@@ -35,9 +35,28 @@ impl WrittenRefId {
     }
 
     fn from_index(i: usize) -> Self {
-        let n = u32::try_from(i + 1).expect("written-reference table exhausted");
+        // Below the qualifier's global bit (`RefQualifier`).
+        let n = u32::try_from(i + 1)
+            .ok()
+            .filter(|&n| n & GLOBAL_BIT == 0)
+            .expect("written-reference table exhausted");
         WrittenRefId(NonZeroU32::new(n).expect("index + 1 is never 0"))
     }
+}
+
+/// The tokens of an entry's written name outside its `range`
+/// (spec/ast.md §18.11.2, WP-2326): the leading `::` of a name whose
+/// qualifier is [`RefQualifier::GLOBAL`] and the `~` of a destructor
+/// name, each `Loc::INVALID` when absent. Kept only for the entries that
+/// have one, sorted by entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kiln_snap::Snap)]
+pub struct RefLead {
+    /// The entry.
+    pub entry: WrittenRefId,
+    /// Its leading `::` (the global qualifier's token).
+    pub colon: Loc,
+    /// The `~` before a destructor's class name.
+    pub tilde: Loc,
 }
 
 /// The syntactic role of a written name (spec/ast.md §18.4). The full
@@ -146,6 +165,15 @@ pub enum QualLink {
     Entry(WrittenRefId),
 }
 
+/// The bit of a [`RefQualifier`] for a leading `::`: set in
+/// [`RefQualifier::GLOBAL`] and in the links [`WrittenRefs::global_link`]
+/// hands the parser, whose low bits number the `::` token (an entry id is
+/// below it).
+const GLOBAL_BIT: u32 = 1 << 31;
+
+/// How far back [`WrittenRefs::repoint`] looks for its entry.
+pub const REPOINT_WINDOW: usize = 4096;
+
 impl RefQualifier {
     /// An unqualified name.
     pub const NONE: RefQualifier = RefQualifier(0);
@@ -161,9 +189,16 @@ impl RefQualifier {
     pub fn link(self) -> QualLink {
         match self.0 {
             0 => QualLink::None,
-            u32::MAX => QualLink::Global,
+            n if n & GLOBAL_BIT != 0 => QualLink::Global,
             n => QualLink::Entry(WrittenRefId(NonZeroU32::new(n).expect("n is not 0"))),
         }
+    }
+
+    /// The `::` token a link from [`WrittenRefs::global_link`] stands for
+    /// (its index in the table's list of them).
+    fn colon(self) -> Option<usize> {
+        (self.0 & GLOBAL_BIT != 0 && self != RefQualifier::GLOBAL)
+            .then_some((self.0 & !GLOBAL_BIT) as usize)
     }
 }
 
@@ -393,6 +428,13 @@ pub struct WrittenRefs {
     /// Stage 5 (§18.10): the sources whose names this table has no
     /// entries for although it is on.
     unrecorded: Vec<Unrecorded>,
+    /// The leading `::` and `~` tokens of the entries that have one, by
+    /// entry (§18.11.2).
+    leads: Vec<RefLead>,
+    /// The location of every leading `::` handed out as a link
+    /// ([`global_link`](Self::global_link)): scratch of the parse, never
+    /// carried (no link outlives the name it qualifies).
+    colons: Vec<Loc>,
 }
 
 /// Source the table has no entries for although it is on (spec/ast.md
@@ -552,13 +594,113 @@ impl WrittenRefs {
         self.iter().filter(move |(_, r)| r.enclosing == Some(d))
     }
 
-    /// Appends `r`; `None` (and nothing recorded) when off.
-    pub fn push(&mut self, r: WrittenRef) -> Option<WrittenRefId> {
+    /// Appends `r`; `None` (and nothing recorded) when off. A qualifier
+    /// from [`global_link`](Self::global_link) is stored as
+    /// [`RefQualifier::GLOBAL`], with its `::` as the entry's lead.
+    pub fn push(&mut self, mut r: WrittenRef) -> Option<WrittenRefId> {
         if !self.on {
             return None;
         }
+        let colon = r.qualifier.colon().and_then(|k| self.colons.get(k).copied());
+        if r.qualifier.link() == QualLink::Global {
+            r.qualifier = RefQualifier::GLOBAL;
+        }
         self.entries.push(r);
-        Some(WrittenRefId::from_index(self.entries.len() - 1))
+        let id = WrittenRefId::from_index(self.entries.len() - 1);
+        if let Some(c) = colon {
+            self.leads.push(RefLead { entry: id, colon: c, tilde: Loc::INVALID });
+        }
+        Some(id)
+    }
+
+    /// The qualifier link of a leading `::` at `colon` (spec/ast.md
+    /// §18.11.2): an entry made with it has [`RefQualifier::GLOBAL`] and
+    /// [`global_colon`](Self::global_colon) `colon`. Off, plain
+    /// [`RefQualifier::GLOBAL`].
+    pub fn global_link(&mut self, colon: Loc) -> RefQualifier {
+        let k = self.colons.len() as u32;
+        if !self.on || k >= GLOBAL_BIT - 1 {
+            return RefQualifier::GLOBAL;
+        }
+        self.colons.push(colon);
+        RefQualifier(GLOBAL_BIT | k)
+    }
+
+    /// Notes that entry `id` names a destructor whose `~` is at `tilde`
+    /// (its `range` is the class name's, §18.11.2).
+    pub fn set_tilde(&mut self, id: WrittenRefId, tilde: Loc) {
+        self.set_lead(id, None, Some(tilde));
+    }
+
+    /// Sets the leading `::` (an entry whose qualifier is
+    /// [`RefQualifier::GLOBAL`]) and the `~` of entry `id`, each when
+    /// given (a carried table's, §18.10).
+    pub fn set_lead(&mut self, id: WrittenRefId, colon: Option<Loc>, tilde: Option<Loc>) {
+        let at = match self.leads.last() {
+            Some(l) if l.entry < id => self.leads.len(),
+            _ => self.leads.partition_point(|l| l.entry < id),
+        };
+        if self.leads.get(at).is_none_or(|l| l.entry != id) {
+            let l = RefLead { entry: id, colon: Loc::INVALID, tilde: Loc::INVALID };
+            self.leads.insert(at, l);
+        }
+        let l = &mut self.leads[at];
+        if let Some(c) = colon {
+            l.colon = c;
+        }
+        if let Some(t) = tilde {
+            l.tilde = t;
+        }
+    }
+
+    /// The leading tokens of entry `id` outside its range, when it has
+    /// any.
+    pub fn lead(&self, id: WrittenRefId) -> Option<&RefLead> {
+        let at = self.leads.binary_search_by_key(&id, |l| l.entry).ok()?;
+        self.leads.get(at)
+    }
+
+    /// Every entry's leading tokens, by entry.
+    pub fn leads(&self) -> &[RefLead] {
+        &self.leads
+    }
+
+    /// The location of the leading `::` of entry `id`, whose qualifier
+    /// is [`RefQualifier::GLOBAL`] (`None` for any other entry, and for
+    /// one whose `::` was not recorded).
+    pub fn global_colon(&self, id: WrittenRefId) -> Option<Loc> {
+        self.lead(id).map(|l| l.colon).filter(|l| l.is_valid())
+    }
+
+    /// The location of the `~` of entry `id`, a destructor name `~T`
+    /// (its `range` is `T`'s).
+    pub fn tilde(&self, id: WrittenRefId) -> Option<Loc> {
+        self.lead(id).map(|l| l.tilde).filter(|l| l.is_valid())
+    }
+
+    /// Where the name of entry `id` begins as an expression stores it:
+    /// the `~` of a destructor name, else `range.lo`. The location of a
+    /// `DeclRefExpr` or `MemberExpr` built from an id-expression or a
+    /// member name equals it (the join, spec/ast.md §18.11.1).
+    pub fn name_lo(&self, id: WrittenRefId) -> Loc {
+        self.tilde(id).unwrap_or(self.get(id).range.lo)
+    }
+
+    /// Where the qualified name ending in entry `id` begins: the leading
+    /// `::`, else the first component's `range.lo` (the start of `id`'s
+    /// own name, [`name_lo`](Self::name_lo), when it is unqualified). A
+    /// `decltype(...)::` component has no entry and is not included.
+    pub fn qualified_lo(&self, id: WrittenRefId) -> Loc {
+        let mut cur = id;
+        // Each qualifier precedes its entry: the walk ends.
+        while let QualLink::Entry(q) = self.get(cur).qualifier.link() {
+            cur = q;
+        }
+        match self.get(cur).qualifier.link() {
+            QualLink::Global => self.global_colon(cur).unwrap_or(self.get(cur).range.lo),
+            _ if cur == id => self.name_lo(id),
+            _ => self.get(cur).range.lo,
+        }
     }
 
     /// Remembers that entry `id` names the overload set `e`, for
@@ -617,6 +759,29 @@ impl WrittenRefs {
         r.found = found.filter(|&f| f != entity);
         r.flags &= !(REF_DEPENDENT | REF_UNRESOLVED);
         Some(id)
+    }
+
+    /// Re-points the newest entry whose name begins at `lo` and names
+    /// `old` to `entity` (`found` when it differs), for a name sema
+    /// resolved once more after it was recorded (a function template-id
+    /// re-resolved against its target, spec/ast.md §18.11.1). The entry
+    /// is among the last [`REPOINT_WINDOW`] (the full-expression's);
+    /// `None` when it is not.
+    pub fn repoint(
+        &mut self,
+        lo: Loc,
+        old: DeclId,
+        entity: DeclId,
+        found: Option<DeclId>,
+    ) -> Option<WrittenRefId> {
+        let from = self.entries.len().saturating_sub(REPOINT_WINDOW);
+        let i = (from..self.entries.len())
+            .rev()
+            .find(|&i| self.entries[i].range.lo == lo && self.entries[i].entity == Some(old))?;
+        let r = &mut self.entries[i];
+        r.entity = Some(entity);
+        r.found = found.filter(|&f| f != entity);
+        Some(WrittenRefId::from_index(i))
     }
 
     /// Remembers that entry `id` is the field designator at `loc`, for
@@ -976,6 +1141,7 @@ impl WrittenRefs {
             return;
         }
         self.entries.truncate(n);
+        self.leads.retain(|l| l.entry.index() < n);
         self.pending.retain(|_, id| id.index() < n);
         self.extra.retain(|id, _| id.index() < n);
         self.designators.retain(|_, id| id.index() < n);
@@ -1011,6 +1177,8 @@ impl WrittenRefs {
         let sz = size_of::<WrittenRef>() as u64;
         let pend = (size_of::<(ExprId, WrittenRefId)>() as u64) * 2;
         let desig = (size_of::<(Loc, WrittenRefId)>() as u64) * 2;
+        let lead = size_of::<RefLead>() as u64;
+        let colon = size_of::<Loc>() as u64;
         let (prov_live, prov_reserved) = self.provenance_mem();
         let (spec_live, spec_reserved) = self.spec_mem();
         Some(MemRow::new(
@@ -1019,11 +1187,15 @@ impl WrittenRefs {
             self.entries.len() as u64 * sz
                 + self.pending.len() as u64 * pend
                 + self.designators.len() as u64 * desig
+                + self.leads.len() as u64 * lead
+                + self.colons.len() as u64 * colon
                 + prov_live
                 + spec_live,
             self.entries.capacity() as u64 * sz
                 + self.pending.capacity() as u64 * pend
                 + self.designators.capacity() as u64 * desig
+                + self.leads.capacity() as u64 * lead
+                + self.colons.capacity() as u64 * colon
                 + prov_reserved
                 + spec_reserved,
         ))
@@ -1094,6 +1266,27 @@ impl WrittenRefs {
                     );
                 }
             }
+        }
+    }
+
+    /// The dump's `q=` and `tilde=` fields of entry `id` (§18.6).
+    fn dump_lead(&self, id: WrittenRefId, out: &mut String, pos: &dyn Fn(Loc) -> String) {
+        match self.get(id).qualifier.link() {
+            QualLink::None => {}
+            QualLink::Global => {
+                out.push_str(" q=::");
+                if let Some(c) = self.global_colon(id) {
+                    out.push_str(&pos(c));
+                }
+            }
+            QualLink::Entry(q) => {
+                out.push_str(" q=");
+                out.push_str(&pos(self.get(q).range.lo));
+            }
+        }
+        if let Some(t) = self.tilde(id) {
+            out.push_str(" tilde=");
+            out.push_str(&pos(t));
         }
     }
 
@@ -1170,14 +1363,7 @@ impl WrittenRefs {
                 out.push_str(" found=");
                 decl(f, &mut out);
             }
-            match r.qualifier.link() {
-                QualLink::None => {}
-                QualLink::Global => out.push_str(" q=::"),
-                QualLink::Entry(q) => {
-                    out.push_str(" q=");
-                    out.push_str(&pos(self.get(q).range.lo));
-                }
-            }
+            self.dump_lead(id, &mut out, &pos);
             match r.enclosing {
                 Some(d) if d == ast.tu => out.push_str(" in=(tu)"),
                 Some(d) => {
@@ -1389,6 +1575,50 @@ mod tests {
         assert_eq!(RefQualifier::entry(id).link(), QualLink::Entry(id));
         assert_eq!(RefQualifier::GLOBAL.link(), QualLink::Global);
         assert_eq!(RefQualifier::NONE.link(), QualLink::None);
+    }
+
+    fn at(lo: u32, q: RefQualifier) -> WrittenRef {
+        let lo = Loc::from_raw(lo);
+        WrittenRef { range: Span::new(lo, lo), qualifier: q, ..entry(None) }
+    }
+
+    #[test]
+    fn leading_colons_and_tildes_are_kept_beside_the_entry() {
+        let mut t = WrittenRefs::default();
+        // Off: the plain global link, nothing kept.
+        assert_eq!(t.global_link(Loc::from_raw(3)), RefQualifier::GLOBAL);
+        assert!(t.colons.is_empty());
+        t.set_on(true);
+        // `::a::b`: the link `a` is made with is stored as GLOBAL.
+        let link = t.global_link(Loc::from_raw(10));
+        assert_eq!(link.link(), QualLink::Global);
+        let ea = t.push(at(12, link)).unwrap();
+        let eb = t.push(at(15, RefQualifier::entry(ea))).unwrap();
+        assert_eq!(t.get(ea).qualifier, RefQualifier::GLOBAL);
+        assert_eq!(t.global_colon(ea), Some(Loc::from_raw(10)));
+        assert_eq!(t.global_colon(eb), None);
+        assert_eq!(t.qualified_lo(eb), Loc::from_raw(10));
+        assert_eq!(t.name_lo(eb), Loc::from_raw(15));
+        // A GLOBAL link of no recorded `::` (a carried table's) has none.
+        let ec = t.push(at(20, RefQualifier::GLOBAL)).unwrap();
+        assert_eq!(t.global_colon(ec), None);
+        assert_eq!(t.qualified_lo(ec), Loc::from_raw(20));
+        // `x.~T()`: the join location is the `~`.
+        let mark = t.mark(0);
+        let dtor = t.push(at(31, RefQualifier::NONE)).unwrap();
+        t.set_tilde(dtor, Loc::from_raw(30));
+        assert_eq!(t.tilde(dtor), Some(Loc::from_raw(30)));
+        assert_eq!(t.name_lo(dtor), Loc::from_raw(30));
+        assert_eq!(t.qualified_lo(dtor), Loc::from_raw(30));
+        // Out-of-order lead rows (a carried table's) stay sorted.
+        t.set_lead(ec, None, Some(Loc::from_raw(19)));
+        let entries: Vec<_> = t.leads().iter().map(|l| l.entry).collect();
+        assert_eq!(entries, [ea, ec, dtor]);
+        assert_eq!(t.tilde(ec), Some(Loc::from_raw(19)));
+        t.truncate(mark);
+        assert_eq!(t.leads().len(), 2);
+        assert_eq!(t.tilde(dtor), None);
+        assert_eq!(size_of::<WrittenRef>(), 28);
     }
 
     #[test]

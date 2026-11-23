@@ -17,7 +17,7 @@
 31:1-31:4  nns  'app' -> app@10:11 in=app::core::Engine::~Engine@31:20
 31:6-31:10  nns  'core' -> app::core@11:11 q=31:1 in=app::core::Engine::~Engine@31:20
 31:12-31:18  nns  'Engine' -> app::core::Engine@15:8 q=31:6 in=app::core::Engine::~Engine@31:20
-31:21-31:27  redecl  'Engine' -> app::core::Engine::~Engine@17:3 q=31:12 in=app::core::Engine::~Engine@31:20
+31:21-31:27  redecl  'Engine' -> app::core::Engine::~Engine@17:3 q=31:12 tilde=31:20 in=app::core::Engine::~Engine@31:20
 32:5-32:8  nns  'app' -> app@10:11 in=app::core::Engine::speed@32:24
 32:10-32:14  nns  'core' -> app::core@11:11 q=32:5 in=app::core::Engine::speed@32:24
 32:16-32:22  nns  'Engine' -> app::core::Engine@15:8 q=32:10 in=app::core::Engine::speed@32:24

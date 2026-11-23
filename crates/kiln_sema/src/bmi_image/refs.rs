@@ -37,6 +37,7 @@ const ENTRY_BYTES: usize = 8 * 4 + 3;
 const SPEC_BYTES: usize = 6 * 4 + 2;
 const UDIR_BYTES: usize = 3 * 4;
 const NODE_BYTES: usize = 1 + 2 * 4;
+const LEAD_BYTES: usize = 3 * 4;
 
 /// One entry: `lo, hi, entity, found, enclosing, qualifier, udir, adl`
 /// (declaration words, the qualifier an earlier entry's index or
@@ -82,7 +83,8 @@ pub(super) enum NodeRec {
 /// A recorded table: argument-dependent sets (namespace and class
 /// counts, then the declaration words), entries, rows, nodes, and the
 /// using-directives of the dependent entries' ordinary lookups (`entry,
-/// declaration, directive`).
+/// declaration, directive`), and the entries' leading `::` and `~`
+/// tokens (`entry, colon, tilde`, locations or [`NONE`]; WP-2326).
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub(super) struct RefsRec {
     sets: Vec<(u32, u32, Vec<u32>)>,
@@ -90,6 +92,7 @@ pub(super) struct RefsRec {
     specs: Vec<SpecRec>,
     nodes: Vec<NodeRec>,
     udirs: Vec<[u32; 3]>,
+    leads: Vec<[u32; 3]>,
 }
 
 /// The section as decoded.
@@ -227,6 +230,12 @@ impl Writer<'_, '_, '_> {
             }
         }
         self.ref_nodes(&map, &mut out)?;
+        for l in t.leads() {
+            let entry = map[l.entry.index()];
+            if entry != NONE {
+                out.leads.push([entry, self.ref_loc(l.colon)?, self.ref_loc(l.tilde)?]);
+            }
+        }
         self.img.refs = Refs::Table(out);
         Ok(())
     }
@@ -334,7 +343,13 @@ pub(super) fn encode_refs(w: &mut Wr, s: &Refs) {
             b.u32(x);
         }
     }
-    // A recorded table is never empty (its five counts): the length
+    b.len(t.leads.len());
+    for l in &t.leads {
+        for &x in l {
+            b.u32(x);
+        }
+    }
+    // A recorded table is never empty (its six counts): the length
     // tells it from the table off.
     w.len(b.0.len());
     w.0.extend_from_slice(&b.0);
@@ -387,6 +402,9 @@ pub(super) fn decode_refs(r: &mut Rd, want: bool) -> Res<Refs> {
     for _ in 0..r.count(UDIR_BYTES)? {
         t.udirs.push([r.u32()?, r.u32()?, r.u32()?]);
     }
+    for _ in 0..r.count(LEAD_BYTES)? {
+        t.leads.push([r.u32()?, r.u32()?, r.u32()?]);
+    }
     if !r.0.is_empty() {
         return bad("trailing bytes in the written references");
     }
@@ -438,7 +456,12 @@ pub(super) fn validate_refs(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Res<
         NodeRec::Decl { entry, decl } => entry < ne && word_ok(decl),
     });
     let ok_udirs = t.udirs.iter().all(|&[entry, d, u]| entry < ne && word_ok(d) && word_ok(u));
-    if ok_sets && ok_entries && ok_specs && ok_nodes && ok_udirs {
+    // By entry, once each; a `::` only on an entry after a leading `::`.
+    let ok_leads = t.leads.windows(2).all(|w| w[0][0] < w[1][0])
+        && t.leads.iter().all(|&[entry, colon, _]| {
+            entry < ne && (colon == NONE || t.entries[entry as usize].words[5] == Q_GLOBAL)
+        });
+    if ok_sets && ok_entries && ok_specs && ok_nodes && ok_udirs && ok_leads {
         Ok(())
     } else {
         bad("bad written references")
@@ -457,6 +480,9 @@ pub(super) fn refs_offsets(img: &Image, offs: &mut Vec<u32>) {
         {
             offs.push(loc);
         }
+    }
+    for l in &t.leads {
+        offs.extend([l[1], l[2]].into_iter().filter(|&o| o != NONE));
     }
 }
 
@@ -568,6 +594,10 @@ impl Sema<'_, '_> {
                 self.ast.written_refs.note_pattern_udir(pushed[entry as usize], d, u);
             }
         }
+        for &[entry, colon, tilde] in &t.leads {
+            let some = |o: u32| (o != NONE).then(|| loc(o));
+            self.ast.written_refs.set_lead(pushed[entry as usize], some(colon), some(tilde));
+        }
     }
 }
 
@@ -598,6 +628,7 @@ mod tests {
                 NodeRec::Decl { entry: 1, decl: 1 },
             ],
             udirs: vec![[1, 1, 0]],
+            leads: vec![[1, NONE, 4]],
         });
         img
     }
@@ -631,7 +662,7 @@ mod tests {
     #[test]
     fn written_refs_section_is_validated() {
         type Corrupt = (&'static str, fn(&mut RefsRec));
-        let corrupt: [Corrupt; 13] = [
+        let corrupt: [Corrupt; 16] = [
             ("qualifier after its entry", |t| t.entries[0].words[5] = 0),
             ("unknown role", |t| t.entries[0].role = 99),
             ("unknown lookup", |t| t.entries[1].how = 99),
@@ -647,6 +678,9 @@ mod tests {
             ("using node past the records", |t| {
                 t.nodes[2] = NodeRec::Decl { entry: 1, decl: 1000 }
             }),
+            ("lead of no entry", |t| t.leads[0][0] = 2),
+            ("a `::` on an entry without one", |t| t.leads[0][1] = 4),
+            ("leads out of order", |t| t.leads.insert(0, [1, NONE, 4])),
         ];
         for (what, f) in corrupt {
             let mut img = with_table();

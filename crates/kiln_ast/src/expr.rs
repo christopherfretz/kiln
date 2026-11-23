@@ -1294,6 +1294,43 @@ pub enum OffsetofStep {
     },
 }
 
+/// One component of a non-dependent `__builtin_offsetof` designator as
+/// sema resolved it (clang `OffsetOfNode`), in order
+/// ([`ColdExprData::offsetof_designator`]): the resolved form of the
+/// written [`OffsetofComponent`]s. A member found in a base class is
+/// preceded by one [`Self::Base`] per base class subobject on the path
+/// to it; a member of an anonymous struct or union is one
+/// [`Self::Field`] per member of its chain, outermost first, each at
+/// the written name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kiln_snap::Snap)]
+pub enum OffsetofNode {
+    /// A base class subobject stepped through (no source of its own):
+    /// the base class's definition.
+    Base {
+        /// The base class.
+        class: DeclId,
+    },
+    /// A non-static data member.
+    Field {
+        /// The `Field` declaration.
+        field: DeclId,
+        /// The `.`, or the name for the leading identifier.
+        start: Loc,
+        /// The name.
+        end: Loc,
+    },
+    /// `[ index ]`.
+    Index {
+        /// The index's position in the expression's index list (its
+        /// children).
+        position: u32,
+        /// The `[`.
+        start: Loc,
+        /// The `]`.
+        end: Loc,
+    },
+}
+
 /// The meaning of the accessor of an ext-vector element access `v.xyzw`
 /// (clang `CheckExtVectorComponent` and
 /// `ExtVectorElementExpr::getEncodedElementAccess`; spec/sema.md §5.8).
@@ -1506,6 +1543,11 @@ pub struct ColdExprData {
     /// an array index is not a constant, or the constant offset does not
     /// fit the node's `u32` (a negative index wraps it).
     pub offsetof_layout: ColdMap<ExprId, Box<[OffsetofStep]>>,
+    /// A non-dependent `OffsetOfExpr`: the operand type as written and
+    /// the designator as sema resolved it (WP-2360; spec/ast.md §5,
+    /// "`OffsetOfExpr`"), for tooling clients. Nothing in the compiler
+    /// reads it: the value is the node's (or `offsetof_layout`'s).
+    pub offsetof_designator: ColdMap<ExprId, (QualType, Box<[OffsetofNode]>)>,
     /// A dependent `CXXSpliceExpr` written as a template-id,
     /// `template [: r :] < args >` (P2996 [expr.prim.splice]): the
     /// template arguments as written.
@@ -1660,6 +1702,7 @@ impl Default for ColdExprData {
             cast_written: ColdMap::new("cast_written"),
             offsetof_pattern: ColdMap::new("offsetof_pattern"),
             offsetof_layout: ColdMap::new("offsetof_layout"),
+            offsetof_designator: ColdMap::new("offsetof_designator"),
             splice_args: ColdMap::new("splice_args"),
             default_arg_rewritten: ColdMap::new("default_arg_rewritten"),
             fp_round: ColdMap::new("fp_round"),
@@ -3494,6 +3537,7 @@ impl HeapSize for ExprArena {
         r.push(self.cold.cast_written.mem_row().prefixed("cold"));
         r.push(self.cold.offsetof_pattern.mem_row().prefixed("cold"));
         r.push(self.cold.offsetof_layout.mem_row().prefixed("cold"));
+        r.push(self.cold.offsetof_designator.mem_row().prefixed("cold"));
         r.push(self.cold.splice_args.mem_row().prefixed("cold"));
         r.push(self.cold.default_arg_rewritten.mem_row().prefixed("cold"));
         r.push(self.cold.fp_round.mem_row().prefixed("cold"));
@@ -3661,6 +3705,21 @@ impl ExprArena {
     /// the constant [`Self::offsetof_value`].
     pub fn offsetof_layout(&self, e: ExprId) -> Option<&[OffsetofStep]> {
         self.cold.offsetof_layout.get(e).map(|s| &**s)
+    }
+
+    /// The operand type as written and the resolved designator of a
+    /// non-dependent `OffsetOfExpr` ([`ColdExprData::offsetof_designator`]);
+    /// `None` for a value-dependent one ([`Self::offsetof_pattern`]).
+    /// An [`OffsetofNode::Index`] names its position in the
+    /// expression's index list ([`Self::offsetof_indices`]).
+    pub fn offsetof_designator(&self, e: ExprId) -> Option<(QualType, &[OffsetofNode])> {
+        self.cold.offsetof_designator.get(e).map(|(t, c)| (*t, &**c))
+    }
+
+    /// The array index expressions of an `OffsetOfExpr`, in the order
+    /// written (its children).
+    pub fn offsetof_indices(&self, e: ExprId) -> ListId {
+        ListId::new(self.expect_kind(e, ExprKind::OffsetOfExpr).a)
     }
 
     /// The byte offset an `OffsetOfExpr` evaluates to, unless it has an

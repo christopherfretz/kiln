@@ -1,0 +1,54 @@
+17:25-17:26  type  'V' -> n::V@14:8 in=(anonymous)@17:28 how=injected
+19:22-19:23  type  'T' -> T@19:19 in=n::V::as@19:24
+18:33-18:34  expr  'x' -> n::V::x@15:7 in=n::V::operator int@18:3
+19:44-19:45  type  'T' -> T@19:19 in=n::V::as@19:24
+19:46-19:47  expr  'x' -> n::V::x@15:7 in=n::V::as@19:24
+21:16-21:17  type  'V' -> n::V@14:8 in=a@21:18
+21:21-21:22  type  'V' -> n::V@14:8 in=b@21:23
+21:35-21:36  expr  'a' -> a@21:18 in=n::operator<@21:6
+21:37-21:38  member  'x' -> n::V::x@15:7 in=n::operator<@21:6
+21:41-21:42  expr  'b' -> b@21:23 in=n::operator<@21:6
+21:43-21:44  member  'x' -> n::V::x@15:7 in=n::operator<@21:6
+22:23-22:24  expr  'v' -> v@22:11 in=n::f@22:5
+23:20-23:21  type  'T' -> T@23:17 in=n::id@23:22
+23:25-23:26  type  'T' -> T@23:17 in=v@23:27
+23:39-23:40  expr  'v' -> v@23:27 in=n::id@23:22
+25:9-25:10  nns  'n' -> n@13:11 in=a@25:15
+25:12-25:13  type  'V' -> n::V@14:8 q=25:9 in=a@25:15
+25:18-25:19  nns  'n' -> n@13:11 in=p@25:24
+25:21-25:22  type  'V' -> n::V@14:8 q=25:18 in=p@25:24
+26:11-26:12  nns  'n' -> n@13:11 in=r@26:7
+26:14-26:15  expr  'f' -> n::f@22:5 q=26:11 in=r@26:7
+26:23-26:24  nns  'n' -> n@13:11 q=::26:21 in=r@26:7
+26:26-26:27  expr  'f' -> n::f@22:5 q=26:23 in=r@26:7
+26:33-26:34  nns  'n' -> n@13:11 in=r@26:7
+26:36-26:38  expr  'id' -> n::id<int>@23:22 found=n::id@23:22 q=26:33 in=r@26:7
+26:49-26:50  nns  'n' -> n@13:11 in=r@26:7
+26:52-26:54  expr  'id' -> n::id<int>@23:22 found=n::id@23:22 q=26:49 in=r@26:7
+27:3-27:4  expr  'r' -> r@26:7 in=use@25:5
+27:8-27:9  nns  'n' -> n@13:11 in=use@25:5
+27:11-27:20  expr  'operator<' -> n::operator<@21:6 q=27:8 in=use@25:5
+27:21-27:22  expr  'a' -> a@25:15 in=use@25:5
+27:25-27:26  expr  'p' -> p@25:24 in=use@25:5
+27:30-27:31  expr  'a' -> a@25:15 in=use@25:5
+27:32-27:42  member  'operator==' -> n::V::operator==@17:8 in=use@25:5
+27:44-27:45  expr  'p' -> p@25:24 in=use@25:5
+27:49-27:50  expr  'a' -> a@25:15 in=use@25:5
+27:51-27:63  member  'operator int' -> n::V::operator int@18:3 in=use@25:5
+28:3-28:4  expr  'r' -> r@26:7 in=use@25:5
+28:8-28:9  expr  'p' -> p@25:24 in=use@25:5
+28:20-28:22  template  'as' -> n::V::as<int>@19:24 found=n::V::as@19:24 in=use@25:5
+28:32-28:33  expr  'a' -> a@25:15 in=use@25:5
+28:43-28:45  template  'as' -> n::V::as<long>@19:24 found=n::V::as@19:24 in=use@25:5
+28:56-28:57  expr  'p' -> p@25:24 in=use@25:5
+28:59-28:60  member  'x' -> n::V::x@15:7 in=use@25:5
+29:3-29:4  expr  'a' -> a@25:15 in=use@25:5
+29:6-29:7  member  'V' -> n::V::~V@16:3 tilde=29:5 in=use@25:5
+30:3-30:4  expr  'p' -> p@25:24 in=use@25:5
+30:6-30:7  nns  'n' -> n@13:11 in=use@25:5
+30:9-30:10  nns  'V' -> n::V@14:8 q=30:6 in=use@25:5
+30:13-30:14  member  'V' -> n::V::~V@16:3 q=30:9 tilde=30:12 in=use@25:5
+31:10-31:11  expr  'r' -> r@26:7 in=use@25:5
+37:46-37:48  type  'T0' -> T0@37:24 in=(anonymous)@37:48
+39:1-39:3  type  'WF' -> WF@38:7 in=retarget@39:5
+39:25-39:29  expr  'wrap' -> wrap<3, int>@37:33 found=wrap@37:33 in=retarget@39:5

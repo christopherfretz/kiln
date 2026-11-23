@@ -716,6 +716,9 @@ pub struct Args {
     /// (with `-E` in place of the preprocessed text, after the origins of
     /// the output's macro-expanded tokens).
     pub dump_pp_record: bool,
+    /// `-fkiln-dump-pp-record=source-order`: the dump, with each
+    /// condition's reads in source order ([`kiln_pp::DumpOptions`]).
+    pub dump_pp_record_source_order: bool,
     /// `-fkiln-cfg-stats` (`-fsyntax-only` and codegen): one line per analysed
     /// function body with its graph's size and build time
     /// (spec/sema.md §7.5.1).
@@ -1373,6 +1376,11 @@ impl Input {
 }
 
 impl Args {
+    /// How `-fkiln-dump-pp-record` prints.
+    pub(crate) fn pp_record_dump_options(&self) -> kiln_pp::DumpOptions {
+        kiln_pp::DumpOptions { reads_in_source_order: self.dump_pp_record_source_order }
+    }
+
     /// Parses `argv` (without the program name) as `kiln++` would.
     pub fn parse(argv: &[String]) -> Args {
         Args::parse_as("kiln++", argv)
@@ -2099,6 +2107,10 @@ impl Args {
             }
             "-fkiln-pp-record" => self.pp_record = true,
             "-fkiln-dump-pp-record" => self.dump_pp_record = true,
+            "-fkiln-dump-pp-record=source-order" => {
+                self.dump_pp_record = true;
+                self.dump_pp_record_source_order = true;
+            }
             "-fkiln-cfg-stats" => self.cfg_stats = true,
             "-fkiln-memory-report" => self.memory_report = true,
             "-fkiln-bmi-image" => self.bmi_image = true,

@@ -531,9 +531,30 @@ struct ExprNode {        // 20 bytes
   | `CXXThrowExpr` | operand or none (rethrow) | | `throw_operand` |
   | `StmtExpr` | the `CompoundStmt` | | `stmt_expr_body` |
   | `AddrLabelExpr` (GNU `&&l`, WP-424) | the `LabelDecl` | `cold.end_loc` = the label name's location; a `void *` prvalue; instantiation-dependent in a template's body so each specialization rebuilds it for its own label (WP-444) | `addr_label` |
-  | `OffsetOfExpr` | `ListId` of the array index expressions | `b` = byte offset (`u32`); with cold `offsetof_layout` steps (an index that is not a constant, or an offset past `u32`) the value is their sum | `offsetof_value`, `offsetof_layout` |
+  | `OffsetOfExpr` | `ListId` of the array index expressions | `b` = byte offset (`u32`); with cold `offsetof_layout` steps (an index that is not a constant, or an offset past `u32`) the value is their sum; cold `offsetof_designator` (non-dependent) or `offsetof_pattern` (value-dependent) keeps the operand type and the designator | `offsetof_value`, `offsetof_layout`, `offsetof_indices`, `offsetof_designator`, `offsetof_pattern` |
   | `CompoundLiteralExpr` | the `InitListExpr` | | `compound_literal_init` |
   | `CXXScalarValueInitExpr` | none | | |
+- **`offsetof`'s designator** (WP-2360, for tooling clients). A
+  non-dependent `OffsetOfExpr` keeps, in the cold row
+  `ColdExprData::offsetof_designator` (`ExprArena::offsetof_designator`),
+  the operand type as written (a typedef stays the typedef) and the
+  designator as sema resolved it, as `OffsetofNode`s in clang's
+  `OffsetOfNode` order: a `Base { class }` (the base class's definition)
+  per base class subobject on the path to a member found in a base, then
+  a `Field { field, start, end }` per member (one per member of an
+  anonymous struct or union chain, outermost first, each at the written
+  name's range), and an `Index { position, start, end }` per subscript,
+  `position` being its index in the expression's index list
+  (`offsetof_indices`, its children). So `__builtin_offsetof(A, y)` and
+  `__builtin_offsetof(Bq, q)` over one layout, or a union's two members,
+  are different rows with one value. An instantiation's row is its own,
+  resolved for its arguments; the pattern, value-dependent, keeps the
+  written form in `offsetof_pattern` instead. Nothing in the compiler
+  reads the row (the value is `offsetof_value` or `offsetof_layout`'s);
+  it is snapshot state (PCH `FORMAT_VERSION` 148). Module images do not
+  carry an `OffsetOfExpr` (a body holding one falls back), so they need
+  nothing. Test: `crates/kiln_parse/tests/offsetof_designator.rs`,
+  `snap_tests::snapshot_round_trip_offsetof`.
 - Source ranges are computed (`begin(e)` walks to the leftmost child;
   kinds ending in a closing token store it in their side record or cold
   map); no stored ranges.
@@ -1741,6 +1762,7 @@ field `Ast::written_refs`. Built in five stages:
 | 3 | declarative contexts: using-declarations and -directives, namespace alias targets, declarator-id qualifiers and the names they redeclare, elaborated and friend references, specialization targets, concept names, designators, deduction-guide names; their lookup provenance; the identifier-accounting test (§18.8) | WP-1932, WP-2100, WP-2131 |
 | 4 | per-specialization entries for dependent names, in a separate table keyed by (pattern entry, specialization) (§18.9) | WP-1933 |
 | 5 | carriage in PCH snapshots and module images | WP-1934 |
+| | the join with expressions; the leading `::` and the `~` (§18.11) | WP-2326 |
 
 ### 18.1 Contract
 
@@ -1785,7 +1807,10 @@ deriving the chain needs range arithmetic over tokens.
 
 `RefQualifier` is a `u32`: 0 none, `u32::MAX` global, otherwise a
 `WrittenRefId` index + 1. A qualifier entry always precedes the entry it
-qualifies.
+qualifies. The tokens of a name outside its `range`, the leading `::`
+of a globally qualified name and the `~` of a destructor name, are in a
+cold side table (§18.11.2); the location an expression stores for a
+name is `name_lo(id)` (§18.11.1).
 
 ### 18.3 `enclosing`
 
@@ -2128,7 +2153,7 @@ stage 1.
 prints, after diagnostics' end of the TU, one line per entry:
 
 ```
-<line>:<col>-<line>:<col>  <role>  '<spelling>' -> <entity> [found=<decl>] [q=<line>:<col>|q=::] [in=<enclosing>] [dep] [exp=<line>:<col>] [how=<how>] [udir=<ns>@<line>:<col>] [adl-ns=<ns>,...] [adl-cls=<class>,...] [adl-enum=<enum>,...]
+<line>:<col>-<line>:<col>  <role>  '<spelling>' -> <entity> [found=<decl>] [q=<line>:<col>|q=::[<line>:<col>]] [tilde=<line>:<col>] [in=<enclosing>] [dep] [exp=<line>:<col>] [how=<how>] [udir=<ns>@<line>:<col>] [adl-ns=<ns>,...] [adl-cls=<class>,...] [adl-enum=<enum>,...]
 ```
 
 Positions are the spelling locations of `lo` and `hi` (the end column
@@ -2139,7 +2164,9 @@ of the range. The fields after `exp=` are the lookup provenance
 qualified name (lambdas as `(lambda)`; a function or template
 parameter unqualified) and `@<line>:<col>` of its location; no entity prints `(dependent)` or `(unresolved)`; `in=(tu)`
 for the translation unit. `q=` names the qualifier entry by its start
-position. `exp=` is the outermost expansion point of a name written in
+position; `q=::` is followed by the position of the leading `::` when
+it was recorded (always, since WP-2326; §18.11.2), and `tilde=` gives
+the `~` of a destructor name. `exp=` is the outermost expansion point of a name written in
 a macro. The harness directive `written-refs: <golden>`
 (spec/harness.md) compares this dump with a golden file.
 
@@ -2923,7 +2950,7 @@ names to be carried.
   side rows (using-directive, argument-dependent set); the interned sets;
   the directive cache; the deferred designators; the per-specialization
   rows, dropped rows included so every `SpecRefId` stays; the pattern
-  nodes and their candidates' using-directives (§18.9.1); the unrecorded rows (§18.10.3). Maps are written as their
+  nodes and their candidates' using-directives (§18.9.1); the unrecorded rows (§18.10.3); the leads (§18.11.2). Maps are written as their
   entries sorted by key, so the bytes do not depend on hashing.
   **Rebuilt** on read: the set index and the row de-duplication index,
   from the sets and the live rows. **Transient**: the scratch of one
@@ -2931,7 +2958,8 @@ names to be carried.
   `spec_last`, `spec_key`), empty at the end of a prefix.
 - **Validated** on read (an `Invalid` error, never a panic): every
   entry, row and set id in range, every qualifier before the entry it
-  qualifies, no set interned twice, no live row kept twice, and the
+  qualifies, the leads sorted and each `::` on a globally qualified
+  entry, no set interned twice, no live row kept twice, and the
   section's typed ids within the restored AST's arenas
   (`Ast::check_ids`).
 - **Restored, recording on.** The restored table continues the
@@ -3020,7 +3048,7 @@ also stores its options as text, which gained the line of the new
 `written_refs` option). Their
 format versions are bumped (PCH `FORMAT_VERSION` 144, image
 `IMAGE_VERSION` 77; 145 and 78 for WP-2220's per-specialization
-using-directives). A restore or import that does not record reads
+using-directives; 147 and 80 for WP-2326's leads, §18.11.2). A restore or import that does not record reads
 the length and skips the section. Measured in §18.10.6.
 
 #### 18.10.5 Tests
@@ -3066,6 +3094,185 @@ included as text. The image of `Inputs/refs_mod.cppm` is 25,711 bytes
 at the base, 25,715 off and 26,484 on. The 29 `bench/oven` entries'
 `-fconstexpr-report` counters (all but `wall_us`) are identical between
 the base and this stage.
+
+### 18.11 The join and the leading `::` (WP-2326)
+
+#### 18.11.1 The join with expressions
+
+A client holding an expression (a cross-referencer walking the AST, a
+tool that reports on a call) finds the entry of its name by location.
+
+- **Rule.** For every `DeclRefExpr` and `MemberExpr` `e` built from an
+  id-expression or a class member access's member name that the parser
+  consumed, outside the exceptions below, exactly one entry `id` of
+  role `expr`, `member` or `template` has
+  `WrittenRefs::name_lo(id) == ast.exprs.get(e).loc()`, and its
+  `entity` is `ast.exprs.decl(e)`. `name_lo(id)` is `range.lo`, except
+  for a destructor name, where it is the `~` (`tilde(id)`, §18.11.2).
+  `ExprNode::loc()` is the one location either expression kind stores:
+  the name's, never the qualifier's or the object expression's. A name
+  sema resolves once more after recording it follows: a function
+  template-id resolved early from its explicit arguments and again
+  against its target ([over.over]/1, `retarget_template_id`) has its
+  entry re-pointed to the specialization the target deduces
+  (`WrittenRefs::repoint`, which looks back over the last 4,096
+  entries; before WP-2326 the entry kept the early one).
+- **Where the location is**, for each way of writing the name:
+
+| written | expression | `loc()` | the entry |
+|---|---|---|---|
+| `f`, `x` | `DeclRefExpr` | the identifier | `expr` |
+| `N::f`, `::N::f` | `DeclRefExpr` | `f`, the last component | `expr`; its `qualifier` links the `nns` entries of `N` (and the `::`, §18.11.2); `qualified_lo(id)` is where the whole name begins |
+| `f<int>`, `N::f<int>` | `DeclRefExpr` | `f`, the template name | `expr`, the specialization, `found` the template |
+| `operator==`, `N::operator==` | `DeclRefExpr` | the `operator` keyword | `expr`, its range over every token of the operator-function-id |
+| `a.operator==`, `a.operator int` | `MemberExpr` | the `operator` keyword | `member`, its range over the operator- or conversion-function-id |
+| `a.m`, `p->m`, `p->N::m` | `MemberExpr` | the member name | `member` |
+| `a.~T`, `p->N::~T` | `MemberExpr` | the `~` | `member` naming the destructor, `range` `T`, `tilde` the `~` |
+| `a.template f<int>`, `p->template f<int>` | `MemberExpr` | `f` | `template` (the member template's specialization, `found` the template) |
+
+- **Exceptions**: expressions with no name token of their own, which
+  no entry joins (`implicit_name` in the test lists the same classes):
+  1. an expression of an instantiation, of a member of a class template
+     specialization the compiler instantiated, or a default argument or
+     default member initializer used at a call or a construction (the
+     children of `CXXDefaultArgExpr` and `CXXDefaultInitExpr`), the
+     elements of an expanded expansion statement (`template for`, one
+     instantiation of its body per element; its pattern is joined), or
+     the body of a defaulted function (`= default`, synthesized): their
+     names are the pattern's, joined there, and a specialization's
+     resolutions are its per-specialization rows (§18.9);
+  2. a reference to a declaration with no name or an implicit one: an
+     anonymous union's member reached through its implicit field, a
+     structured binding's hidden variable and the member access on it,
+     a range-for's `__range`, `__begin` and `__end`;
+  3. a condition variable's value (`if (auto t = e)`), which is at the
+     variable's own name: a declaration, not a reference;
+  4. an operator use's callee (`a + b`, `f(x)` calling `operator()`,
+     `a = b`, `a[i]`), whose `loc()` is the operator token;
+  5. a reference sema built at a token that does not spell the name: a
+     user-defined literal's literal operator (`1_km`), the conversion
+     function an implicit user-defined conversion calls (a `MemberExpr`
+     at its operand, `int i = s;` puts it at `s`, or a `DeclRefExpr`
+     for an explicit-object conversion function), a
+     tuple-like structured binding's `get` (at the binding), a
+     coroutine's `await_ready`, `await_suspend`, `await_resume` and
+     promise calls (at `co_await`, `co_yield`, `co_return` or the
+     function's body);
+  6. an implicit capture's initializer (a capture-default's).
+
+  One class joins by location with a different entity: a member access
+  in a template pattern naming an overload set (type `OVERLOAD`) has
+  the set's first member as its declaration while its entry names
+  nothing and is `DEPENDENT` (or `UNRESOLVED`): the set is resolved per
+  specialization (§18.9).
+- **No expression-to-entry map.** A cold `ExprId → WrittenRefId` map
+  would cost a hash-map slot per name expression (8 bytes of key and
+  value at the map's load factor, about 10 to 18 bytes, a half of the
+  28-byte entry again) and the overload-resolution and member-access
+  funnels would have to hand the parser the expression they finally
+  build (an overloaded name's expression is rebuilt after resolution,
+  §18.4). The location rule makes the map unnecessary: a client indexes
+  the entries by `name_lo` in one pass, or looks one name up by
+  location in the table sorted by `range`. The rule holds either way.
+- **Test.** `every_name_expression_joins_its_entry`
+  (`crates/kiln_parse/tests/written_refs_accounting.rs`) parses every
+  file of `tests/conformance/written_refs/` and the directories §18.8
+  pins, walks the AST as the dump does (`kiln_ast::dump::for_each_written_expr`,
+  which leaves instantiations out), and checks the rule for every
+  `DeclRefExpr` and `MemberExpr` spelled in the main file: 790 files, 6,240 name expressions, no
+  mismatch. Over all of `tests/conformance/` (3,467 files that compile,
+  56,989 name expressions) it finds none either (WP-2326; the
+  exceptions above and the template-id retarget came from that run).
+  `every_name_expression_joins_its_entry_in_a_directory` (ignored) runs
+  it on the `.cpp` files of `KILN_REFS_DIR` and fails on a mismatch with
+  `KILN_REFS_STRICT` set. `tests/conformance/written_refs/join.cpp` has
+  one of each row of the table above.
+
+#### 18.11.2 The leading `::` and the `~`
+
+`RefLead { entry, colon, tilde }` (12 bytes) gives the tokens of an
+entry's name outside its `range`: the leading `::` of a name whose
+`qualifier` is `GLOBAL`, and the `~` of a destructor name (an
+expression, a pseudo-destructor's type name, or a destructor's
+declarator-id), each `Loc::INVALID` when absent. A cold side table,
+sorted by entry, holds a row only for the entries that have one:
+
+- `global_colon(id)`: the `::` of entry `id`, whose qualifier is
+  `GLOBAL` (the first component of `::a::b`, or `f` of `::f`);
+- `tilde(id)`: the `~` of a destructor name;
+- `name_lo(id)`: the `~` or `range.lo`, the join location (§18.11.1);
+- `qualified_lo(id)`: where the qualified name ending in `id` begins,
+  following `qualifier` to the first component: its `::`, else its
+  `range.lo` (a `decltype(...)::` component has no entry and is not
+  included);
+- `lead(id)`, `leads()`: the rows.
+
+The locations are kiln token locations, as `range`'s are: a `::`
+spelled by a macro (`#define G ::`, `G a::f()`) is the macro's token,
+whose spelling is in the macro's body and whose expansion point is the
+macro's use; a `::` cut from its name by a comment, a line break or a
+line splice is at its own token; one split by a line splice (`:\` and
+`:` on the next line) is at its first `:`. `:: template G<int>::x`,
+`typename ::a::A<T>::type`, `p->::a::S::~S()`, the pseudo-destructor
+`i->::I::~I()` (both type names share the one `::`) and the
+declarator-id `::a::S::~S` each keep theirs
+(`tests/conformance/written_refs/global-colons.cpp`).
+
+**Recorded at parse.** At the three places a leading `::` starts a
+qualifier (`parse_nested_name_upto`, the pseudo-destructor's
+`::F::~Q`, and the scanned qualifier of a template template argument),
+the parser takes the link from `WrittenRefs::global_link(colon)`
+instead of `RefQualifier::GLOBAL`: a `u32` with the global bit (bit 31)
+set and the `::`'s index in a scratch list of locations below it.
+`push` stores it as `GLOBAL` with the `::` as the entry's lead, so no
+in-flight link reaches an entry and every reader of `qualifier` is
+unchanged (entry ids stay below bit 31). The `~` is noted with the
+destructor name (`Parser::note_wname_dtor`) and the destructor
+declarator-id. The alternative, deriving the `::` as the token before
+the first component's `range.lo`, was rejected although it stores
+nothing: the table's clients have no token stream after the unit is
+built (an importer or a PCH consumer never had the prefix's), the
+token before the first component is `template` in `:: template G<int>`,
+and for a macro's `::` the text before the name is the macro's name;
+skipping comments and splices would need the lexer again.
+
+**Cost.** Off, `global_link` is one branch on the flag and returns
+`GLOBAL` (the parser called nothing before), the destructor sites
+test the flag they already tested, and the name the parser holds for
+`with_written_name` carries one more `Loc`: nothing is allocated and the entry
+is still 28 bytes (its `size_of` test). On, each leading `::` costs 4
+bytes of scratch and each globally qualified entry or destructor name
+a 12-byte row. On `#include <bits/stdc++.h>` (debug build, GCC 14's
+libstdc++, `-std=c++26 -fsyntax-only`) the table has 209,806 entries,
+8,367,460 live bytes; 641 are globally qualified and 60 are destructor
+names, 701 rows (8,412 bytes) and at least 641 scratch locations (2,564
+bytes): about 11 KB, 0.13% of the table. Every `q=::` of its dump has
+its position.
+
+**Carriage.** The PCH section (§18.10.1) carries the rows as
+`WrittenRefsSection::leads`, validated sorted, in range, and each `::`
+on an entry whose qualifier is `GLOBAL`; the scratch list is never
+carried (no in-flight link outlives its name). The image's `refs`
+section (spec/modules.md §11.11) ends with them, (entry, colon, tilde)
+as three words with `NONE` for an absent location, its locations in the
+offset check, validated as the snapshot's. PCH `FORMAT_VERSION` 147,
+`IMAGE_VERSION` 80 (146 and 79 are WP-2091's).
+
+**Tests.** `crates/kiln_ast/src/written_refs.rs`
+(`leading_colons_and_tildes_are_kept_beside_the_entry`: the link,
+normalization, off, `name_lo`, `qualified_lo`, sorted insertion,
+truncation), `written_refs_carry.rs` (the rows round trip; a `::` on an
+entry that is not globally qualified is rejected),
+`crates/kiln_sema/src/bmi_image/refs.rs` (the rows round trip; a row of
+no entry, a `::` on an entry without one and rows out of order are
+rejected), `crates/kiln_parse/tests/written_refs.rs`
+(`leading_colons_and_tildes_through_the_api`: a macro's `::`, a
+comment between, the destructor's `MemberExpr` at its `~`),
+`tests/conformance/written_refs/global-colons.cpp`, and the carriage
+goldens: `Inputs/refs_pch.h` and `Inputs/refs_mod.cppm` end with a
+`p->::N::Pt::~Pt()`, so `pch.refs` (through the snapshot and as text)
+and `module.refs` (through the image and replayed) show the same
+`q=::` and `tilde=` positions.
 
 ## 19. The declaration-extent table (WP-2090)
 

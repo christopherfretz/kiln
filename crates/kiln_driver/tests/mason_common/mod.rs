@@ -241,7 +241,7 @@ pub fn container(obj: &[u8]) -> Vec<u8> {
 
 /// The definition hash's scheme (kind 1 `odr.scheme`) the kind 2 tests
 /// expect.
-pub const DEF_SCHEME: &str = "kiln-odr-1";
+pub const DEF_SCHEME: &str = "kiln-odr-2";
 
 /// Kind 2 row flags (O-15) and classes.
 pub const VAGUE: u16 = 1;

@@ -11,8 +11,9 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::Arc;
 
-use kiln_source::{FileId, SourceManager, WorkDir};
+use kiln_source::{FileId, Overlay, SourceManager, WorkDir};
 
 /// The group a search directory was given in (clang
 /// `frontend::IncludeDirGroup`).
@@ -372,9 +373,15 @@ fn read_names(path: &Path) -> Option<Vec<String>> {
 /// (a miss stops there), one `fstat` of the descriptor (identity by
 /// device and inode) and its reads; a directory listing is one `open`,
 /// its `getdents` and a `close`. Nothing is canonicalized.
+///
+/// With an [`Overlay`] ([`RealFs::with_overlay`]) a read of an overlaid
+/// file (`#embed`) returns the overlay's bytes; a header is loaded through
+/// the source manager, which consults its own overlay
+/// (spec/source.md "Overlay"). Directory queries never consult it.
 #[derive(Clone, Debug, Default)]
 pub struct RealFs {
     work_dir: WorkDir,
+    overlay: Option<Arc<Overlay>>,
 }
 
 impl RealFs {
@@ -386,7 +393,16 @@ impl RealFs {
 
     /// The disk, relative paths resolved against `work_dir`.
     pub fn in_dir(work_dir: WorkDir) -> RealFs {
-        RealFs { work_dir }
+        RealFs { work_dir, overlay: None }
+    }
+
+    /// This file system with `overlay`'s replacement contents for
+    /// [`HeaderFs::read`] (the source manager's,
+    /// [`SourceManager::overlay`]); `None` reads the disk only.
+    #[must_use]
+    pub fn with_overlay(mut self, overlay: Option<Arc<Overlay>>) -> RealFs {
+        self.overlay = overlay.filter(|o| !o.is_empty());
+        self
     }
 
     /// The path to open for `path`.
@@ -448,8 +464,14 @@ impl HeaderFs for RealFs {
     }
 
     fn read(&mut self, path: &str) -> Option<Vec<u8>> {
-        let mut f = std::fs::File::open(self.disk(path)).ok()?;
+        let disk = self.disk(path);
+        let mut f = std::fs::File::open(&disk).ok()?;
         let m = f.metadata().ok().filter(std::fs::Metadata::is_file)?;
+        if let Some(o) = &self.overlay
+            && let Some(b) = o.bytes_of(&disk, &m)
+        {
+            return Some(b.to_vec());
+        }
         kiln_source::read_open_file(&mut f, &m).ok()
     }
 }

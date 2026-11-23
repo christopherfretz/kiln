@@ -2897,7 +2897,7 @@ fn module_header_source_inputs() {
 
 /// WP-2111 (spec/pp.md "Preprocessing record", inclusions): a header-unit
 /// import read from its module file is an `imported` inclusion row with
-/// the file found, and flags the record incomplete; the module file's
+/// the file found, and (WP-2113) the record is complete; the module file's
 /// copy of the header that kiln replays is that row's instance. Built from
 /// its source the import is an `entered` row.
 #[test]
@@ -2921,7 +2921,9 @@ fn pp_record_header_unit_import() {
         ),
         "{out}"
     );
-    assert!(out.ends_with("record incomplete: restored imported\n"), "{out}");
+    // WP-2113: the replay is recorded and the exports keep the unit's
+    // keys, so the import is complete.
+    assert!(out.ends_with("\nrecord complete\n"), "{out}");
     let out = dump(&["-fsyntax-only", "-fkiln-dump-pp-record", "u.cpp"]);
     assert!(out.contains(&format!("{row} entered file h.h ctx i1\n")), "{out}");
 }

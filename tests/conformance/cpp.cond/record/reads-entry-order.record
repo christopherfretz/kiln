@@ -1,0 +1,18 @@
+def reads-entry-order.cpp:367 HDR file dir reads-entry-order.cpp:359..reads-entry-order.cpp:389 = < no - such - header . h >
+def reads-entry-order.cpp:398 A file dir reads-entry-order.cpp:390..reads-entry-order.cpp:401 = 1
+def reads-entry-order.cpp:410 F(x) file dir reads-entry-order.cpp:402..reads-entry-order.cpp:418 = ( x )
+param reads-entry-order.cpp:410 0 x reads-entry-order.cpp:412 uses b1:plain
+def builtin:__has_include __has_include builtin
+exp reads-entry-order.cpp:438 HDR def reads-entry-order.cpp:367 end reads-entry-order.cpp:438 in-directive
+exp reads-entry-order.cpp:424 __has_include def builtin:__has_include end reads-entry-order.cpp:441 in-directive
+exp reads-entry-order.cpp:446 F def reads-entry-order.cpp:410 end reads-entry-order.cpp:449 in-directive args a0=reads-entry-order.cpp:448..reads-entry-order.cpp:449/1
+exp reads-entry-order.cpp:448 A def reads-entry-order.cpp:398 parent reads-entry-order.cpp:446 end reads-entry-order.cpp:448 in-directive
+query reads-entry-order.cpp:424 __has_include <no-such-header.h> = 0 name reads-entry-order.cpp:438..reads-entry-order.cpp:441 macro
+cond reads-entry-order.cpp:419 if taken cond reads-entry-order.cpp:422..reads-entry-order.cpp:464 group reads-entry-order.cpp:464..reads-entry-order.cpp:472
+read reads-entry-order.cpp:419 expanded HDR reads-entry-order.cpp:367 at reads-entry-order.cpp:438 exp reads-entry-order.cpp:438
+read reads-entry-order.cpp:419 expanded __has_include builtin:__has_include at reads-entry-order.cpp:424 exp reads-entry-order.cpp:424
+read reads-entry-order.cpp:419 expanded F reads-entry-order.cpp:410 at reads-entry-order.cpp:446 exp reads-entry-order.cpp:446
+read reads-entry-order.cpp:419 expanded A reads-entry-order.cpp:398 at reads-entry-order.cpp:448 exp reads-entry-order.cpp:448
+read reads-entry-order.cpp:419 tested A reads-entry-order.cpp:398 at reads-entry-order.cpp:462
+cond reads-entry-order.cpp:472 endif closes open reads-entry-order.cpp:419 cond reads-entry-order.cpp:478..reads-entry-order.cpp:478
+record complete

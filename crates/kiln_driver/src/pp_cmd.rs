@@ -399,8 +399,8 @@ impl Job<'_> {
         engine: &DiagEngine<'_>,
         angled: bool,
     ) -> Option<FileId> {
-        let mut search =
-            HeaderSearch::new(RealFs::in_dir(self.args.work_dir.clone()), self.search_list());
+        let fs = RealFs::in_dir(self.args.work_dir.clone()).with_overlay(sm.overlay().cloned());
+        let mut search = HeaderSearch::new(fs, self.search_list());
         let req = IncludeRequest {
             kind: IncludeKind::Include,
             name: self.path.to_owned(),
@@ -709,8 +709,10 @@ impl Job<'_> {
         // (spec/modules.md §11.12); `-E`/`-M` import nothing.
         let cache_key = staged.then(|| (predefines.clone(), list.verbose_text()));
         sm.set_work_dir(a.work_dir.clone());
-        let mut search = HeaderSearch::new(RealFs::in_dir(a.work_dir.clone()), list)
-            .with_embed_dirs(a.embed_dirs.clone());
+        // `#embed` reads through the source manager's overlay, as its
+        // loads do (spec/source.md "Overlay").
+        let fs = RealFs::in_dir(a.work_dir.clone()).with_overlay(sm.overlay().cloned());
+        let mut search = HeaderSearch::new(fs, list).with_embed_dirs(a.embed_dirs.clone());
         if a.pch.record_lookups || hooks.is_some_and(|h| h.record_lookups) {
             search.record_lookups();
         }
@@ -1125,7 +1127,12 @@ impl Job<'_> {
                 }
             }
             if let Some(r) = pp.record() {
-                result.output.push_str(&r.dump(sm, interner, &toks));
+                result.output.push_str(&r.dump_with(
+                    sm,
+                    interner,
+                    &toks,
+                    a.pp_record_dump_options(),
+                ));
             }
         } else {
             let opts = PrintOptions {

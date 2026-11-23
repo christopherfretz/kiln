@@ -1,7 +1,7 @@
 // [cpp.embed]: an `#embed` is an inclusion row of kind `embed` with
-// outcome `embedded`, its name range and its written spelling; the file
-// found and its search index are not recorded yet (spec/pp.md
-// "Preprocessing record", inclusions).
+// outcome `embedded`, its name range, its written spelling and the
+// resource read (`file`); found relative to the includer, it has no
+// search index (spec/pp.md "Preprocessing record", inclusions).
 //@ expect: compile-ok
 //@ strict-diags
 //@ args: -Wno-c23-extensions

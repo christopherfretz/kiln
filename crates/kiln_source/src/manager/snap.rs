@@ -24,6 +24,7 @@
 //! | `macro_prefix_map` | configuration | not stored: the consumer sets it from its own command line (validated by the snapshot's configuration fingerprint) |
 //! | `source_path_style` | configuration | not stored, as `macro_prefix_map` |
 //! | `work_dir` | configuration | not stored, as `macro_prefix_map` (a lazy buffer's path is stored joined) |
+//! | `overlay` | configuration | not stored: a restored manager has none (spec/source.md "Overlay") |
 //! | `gcc_names` | state | as data |
 //!
 //! `FileEntry`:
@@ -31,7 +32,7 @@
 //! | field | class | how |
 //! |---|---|---|
 //! | `start`, `name`, `len` | state | as data |
-//! | `origin` | state | a buffer read from disk is restored as a lazy buffer of its path, checked against the content hash of its text on first use (`Origin::Lazy`, as [`SourceManager::add_lazy_file`]); a virtual buffer as itself |
+//! | `origin` | state | a buffer read from disk is restored as a lazy buffer of its path, checked against the content hash of its text on first use (`Origin::Lazy`, as [`SourceManager::add_lazy_file`]); a virtual buffer as itself; an overlaid one (`Origin::Overlay`) as a lazy buffer whose recorded copy was used, its text inline (the disk does not hold it) |
 //! | `origin` (`Lazy::copy`) | rebuilt (lost) | a closure: a lazy buffer whose copy was already used is carried with its text inline; an unread one loses its copy |
 //! | `body` | state / rebuilt | a virtual buffer's text inline; a disk buffer's text is re-read from the file on first use, its load report recomputed then |
 //! | `lines` | rebuilt | the line-start cache, recomputed on first use |
@@ -78,6 +79,14 @@ impl Snap for FileEntry {
                 w.u8(ON_DISK);
                 PathBuf::from(&**name).put(w);
                 content_hash(text().as_bytes()).put(w);
+            }
+            // The text is the overlay's, not the disk's: carried inline,
+            // as a lazy buffer whose recorded copy was used.
+            Origin::Overlay => {
+                w.u8(RECORDED);
+                PathBuf::from(&**name).put(w);
+                content_hash(text().as_bytes()).put(w);
+                w.str(text());
             }
             Origin::Lazy { path, hash, copy: _ } => {
                 let copied = body.get().filter(|b| b.outcome == LazyOutcome::Copy);
@@ -197,6 +206,7 @@ impl Snap for SourceManager {
             source_path_style: _,
             work_dir: _,
             gcc_names,
+            overlay: _,
         } = self;
         presumed_names.put(w);
         files.put(w);
@@ -237,6 +247,7 @@ impl Snap for SourceManager {
             source_path_style: OnceLock::new(),
             work_dir: OnceLock::new(),
             gcc_names,
+            overlay: OnceLock::new(),
         };
         if let Err(why) =
             kiln_snap::timing::timed_part("SourceManager check", || sm.check_restored())

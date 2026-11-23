@@ -1624,7 +1624,7 @@ impl Parser<'_, '_> {
             return None;
         };
         let nl = self.bump().span.lo;
-        self.note_wname(nl, RefQualifier::NONE);
+        self.note_wname_dtor(tl, nl, RefQualifier::NONE);
         if self.at(Punct::Less) {
             // `p->~X<T>()`: the simple-template-id names the destroyed
             // class type.
@@ -1735,7 +1735,7 @@ impl Parser<'_, '_> {
                 return None;
             };
             let nl = self.bump().span.lo;
-            self.note_wname(nl, link);
+            self.note_wname_dtor(tl, nl, link);
             if self.at(Punct::Less)
                 && let Some(sf) = self.s.dependent_destructor_prefix(e, arrow, q)
             {
@@ -1905,7 +1905,7 @@ impl Parser<'_, '_> {
         let qual = if self.pos() + 1 == first_at {
             // `::F::~Q`.
             let start = self.bump().span.lo;
-            link = RefQualifier::GLOBAL;
+            link = self.s.ast.written_refs.global_link(start);
             Some(kiln_sema::using::Qualifier {
                 ctx: self.s.ast.tu,
                 nns: self.s.nns_global(),
@@ -1977,7 +1977,7 @@ impl Parser<'_, '_> {
         };
         let nl = self.bump().span.lo;
         // `Q`, recorded with the expression: the destroyed type.
-        self.note_wname(nl, link);
+        self.note_wname_dtor(tl, nl, link);
         let destroyed = if self.at(Punct::Less) {
             Some(self.parse_pseudo_dtor_template_id(qual, name, nl)?)
         } else {
@@ -2556,7 +2556,7 @@ impl Parser<'_, '_> {
             let tl = self.bump().span.lo;
             let name = self.ident()?;
             let nl = self.bump().span.lo;
-            self.note_wname(nl, link);
+            self.note_wname_dtor(tl, nl, link);
             let this = self.s.act_on_this(begin);
             return Some(self.s.act_on_member_destructor_q(
                 this,

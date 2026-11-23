@@ -155,7 +155,36 @@ pub fn parse_stack_size(v: &str) -> Option<usize> {
     Some(bytes.max(MIN_STACK_SIZE))
 }
 
+/// A [`Sema`]'s guard state set aside while an evaluation-session entry
+/// works on the calling thread ([`Sema::guard_enter_thread`]).
+#[derive(Clone, Copy, Debug)]
+#[must_use = "the saved state is restored by `Sema::guard_leave_thread`"]
+pub(crate) struct GuardSave {
+    guard: StackGuard,
+    exhausted: bool,
+}
+
 impl Sema<'_, '_> {
+    /// Makes the calling thread's guard ([`StackGuard::current`]) the one
+    /// every check reads until [`Sema::guard_leave_thread`]
+    /// (spec/eval-session.md §9): a session compiled on one thread runs on
+    /// any. Sema's copy is the creating thread's, and its base measured
+    /// against another thread's frames reads as no stack left.
+    pub(crate) fn guard_enter_thread(&mut self) -> GuardSave {
+        let guard = self.inst.guard;
+        self.inst.guard = StackGuard::current();
+        GuardSave { guard, exhausted: self.inst.stack_exhausted.get() }
+    }
+
+    /// Restores what [`Sema::guard_enter_thread`] set aside: the creating
+    /// thread's guard, and the tripped flag as it was before (an
+    /// exhaustion during the entry ends with it: its fatal error was the
+    /// entry's, spec/eval-session.md §9).
+    pub(crate) fn guard_leave_thread(&mut self, save: GuardSave) {
+        self.inst.guard = save.guard;
+        self.inst.stack_exhausted.set(save.exhausted);
+    }
+
     /// Whether the stack is nearly exhausted (a cheap check for the
     /// recursive entries; spec/sema-templates.md P4 (c)).
     #[inline]

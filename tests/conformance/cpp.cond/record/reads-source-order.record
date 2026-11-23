@@ -1,0 +1,18 @@
+def reads-source-order.cpp:496 HDR file dir reads-source-order.cpp:488..reads-source-order.cpp:518 = < no - such - header . h >
+def reads-source-order.cpp:527 A file dir reads-source-order.cpp:519..reads-source-order.cpp:530 = 1
+def reads-source-order.cpp:539 F(x) file dir reads-source-order.cpp:531..reads-source-order.cpp:547 = ( x )
+param reads-source-order.cpp:539 0 x reads-source-order.cpp:541 uses b1:plain
+def builtin:__has_include __has_include builtin
+exp reads-source-order.cpp:567 HDR def reads-source-order.cpp:496 end reads-source-order.cpp:567 in-directive
+exp reads-source-order.cpp:553 __has_include def builtin:__has_include end reads-source-order.cpp:570 in-directive
+exp reads-source-order.cpp:575 F def reads-source-order.cpp:539 end reads-source-order.cpp:578 in-directive args a0=reads-source-order.cpp:577..reads-source-order.cpp:578/1
+exp reads-source-order.cpp:577 A def reads-source-order.cpp:527 parent reads-source-order.cpp:575 end reads-source-order.cpp:577 in-directive
+query reads-source-order.cpp:553 __has_include <no-such-header.h> = 0 name reads-source-order.cpp:567..reads-source-order.cpp:570 macro
+cond reads-source-order.cpp:548 if taken cond reads-source-order.cpp:551..reads-source-order.cpp:593 group reads-source-order.cpp:593..reads-source-order.cpp:601
+read reads-source-order.cpp:548 expanded __has_include builtin:__has_include at reads-source-order.cpp:553 exp reads-source-order.cpp:553
+read reads-source-order.cpp:548 expanded HDR reads-source-order.cpp:496 at reads-source-order.cpp:567 exp reads-source-order.cpp:567
+read reads-source-order.cpp:548 expanded F reads-source-order.cpp:539 at reads-source-order.cpp:575 exp reads-source-order.cpp:575
+read reads-source-order.cpp:548 expanded A reads-source-order.cpp:527 at reads-source-order.cpp:577 exp reads-source-order.cpp:577
+read reads-source-order.cpp:548 tested A reads-source-order.cpp:527 at reads-source-order.cpp:591
+cond reads-source-order.cpp:601 endif closes open reads-source-order.cpp:548 cond reads-source-order.cpp:607..reads-source-order.cpp:607
+record complete

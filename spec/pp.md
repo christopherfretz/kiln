@@ -851,7 +851,10 @@ is a port of clang's `PrintPPOutputPPCallbacks`. It covers:
 
 `kiln_pp::state` writes and installs the preprocessor state a header
 leaves behind. The record's contents and byte layout are
-spec/modules.md §11.13.
+spec/modules.md §11.13. The decoded record is
+`kiln_pp::state::StateRecord` (`decode`, `materialize`; named
+`PpRecord` before WP-2114, which freed that name for the preprocessing
+record below).
 
 - **Points.** A preprocessor with `StateHooks` (`set_state_hooks`,
   before the first token) counts the *points* of the main file's
@@ -900,7 +903,7 @@ spec/modules.md §11.13.
   the installed record on `-E`, `-dM -E` and diagnostics, including
   the whole pp torture corpus.
 
-### Preprocessing record (WP-2110, WP-2111, WP-2112)
+### Preprocessing record (WP-2110, WP-2111, WP-2112, WP-2113)
 
 `kiln_pp::record` keeps, on request, what macro expansion did, so that a
 tooling client can ask where any token location came from: which
@@ -1105,7 +1108,7 @@ they fill:
 | `AfterDepthLimit` | the limit was hit earlier and the file was entered before: not entered again (clang's include-cycle cut) | yes | |
 | `NotFound` | no file (an error) | none | |
 | `Malformed` | no usable header name, or a directive inside macro arguments: nothing was looked up | none | |
-| `Embedded` | an `#embed` whose resource was found | none (yet) | |
+| `Embedded` | an `#embed` whose resource was found | `lookup` only: the index in the `--embed-dir` list it was found at (`None`: relative to the includer, as written, or absolute) | `resource(i)`: the path it was read from (`None` when replayed from a module file, which logs the bytes alone; WP-2260) |
 | `Imported` | a header-unit import whose macros came from a module file, or from an earlier import of the unit | yes | an instance when kiln replays the module file's copy of the header |
 
 A header-unit import built from source here is `Entered`, its instance
@@ -1118,8 +1121,10 @@ inclusion.
 loc) -> IncContext` is total: `Inclusion(i)`, the instance whose range
 holds the location; `Main`, the main file (the root of every chain);
 `Builtin`, the predefines buffer `<built-in>` (predefines, `-D`/`-U`,
-the `-include` lines); `Unknown`, anything else (an invalid location, a
-restored prefix, a scratch buffer). A macro location is resolved
+the `-include` lines); `Imported { image }`, a buffer of a module
+imported from its declaration image (stage 4, below); `Unknown`,
+anything else (an invalid location, a prefix restored without its
+record, a scratch buffer). A macro location is resolved
 through `expansion_loc`, so an expansion's tokens are in the context of
 their outermost invocation; the caller does not have to. A definition
 is asked by its name, an expansion by its name, a conditional or an
@@ -1276,7 +1281,10 @@ line per output token at a macro location comes first. Lines:
 `inc <key> <kind> <written> [macro <exp>] [name <lo>..<hi>] <outcome>
 [file <name>] [dir <n>] [guard <def>] [ctx i<n>]`, `cond <key> <kind>
 <outcome> [guard] [unterminated] [open <key>|stray] cond <lo>..<hi>
-[group <lo>..<hi>]` and `once <key>`, and a last line `record complete`
+[group <lo>..<hi>]`, `once <key>` and `image <key> <module> files
+<name>[ +<n>]` (an import built from its declaration image, its key the
+module name, then the unit's main file and how many more files the
+image has), and a last line `record complete`
 or `record incomplete: <flags>`. Stage 3 adds, after the `undef` lines,
 `push <key> <name> saves <def>|undefined`, `pop <key> <name> restores
 <def>|undefined replaces <def>|undefined [push <key>]` and `pop <key>
@@ -1296,7 +1304,15 @@ and compares the keys, or follows the chain through the `inc` lines.
 Conditionals, queries and stack events in `<built-in>` are not printed; an `-include`'s written
 name is reduced to its last path component. Origins print as
 `<exp>:b<k>` (body token), `<exp>:a<k>@b<use>[<index>]<<from>` (argument,
-then the origin of `from`), `<exp>:<kind>(b<i>..b<j>)` (made) and `?`.
+then the origin of `from`), `<exp>:<kind>(b<i>..b<j>)` (made), `imported:<module>` (a location
+of a declaration image) and `?`. An `Embedded` row's `file` is the last
+path component of its resource. `-fkiln-dump-pp-record=source-order`
+(`DumpOptions::reads_in_source_order`) prints each condition's reads in
+source order: by the file location each is at (through every
+expansion), entry order among reads at one place; by default they are
+in entry order, where the `expanded` read of a builtin
+(`__has_include(M)`) follows those of the macros its operand expanded
+(WP-2301).
 Builtin, predefined, command-line and restored definitions are printed
 only when an expansion or an `#undef` names them (the driver adds `-D`s
 of its own, which differ between `-fclang-compat=` versions). The harness directive
@@ -1310,11 +1326,12 @@ and dead) with its outcome, ranges, links, guard flag and
 unterminated flag, the `#pragma once` that took effect, every inclusion
 directive with its outcome, and the include context of every location.
 Gaps are never silent:
-`gaps()` (`is_complete()`) has `RESTORED` when a PCH snapshot or a
-preprocessor-state record was installed, or a definition was met that
-the record did not see made (registered when first met, source
-`Restored`), `IMPORTED` when a header unit's macros came from a module
-file or image (a header-unit import with outcome `Imported`), and
+`gaps()` (`is_complete()`) has `RESTORED` when a PCH snapshot without
+a record (stage 4) or a preprocessor-state record was installed, or a
+definition was met that the record did not see made (registered when
+first met, source `Restored`), `IMPORTED` when a module's unit was built
+from its declaration image, or a header unit's macros were met that the
+record did not see made (stage 4), and
 `LOC_SPACE_EXHAUSTED` when an expansion or an
 inclusion could not get its own locations (two inclusions may then share
 `Loc`s, and `inclusion_of` cannot tell them apart). Under `RESTORED` the
@@ -1335,11 +1352,66 @@ derivation; every evaluated condition has reads, is partial, or is
 literally constant; the `Expanded` reads are exactly the expansions
 entered in the directive; recording on and off give the same `-E`
 output, the same `Loc` and the same `Symbol` for every token; and the
-new tables are counted in `bytes()`. Not yet recorded: the file and
-search index of an `#embed`; carriage of the record in PCH snapshots
-and module images (stage 4, WP-2113). Until then a translation unit
-restored from a snapshot is `RESTORED` for stage 3 as for stages 1
-and 2.
+new tables are counted in `bytes()`.
+
+**Carriage (stage 4, WP-2113).** *PCH snapshots.* A PCH built
+recording (`-fkiln-pp-record` or `-fkiln-dump-pp-record`) carries its
+header's record: `Preprocessor::snap_put_record` writes it last, after
+every root of the snapshot and in the same stream, so that each
+recorded definition is the restored macro table's own `MacroDef`. With
+recording off it writes nothing: such a snapshot has the bytes it had
+before stage 4 except the format version and its schema hash
+(spec/pch.md "Format versioning"), and the dump of the options, which
+names the new `-fkiln-dump-pp-record=source-order` field. The consumer reads it with
+`snap_restore_record` (a `RecordCarry`) after every root and before it
+enters its main file; the record is checked (every index in range,
+every sorted table sorted, every symbol interned, every file id
+allocated, every definition consistent: a damaged record refuses the
+snapshot, which replays the header, never a panic), its pointer index
+rebuilt, and recording goes on into it. The restored unit's record is
+then the record of the same compile with the header as `-include` in
+place of the PCH, table for table and index for index (definitions and
+their parameters, expansions, arguments, entries, `#undef`s,
+conditionals, inclusions, instances, once marks, made rows, reads,
+queries, stack events, nesting): the producer reads the same
+predefines and `-include`s in the same order. What differs is the
+`Loc` values (the producer laid the prefix out after an empty main
+file, the consumer's own run after its main file), so the equality is
+the dump's, whose keys are `file:offset`. Recording is not part of a
+PCH's identity (spec/pch.md): a recording consumer of a snapshot built
+without the record restores it all the same, its record is `RESTORED`
+(the prefix's rows absent), and `-v` notes `snapshot restored without
+its preprocessing record`; a consumer that does not record skips the
+record's bytes.
+
+*Header units.* A header unit's exports go through the
+preprocessor-state record (spec/modules.md §11.13 "Header units"),
+which makes new `MacroDef`s; the record keeps each as an alias of the
+definition it saw made in the unit, so an importer's expansion, read or
+`#undef` of an exported macro names the unit's row and key. A header
+unit read from its module file is replayed from the module file's copy
+of the header, recorded as source (an `Imported` row with an instance):
+the import is complete. `IMPORTED` is left for a definition met that
+the record did not see made.
+
+*Named modules.* A named module whose capsule is replayed in process is
+recorded as source. One built from its declaration image
+(`-fkiln-bmi-image`, spec/modules.md §11.11 "Part 2a") is not
+preprocessed in the importer at all: the image's declarations keep
+their locations in the module's own files, which the importer's source
+manager recreates without lexing them. The record carries no per-image
+record. It names each such import (`images()`: `ImageUnit { module,
+at, files }`), answers every location in one of its `files` with
+`IncContext::Imported { image }` and, at a macro location,
+`Origin::Imported { image }` (never `Unknown`), and sets `IMPORTED`.
+This is the smallest carriage that leaves no location of an imported
+declaration without an origin or an explicit "not recorded" answer: a
+client that wants the purview's rows records the module interface's own
+compile, whose keys (`file:offset` of the same files) join the
+importer's. Carrying a record in every image would cost each image the
+record's size (about 130 bytes per expansion) whether or not anyone
+records, for rows of a preprocessing the importer never does. A module
+preamble lexed before the image takes over is recorded as source.
 
 **Cost.** Per expansion 24 bytes, per argument 8, per argument token 4,
 per definition 32 plus the retained `MacroDef`, per parameter 4, per
@@ -1352,7 +1424,9 @@ only the record keeps alive. Recording off allocates nothing.
 per made row 8 bytes plus 4 per operand, per evaluated condition that
 read something 8 plus 16 per read, per conditional row 4 (`enclosing`)
 and 8 more once `cond_at` is called, per query 32 plus its operand text,
-per stack event 20. Measured at
+per stack event 20. Stage 4 adds 16 per header-unit export (the alias
+and its index entry), per image import 24 plus its module name and 4 per
+file, and per `#embed` resource 24 plus its path. Measured at
 WP-2110 (release build, median of 5): `<bits/stdc++.h>` makes 38,780
 expansions and a 5.0 MB record (about 130 bytes per expansion, all
 tables and spare capacity included), peak RSS +3.9 MiB, `-E` time
@@ -1371,6 +1445,22 @@ over recording off, and times are within noise; on clang's
 `SemaExpr.cpp` (`-std=c++17`) the record grows from 20.4 MB to 23.3 MB.
 With recording off, time and peak RSS are within noise of the build
 before stage 3, and the Oven's counters on `bench/oven` are identical.
+Measured at WP-2113 (harness build, median of 7): one unit including
+every libc++ header (`-std=c++26 -stdlib=libc++ -fsyntax-only`) has a
+15.2 MB record (190,762 rows in `pp.record`), peak RSS +10.5 MiB, time
+within noise; as a PCH, the snapshot grows from 42.3 MB to 52.8 MB, and
+a recording consumer restores it in 0.29 s against 0.16 s (+9.9 MiB),
+while a consumer that does not record skips the record within noise.
+A PCH of `<bits/stdc++.h>` grows from 37.6 MB to 44.3 MB; restoring it
+takes 0.30 s with recording on or off (+7.8 MiB with it). `import std;`
+is complete, peak RSS +11.9 MiB, time within noise. The LLVM slice
+(`llvm/lib/IR/Instructions.cpp` and clang's `SemaExpr.cpp`, `-E`)
+passes the completeness checks: 10.8 MB and 25.2 MB records, the
+latter +16.3 MiB with time within noise. With recording off, a PCH of
+`<bits/stdc++.h>` is byte for byte the one built before stage 4 except
+the format version, the schema hash, the options line's new field and
+the checksum, and the counters of `bench/oven` (29 entries) and
+`bench/frontend` (19) are identical to it.
 
 **Tests.** `crates/kiln_pp/tests/pp_record.rs` (the parameter-use
 classifier against real expansions, stability, `-E` identity with
@@ -1381,8 +1471,16 @@ runs, the include contexts; stage 3: the completeness checks on the
 acceptance cases and on `<bits/stdc++.h>`, paste operands, the same
 tokens with recording on and off, `cond_at` and `enclosing` across two
 instances, a skipped group and a macro location, push/pop pairs, the
-bytes counted); `crates/kiln_driver/tests/modules_bmi.rs`
-`pp_record_header_unit_import` (an `Imported` row and the gap); the
+bytes counted; stage 4: a snapshot round trip at the `kiln_pp` level on
+the acceptance cases and on the host's libstdc++ and libc++ headers, the
+restored unit's record equal to the record without the snapshot, and a
+damaged record refused); `crates/kiln_driver/tests/pp_record_carry.rs`
+(a PCH built recording and the same compile without it give the same
+dump, a PCH built without the record gives `restored` and the note, a
+header-unit import's expansions name the unit's definitions, a named
+module imported from its image answers `imported`);
+`crates/kiln_driver/tests/modules_bmi.rs` `pp_record_header_unit_import`
+(an `Imported` row, complete); the
 dump goldens under `tests/conformance/cpp.replace/record`,
 `cpp.cond/record`, `cpp.include/record` and `cpp.embed/record`.
 

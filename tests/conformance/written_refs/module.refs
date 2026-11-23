@@ -21,6 +21,12 @@ refs_mod.cppm:17:32-17:35  nns  'geo' -> geo@refs_mod.cppm:4:18 in=top@refs_mod.
 refs_mod.cppm:17:37-17:42  expr  'twice' -> geo::twice<int>@refs_mod.cppm:10:22 found=geo::twice@refs_mod.cppm:10:22 q=refs_mod.cppm:17:32 in=top@refs_mod.cppm:17:5
 refs_mod.cppm:17:43-17:44  expr  'a' -> a@refs_mod.cppm:17:13 in=top@refs_mod.cppm:17:5
 refs_mod.cppm:17:48-17:49  expr  'b' -> b@refs_mod.cppm:17:20 in=top@refs_mod.cppm:17:5
+refs_mod.cppm:20:25-20:28  nns  'geo' -> geo@refs_mod.cppm:4:18 in=p@refs_mod.cppm:20:34
+refs_mod.cppm:20:30-20:32  type  'Pt' -> geo::Pt@refs_mod.cppm:5:8 q=refs_mod.cppm:20:25 in=p@refs_mod.cppm:20:34
+refs_mod.cppm:20:39-20:40  expr  'p' -> p@refs_mod.cppm:20:34 in=lead@refs_mod.cppm:20:20
+refs_mod.cppm:20:44-20:47  nns  'geo' -> geo@refs_mod.cppm:4:18 q=::refs_mod.cppm:20:42 in=lead@refs_mod.cppm:20:20
+refs_mod.cppm:20:49-20:51  nns  'Pt' -> geo::Pt@refs_mod.cppm:5:8 q=refs_mod.cppm:20:44 in=lead@refs_mod.cppm:20:20
+refs_mod.cppm:20:54-20:56  member  'Pt' -> geo::Pt::~Pt@refs_mod.cppm:5:8 q=refs_mod.cppm:20:49 tilde=refs_mod.cppm:20:53 in=lead@refs_mod.cppm:20:20
 13:20-13:23  nns  'geo' -> geo@refs_mod.cppm:4:18 in=use@13:5
 13:25-13:30  expr  'twice' -> geo::twice<int>@refs_mod.cppm:10:22 found=geo::twice@refs_mod.cppm:10:22 q=13:20 in=use@13:5
 13:36-13:39  expr  'top' -> top@refs_mod.cppm:17:5 in=use@13:5 adl-ns=

@@ -1,9 +1,9 @@
 20:24-20:29  nns  'outer' -> outer@12:11 in=short_name@20:11
 20:31-20:36  ns-alias  'inner' -> outer::inner@13:11 q=20:24 in=short_name@20:11
 21:19-21:29  ns-alias  'short_name' -> short_name@20:11 in=again@21:11
-22:27-22:32  ns-alias  'outer' -> outer@12:11 q=:: in=from_global@22:11
+22:27-22:32  ns-alias  'outer' -> outer@12:11 q=::22:25 in=from_global@22:11
 24:17-24:22  using-directive  'outer' -> outer@12:11 in=(tu)
-25:19-25:24  nns  'outer' -> outer@12:11 q=:: in=(tu)
+25:19-25:24  nns  'outer' -> outer@12:11 q=::25:17 in=(tu)
 25:26-25:31  using-directive  'inner' -> outer::inner@13:11 q=25:19 in=(tu)
 26:17-26:27  using-directive  'short_name' -> short_name@20:11 in=(tu)
 29:19-29:24  using-directive  'again' -> again@21:11 in=read@28:5

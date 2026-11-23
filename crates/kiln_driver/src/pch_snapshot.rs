@@ -57,6 +57,7 @@ pub(crate) const SCHEMA_HASH: u64 = kiln_snap::SchemaHash::new("snapshot", "root
     .root_field("diagnostics engine", DiagEngine::SNAP_SCHEMA_HASH)
     .root_field("preprocessor", Preprocessor::SNAP_SCHEMA_HASH)
     .root_field("sema", Sema::SNAP_SCHEMA_HASH)
+    .field::<kiln_pp::PpRecord>("preprocessing record")
     .finish();
 
 /// The descriptor walk of the same roots ([`SCHEMA_HASH`]'s readable
@@ -71,6 +72,7 @@ pub(crate) fn schema() -> kiln_snap::Schema {
     DiagEngine::snap_schema(&mut s);
     Preprocessor::snap_schema(&mut s);
     Sema::snap_schema(&mut s);
+    kiln_pp::PpRecord::schema(&mut s);
     s
 }
 
@@ -131,7 +133,7 @@ pub(crate) const MAGIC: [u8; 8] = *b"KILNSNAP";
 /// driver warning id; version 7 (WP-1433) a new AST cold map
 /// (`offsetof_layout`); version 8 (WP-1426) the SME diagnostic ids and
 /// attribute kinds and the 32-bit `FuncInfo`.
-pub(crate) const FORMAT_VERSION: u32 = 146;
+pub(crate) const FORMAT_VERSION: u32 = 150;
 /// The length of the magic and the format version.
 pub(crate) const HEADER_LEN: usize = 12;
 
@@ -173,8 +175,12 @@ fn excluded(args: &Args) -> Args {
         // §18.10.1): either side may differ.
         written_refs: d.written_refs,
         dump_decl_extents: d.dump_decl_extents,
+        // The preprocessing record likewise: carried when the producer
+        // recorded it, read when the consumer records (spec/pp.md
+        // "Preprocessing record", stage 4).
         pp_record: d.pp_record,
         dump_pp_record: d.dump_pp_record,
+        dump_pp_record_source_order: d.dump_pp_record_source_order,
         cfg_stats: d.cfg_stats,
         memory_report: d.memory_report,
         time_trace: d.time_trace,
@@ -912,6 +918,8 @@ pub(crate) struct Restore<'r> {
     pub reader: Reader<'r>,
     /// The `-include`s after the PCH.
     pub includes: &'r [String],
+    /// The PCH (for the notes of the restore).
+    pch: &'r str,
     /// Why the restore failed (the job then replays), set by the job.
     pub failed: Option<String>,
     pub timer: Timer,
@@ -938,7 +946,11 @@ pub(crate) fn open(
     timer.mark("SourceManager");
     let interner: Arc<Interner> = reader.get().map_err(|e| e.to_string())?;
     timer.mark("Interner");
-    Ok((sm, interner, Restore { reader, includes: &s.includes, failed: None, timer, verify }))
+    Ok((
+        sm,
+        interner,
+        Restore { reader, includes: &s.includes, pch: &s.pch, failed: None, timer, verify },
+    ))
 }
 
 /// A streamed section block's checksum as it is read, and the checksum
@@ -1068,17 +1080,6 @@ impl crate::pp_cmd::Job<'_> {
         // The files the snapshot's prefix loaded: a written-reference
         // table restored without entries names them (spec/ast.md §18.10.1).
         let prefix_files = u32::try_from(sm.file_count()).unwrap_or(u32::MAX);
-        let entered = pp.enter_next_main_file(main).and_then(|()| {
-            if restore.includes.is_empty() {
-                Ok(())
-            } else {
-                pp.enter_builtin_includes(includes_buffer(restore.includes))
-            }
-        });
-        if let Err(e) = entered {
-            restore.failed = Some(format!("Preprocessor: {e}"));
-            return None;
-        }
         let popts = parse_options();
         let mut sema = kiln_parse::new_sema(
             Arc::clone(interner),
@@ -1099,6 +1100,28 @@ impl crate::pp_cmd::Job<'_> {
             restore.failed = Some(format!("Sema: {e}"));
             return None;
         }
+        // The preprocessing record, after every root (spec/pp.md
+        // "Preprocessing record", stage 4): read before the main file is
+        // entered, which goes on recording into it.
+        let carry = match pp.snap_restore_record(&mut restore.reader) {
+            Ok(c) => c,
+            Err(e) => {
+                restore.failed = Some(format!("PpRecord: {e}"));
+                return None;
+            }
+        };
+        restore.timer.mark("PpRecord");
+        let entered = pp.enter_next_main_file(main).and_then(|()| {
+            if restore.includes.is_empty() {
+                Ok(())
+            } else {
+                pp.enter_builtin_includes(includes_buffer(restore.includes))
+            }
+        });
+        if let Err(e) = entered {
+            restore.failed = Some(format!("Preprocessor: {e}"));
+            return None;
+        }
         sema.ast.written_refs.set_prefix_files(prefix_files);
         if restore.reader.remaining() != 0 {
             restore.failed = Some(format!("{} trailing bytes", restore.reader.remaining()));
@@ -1110,6 +1133,11 @@ impl crate::pp_cmd::Job<'_> {
         if restore.verify.as_ref().is_some_and(|c| !c.matches()) {
             restore.failed = Some("the section block read does not match its checksum".to_owned());
             return None;
+        }
+        if carry == kiln_pp::RecordCarry::NotCarried {
+            let what = "restored without its preprocessing record (the header was built without \
+                        -fkiln-pp-record): the record of this compile is incomplete";
+            note(self.args, &self.stderr, restore.pch, what);
         }
         Some((sema, pp, deps, popts))
     }
@@ -1415,6 +1443,11 @@ pub(crate) fn produce(
     a.pch.header_main = false;
     a.pch.producing = false;
     a.pch.record_lookups = true;
+    // The record is carried when the header was built recording
+    // (spec/pp.md "Preprocessing record", stage 4); its dump is the
+    // header pass's output, not the snapshot pass's.
+    a.pp_record = a.pp_record || a.dump_pp_record;
+    a.dump_pp_record = false;
     let written = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let gate = Single { header, written: Arc::clone(&written) };
     let stderr = if single {

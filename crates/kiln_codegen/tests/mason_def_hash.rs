@@ -624,7 +624,7 @@ fn golden_path() -> PathBuf {
 }
 
 const GOLDEN_HEADER: &str = "\
-# The definition hash's golden digests (kiln_abi::odr_def, scheme kiln-odr-1).
+# The definition hash's golden digests (kiln_abi::odr_def, scheme kiln-odr-2).
 # BUMP RULE (mortar O-11): a changed digest here means the serialization
 # changed; bump ODR_DEF_SCHEME in crates/kiln_abi/src/odr_def/mod.rs (and
 # spec/abi.md \"Definition hash\"), then regenerate with KILN_BLESS=1.
@@ -1698,5 +1698,192 @@ fn attribute_misses_split_equal_meaning() {
         let (x, y) = (digest_in(a, "f"), digest_in(b, "f"));
         assert!(!x.partial && !y.partial, "{case}");
         assert_ne!(x.hash, y.hash, "{case}: the miss is gone");
+    }
+}
+
+/// A coroutine prelude without headers (the coroutine lambda row).
+const CORO: &str = "\
+namespace std {\n\
+template <class R, class...> struct coroutine_traits { using promise_type = typename R::promise_type; };\n\
+template <class P = void> struct coroutine_handle {\n\
+  void* p;\n\
+  static coroutine_handle from_address(void* a) noexcept { return {a}; }\n\
+  void* address() const noexcept { return p; }\n\
+};\n\
+struct suspend_always {\n\
+  bool await_ready() const noexcept { return false; }\n\
+  template <class H> void await_suspend(H) const noexcept {}\n\
+  void await_resume() const noexcept {}\n\
+};\n\
+struct suspend_never {\n\
+  bool await_ready() const noexcept { return true; }\n\
+  template <class H> void await_suspend(H) const noexcept {}\n\
+  void await_resume() const noexcept {}\n\
+};\n\
+}\n\
+struct start {};\n\
+struct task {\n\
+  struct promise_type {\n\
+    task get_return_object() { return {}; }\n\
+    start initial_suspend() { return {}; }\n\
+    std::suspend_never final_suspend() noexcept { return {}; }\n\
+    void return_void() {}\n\
+    void unhandled_exception() {}\n\
+  };\n\
+};\n\
+inline std::suspend_never operator co_await(const start&) { return {}; }\n";
+
+/// A tuple-like class without headers (the structured binding row).
+const TUPLE_LIKE: &str = "\
+namespace std { using size_t = decltype(sizeof 0);\n\
+template <class T> struct tuple_size; template <size_t I, class T> struct tuple_element; }\n\
+namespace n { struct P { int a, b; };\n\
+template <std::size_t I> const int &get(const P &p) { return I ? p.b : p.a; } }\n\
+template <> struct std::tuple_size<n::P> { static constexpr std::size_t value = 2; };\n\
+template <std::size_t I> struct std::tuple_element<I, n::P> { using type = const int; };\n";
+
+/// WP-2360, WP-2361 (`kiln-odr-2`): pairs of definitions that differ in
+/// meaning and hashed alike under `kiln-odr-1` (a tooling client's audit):
+/// a local class's tag, `#pragma pack` and layout attributes, a local
+/// enumeration's underlying type, a coroutine lambda's wrapped body, a
+/// tuple-like binding's `get`, a local's `cleanup(f)`, and `offsetof`'s
+/// operand type and designator.
+#[test]
+fn odr2_rows_move_the_digest() {
+    let rows: Vec<(&str, String, String)> = vec![
+        (
+            "local union against struct",
+            "int f() { union U { int a; double b; }; return sizeof(U); }".into(),
+            "int f() { struct U { int a; double b; }; return sizeof(U); }".into(),
+        ),
+        (
+            "local class packed",
+            "int f() { struct __attribute__((packed)) S { char c; int i; }; return sizeof(S); }"
+                .into(),
+            "int f() { struct S { char c; int i; }; return sizeof(S); }".into(),
+        ),
+        (
+            "local class pragma pack",
+            "int f() {\n#pragma pack(push, 1)\nstruct S { char c; int i; };\n#pragma pack(pop)\n\
+             return sizeof(S); }"
+                .into(),
+            "int f() {\nstruct S { char c; int i; };\nreturn sizeof(S); }".into(),
+        ),
+        (
+            "local class field aligned",
+            "int f() { struct S { char c; [[gnu::aligned(8)]] int i; }; return sizeof(S); }".into(),
+            "int f() { struct S { char c; [[gnu::aligned(16)]] int i; }; return sizeof(S); }"
+                .into(),
+        ),
+        (
+            "local class alignas",
+            "int f() { struct alignas(8) S { int i; }; return sizeof(S); }".into(),
+            "int f() { struct alignas(16) S { int i; }; return sizeof(S); }".into(),
+        ),
+        (
+            "local enum underlying type",
+            "int f() { enum E : char { A }; return sizeof(E); }".into(),
+            "int f() { enum E : long { A }; return sizeof(E); }".into(),
+        ),
+        (
+            "local enum fixed",
+            "int f() { enum E { A }; return A; }".into(),
+            "int f() { enum E : int { A }; return A; }".into(),
+        ),
+        (
+            "coroutine lambda initial suspend",
+            format!("{CORO}void f() {{ auto l = []() -> task {{ co_return; }}; l(); }}"),
+            format!(
+                "{CORO}inline std::suspend_always operator co_await(start&&) {{ return {{}}; }}\n\
+                 void f() {{ auto l = []() -> task {{ co_return; }}; l(); }}"
+            ),
+        ),
+        (
+            "structured binding get",
+            format!("{TUPLE_LIKE}int f(n::P &p) {{ auto &[x, y] = p; return x; }}"),
+            format!(
+                "{TUPLE_LIKE}namespace n {{ template <std::size_t I> const int &get(P &p) \
+                 {{ return p.b; }} }}\nint f(n::P &p) {{ auto &[x, y] = p; return x; }}"
+            ),
+        ),
+        (
+            "cleanup function",
+            "void ra(int *); void rb(int *); void f() { int x __attribute__((cleanup(ra))) = 0; }"
+                .into(),
+            "void ra(int *); void rb(int *); void f() { int x __attribute__((cleanup(rb))) = 0; }"
+                .into(),
+        ),
+        (
+            "cleanup added",
+            "void ra(int *); void f() { int x = 0; }".into(),
+            "void ra(int *); void f() { int x __attribute__((cleanup(ra))) = 0; }".into(),
+        ),
+        (
+            "offsetof other class same layout",
+            "struct A { int x, y; }; struct Bq { int p, q; };\n\
+             unsigned long f() { return __builtin_offsetof(A, y); }"
+                .into(),
+            "struct A { int x, y; }; struct Bq { int p, q; };\n\
+             unsigned long f() { return __builtin_offsetof(Bq, q); }"
+                .into(),
+        ),
+        (
+            "offsetof union members",
+            "union U { int i; float fl; }; unsigned long f() { return __builtin_offsetof(U, i); }"
+                .into(),
+            "union U { int i; float fl; }; unsigned long f() { return __builtin_offsetof(U, fl); }"
+                .into(),
+        ),
+    ];
+    let mut bad = Vec::new();
+    for (case, a, b) in &rows {
+        let (x, y) = (digest_in(a, "f"), digest_in(b, "f"));
+        if x.hash == y.hash {
+            bad.push(*case);
+        }
+    }
+    assert!(bad.is_empty(), "{} of {} rows kept the digest: {bad:?}", bad.len(), rows.len());
+}
+
+/// `kiln-odr-2`'s must-equal pairs: `class` and `struct` are one tag of a
+/// local class; a typedef of `offsetof`'s operand type is the type.
+#[test]
+fn odr2_must_equal() {
+    let equal = [
+        (
+            "int f() { class L { public: int a; }; return L().a; }",
+            "int f() { struct L { int a; }; return L().a; }",
+        ),
+        (
+            "struct A { int x, y; }; unsigned long f() { return __builtin_offsetof(A, y); }",
+            "struct A { int x, y; }; typedef A T;\n\
+             unsigned long f() { return __builtin_offsetof(T, y); }",
+        ),
+    ];
+    for (a, b) in equal {
+        assert_eq!(digest_in(a, "f"), digest_in(b, "f"), "{a}");
+    }
+}
+
+/// The documented misses of `kiln-odr-2` (spec/abi.md "Misses and
+/// exclusions", #9 and #19): definitions that differ and hash alike. When
+/// one of them differs, the miss is gone: update the table.
+#[test]
+fn misses_pass() {
+    let pairs = [
+        (
+            "concatenated literal",
+            "const char *f() { return \"ab\" \"c\"; }",
+            "const char *f() { return \"ab\" \"d\"; }",
+        ),
+        (
+            "musttail",
+            "int g(int); int f(int x) { [[clang::musttail]] return g(x); }",
+            "int g(int); int f(int x) { return g(x); }",
+        ),
+    ];
+    for (case, a, b) in pairs {
+        let (x, y) = (digest_in(a, "f"), digest_in(b, "f"));
+        assert_eq!(x.hash, y.hash, "{case}: the miss is gone");
     }
 }

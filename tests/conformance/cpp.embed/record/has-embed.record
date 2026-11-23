@@ -1,0 +1,17 @@
+def builtin:__has_embed __has_embed builtin
+exp has-embed.cpp:430 __has_embed def builtin:__has_embed end has-embed.cpp:458 in-directive
+exp has-embed.cpp:482 __has_embed def builtin:__has_embed end has-embed.cpp:505 in-directive
+exp has-embed.cpp:535 __has_embed def builtin:__has_embed end has-embed.cpp:576 in-directive
+query has-embed.cpp:430 __has_embed "Inputs/two.bin" = 1 name has-embed.cpp:442..has-embed.cpp:458
+query has-embed.cpp:482 __has_embed <empty.bin> = 2 name has-embed.cpp:494..has-embed.cpp:505
+query has-embed.cpp:535 __has_embed "Inputs/missing.bin" = 0 name has-embed.cpp:547..has-embed.cpp:567
+cond has-embed.cpp:426 if taken cond has-embed.cpp:429..has-embed.cpp:459 group has-embed.cpp:459..has-embed.cpp:471
+read has-embed.cpp:426 expanded __has_embed builtin:__has_embed at has-embed.cpp:430 exp has-embed.cpp:430
+cond has-embed.cpp:471 endif closes open has-embed.cpp:426 cond has-embed.cpp:477..has-embed.cpp:477
+cond has-embed.cpp:478 if taken cond has-embed.cpp:481..has-embed.cpp:511 group has-embed.cpp:511..has-embed.cpp:523
+read has-embed.cpp:478 expanded __has_embed builtin:__has_embed at has-embed.cpp:482 exp has-embed.cpp:482
+cond has-embed.cpp:523 endif closes open has-embed.cpp:478 cond has-embed.cpp:529..has-embed.cpp:529
+cond has-embed.cpp:530 if taken cond has-embed.cpp:533..has-embed.cpp:577 group has-embed.cpp:577..has-embed.cpp:591
+read has-embed.cpp:530 expanded __has_embed builtin:__has_embed at has-embed.cpp:535 exp has-embed.cpp:535
+cond has-embed.cpp:591 endif closes open has-embed.cpp:530 cond has-embed.cpp:597..has-embed.cpp:597
+record complete

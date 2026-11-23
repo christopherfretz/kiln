@@ -78,9 +78,9 @@ pub use preprocessor::{Marker, PpItem, Preprocessor};
 pub use print::{PrintOptions, print_macros, print_preprocessed};
 pub use record::{
     Arg, CondIx, CondKind, CondOutcome, Conditional, DefEnd, DefIx, DefSource, Definition,
-    ExpFlags, ExpIx, Expansion, IncContext, IncIx, IncKind, IncOutcome, Inclusion, Made, MadeKind,
-    Origin, ParamUse, PpRecord, Query, Read, ReadKind, RecordFlags, StackEvent, StackKind, Undef,
-    Use,
+    DumpOptions, ExpFlags, ExpIx, Expansion, ImageUnit, IncContext, IncIx, IncKind, IncOutcome,
+    Inclusion, Made, MadeKind, Origin, ParamUse, PpRecord, Query, Read, ReadKind, RecordCarry,
+    RecordFlags, StackEvent, StackKind, Undef, Use,
 };
 pub use resolver::{HeaderSearch, SearchEvent, SearchObserver};
 pub use search::{

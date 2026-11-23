@@ -9,7 +9,7 @@ mod common;
 use common::PREDEFINES;
 use kiln_diag::{DiagEngine, DiagOptions, MemorySink};
 use kiln_lex::{Interner, Std};
-use kiln_pp::state::{PpRecord, StateHooks};
+use kiln_pp::state::{StateHooks, StateRecord};
 use kiln_pp::{
     DirGroup, HeaderSearch, IncludeResolver, MemoryResolver, PpOptions, Preprocessor, PrintOptions,
     RealFs, SearchDirSpec, SearchList, print_macros, print_preprocessed,
@@ -108,7 +108,7 @@ fn run_of(
     let mut pp = Preprocessor::new(&sm, &engine, &interner, opts(&pre));
     pp.set_include_resolver(files.resolver());
     if load {
-        let rec = PpRecord::decode(bytes).expect("the record decodes");
+        let rec = StateRecord::decode(bytes).expect("the record decodes");
         let st = rec.materialize(&sm, &interner).expect("the record materializes");
         pp.set_state_hooks(StateHooks { install: Some((0, st)), ..StateHooks::default() });
     }
@@ -210,12 +210,12 @@ fn record_is_total() {
     // decodes or is an error, never a panic.
     let bytes = record("#define F(a) a + 1\n#pragma push_macro(\"F\")\n#pragma GCC poison p\n");
     for n in 0..bytes.len() {
-        let _ = PpRecord::decode(&bytes[..n]);
+        let _ = StateRecord::decode(&bytes[..n]);
     }
     for i in 0..bytes.len() {
         let mut b = bytes.clone();
         b[i] ^= 0x5a;
-        if let Ok(r) = PpRecord::decode(&b) {
+        if let Ok(r) = StateRecord::decode(&b) {
             let interner = Interner::new();
             let sm = SourceManager::new();
             let _ = r.materialize(&sm, &interner);

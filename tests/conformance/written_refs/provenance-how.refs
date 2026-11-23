@@ -30,7 +30,7 @@
 35:46-35:48  nns  'ns' -> ns@7:11 in=r@35:7
 35:50-35:54  nns  'Base' -> ns::Base@8:8 q=35:46 in=r@35:7
 35:56-35:58  member  'bm' -> ns::Base::bm@10:7 q=35:50 in=r@35:7
-35:63-35:65  nns  'ns' -> ns@7:11 q=:: in=r@35:7
+35:63-35:65  nns  'ns' -> ns@7:11 q=::35:61 in=r@35:7
 35:67-35:71  type  'Base' -> ns::Base@8:8 q=35:63 in=r@35:7
 35:75-35:77  member  'bm' -> ns::Base::bm@10:7 in=r@35:7
 36:3-36:6  type  'Gen' -> Gen@31:8 in=gen@36:7

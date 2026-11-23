@@ -335,9 +335,15 @@ impl Oven {
         }
         if let Fault::Uncaught { obj, ty, what } = &fault {
             // At the exception's throw, without a call stack (clang's
-            // P3068 `note_constexpr_unhandled_exception*`).
+            // P3068 `note_constexpr_unhandled_exception*`); in an
+            // evaluation-session run, with the call stack it left the
+            // entry from (spec/eval-session.md §7, WP-2413).
             let (loc, note) = self.uncaught_note(ast, site, *obj, *ty, what.as_deref());
-            return vec![Note::new(loc, note)];
+            let mut notes = vec![Note::new(loc, note)];
+            if self.session_run_outermost() {
+                self.call_stack(ast, &mut notes);
+            }
+            return notes;
         }
         let mut extra = Vec::new();
         let mut frame = None;

@@ -871,6 +871,24 @@ impl Sema<'_, '_> {
         None
     }
 
+    /// The name `early` resolved to is resolved once more, to `to`
+    /// (possibly under parentheses or `&`): a function template-id
+    /// re-resolved against its target ([over.over]/1,
+    /// [`Self::retarget_template_id`]). Its entry follows, so it names
+    /// what the expression names (the join, spec/ast.md §18.11.1).
+    pub(crate) fn repoint_written_name(&mut self, early: ExprId, to: ExprId) {
+        if !self.records_written_refs() || !self.inst.stack.is_empty() {
+            return;
+        }
+        let (Target::Decl(old, _), Target::Decl(new, found)) =
+            (self.written_target(early), self.written_target(self.addr_operand(to)))
+        else {
+            return;
+        };
+        let lo = self.ast.exprs.get(early).loc();
+        let _ = self.ast.written_refs.repoint(lo, old, new, found);
+    }
+
     /// The overload set `from` goes on as the set `to`.
     #[inline]
     pub(crate) fn retarget_written_ref(&mut self, from: ExprId, to: ExprId) {

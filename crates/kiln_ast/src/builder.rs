@@ -2557,17 +2557,23 @@ impl<'a> AstBuilder<'a> {
     /// `getNonLValueExprType`) reading the next variadic argument through
     /// the `va_list` lvalue `list`; `ty_loc` is where `written` begins
     /// and `rparen` is the closing `)`. Dependence is `written`'s plus `list`'s without its type
-    /// dependence (clang's `computeDependence(VAArgExpr *)`).
+    /// dependence (clang's `computeDependence(VAArgExpr *)`), and `ERROR`
+    /// when `erroneous` (a non-POD `written` reported as an error).
+    #[allow(clippy::too_many_arguments, reason = "one node's fields")]
     pub fn va_arg_expr(
         &mut self,
         list: ExprId,
         written: QualType,
         ty: QualType,
+        erroneous: bool,
         ty_loc: Loc,
         loc: Loc,
         rparen: Loc,
     ) -> ExprId {
-        let deps = self.type_deps(written) | self.deps(list).without(ExprDeps::TYPE);
+        let mut deps = self.type_deps(written) | self.deps(list).without(ExprDeps::TYPE);
+        if erroneous {
+            deps |= ExprDeps::ERROR;
+        }
         let e = self.simple(
             ExprKind::VAArgExpr,
             ValueCategory::PRValue,
@@ -3542,11 +3548,16 @@ impl<'a> AstBuilder<'a> {
     /// bytes. `indices` are the array subscripts written in the
     /// designator (dumped as children, as clang). `invalid_record`: the
     /// designator passes through an invalid class, so the value is not a
-    /// constant (clang `ExprConstant` `VisitOffsetOfExpr`).
+    /// constant (clang `ExprConstant` `VisitOffsetOfExpr`). `designator`
+    /// is the operand type as written and the designator as resolved
+    /// (`ColdExprData::offsetof_designator`, for tooling clients; an
+    /// `Index` names its position in `indices`).
+    #[allow(clippy::too_many_arguments, reason = "one node's fields")]
     pub fn offsetof(
         &mut self,
         ty: QualType,
         indices: &[ExprId],
+        designator: (QualType, &[crate::expr::OffsetofNode]),
         offset: u32,
         invalid_record: bool,
         loc: Loc,
@@ -3568,24 +3579,33 @@ impl<'a> AstBuilder<'a> {
             offset,
         );
         self.ast.exprs.cold.end_loc.insert(e, rparen).expect(FRESH_EXPR);
+        let (operand, nodes) = designator;
+        self.ast
+            .exprs
+            .cold
+            .offsetof_designator
+            .insert(e, (operand, nodes.into()))
+            .expect(FRESH_EXPR);
         e
     }
 
     /// `__builtin_offsetof(T, designator)` whose value is computed when
     /// it is evaluated: the sum of `steps` in `size_t` (`ty`), an index
     /// not being a constant or the constant offset not fitting a `u32`.
-    /// `indices` are all the array subscripts written, as
-    /// [`Self::offsetof`].
+    /// `indices` are all the array subscripts written and `designator`
+    /// the resolved designator, as [`Self::offsetof`].
+    #[allow(clippy::too_many_arguments, reason = "one node's fields")]
     pub fn offsetof_steps(
         &mut self,
         ty: QualType,
         indices: &[ExprId],
+        designator: (QualType, &[crate::expr::OffsetofNode]),
         steps: &[crate::expr::OffsetofStep],
         invalid_record: bool,
         loc: Loc,
         rparen: Loc,
     ) -> ExprId {
-        let e = self.offsetof(ty, indices, 0, invalid_record, loc, rparen);
+        let e = self.offsetof(ty, indices, designator, 0, invalid_record, loc, rparen);
         self.ast.exprs.cold.offsetof_layout.insert(e, steps.into()).expect(FRESH_EXPR);
         e
     }

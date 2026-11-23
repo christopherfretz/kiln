@@ -1,0 +1,46 @@
+17:53-17:54  type  'T' -> T@17:19 in=a::S::g@17:33
+20:16-20:17  type  'T' -> T@19:17 in=a::A@19:27
+25:35-25:36  type  'T' -> T@24:17 in=G::x@25:24
+31:30-31:31  nns  'a' -> a@12:11 q=::29:16 in=macros@31:5
+31:33-31:34  expr  'f' -> a::f@13:5 q=31:30 in=macros@31:5
+30:16-30:17  nns  'a' -> a@12:11 q=::30:14 in=macros@31:5 exp=31:39
+31:44-31:45  expr  'f' -> a::f@13:5 q=30:16 in=macros@31:5
+31:57-31:60  expr  'top' -> top@28:5 q=::29:16 in=macros@31:5
+32:39-32:40  nns  'G' -> G@24:27 q=::32:28 in=template_kw@32:5
+32:47-32:48  expr  'x' -> G<int>::x@25:24 q=32:39 in=template_kw@32:5
+32:53-32:54  nns  'a' -> a@12:11 q=::32:51 in=template_kw@32:5
+32:56-32:57  nns  'S' -> a::S@14:8 q=32:53 in=template_kw@32:5
+32:68-32:69  expr  'g' -> a::S::g<char>@17:33 found=a::S::g@17:33 q=32:56 in=template_kw@32:5
+33:12-33:13  nns  'a' -> a@12:11 in=p@33:18
+33:15-33:16  type  'S' -> a::S@14:8 q=33:12 in=p@33:18
+33:21-33:22  nns  'a' -> a@12:11 in=q@33:32
+33:24-33:25  template  'A' -> a::A@19:27 q=33:21 in=q@33:32
+33:35-33:36  type  'I' -> I@27:13 in=i@33:38
+34:3-34:4  expr  'p' -> p@33:18 in=dtors@33:6
+34:8-34:9  nns  'a' -> a@12:11 q=::34:6 in=dtors@33:6
+34:11-34:12  nns  'S' -> a::S@14:8 q=34:8 in=dtors@33:6
+34:15-34:16  member  'S' -> a::S::~S@16:3 q=34:11 tilde=34:14 in=dtors@33:6
+35:3-35:4  expr  'q' -> q@33:32 in=dtors@33:6
+35:8-35:9  nns  'a' -> a@12:11 q=::35:6 in=dtors@33:6
+35:11-35:12  nns  'A' -> a::A@19:27 q=35:8 in=dtors@33:6
+35:20-35:21  member  'A' -> a::A<int>::~A@21:3 q=35:11 tilde=35:19 in=dtors@33:6
+36:3-36:4  expr  'i' -> i@33:38 in=dtors@33:6
+36:8-36:9  type  'I' -> I@27:13 q=::36:6 in=dtors@33:6
+36:12-36:13  type  'I' -> I@27:13 q=::36:6 tilde=36:11 in=dtors@33:6
+38:3-38:4  nns  'a' -> a@12:11 q=::38:1 in=a::S::~S@38:9
+38:6-38:7  nns  'S' -> a::S@14:8 q=38:3 in=a::S::~S@38:9
+38:10-38:11  redecl  'S' -> a::S::~S@16:3 q=38:6 tilde=38:9 in=a::S::~S@38:9
+39:57-39:58  nns  'a' -> a@12:11 q=::39:55 in=dep@39:24
+39:62-39:63  type  'T' -> T@39:17 in=dep@39:24
+39:60-39:61  nns  'A' -> a::A@19:27 q=39:57 in=dep@39:24
+39:66-39:70  type  'type' -> (dependent) q=39:60 in=dep@39:24
+39:66-39:70  type  'type' -> a::A<int>::type@20:9 spec=dep<int>@39:24
+40:24-40:27  expr  'dep' -> dep<int>@39:24 found=dep@39:24 in=use_dep@40:5 adl-ns=
+42:29-42:30  nns  'a' -> a@12:11 q=::42:10 in=spaced@41:5
+42:32-42:33  expr  'f' -> a::f@13:5 q=42:29 in=spaced@41:5
+43:7-43:10  expr  'top' -> top@28:5 q=::42:38 in=spaced@41:5
+43:15-44:2  nns  '\
+a' -> a@12:11 q=::43:13 in=spaced@41:5
+44:4-44:5  nns  'S' -> a::S@14:8 q=43:15 in=spaced@41:5
+44:7-44:12  expr  'count' -> a::S::count@15:14 q=44:4 in=spaced@41:5
+45:2-45:5  expr  'top' -> top@28:5 q=::44:15 in=spaced@41:5

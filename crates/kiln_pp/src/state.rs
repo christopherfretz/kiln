@@ -6,7 +6,7 @@
 //!
 //! The writer snapshots a [`Preprocessor`] against a [`Baseline`] (the
 //! state before the header was read) into a [`PpState`] and encodes it;
-//! the reader decodes a [`PpRecord`], materializes it into an importer's
+//! the reader decodes a [`StateRecord`], materializes it into an importer's
 //! source manager (lazy buffers for the files, the location records of
 //! `kiln_source::image_locs`) and installs it into a fresh
 //! preprocessor, which then goes on as if it had read the header.
@@ -71,7 +71,7 @@ pub struct Baseline {
 /// The preprocessor state a header leaves, as the difference from a
 /// [`Baseline`]: what the record holds, either taken from a live
 /// preprocessor ([`Preprocessor::state_snapshot`]) or materialized from a
-/// record ([`PpRecord::materialize`]).
+/// record ([`StateRecord::materialize`]).
 #[derive(Debug, Default)]
 pub struct PpState {
     /// Definitions made or replaced, by name.
@@ -314,7 +314,7 @@ impl Preprocessor<'_, '_> {
     ) -> Option<Vec<Rc<MacroDef>>> {
         let st = PpState { macros: defs.to_vec(), ..PpState::default() };
         let bytes = st.encode(self.sm, self.interner, unit).ok()?;
-        let rec = PpRecord::decode(&bytes).ok()?;
+        let rec = StateRecord::decode(&bytes).ok()?;
         let mut back = rec.materialize(self.sm, self.interner).ok()?;
         // The encoding sorts by name; the export order is by location.
         let pos: HashMap<Symbol, usize> =
@@ -641,7 +641,7 @@ enum RawDef {
 
 /// A decoded, checked record, not yet tied to a source manager.
 #[derive(Clone, Debug)]
-pub struct PpRecord {
+pub struct StateRecord {
     files: Vec<FileRec>,
     slocs: Vec<SlocRec>,
     bases: Vec<u32>,
@@ -688,7 +688,7 @@ fn tok_flags(bits: u8) -> W<TokFlags> {
     Ok(f)
 }
 
-impl PpRecord {
+impl StateRecord {
     /// Decodes and checks the bytes of a [`crate::bmi::SECTION_PP`]
     /// section. Total: every malformed input is an error.
     ///
@@ -699,7 +699,7 @@ impl PpRecord {
         clippy::many_single_char_names,
         reason = "the layout field by field, in order (spec/modules.md §11.13)"
     )]
-    pub fn decode(bytes: &[u8]) -> W<PpRecord> {
+    pub fn decode(bytes: &[u8]) -> W<StateRecord> {
         let mut r = Reader(bytes);
         if r.u32()? != VERSION {
             return Err("an unknown preprocessor-state record version");
@@ -928,7 +928,7 @@ impl PpRecord {
         if !r.0.is_empty() {
             return Err("trailing bytes in the preprocessor-state record");
         }
-        Ok(PpRecord {
+        Ok(StateRecord {
             files,
             slocs,
             bases,

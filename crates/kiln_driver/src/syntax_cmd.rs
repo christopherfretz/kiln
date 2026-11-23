@@ -319,6 +319,10 @@ impl SyntaxJob<'_> {
         engine.snap_put(&mut w)?;
         p.pp.snap_put(&mut w)?;
         p.sema.snap_put(&mut w)?;
+        // Last, and only when the prefix was recorded (spec/pp.md
+        // "Preprocessing record", stage 4): with recording off the
+        // snapshot has no byte of it.
+        p.pp.snap_put_record(&mut w);
         let bytes = w.into_bytes();
         if crate::pch_snapshot::timing() {
             eprintln!(
@@ -589,11 +593,19 @@ impl SyntaxJob<'_> {
         engine: &'a DiagEngine<'sm>,
         interner: &'sm Arc<Interner>,
         host: Box<dyn kiln_parse::HostCalls + Send>,
-    ) -> Option<(kiln_sema::Sema<'a, 'sm>, Option<FileId>)> {
+    ) -> Option<(kiln_sema::Sema<'a, 'sm>, Option<FileId>, Vec<crate::front_end::Consulted>)> {
         let job = &self.0;
         let inputs = job.pp_inputs(sm, engine)?;
         let target = self.target(engine)?;
-        let (pp, _) = job.build_preprocessor(sm, engine, interner, inputs, true)?;
+        // Header search's events, for the consulted resources (WP-2412).
+        let hooks = crate::front_end::PpHooks {
+            record_lookups: false,
+            pp_record: false,
+            events: crate::front_end::SearchEvents::default(),
+            overlay: None,
+        };
+        let (pp, _) =
+            job.build_preprocessor_with(sm, engine, interner, inputs, true, Some(&hooks))?;
         let popts = ParseOptions {
             record_carried: false,
             record_image: false,
@@ -603,7 +615,7 @@ impl SyntaxJob<'_> {
         };
         let main = pp.main_file();
         let limits = job.args.constexpr.limits();
-        let (sema, _) = kiln_parse::parse_preprocessed_retained(
+        let (sema, pp) = kiln_parse::parse_preprocessed_retained(
             pp,
             Arc::clone(interner),
             engine,
@@ -612,7 +624,8 @@ impl SyntaxJob<'_> {
             limits,
             Some(host),
         );
-        Some((sema, main))
+        let consulted = crate::front_end::consulted(sm, &pp, &hooks.events.borrow());
+        Some((sema, main, consulted))
     }
 
     /// The end of [`Self::parse`]: module and PCH output, reports and
@@ -665,7 +678,7 @@ impl SyntaxJob<'_> {
             h.see(&unit, &mut pp);
         }
         let pp_record = if a.dump_pp_record {
-            pp.record().map(|r| r.dump(sm, pp.interner(), &[]))
+            pp.record().map(|r| r.dump_with(sm, pp.interner(), &[], a.pp_record_dump_options()))
         } else {
             None
         };
@@ -747,6 +760,11 @@ impl SyntaxJob<'_> {
     pub(crate) fn run_hooked(&self, engines: &dyn crate::Engines, hooks: &mut Hooks<'_>) {
         let job = &self.0;
         let sm = SourceManager::new();
+        // `FrontEndOptions::overlay`, before any load (spec/source.md
+        // "Overlay").
+        if let Some(o) = &hooks.pp.overlay {
+            sm.set_overlay(Arc::clone(o));
+        }
         let interner = Arc::new(Interner::new());
         let engine = engines.make(&sm, job.diag_opts, None);
         let mut result = JobResult::default();

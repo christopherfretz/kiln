@@ -17,7 +17,7 @@
 50:48-50:49  nns  'a' -> a@15:11 in=qualified@50:5
 50:51-50:56  nns  'inner' -> a::inner@18:11 q=50:48 in=qualified@50:5
 50:58-50:62  expr  'deep' -> a::inner::deep@19:5 q=50:51 in=qualified@50:5
-50:67-50:69  expr  'dv' -> d::dv@33:5 q=:: in=qualified@50:5 udir=d@37:1
+50:67-50:69  expr  'dv' -> d::dv@33:5 q=::50:65 in=qualified@50:5 udir=d@37:1
 53:7-53:8  nns  'a' -> a@15:11 in=e::y@53:10
 53:10-53:11  using-decl  'y' -> a::y@17:5 q=53:7 in=e::y@53:10
 54:18-54:19  expr  'y' -> a::y@17:5 found=e::y@53:10 in=e::f@54:5

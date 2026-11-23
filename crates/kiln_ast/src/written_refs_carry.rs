@@ -12,8 +12,9 @@
 //! | `entries`, `pending`, `extra`, `adl_sets`, `udir_cache`, `designators` | state: the main table, its pending patches and provenance |
 //! | `specs` (dropped rows included, so `SpecRefId`s stay), `spec_nodes`, `spec_udirs` | state: the per-specialization table, its pattern nodes and their using-directives |
 //! | `unrecorded` | state |
+//! | `leads` | state: the leading `::` and `~` tokens (WP-2326) |
 //! | `adl_index`, `spec_seen` | rebuilt from `adl_sets` and the live rows of `specs` |
-//! | `inst_target`, `spec_pending`, `spec_last`, `spec_key` | transient: scratch of one declaration or one instantiation, empty at rest |
+//! | `inst_target`, `spec_pending`, `spec_last`, `spec_key`, `colons` | transient: scratch of one declaration or one instantiation, empty at rest |
 //! | `on` | the restoring compilation's own option |
 
 use std::collections::HashMap;
@@ -22,8 +23,8 @@ use kiln_snap::{Reader, SnapError, Writer};
 use kiln_source::Loc;
 
 use super::{
-    AdlSet, AdlSetId, PatternNode, QualLink, RefExtra, SPEC_DEAD, SpecRef, Unrecorded, WrittenRef,
-    WrittenRefId, WrittenRefs,
+    AdlSet, AdlSetId, PatternNode, QualLink, RefExtra, RefLead, SPEC_DEAD, SpecRef, Unrecorded,
+    WrittenRef, WrittenRefId, WrittenRefs,
 };
 use crate::Ast;
 use crate::ids::{DeclId, ExprId};
@@ -42,6 +43,7 @@ pub struct WrittenRefsSection {
     spec_nodes: Vec<(PatternNode, WrittenRefId)>,
     spec_udirs: Vec<((WrittenRefId, DeclId), DeclId)>,
     unrecorded: Vec<Unrecorded>,
+    leads: Vec<RefLead>,
 }
 
 /// The schema hash of the section's payload, which `Sema`'s snapshot root
@@ -67,6 +69,7 @@ impl WrittenRefs {
             spec_nodes: sorted(&self.spec_nodes),
             spec_udirs: sorted(&self.spec_udirs),
             unrecorded: self.unrecorded.clone(),
+            leads: self.leads.clone(),
         }
     }
 
@@ -84,6 +87,16 @@ impl WrittenRefs {
             {
                 return Err("a written-reference qualifier that does not precede its entry");
             }
+        }
+        // Leads: by entry, once each, a `::` only on a global qualifier.
+        let leads_ok = s.leads.windows(2).all(|w| w[0].entry < w[1].entry)
+            && s.leads.iter().all(|l| {
+                entry_ok(l.entry)
+                    && (!l.colon.is_valid()
+                        || s.entries[l.entry.index()].qualifier.link() == QualLink::Global)
+            });
+        if !leads_ok {
+            return Err("a written-reference lead out of order or on the wrong entry");
         }
         let ok = s.pending.iter().all(|&(_, id)| entry_ok(id))
             && s.extra.iter().all(|&(id, x)| entry_ok(id) && set_ok(x.adl))
@@ -126,6 +139,8 @@ impl WrittenRefs {
             spec_last: None,
             spec_key: None,
             unrecorded: s.unrecorded,
+            leads: s.leads,
+            colons: Vec::new(),
         })
     }
 }
@@ -255,5 +270,30 @@ mod tests {
         let bytes = put(&ast);
         let mut r = Reader::new(&bytes);
         assert!(ast.get_written_refs(&mut r, true, 0).is_err());
+    }
+
+    #[test]
+    fn leads_round_trip_and_a_colon_off_a_global_is_rejected() {
+        let mut ast = new_ast();
+        ast.written_refs.set_on(true);
+        let link = ast.written_refs.global_link(Loc::from_raw(3));
+        let ea = ast.written_refs.push(entry(link)).unwrap();
+        let eb = ast.written_refs.push(entry(RefQualifier::entry(ea))).unwrap();
+        ast.written_refs.set_tilde(eb, Loc::from_raw(4));
+        let bytes = put(&ast);
+        let mut back = new_ast();
+        let mut rd = Reader::new(&bytes);
+        back.get_written_refs(&mut rd, true, 0).expect("read");
+        assert_eq!(back.written_refs.leads(), ast.written_refs.leads());
+        assert_eq!(back.written_refs.global_colon(ea), Some(Loc::from_raw(3)));
+        assert_eq!(back.written_refs.tilde(eb), Some(Loc::from_raw(4)));
+        // A `::` on an entry that is not globally qualified.
+        let mut bad = new_ast();
+        bad.written_refs.set_on(true);
+        let ec = bad.written_refs.push(entry(RefQualifier::NONE)).unwrap();
+        bad.written_refs.set_lead(ec, Some(Loc::from_raw(3)), None);
+        let bytes = put(&bad);
+        let mut rd = Reader::new(&bytes);
+        assert!(new_ast().get_written_refs(&mut rd, true, 0).is_err());
     }
 }

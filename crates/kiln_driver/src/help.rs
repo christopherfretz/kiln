@@ -344,6 +344,9 @@ KILN DEVELOPMENT:
                           [kiln] Record and dump the declaration extents
   -fkiln-dump-pp-record   [kiln] Dump the preprocessing record (with -E: the
                           origin of each token from a macro)
+  -fkiln-dump-pp-record=source-order
+                          [kiln] The same, each condition's reads in source
+                          order
   -fkiln-pp-record        [kiln] Keep the preprocessing record (for measuring)
   -fkiln-cfg-stats        [kiln] With -fsyntax-only: control-flow graph sizes
   -fkiln-cfg-max-elems=<n>

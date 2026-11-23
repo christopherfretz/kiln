@@ -102,6 +102,14 @@ pub struct EmbedRequest {
 pub struct EmbedData {
     /// The bytes, already cut to `offset`/`limit`.
     pub bytes: Vec<u8>,
+    /// The path the resource was read from, as the resolver spelled it
+    /// (`None`: not known, a resource replayed from a module file); the
+    /// preprocessing record keeps it ([`crate::PpRecord::resource`]).
+    pub path: Option<String>,
+    /// The index in the `--embed-dir` list it was found at (`None`:
+    /// relative to the includer, as written, or an absolute name), as an
+    /// inclusion's [`crate::Inclusion::lookup`].
+    pub lookup: Option<u32>,
 }
 
 /// Finds headers and resources for the preprocessor.
@@ -261,6 +269,6 @@ impl IncludeResolver for MemoryResolver {
         let len = req
             .limit
             .map_or(rest.len(), |l| usize::try_from(l).unwrap_or(usize::MAX).min(rest.len()));
-        Some(EmbedData { bytes: rest[..len].to_vec() })
+        Some(EmbedData { bytes: rest[..len].to_vec(), path: Some(req.name.clone()), lookup: None })
     }
 }

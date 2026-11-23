@@ -68,8 +68,13 @@ use crate::mangle::AnonIds;
 /// narrower overload test of the short form, `target_clones`' clone list
 /// (WP-1608, WP-1626).
 /// `kiln-odr-1` (WP-1586, K-3f): `d5`'s serialization, frozen and renamed
-/// with no byte changed. Any later change is `kiln-odr-2`.
-pub const ODR_DEF_SCHEME: &str = "kiln-odr-1";
+/// with no byte changed.
+/// `kiln-odr-2` (WP-2360, WP-2361): a local class's tag, `#pragma pack`
+/// value and layout attributes, a local enumeration's underlying type, a
+/// coroutine lambda's wrapped body, a tuple-like binding's holding
+/// variable, a local's `cleanup(f)`, and `offsetof`'s operand type and
+/// resolved designator.
+pub const ODR_DEF_SCHEME: &str = "kiln-odr-2";
 
 // Tags. Statement kinds are `1 + StmtKind`, expression kinds
 // `0x21 + ExprKind` (both enums' numbering is stable); the rest follow.

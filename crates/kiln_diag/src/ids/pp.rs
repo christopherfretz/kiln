@@ -104,6 +104,9 @@ pp_module_file_config_mismatch = Fatal (1) "module file '{0}' cannot be loaded d
 pp_module_file_corrupt = Fatal (2) "module file '{0}' is corrupt: {1}";
 pp_module_file_format = Fatal (3) "module file '{0}' has format version {1}, expected {2}";
 pp_module_file_not_found = Fatal (1) "module file '{0}' not found";
+// WP-2390: an overlay (spec/source.md "Overlay") replaces an input of an
+// imported module file.
+pp_module_file_overlaid = Fatal (2) "module file '{0}' was built from '{1}', which the overlay replaces";
 pp_module_file_version = Fatal (3) "module file '{0}' was built by kiln {1}; this is kiln {2}";
 pp_module_file_wrong_module = Fatal (3) "module file '{0}' holds module '{1}', not '{2}'";
 pp_module_name_is_macro = Error (1) "module name component '{0}' cannot be an object-like macro";

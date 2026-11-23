@@ -26,7 +26,14 @@
 //! `nodiscard`, `maybe_unused`. The calling convention, GNU `noreturn` of
 //! the function type and `regparm` are hashed from the type
 //! (`declarator`). `packed`, `no_unique_address`, `trivial_abi` are a
-//! class's (kind 3).
+//! class's (kind 3); a local class has no kind 3 row, so its and its
+//! fields' layout attributes are hashed in the enclosing definition
+//! (`layout_attrs`, `kiln-odr-2`): written or implicit, as its layout
+//! reads them.
+//!
+//! `cleanup(f)` on a local (`kiln-odr-2`): the function as an entity once
+//! checked (`AttrNode::CHECKED`: the node's word is its `DeclId`), the
+//! argument expression before (a dependent pattern's).
 
 use kiln_ast::attr::{AttrKind, AttrNode};
 use kiln_ast::decl::DeclFlags;
@@ -38,14 +45,27 @@ use super::{Area, DefHasher, Item, Site, T_NONE, Work};
 /// The listed attributes of a declaration chain.
 const T_ATTRS: u8 = 0xBD;
 
-/// The closed list of O-10 (scheme 1) that a declaration carries.
-const LISTED: [AttrKind; 6] = [
+/// The closed list of O-10 (scheme 1) that a declaration carries, and
+/// (`kiln-odr-2`, WP-2361) a local variable's `cleanup(f)`: the function
+/// called at scope exit (sema keeps it on local variables only).
+const LISTED: [AttrKind; 7] = [
     AttrKind::ALIGNED,
     AttrKind::NORETURN,
     AttrKind::TARGET,
     AttrKind::TARGET_CLONES,
     AttrKind::TARGET_VERSION,
     AttrKind::INDETERMINATE,
+    AttrKind::CLEANUP,
+];
+
+/// What a local class's or its fields' layout reads (`layout_attrs`).
+const LAYOUT: [AttrKind; 6] = [
+    AttrKind::ALIGNED,
+    AttrKind::PACKED,
+    AttrKind::MS_STRUCT,
+    AttrKind::GCC_STRUCT,
+    AttrKind::NO_UNIQUE_ADDRESS,
+    AttrKind::TRIVIAL_ABI,
 ];
 
 /// Not written: added by sema (bit 0) or inherited from a previous
@@ -129,6 +149,51 @@ impl DefHasher<'_> {
         }
     }
 
+    /// The attributes a local class's layout reads (WP-2361,
+    /// `kiln-odr-2`) on class or field `d` and its redeclarations: as a
+    /// sorted set of records (kind, arguments), written or not (an
+    /// instantiated local class's are copies, and a `#pragma`'s are
+    /// implicit), then the further `alignas` expressions sema keeps
+    /// apart. A local class has no kind 3 row (its type is TU-local), so
+    /// its definition's row carries what its layout depends on beyond
+    /// its members: `packed`, `aligned`/`alignas`, `ms_struct` and
+    /// `gcc_struct`, `no_unique_address` and `trivial_abi` (the
+    /// `#pragma pack` value and the tag are written by the caller).
+    pub(super) fn layout_attrs(&mut self, d: DeclId) {
+        let ast = self.ast;
+        let chain: Vec<DeclId> = ast.redecls_of(d).collect();
+        let mut records: Vec<Vec<u8>> = Vec::new();
+        let mut aligns: Vec<ExprId> = Vec::new();
+        for &r in &chain {
+            if ast.decls.get(r).has(DeclFlags::HAS_ATTRS) {
+                let nodes: Vec<AttrNode> = ast
+                    .lists
+                    .iter::<AttrId>(ast.attrs.of_decl(r))
+                    .map(|a| *ast.attrs.get(a))
+                    .filter(|n| LAYOUT.contains(&n.kind))
+                    .collect();
+                for n in nodes {
+                    let start = self.out.len();
+                    self.attr_record(n);
+                    records.push(self.out.split_off(start));
+                }
+            }
+            if let Some(&e) = ast.decls.cold.alignment.get(r) {
+                aligns.push(e);
+            }
+        }
+        records.sort_unstable();
+        records.dedup();
+        self.count(records.len());
+        for r in &records {
+            self.out.extend_from_slice(r);
+        }
+        self.count(aligns.len());
+        for e in aligns {
+            self.attr_expr(e);
+        }
+    }
+
     /// One attribute: its kind and its arguments.
     fn attr_record(&mut self, n: AttrNode) {
         self.u32(u32::from(n.kind.0));
@@ -160,6 +225,22 @@ impl DefHasher<'_> {
                 self.out.extend_from_slice(list.as_bytes());
             }
             AttrKind::TARGET_CLONES => self.partial(Area::Attrs, Site::Item(Item::Attributes)),
+            // Checked (`AttrNode::CHECKED`): `a` is the function's
+            // `DeclId`, named as a callee; else (a dependent argument of a
+            // pattern) the argument expression as written.
+            AttrKind::CLEANUP => {
+                match (n.is_checked(), DeclId::from_raw(n.a), ExprId::from_raw(n.a)) {
+                    (true, Some(f), _) => {
+                        self.byte(1);
+                        self.decl_ref(f);
+                    }
+                    (false, _, Some(e)) if n.a != u32::MAX => {
+                        self.byte(2);
+                        self.attr_expr(e);
+                    }
+                    _ => self.byte(0),
+                }
+            }
             _ => {}
         }
     }

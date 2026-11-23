@@ -128,7 +128,7 @@ linker prints its version; Meson's linker probe, WP-920), and `-c
 | `-fkiln-written-refs` | records the written-reference table (spec/ast.md §18) without printing it, for a tooling client of the library API and for PCH and module-file producers: a snapshot or declaration image made with it carries the table to consumers that record (spec/ast.md §18.10); part of neither identity |
 | `-fkiln-decl-extents` | records the declaration-extent table (spec/ast.md §19; off otherwise) for a tooling client of the library API; part of the PCH and module-file identity, and its rows are carried in PCH snapshots and module images |
 | `-fkiln-dump-decl-extents` | implies `-fkiln-decl-extents`; with `-fsyntax-only` (to the output) or codegen (to standard output, before the IR): prints one line per declaration with a row in the §19.7 layout; a PCH producer with it takes two passes |
-| `-fkiln-dump-pp-record` | kiln: records the preprocessing record (spec/pp.md "Preprocessing record"; off otherwise) and prints it, one line per entry: with `-E` in place of the preprocessed text, after one `tok` line per output token at a macro location; with `-fsyntax-only` (to the output, after a written-reference dump) or codegen (to standard output, before the IR), the entries only. A PCH producer with it takes two passes, and the record is not carried in PCH snapshots or module images (a consumer's record is incomplete: `record incomplete: restored`; WP-2113). The harness's `pp-record:` directive runs it (spec/harness.md; WP-2110) |
+| `-fkiln-dump-pp-record` | kiln: records the preprocessing record (spec/pp.md "Preprocessing record"; off otherwise) and prints it, one line per entry: with `-E` in place of the preprocessed text, after one `tok` line per output token at a macro location; with `-fsyntax-only` (to the output, after a written-reference dump) or codegen (to standard output, before the IR), the entries only. A PCH producer with it (or with `-fkiln-pp-record`) takes two passes and carries the header's record in its snapshot, which a recording consumer goes on from; a snapshot built without it leaves the consumer's record `restored`, with a `-v` note (spec/pp.md "Preprocessing record", stage 4; WP-2113). `=source-order` prints each condition's reads in source order (WP-2301). The harness's `pp-record:` directive runs it (spec/harness.md; WP-2110) |
 | `-fkiln-pp-record` | kiln: records the preprocessing record and drops it (to measure its cost; WP-2110). No output changes, except the `pp.record` row of `-fkiln-memory-report` |
 | `-fkiln-cfg-max-elems=N` | kiln: the element budget of one body's graph (default 33554432); a body over it builds no graph and its CFG-based warnings are skipped (spec/sema.md §7.5.1). A value that is not an integer is `invalid integral value` |
 | `-fkiln-outline-expansions=N` | kiln: the size threshold, in AST nodes summed over the elements, above which an expansion statement's elements are emitted as separate internal helpers at `-O1` and above (default 2048; `0` disables; spec/landed/codegen/WP-793.md). A value that is not an integer is `invalid integral value` |
@@ -248,7 +248,9 @@ part of the PCH compatibility key (spec/pch.md).
 
 An argument `@file` is replaced by the arguments read from `file`
 before anything else is parsed (`rsp::expand`, both in `main` and in
-`run_as`), as clang's driver (`ExpansionContext::expandResponseFiles`,
+`run_as`; in the front-end library entry unless its `response_files`
+option is off, and never in an evaluation session's command line,
+WP-2411), as clang's driver (`ExpansionContext::expandResponseFiles`,
 GNU tokenizer): whitespace separates arguments, `'` and `"` quote (an
 empty pair is an empty argument), and a backslash takes the next
 character literally, also inside quotes. A nested `@file` is expanded
@@ -1686,6 +1688,8 @@ sequence; the evaluation session (spec/eval-session.md §2) uses it too.
   is not supported by the front-end library entry`): `-verify` and
   `-include-pch` (written, or made by the PCH probe of `-include`). The
   PCH snapshot phase does not run (a snapshot PCH is never consumed).
+  With `drv_front_end_overlay_input`: an `overlay` that replaces an input
+  of a module file of the command line (below).
 - Suppressed, not refused: nothing is written but diagnostics. No
   `-o`, no dependency file (`-MD` is still lexed to the end, as for
   `-fsyntax-only`), no module file, no `-fconstexpr-report=` /
@@ -1730,8 +1734,14 @@ Options (`FrontEndOptions`, `#[non_exhaustive]`, `Default`): `stderr`,
 `record_lookups`, `own_thread` (default on), `pch_probe` (default on;
 off, `-include h` is the header even with `h.pch` or `h.gch` beside
 it: the driver's PCH probe, spec/driver.md "Precompiled headers", does
-not run), `environment` (an `env::Environment`,
-default the process's), and `pp_record` (default off; on, the
+not run), `response_files` (default on, as the executable: each
+`@file` word is replaced by the words read from the file, "Response
+files" above; off (WP-2411), the words are taken as given and an `@x`
+word is an ordinary word, an input named `@x`, so a client that checked
+each word knows every option that reaches the driver; test
+`front_end.rs` `response_files_can_be_turned_off`; evaluation sessions
+never expand, spec/eval-session.md §2), `environment` (an
+`env::Environment`, default the process's), and `pp_record` (default off; on, the
 preprocessor keeps its preprocessing record, spec/pp.md "Preprocessing
 record", which the closure reads as `fe.pp.record()`; WP-2110), and
 `written_refs` (default off; WP-2320; on, the command line's
@@ -1762,6 +1772,28 @@ process's. The entry never calls `set_current_dir`, so two runs in two
 directories run at the same time, and a `-working-directory` of the
 command line wins (a relative one relative to `working_directory`).
 `@file`s are read from `working_directory`.
+
+`overlay` (WP-2390, an `Option<Arc<kiln_source::Overlay>>`, default
+`None`, shown by `Debug`) gives the run replacement contents for files
+that exist (spec/source.md "Overlay"): the job's source manager gets it
+before any load (`SourceManager::set_overlay`) and its header search's
+`RealFs` reads `#embed` resources through it. The run sees exactly what
+the same command sees over a copy of the tree in which the overlaid
+files hold the overlay's bytes: the same diagnostics, tokens, AST and
+files read, through every route (the main input, `#include` by any
+spelling or symbolic link, `#include_next`, `-include`, `#embed`,
+`__has_include`, `#pragma once` and include guards); buffers of
+overlaid files are `FileOrigin::Overlay`. An empty overlay is none
+(byte-identical results). The overlay belongs to the run: a later run
+in the same process without it reads the disk. Refused with the driver
+error `drv_front_end_overlay_input` (`the overlay replaces '<f>', an
+input of the module file '<m>'`), one per overlaid input, before the
+job: a module file of the command line (`-fmodule-file=`, named or not,
+or a module-file input) whose file table names an overlaid file; a
+module file found later (`-fprebuilt-module-path=`, the module cache)
+is refused at its import (`pp_module_file_overlaid`). A PCH never meets
+an overlay, since `-include-pch` is refused. There is no command-line
+flag for an overlay.
 
 `front_end::std_config(std, options)` is the configuration the driver
 builds for `kiln++ -fsyntax-only -std=<std>` with no other flag

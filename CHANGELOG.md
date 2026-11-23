@@ -10,6 +10,61 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- A per-run source overlay for tooling clients (WP-2390, spec/source.md
+  "Overlay", stage 1): `kiln_source::Overlay` holds replacement bytes for
+  files that exist, keyed by the identity of the file each path names
+  (another spelling, a symbolic link or a hard link is the same file);
+  `SourceManager::set_overlay` makes every load of an overlaid file take
+  them (`FileOrigin::Overlay`, `original_bytes` the overlay's), `#embed`
+  reads through it, and `FrontEndOptions::overlay` gives one to a
+  front-end run, which then sees what the same command sees over a tree
+  holding those bytes. A module file built from an overlaid file is
+  refused (`drv_front_end_overlay_input` for one the command line names,
+  `pp_module_file_overlaid` at an import).
+- Evaluation sessions for tooling clients (WP-2412, WP-2413;
+  spec/eval-session.md §2, §7): `SessionFrontEnd::consulted` lists the
+  `#embed` resources and `__has_include` / `__has_embed` hits of the unit
+  with their contents, as `FrontEnd::consulted`; an exception leaving a
+  run's entry is reported with the call stack at its throw as `in call
+  to` notes under `-fconstexpr-backtrace-limit=` (session runs only;
+  compile output keeps clang's shape). `FrontEndOptions::response_files`
+  (default on) turns off `@file` expansion in `run_front_end` (WP-2411).
+
+- The written-reference table joins the AST and keeps the tokens
+  outside a name (WP-2326, spec/ast.md §18.11): the location a
+  `DeclRefExpr` or `MemberExpr` stores is its name's entry's `name_lo`
+  (the `~` of a destructor, else `range.lo`), with the exceptions listed
+  and a join test over the corpus; the leading `::` of a globally
+  qualified name (`global_colon`, `qualified_lo`, also from a macro or
+  across a comment or line splice) and a destructor's `~` (`tilde`) are
+  recorded at parse in a cold side table, carried by PCH snapshots and
+  module images, and dumped as `q=::L:C` and `tilde=L:C`.
+- `__builtin_offsetof` keeps, for a non-dependent expression, its operand
+  type and its resolved designator (per component the member, the base
+  class stepped through, or the index position) in a cold row
+  (`ExprArena::offsetof_designator`; PCH format 148), so tooling clients
+  tell apart `offsetof(A, y)` and `offsetof(B, q)` at one offset. The ODR
+  definition hash moves to scheme `kiln-odr-2`: it hashes that
+  designator, a local class's tag, `#pragma pack` value and layout
+  attributes, a local enumeration's underlying type, a coroutine lambda's
+  wrapped body, a tuple-like structured binding's `get` call and a
+  local's `cleanup(f)`, each a pair of definitions that differ in meaning
+  and hashed alike before; `[[clang::musttail]]` and concatenated string
+  literals are documented misses (WP-2360, WP-2361; spec/ast.md,
+  spec/abi.md "Definition hash").
+
+- The preprocessing record is carried in PCH snapshots and named by
+  module imports (stage 4, WP-2113, WP-2260, WP-2300, WP-2301; spec/pp.md
+  "Preprocessing record"): a PCH built with `-fkiln-pp-record` carries its
+  header's record, and a recording consumer's record is that of the same
+  compile with the header as `-include` (a PCH built without it leaves the
+  record `restored`, with a `-v` note); a header unit's exported macros
+  keep the unit's keys, so its import is complete; an import built from a
+  module image is an `image` entry whose locations answer `Imported`. An
+  `#embed` row records the resource read and its `--embed-dir` index, and
+  `-fkiln-dump-pp-record=source-order` prints a condition's reads in
+  source order. Off, a snapshot has no byte of the record (PCH
+  `FORMAT_VERSION` 150).
 - The written-reference table's stage-4 gaps are closed (WP-2220..WP-2224,
   WP-2170; spec/ast.md §18.8, §18.9): per-specialization entries name the
   using-directive their lookup went through (`SpecRef::udir`), re-find
@@ -712,6 +767,11 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Changed
 
+- Breaking, for tooling clients (WP-2411, spec/eval-session.md §2):
+  `with_eval_session` takes its command line as words with no `@file`
+  response-file expansion; an `@x` word is an ordinary word (an input
+  named `@x`).
+
 - Breaking, for tooling clients (WP-2321, WP-2322, WP-2324, WP-2325):
   `HostCalls` no longer requires `Send`; only a registered handler is
   `Box<dyn HostCalls + Send>`, and `EvalSession::run` takes any handler
@@ -724,6 +784,9 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   with the note "a host call cannot be evaluated here: this expression
   is evaluated when the code is instantiated, not when it runs", and
   every run that reaches the work fails identically.
+- The decoded preprocessor-state record `kiln_pp::state::PpRecord` is
+  renamed `kiln_pp::state::StateRecord` (WP-2114), so it no longer
+  shares its name with the preprocessing record `kiln_pp::PpRecord`.
 - `EntryError::NotConsteval` is renamed `EntryError::NotConstexpr`
   (WP-2072): it is now returned only for a function that is neither
   `constexpr` nor `consteval`.
@@ -823,6 +886,21 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   packagers").
 
 ### Fixed
+
+- An evaluation-session run on a thread other than the one that
+  compiled the session checks that thread's stack guard (WP-2410,
+  spec/eval-session.md §9): it failed "stack exhausted" at its first
+  instantiation or nested evaluation, and every later run of the session
+  with it. A stack exhausted by one run no longer stops the next.
+
+- A class template's friend function template definition with a default
+  template argument, instantiated after the template was declared at
+  namespace scope, is "default template argument not permitted on a
+  friend template" ([temp.param]/12), as clang; kiln accepted it. And
+  `va_arg` of a class that is not trivially copyable keeps its
+  `VAArgExpr` but marks it erroneous while `-Wnon-pod-varargs` is an
+  error, so a consumer walking the body sees it (WP-2362, WP-2363,
+  spec/sema.md §5.12).
 
 - An alias-declaration (or alias template) whose type-id is invalid
   declares nothing, as clang: later uses of its name are "unknown type

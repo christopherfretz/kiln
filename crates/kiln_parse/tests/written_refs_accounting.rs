@@ -759,3 +759,268 @@ fn every_identifier_is_accounted_for_in_the_standard_library() {
         assert!(left.is_empty(), "{} identifiers left over", left.len());
     }
 }
+
+// ---------------------------------------------------------------------
+// The join (spec/ast.md §18.11.1, WP-2326): a name expression and its entry
+// ---------------------------------------------------------------------
+
+/// The name expressions of `src` (named `name`) without an entry they
+/// join: every `DeclRefExpr` and `MemberExpr` of the code as written
+/// (`kiln_ast::dump::for_each_written_expr`) whose declaration has a name
+/// must have exactly one entry whose `name_lo` is the expression's
+/// `loc()`, of role `expr`, `member`, `template` or `concept`, with the
+/// expression's declaration as its entity. `None`: the file has errors.
+/// Each mismatch is `(line:col, what)`.
+fn join(name: &str, src: &str) -> Option<(usize, Vec<(String, String)>)> {
+    use kiln_ast::expr::ExprKind;
+    use kiln_ast::written_refs::RefRole;
+    let sm = SourceManager::new();
+    let main = sm.add_virtual(name, src.to_owned()).expect("location space");
+    let interner = Arc::new(Interner::new());
+    let engine = DiagEngine::new(&sm, &DiagOptions::default(), MemorySink::new());
+    let opts = parse_options(None);
+    let pp = preprocessor(&sm, &engine, &interner, main, None);
+    let target = Target::for_arch(Arch::X86_64);
+    let limits = ConstexprLimits::default();
+    let (tu, _) = parse_preprocessed(pp, Arc::clone(&interner), &engine, target, &opts, limits);
+    if engine.error_count() > 0 {
+        return None;
+    }
+    let ast = &tu.ast;
+    let mut at: std::collections::HashMap<Loc, Vec<kiln_ast::written_refs::WrittenRefId>> =
+        std::collections::HashMap::new();
+    for (id, _) in ast.written_refs.iter() {
+        at.entry(ast.written_refs.name_lo(id)).or_default().push(id);
+    }
+    let dopts = kiln_ast::dump::DumpOptions {
+        sources: Some(&sm),
+        main_file: Some(main),
+        ..Default::default()
+    };
+    let mut names = Vec::new();
+    let mut parent = std::collections::HashMap::new();
+    kiln_ast::dump::for_each_written_expr(ast, &dopts, |e, up| {
+        if let Some(p) = up {
+            parent.entry(e).or_insert(p);
+        }
+        let k = ast.exprs.get(e).kind();
+        if matches!(k, ExprKind::DeclRefExpr | ExprKind::MemberExpr) {
+            names.push(e);
+        }
+    });
+    names.sort_unstable();
+    names.dedup();
+    let name_of = |d| {
+        let mut s = String::new();
+        kiln_ast::types::TypeNames::write_decl_name(ast, d, true, &mut s);
+        s
+    };
+    let mut bad = Vec::new();
+    let mut checked = 0;
+    for e in names {
+        let n = ast.exprs.get(e);
+        let d = ast.exprs.decl(e);
+        let loc = n.loc();
+        let Some(a) = spelled(&sm, Scope::Main(main), loc) else { continue };
+        if implicit_name(ast, &parent, e, src, a.1) {
+            continue;
+        }
+        checked += 1;
+        let ids = at.get(&loc).map_or(&[][..], Vec::as_slice);
+        let ok: Vec<_> = ids
+            .iter()
+            .map(|&id| ast.written_refs.get(id))
+            .filter(|r| {
+                matches!(
+                    r.role,
+                    RefRole::Expr | RefRole::Member | RefRole::Template | RefRole::Concept
+                )
+            })
+            .collect();
+        // A member access in a template pattern that names an overload
+        // set has the set's first member as its declaration and an entry
+        // naming nothing yet: the set is resolved per specialization
+        // (§18.11.1, §18.9.4).
+        let overload = n.ty() == kiln_ast::QualType::OVERLOAD;
+        let what = match ok.as_slice() {
+            [r] if r.entity == Some(d) => continue,
+            [r] if overload
+                && r.entity.is_none()
+                && r.flags & kiln_ast::written_refs::REF_DEPENDENT != 0 =>
+            {
+                continue;
+            }
+            [r] => format!(
+                "{k:?} of {:?} '{}', entry {} names {:?}",
+                ast.decls.get(d).kind(),
+                name_of(d),
+                r.role.spelling(),
+                r.entity.map(|x| ast.decls.get(x).kind()),
+                k = n.kind(),
+            ),
+            [] => format!(
+                "{:?} of {:?} '{}': no entry ({} of other roles)",
+                n.kind(),
+                ast.decls.get(d).kind(),
+                name_of(d),
+                ids.len()
+            ),
+            _ => format!("{:?}: {} entries", n.kind(), ok.len()),
+        };
+        bad.push((line_col(&sm, Scope::Main(main), a), what));
+    }
+    Some((checked, bad))
+}
+
+/// True when name expression `e` (spelled at offset `off` of `src`) has
+/// no name token of its own, so no entry joins it (spec/ast.md
+/// §18.11.1's exceptions 2 to 6; the walk leaves out exception 1): a
+/// declaration without a name or an implicit one (an anonymous union
+/// member, a structured binding's variable and the member access on it,
+/// a range-for's `__begin`), a condition variable's value, a reference
+/// at a token that does not spell its name (a user-defined literal's
+/// literal operator, an implicit conversion function, a structured
+/// binding's `get`, a coroutine's implicit calls), an operator use's
+/// callee (`a + b`, `f(x)` calling `operator()`, `a = b`), and an
+/// implicit capture's initializer (a capture-default's).
+fn implicit_name(
+    ast: &kiln_ast::Ast,
+    parent: &std::collections::HashMap<kiln_ast::ExprId, kiln_ast::ExprId>,
+    e: kiln_ast::ExprId,
+    src: &str,
+    off: u32,
+) -> bool {
+    use kiln_ast::decl::{DeclFlags, DeclKind};
+    use kiln_ast::expr::ExprKind;
+    let d = ast.exprs.decl(e);
+    let dn = ast.decls.get(d);
+    if dn.name().is_empty() || dn.has(DeclFlags::IMPLICIT) {
+        return true;
+    }
+    // A reference at the declaration's own name: a condition variable's
+    // value (`if (auto t = e)`).
+    if ast.exprs.get(e).loc() == dn.loc() {
+        return true;
+    }
+    // A structured binding's member access on its hidden variable.
+    if ast.exprs.get(e).kind() == ExprKind::MemberExpr {
+        let mut b = ast.exprs.operand(e);
+        while matches!(ast.exprs.get(b).kind(), ExprKind::ImplicitCastExpr) {
+            b = ast.exprs.operand(b);
+        }
+        if ast.exprs.get(b).kind() == ExprKind::DeclRefExpr {
+            let bd = ast.decls.get(ast.exprs.decl(b));
+            if bd.name().is_empty() || bd.has(DeclFlags::IMPLICIT) {
+                return true;
+            }
+        }
+    }
+    // No token spelling the name at the location: sema built the
+    // reference at another token (a user-defined literal's literal
+    // operator, a conversion function an implicit conversion calls, a
+    // structured binding's `get`, a coroutine's `await_ready` at its
+    // `co_await`).
+    let text = src.get(off as usize..).unwrap_or("");
+    let named = match (dn.kind(), dn.name().as_ident()) {
+        (DeclKind::CXXDestructor, _) => text.starts_with('~'),
+        (_, Some(n)) => text
+            .strip_prefix(ast.symbols().as_str(n))
+            .is_some_and(|rest| !rest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')),
+        _ => text.starts_with("operator"),
+    };
+    if !named {
+        return true;
+    }
+    // The first ancestor that is not an implicit wrapper, and the child
+    // of it on the way up.
+    let wrapper = |x| {
+        matches!(
+            ast.exprs.get(x).kind(),
+            ExprKind::ImplicitCastExpr
+                | ExprKind::CXXConstructExpr
+                | ExprKind::MaterializeTemporaryExpr
+                | ExprKind::CXXBindTemporaryExpr
+                | ExprKind::ExprWithCleanups
+                | ExprKind::ConstantExpr
+                | ExprKind::OpaqueValueExpr
+                | ExprKind::ArrayInitLoopExpr
+        )
+    };
+    let (mut child, mut up) = (e, parent.get(&e).copied());
+    while let Some(p) = up
+        && wrapper(p)
+    {
+        child = p;
+        up = parent.get(&p).copied();
+    }
+    let Some(p) = up else { return false };
+    match ast.exprs.get(p).kind() {
+        ExprKind::CXXOperatorCallExpr => ast.exprs.callee(p) == child,
+        ExprKind::LambdaExpr => {
+            let l = ast.exprs.lambda(p);
+            let inits = l.inits.map(|i| ast.lists.iter::<kiln_ast::ExprId>(i).collect::<Vec<_>>());
+            inits
+                .and_then(|v| v.iter().position(|&x| x == child))
+                .is_some_and(|i| l.captures.get(i).is_some_and(|c| c.implicit))
+        }
+        _ => false,
+    }
+}
+
+/// [`join`] over every `.cpp` file of `dir`: `(files, names, mismatches
+/// as (file, line:col, what))`.
+fn run_join(dir: &Path) -> (usize, usize, Vec<(String, String, String)>) {
+    let files = cpp_files(dir);
+    let base = dir.to_path_buf();
+    let worker = std::thread::Builder::new().stack_size(1 << 30).spawn(move || {
+        let (mut counted, mut names) = (0, 0);
+        let mut bad = Vec::new();
+        for f in &files {
+            let Ok(src) = std::fs::read_to_string(f) else { continue };
+            let name = f.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let shown = f.strip_prefix(&base).unwrap_or(f).display().to_string();
+            let Ok(r) = std::panic::catch_unwind(|| join(&name, &src)) else {
+                bad.push((shown, String::new(), "panic".into()));
+                continue;
+            };
+            let Some((n, b)) = r else { continue };
+            counted += 1;
+            names += n;
+            bad.extend(b.into_iter().map(|(at, w)| (shown.clone(), at, w)));
+        }
+        (counted, names, bad)
+    });
+    worker.expect("a thread").join().expect("no panic")
+}
+
+/// The join over the written-reference corpus and the pinned directories.
+#[test]
+fn every_name_expression_joins_its_entry() {
+    let mut dirs = vec!["written_refs"];
+    dirs.extend_from_slice(PINNED);
+    let (mut files, mut names, mut bad) = (0, 0, Vec::new());
+    for d in dirs {
+        let (c, n, b) = run_join(&conformance().join(d));
+        files += c;
+        names += n;
+        bad.extend(b.into_iter().map(|(f, at, w)| format!("{d}/{f}:{at}: {w}")));
+    }
+    eprintln!("join: {files} files, {names} name expressions, {} mismatches", bad.len());
+    assert!(names > 1000, "the corpus has name expressions ({names})");
+    assert!(bad.is_empty(), "{} mismatches:\n{}", bad.len(), bad.join("\n"));
+}
+
+/// The join over the `.cpp` files of `KILN_REFS_DIR`.
+#[test]
+#[ignore = "set KILN_REFS_DIR to a directory of sources"]
+fn every_name_expression_joins_its_entry_in_a_directory() {
+    let Ok(dir) = std::env::var("KILN_REFS_DIR") else { return };
+    let (files, names, bad) = run_join(Path::new(&dir));
+    eprintln!("join: {files} files, {names} name expressions, {} mismatches", bad.len());
+    for (f, at, w) in &bad {
+        eprintln!("{f}:{at}: {w}");
+    }
+    if std::env::var_os("KILN_REFS_STRICT").is_some() {
+        assert!(bad.is_empty(), "{} mismatches", bad.len());
+    }
+}

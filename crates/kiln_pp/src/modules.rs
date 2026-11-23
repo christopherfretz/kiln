@@ -976,6 +976,17 @@ impl Preprocessor<'_, '_> {
             self.emit(Diag::new(DiagId::pp_module_file_config_mismatch, span).arg(path));
             return None;
         }
+        // The module file holds its inputs' text as it was built, which an
+        // overlay of the run replaces (spec/source.md "Overlay", stage 1:
+        // refused, not validated against the overlay).
+        if let Some(o) = self.sm.overlay()
+            && let Some(f) =
+                c.files.iter().find(|f| o.contains(&self.sm.work_dir().join_str(&f.path)))
+        {
+            let d = Diag::new(DiagId::pp_module_file_overlaid, span).arg(path).arg(&f.path);
+            self.emit(d);
+            return None;
+        }
         Some(c)
     }
 
@@ -1076,6 +1087,11 @@ impl Preprocessor<'_, '_> {
         self.log_image(key, None);
         let carried = take_carried(path, &mut c);
         drop(c);
+        // Its purview is not preprocessed here (spec/pp.md "Preprocessing
+        // record", stage 4): the record names the image instead.
+        if let Some(r) = self.record.as_deref_mut() {
+            r.image(key, span.lo, &files);
+        }
         let image = Rc::new(bmi::ImageSection { path: path.to_owned(), bytes, files });
         let Some(m) = &mut self.modules else { return None };
         m.built.insert(key.to_owned(), Vec::new());
@@ -1173,6 +1189,9 @@ impl Preprocessor<'_, '_> {
         }
         self.see_gated(&stop.gated);
         self.log_image(&stop.key, None);
+        if let Some(r) = self.record.as_deref_mut() {
+            r.image(&stop.key, stop.span.lo, &files);
+        }
         let Some(Frame::File(f)) = self.frames.last_mut() else { return false };
         let image = Rc::new(bmi::ImageSection { path: stop.path, bytes: stop.bytes, files });
         f.image_done = Some((image, stop.span));
@@ -1437,7 +1456,7 @@ impl Preprocessor<'_, '_> {
                 let r = self.modules.as_ref()?.replays.get(i)?;
                 let key = embed_key(r.includer(req.includer), req);
                 let bytes = r.embeds.get(&key)?.clone()?;
-                Some(EmbedData { bytes })
+                Some(EmbedData { bytes, path: None, lookup: None })
             }
             ctx => {
                 let res = self.resolver.resolve_embed(self.sm, req);
@@ -1540,9 +1559,6 @@ impl Preprocessor<'_, '_> {
                 module: &unit,
                 cache_inputs: None,
             });
-            if let Some(r) = &self.record {
-                r.set_flag(crate::record::RecordFlags::IMPORTED);
-            }
             let read = bmi::read_file(&self.sm.work_dir().join_str(&path));
             let Some(c) = self.load_capsule(&path, read, Some(&unit), span) else { return };
             if c.kind != UnitKind::HeaderUnit {
@@ -1702,6 +1718,15 @@ impl Preprocessor<'_, '_> {
             if self.modules.as_ref().is_some_and(|m| !m.opts.no_unit_record)
                 && let Some(back) = self.unit_round_trip(unit, &v)
             {
+                // The record saw each made (spec/pp.md "Preprocessing
+                // record", stage 4): the exported copy keeps its key.
+                if let Some(r) = self.record.as_deref_mut() {
+                    for (b, d) in back.iter().zip(&v) {
+                        if b.name == d.name {
+                            r.alias(b, d);
+                        }
+                    }
+                }
                 v = back;
             }
             v

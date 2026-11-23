@@ -1526,8 +1526,8 @@ impl Parser<'_, '_> {
         let mut i = 0;
         let mut link = RefQualifier::NONE;
         let mut ctx = None;
-        if toks.first().is_some_and(|&t| Self::punct_of(t) == Some(Punct::ColonColon)) {
-            link = RefQualifier::GLOBAL;
+        if let Some(t) = toks.first().filter(|&&t| Self::punct_of(t) == Some(Punct::ColonColon)) {
+            link = self.s.ast.written_refs.global_link(t.span.lo);
             ctx = Some(self.s.ast.tu);
             i += 1;
         }

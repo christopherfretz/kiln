@@ -85,9 +85,10 @@ drop(session); session.into_sema() -> Sema;
   `--target=`, `-W` options and constexpr limits apply as for
   `-fsyntax-only`) and calls the closure with a `SessionFrontEnd`
   (`#[non_exhaustive]`: the session, the source manager, the main file,
-  the command line's `DiagOptions` and the translation unit's own
-  diagnostics, `tu_diagnostics`, its warnings and remarks as printed;
-  later fields may be added) or with the reason no session was opened.
+  the command line's `DiagOptions`, the translation unit's own
+  diagnostics, `tu_diagnostics`, its warnings and remarks as printed,
+  and the resources it consulted, `consulted`; later fields may be
+  added) or with the reason no session was opened.
   The builtin is visible (a placeholder handler that fails every call is
   the translation unit's). The translation unit's own diagnostics go to
   `io`'s standard error as the driver prints them. The closure form is
@@ -127,6 +128,27 @@ drop(session); session.into_sema() -> Sema;
   `crates/kiln_driver/tests/eval_session.rs` `refusals_say_why` (each
   case, the error limit, `-fkiln-crash-for-testing=parse`, a panicking
   closure).
+- **Words, no response files** (WP-2411). The command line is taken
+  as argv words already split: no `@file` word is read as a response
+  file (the driver's `rsp::expand`, spec/driver.md "Response files",
+  does not run), so `@x` is an ordinary word, an input named `@x` (a
+  second input refuses the session as `CommandLine`). A client that
+  validated the words one by one knows every option that reaches the
+  driver; one that wants response files expands them itself
+  (`kiln_driver::rsp::expand_in`) and validates the result. There is no
+  option to turn expansion on: a session's command line is the
+  client's, never a build's. Test: `crates/kiln_driver/tests/eval_session.rs`
+  `a_sessions_words_are_not_response_files`.
+- **Consulted resources** (WP-2412). `SessionFrontEnd::consulted` lists
+  the paths the unit depends on that are in no buffer it entered: each
+  `#embed` resource (`ConsultedKind::Embed`) and each `__has_include` /
+  `__has_embed` hit (`Probe`), with what was read there
+  (`Content { size, digest }`), in the order first met, each once; the
+  list `FrontEnd::consulted` gives for the same command line
+  (spec/driver.md "Front-end library entry"). A run reads no file, so
+  the list is the unit's for every run. Test:
+  `crates/kiln_driver/tests/eval_session.rs`
+  `consulted_resources_are_listed`.
 - **The driver's stages** (WP-2120). `with_eval_session` runs the
   command line through the front-end library entry's stages
   (`front_end::prepare`, spec/driver.md "Front-end library entry"): the
@@ -894,6 +916,24 @@ duplicates of another run or of the translation unit.
     performed here was not deallocated` for a leak). The notional
     variable has no name a client could use, so the headline names the
     entry.
+  - **An uncaught exception** (WP-2413; `RunError::Uncaught`): the
+    reason is clang's P3068 note at the throw (`unhandled exception of
+    type 'E' with content {...} thrown from here`, or `unhandled
+    exception: <what()>`), followed in a run by the call stack the
+    exception left the entry from, as for any other failure: the frames
+    active at the throw-expression, innermost first (for a rethrow,
+    `throw;`, the frames active at the rethrow: the original throw's
+    were left when its handler was entered), under the same
+    `-fconstexpr-backtrace-limit=` elision, the entry's frame last at
+    its declaration. clang gives no call stack with this note, so only
+    a run's own evaluation adds it (`Oven::session_run_outermost`):
+    an uncaught exception in the translation unit's evaluations, and in
+    a run's nested work (§5.1, the translation unit's work, replayed
+    alike in every run), keeps clang's shape. Test:
+    `crates/kiln_driver/tests/eval_session.rs`
+    `an_uncaught_exception_has_its_call_stack` (rendered with
+    `SessionFrontEnd::render`: a shallow stack, one over the limit, a
+    rethrow, and the same throw in the unit's own `constexpr` variable).
 - **Replay.** Semantic work is kept (§5), but a fresh session would
   report its diagnostics in the first run that needs it. The session
   records the diagnostics emitted during each unit's work (§5.1), in
@@ -1108,6 +1148,59 @@ worker. `RunReport: Send`. `CancelToken: Send + Sync`. The
 translation unit's handler, which the session keeps, is `Send`
 (`Box<dyn HostCalls + Send>`); a run's handler need not be, as it is
 only borrowed for the run (§6, spec/host-calls.md §3; WP-2321).
+
+**The stack guard follows the calling thread (WP-2410).** Semantic work
+a run does (an instantiation, a nested evaluation through the Oven's
+bridge) checks the native stack with the stack guard
+(spec/sema-templates.md P4 (c), `kiln_sema::stack_guard`), which `Sema`
+copies from the thread that creates it. During `run` and
+`variable_value` the guard checked is the calling thread's
+(`StackGuard::current()`, the one `StackGuard::install` put there, or
+none), and the creating thread's is restored when the call returns. A
+copy measured on another thread reads as no stack left, so before
+WP-2410 a run on any thread but the compiling one failed "stack
+exhausted" at its first check, and every later run did too. A client
+that runs sessions on worker threads gives each worker the stack it
+needs (`std::thread::Builder::stack_size`) and installs the guard first
+thing on it; on a thread without one, every check passes (deep
+recursion then overflows the thread's stack, as for any library caller,
+spec/sema-templates.md §10.3).
+
+- **Exhaustion is the run's.** When a run's work exhausts the calling
+  thread's stack, the run fails with `RunError::Failed` and the fatal
+  `sema_stack_exhausted` ("kiln: stack exhausted during template
+  instantiation; ..."), its instantiation context as notes. Within the
+  run the guard's tripped flag stays set, so the recursion unwinds and
+  no further check passes. When the run ends it is restored to its
+  value at the run's start, which is clear (a session opens only on a
+  translation unit without a fatal error), so the next run, on any
+  thread, starts with the guard untripped.
+- **What it stopped stays stopped.** The instantiation the exhaustion
+  cut short is kept as it failed, as any failed semantic work (§5.1
+  rule 1: semantic work is not rolled back): every later run that
+  reaches it fails with the same diagnostic, on any thread and with any
+  stack; runs that do not reach it are unaffected. This is the one
+  outcome of kept work that depends on the running thread (its stack
+  size), not on the translation unit alone: a fresh session on a
+  thread with a larger stack does the work. A client that hits it gives
+  its workers more stack, or `-fkiln-stack-size=` the compiling thread
+  and runs there.
+- **Checked thread-bound state.** Nothing else a run reads is bound to
+  the thread that compiled the session: the Oven's limits (steps,
+  memory, call depth) are counts, not native stack measures; the other
+  `thread_local!`s are read on the calling thread, never through a
+  copy, and hold instrumentation or hints, no semantic state (the
+  per-thread symbol intern cache, whose hits are verified against the
+  interner; the crash reporter's current activity; the `-ftime-trace`,
+  statistics and profiling recorders, which record on the thread that
+  armed them).
+
+Test: `crates/kiln_parse/tests/eval_session.rs`
+`a_run_checks_the_stack_of_its_own_thread` (compiled on a guarded
+thread A; a run on B instantiating templates, then one on A; a run on
+a 4 MiB B that exhausts it fails with the stack diagnostic, then runs on
+A and B succeed, the exhausted entry fails alike on A, and a fresh
+session runs it on A).
 
 ## 10. Cost
 
