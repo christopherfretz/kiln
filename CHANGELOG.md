@@ -20,6 +20,25 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   and `token_at(file, offset)` answer per file in O(log n), with no
   second lex (a skipped group starts no token). Off by default, one
   branch per token when off.
+- The written-reference table records operator uses and user-defined
+  literals (WP-2820, spec/ast.md §18.13): the operator token of an
+  operator expression whose overload resolution selected a function is
+  an entry of the new role `operator` naming it (unary, binary,
+  compound-assignment, increment, `=`, `,`, `[]` and `()` with their
+  closing token in `WrittenRefs::close`, one entry per `operator->` of
+  an `->` chain, surrogate calls, implicitly declared and defaulted
+  operators), with `how` `member` or `adl` where it applies; a rewritten
+  or reversed comparison is flagged `REWRITTEN` / `REVERSED`, with a
+  second entry when the comparison of a `<=>` result with zero is itself
+  overloaded; a failed resolution on a class or enumeration operand is
+  `UNRESOLVED`. The ud-suffix of every user-defined literal (integer,
+  floating, character, string of any prefix, raw, literal operator
+  templates, each suffixed piece of a concatenation) is a `ud-suffix`
+  entry over the suffix's own bytes, located through line splices,
+  which its literal operator's callee joins. PCH snapshots
+  (`FORMAT_VERSION` 164) and module images (`IMAGE_VERSION` 88) carry
+  them. Dependent operators, folds, `new`, `delete` and `co_await` are
+  staged (WP-2910, WP-2911).
 - A refused evaluation session's diagnostics as data (WP-2827,
   spec/eval-session.md §2, spec/diag.md §10.4):
   `SessionRefused::TuHasErrors` and `Stopped` carry `records`
@@ -1091,6 +1110,10 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   once more after a pause, a second such failure is the new status HOST
   instead of the test's FAIL or ERROR, the summary counts both, and the
   module-file lanes no longer drop a test they could not read.
+- A universal-character-name in a literal's ud-suffix (`1_\u00e9`) or in
+  the suffix of a literal operator's declarator (`operator""_\u00e9`) names
+  the character it designates, as in any other identifier, so it matches the
+  suffix spelled with that character ([lex.ext]/1; WP-2820).
 - An array bound whose value is known but whose expression is
   instantiation-dependent (`char (*)[sizeof(sizeof(f(T())))]`) keeps its
   expression on the constant array type (WP-2720, spec/types.md §7.2

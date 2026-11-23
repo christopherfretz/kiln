@@ -1,0 +1,24 @@
+29:10-29:11  type  'A' -> A@22:8 in=a@29:12
+29:15-29:16  type  'B' -> B@23:8 in=b@29:17
+29:20-29:21  type  'E' -> E@27:12 in=e@29:22
+30:3-30:4  expr  'a' -> a@29:12 in=use@29:6
+30:7-30:8  expr  'a' -> a@29:12 in=use@29:6
+30:5-30:6  operator  '+' -> (unresolved) in=use@29:6
+31:3-31:4  expr  'b' -> b@29:17 in=use@29:6
+31:5-31:6  operator  '+' -> (unresolved) in=use@29:6
+32:3-32:4  expr  'a' -> a@29:12 in=use@29:6
+32:4-32:5  operator  '[' -> (unresolved) close=32:6 in=use@29:6
+33:3-33:4  expr  'a' -> a@29:12 in=use@29:6
+33:4-33:5  operator  '(' -> (unresolved) close=33:6 in=use@29:6
+34:3-34:4  expr  'e' -> e@29:22 in=use@29:6
+34:5-34:6  operator  '+' -> (unresolved) in=use@29:6
+35:4-35:5  expr  'a' -> a@29:12 in=use@29:6
+35:3-35:4  operator  '-' -> (unresolved) in=use@29:6
+36:3-36:4  expr  'a' -> a@29:12 in=use@29:6
+36:6-36:7  member  'm' -> (unresolved) in=use@29:6
+36:4-36:6  operator  '->' -> (unresolved) in=use@29:6
+37:3-37:4  expr  'p' -> p@29:30 in=use@29:6
+37:7-37:8  expr  'p' -> p@29:30 in=use@29:6
+38:3-38:10  expr  'missing' -> (unresolved) in=use@29:6
+38:13-38:14  expr  'a' -> a@29:12 in=use@29:6
+39:4-39:9  ud-suffix  '_none' -> (unresolved) in=use@29:6

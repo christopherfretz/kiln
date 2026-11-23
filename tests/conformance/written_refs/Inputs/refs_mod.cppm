@@ -18,3 +18,13 @@ int top(int a, int b) { return geo::twice(a) * b; }
 }
 // A leading `::` and a destructor's `~` are carried (WP-2326).
 export inline void lead(geo::Pt *p) { p->::geo::Pt::~Pt(); }
+// Operator entries with their closing tokens, and ud-suffixes, are
+// carried (WP-2820).
+export namespace geo {
+struct Grid {
+  int operator[](int i) const { return i; }
+};
+inline Pt operator+(Pt a, Pt b) { return {a.x + b.x, a.y + b.y}; }
+inline int operator""_px(unsigned long long v) { return int(v); }
+inline int cell(Grid g, Pt p) { return g[(p + p).x] + 3_px; }
+} // namespace geo

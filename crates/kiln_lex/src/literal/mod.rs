@@ -910,6 +910,54 @@ fn unterminated(spelling: &str, quote: u8) -> Diags {
     d
 }
 
+/// The identifier a ud-suffix spells ([lex.ext]/1: a ud-suffix is an
+/// identifier): its universal-character-names (`\uXXXX`, `\UXXXXXXXX`,
+/// `\u{…}`, `\N{…}`) replaced by their characters, as the lexer does
+/// for an identifier token, so `1_\u00e9` and `operator""_é` name the
+/// same literal operator (clang `expandUCNs`). A malformed one is kept
+/// as written (the lexer has diagnosed it).
+pub fn ud_suffix_name(suffix: &str) -> std::borrow::Cow<'_, str> {
+    if !suffix.contains('\\') {
+        return std::borrow::Cow::Borrowed(suffix);
+    }
+    let mut out = String::with_capacity(suffix.len());
+    let mut rest = suffix;
+    while let Some(i) = rest.find('\\') {
+        out.push_str(&rest[..i]);
+        rest = &rest[i..];
+        let (ch, len) = ud_suffix_ucn(rest).unwrap_or(('\\', 1));
+        out.push(ch);
+        rest = &rest[len..];
+    }
+    out.push_str(rest);
+    std::borrow::Cow::Owned(out)
+}
+
+/// The character and byte length of the universal-character-name that
+/// starts `s` (at its `\`), if well-formed.
+fn ud_suffix_ucn(s: &str) -> Option<(char, usize)> {
+    let b = s.as_bytes();
+    let (digits, len) = match (b.get(1)?, b.get(2)) {
+        (b'u' | b'N', Some(b'{')) => {
+            let close = s.find('}')?;
+            let body = &s[3..close];
+            if b[1] == b'N' {
+                return match lookup_char_name(body)? {
+                    NameMatch::Exact(c) | NameMatch::Loose(c) => Some((c, close + 1)),
+                };
+            }
+            (body, close + 1)
+        }
+        (b'u', _) => (s.get(2..6)?, 6),
+        (b'U', _) => (s.get(2..10)?, 10),
+        _ => return None,
+    };
+    if digits.is_empty() || !digits.bytes().all(|d| d.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some((char::from_u32(u32::from_str_radix(digits, 16).ok()?)?, len))
+}
+
 /// Evaluates a string literal ([lex.string]) from its spelling: prefix,
 /// escapes, encoding into code units, ud-suffix. Raw string bodies are
 /// taken verbatim except that CR LF becomes LF (as clang does; phase 1

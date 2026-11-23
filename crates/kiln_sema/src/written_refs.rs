@@ -1069,7 +1069,7 @@ impl Sema<'_, '_> {
         }
     }
 
-    fn push_written_ref(
+    pub(crate) fn push_written_ref(
         &mut self,
         range: Span,
         entity: Option<DeclId>,

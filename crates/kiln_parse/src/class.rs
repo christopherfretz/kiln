@@ -2769,7 +2769,7 @@ impl Parser<'_, '_> {
                     d.invalid = true;
                 }
                 if let Some(u) = lit.ud_suffix {
-                    ud.get_or_insert_with(|| self.s.intern(u));
+                    ud.get_or_insert_with(|| self.s.intern(&kiln_lex::literal::ud_suffix_name(u)));
                 }
             }
             if !empty && !d.invalid {

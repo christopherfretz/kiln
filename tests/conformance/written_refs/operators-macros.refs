@@ -1,0 +1,19 @@
+10:3-10:4  type  'V' -> V@8:8 in=V::operator+@10:5 how=injected
+10:15-10:16  type  'V' -> V@8:8 in=(anonymous)@10:16 how=injected
+12:53-12:54  expr  'v' -> v@12:37 in=operator""_n@12:5
+20:9-20:10  type  'V' -> V@8:8 in=v@20:11
+20:14-20:15  type  'V' -> V@8:8 in=u@20:16
+21:7-21:8  expr  'v' -> v@20:11 in=use@20:5 exp=21:3
+21:10-21:11  expr  'u' -> u@20:16 in=use@20:5 exp=21:3
+13:21-13:22  operator  '+' -> V::operator+@10:5 in=use@20:5 exp=21:3 how=member
+22:6-22:7  expr  'v' -> v@20:11 in=use@20:5 exp=22:3
+14:19-14:20  operator  '[' -> V::operator[]@9:7 close=14:21 in=use@20:5 exp=22:3 how=member
+23:8-23:9  expr  'v' -> v@20:11 in=use@20:5 exp=23:3
+23:8-23:9  expr  'v' -> v@20:11 in=use@20:5 exp=23:3
+15:19-15:20  operator  '+' -> V::operator+@10:5 in=use@20:5 exp=23:3 how=member
+24:3-24:4  expr  'v' -> v@20:11 in=use@20:5
+24:12-24:13  expr  'u' -> u@20:16 in=use@20:5
+24:9-24:10  operator  '+' -> V::operator+@10:5 in=use@20:5 exp=24:5 how=member
+16:14-16:16  ud-suffix  '_n' -> operator""_n@12:5 in=use@20:5 exp=25:10
+25:21-25:23  ud-suffix  '_n' -> operator""_n@12:5 in=use@20:5 exp=25:16
+<scratch space>:1:2-1:4  ud-suffix  '_n' -> operator""_n@12:5 in=use@20:5 exp=25:27

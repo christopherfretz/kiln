@@ -17,7 +17,7 @@ use kiln_lex::literal::{
     CodeUnits, NumberClass, SourceBytes, StringLiteral, classify_number_in,
     decode_char_from_source, decode_string_from_source, invalid_utf8,
 };
-use kiln_lex::{Punct, Std, TokKind, Token};
+use kiln_lex::{Punct, Std, TokFlags, TokKind, Token};
 use kiln_sema::expr::CastStyle;
 use kiln_sema::{
     DeclSite, DeclaratorContext, NameClass, OffsetofComponent, SpecialName, TypeSpecKind,
@@ -235,16 +235,20 @@ impl Parser<'_, '_> {
     /// clang's `ParseSimpleExpressionList` for a C-style cast's
     /// parenthesized operand after its first element `first` and a comma:
     /// the assignment-expressions are all parsed before their comma
-    /// operators are built, left to right at the `(` `at`.
-    fn parse_paren_list_rest(&mut self, first: ExprId, at: Loc) -> PExpr {
-        let mut elems = vec![self.parse_assignment_expr()?];
+    /// operators are built, left to right at the `(` `at`. Each comma's
+    /// written-reference entry is still at the comma itself (`comma` the
+    /// first one; spec/ast.md §18.13.2).
+    fn parse_paren_list_rest(&mut self, first: ExprId, at: Loc, comma: Span) -> PExpr {
+        let mut elems = vec![(comma, self.parse_assignment_expr()?)];
         while self.cur_binop().is_some_and(|(_, op)| op == Some(BinaryOp::Comma)) {
-            self.bump();
-            elems.push(self.parse_assignment_expr()?);
+            let c = self.bump().span;
+            elems.push((c, self.parse_assignment_expr()?));
         }
         let mut lhs = first;
-        for e in elems {
-            lhs = self.s.act_on_binary(BinaryOp::Comma, lhs, e, at);
+        for (c, e) in elems {
+            let l = lhs;
+            lhs = self.s.act_on_binary(BinaryOp::Comma, l, e, at);
+            self.s.note_written_operator(lhs, c, at, Loc::INVALID, &[l, e]);
         }
         Some(lhs)
     }
@@ -312,7 +316,7 @@ impl Parser<'_, '_> {
             if let Some(at) = comma_at
                 && op == Some(BinaryOp::Comma)
             {
-                return self.parse_paren_list_rest(lhs, at);
+                return self.parse_paren_list_rest(lhs, at, op_tok.span);
             }
             let mut middle = None;
             let mut colon = None;
@@ -358,7 +362,11 @@ impl Parser<'_, '_> {
                 }
             }
             lhs = match (op, middle) {
-                (Some(op), _) => self.s.act_on_binary(op, lhs, rhs, op_loc),
+                (Some(op), _) => {
+                    let e = self.s.act_on_binary(op, lhs, rhs, op_loc);
+                    self.s.note_written_operator(e, op_tok.span, op_loc, Loc::INVALID, &[lhs, rhs]);
+                    e
+                }
                 (None, Some(m)) => self.s.act_on_conditional(lhs, m, rhs, op_loc),
                 (None, None) => unreachable!("'?' always has a middle operand"),
             };
@@ -442,7 +450,9 @@ impl Parser<'_, '_> {
         }
         Some(match (op, colon) {
             (Some(op), _) if p == prec::ASSIGN => {
-                self.s.act_on_assign_list(op, lhs, &l, op_tok.span.lo)
+                let e = self.s.act_on_assign_list(op, lhs, &l, op_tok.span.lo);
+                self.s.note_written_operator(e, op_tok.span, op_tok.span.lo, Loc::INVALID, &[lhs]);
+                e
             }
             (None, Some(c)) => self.s.act_on_misplaced_init_list(lhs, &l, true, ":", c),
             _ => {
@@ -494,15 +504,18 @@ impl Parser<'_, '_> {
             if let Some(op) = op {
                 // clang `IsAfterAmp`: `*` directly after a unary `&`.
                 let after_amp = op == UnaryOp::Deref && self.addr_operand_at == Some(self.pos());
-                self.bump();
+                let tok = self.bump().span;
                 if op == UnaryOp::AddrOf {
                     self.addr_operand_at = Some(self.pos());
                 }
                 let e = self.parse_cast_expr()?;
-                if after_amp {
-                    return Some(self.s.act_on_deref_after_amp(e, loc));
-                }
-                return Some(self.s.act_on_unary(op, e, loc));
+                let r = if after_amp {
+                    self.s.act_on_deref_after_amp(e, loc)
+                } else {
+                    self.s.act_on_unary(op, e, loc)
+                };
+                self.s.note_written_operator(r, tok, loc, Loc::INVALID, &[e]);
+                return Some(r);
             }
             if p == Punct::AmpAmp {
                 return self.parse_addr_label(loc);
@@ -1466,64 +1479,10 @@ impl Parser<'_, '_> {
                     if self.peek_is(1, Punct::LSquare) {
                         return Some(e);
                     }
-                    self.bump();
-                    // C++23 [expr.sub]: an expression-list (possibly
-                    // empty, possibly braced-init-lists). Its delayed
-                    // typos are held (WP-330): clang's
-                    // `ParsePostfixExpressionSuffix` corrects the base's at
-                    // the `]` and drops the index of a subscript missing
-                    // its `]`, whose typos then wait for the end of the
-                    // translation unit.
-                    let mark = self.s.begin_delayed_typos();
-                    let args = if self.at(Punct::RSquare) {
-                        Some(Vec::new())
-                    } else if self.std < Std::Cxx23 && !self.at(Punct::LBrace) {
-                        // Before C++23 the index is one expression, so a
-                        // top-level comma is the comma operator
-                        // ([expr.sub]/1 in C++20, [depr.comma.subscript];
-                        // clang `ParsePostfixExpressionSuffix`).
-                        let outer = std::mem::replace(&mut self.expr_invalid, false);
-                        let a = self.with_greater_op(true, Self::parse_expression);
-                        let a = a.filter(|_| !std::mem::replace(&mut self.expr_invalid, outer));
-                        a.map(|a| vec![a])
-                    } else {
-                        self.with_greater_op(true, |p| p.parse_expr_list(Punct::RSquare))
-                    };
-                    let Some(args) = args else {
-                        // `ParseExpressionList` corrects what it parsed,
-                        // then the base. The subscript is `ExprError`
-                        // and its `]` is matched (WP-399).
-                        self.s.flush_delayed_typos(mark);
-                        self.s.correct_delayed_typos_in(e);
-                        let _ = self.expect_closing(Punct::RSquare, Punct::LSquare, loc);
-                        self.expr_invalid = true;
-                        e = self.s.act_on_error_expr(&[e], loc);
-                        continue;
-                    };
-                    self.s.correct_delayed_typos_in(e);
-                    if !self.at(Punct::RSquare) {
-                        // clang's `ParsePostfixExpressionSuffix`: no `]`
-                        // after the list makes the subscript `ExprError`
-                        // with no Sema action (WP-399).
-                        self.s.drop_delayed_typos(mark);
-                        let _ = self.expect_closing(Punct::RSquare, Punct::LSquare, loc);
-                        self.expr_invalid = true;
-                        e = self.s.act_on_error_expr(&[e], loc);
-                        continue;
-                    }
-                    self.s.end_delayed_typos(mark);
-                    let rsquare = self.expect_closing(Punct::RSquare, Punct::LSquare, loc);
-                    // A subscript whose Sema action fails is `ExprError`
-                    // (`i[1]` on an `int`): an expression-list skips to
-                    // its `,` (WP-399).
-                    let errors = self.s.diags.error_count();
-                    e = self.s.act_on_subscript_args(e, &args, loc, rsquare);
-                    if self.s.diags.error_count() > errors && self.s.is_error_expr(e) {
-                        self.expr_invalid = true;
-                    }
+                    e = self.parse_subscript_suffix(e, loc);
                 }
                 Some(Punct::LParen) => {
-                    self.bump();
+                    let tok = self.bump().span;
                     let mark = self.s.typo_mark();
                     let Some(args) = self.with_greater_op(true, Self::parse_call_args) else {
                         // clang's `ParseExpressionList` corrects the
@@ -1573,23 +1532,95 @@ impl Parser<'_, '_> {
                         e = self.s.act_on_error_expr(&[], loc);
                         continue;
                     };
+                    let callee = e;
                     e = self.s.act_on_call(e, &args, loc, rparen);
+                    if self.s.records_written_refs() {
+                        let ops: Vec<ExprId> = std::iter::once(callee).chain(args).collect();
+                        self.s.note_written_operator(e, tok, loc, rparen, &ops);
+                    }
                 }
                 Some(p @ (Punct::Period | Punct::Arrow)) => {
-                    self.bump();
+                    let tok = self.bump().span;
+                    let base = e;
                     e = self.parse_member_access_suffix(e, loc, p == Punct::Arrow)?;
+                    if p == Punct::Arrow {
+                        self.s.note_written_arrow(e, base, tok);
+                    }
                 }
-                Some(Punct::PlusPlus) => {
-                    self.bump();
-                    e = self.s.act_on_unary(UnaryOp::PostInc, e, loc);
-                }
-                Some(Punct::MinusMinus) => {
-                    self.bump();
-                    e = self.s.act_on_unary(UnaryOp::PostDec, e, loc);
+                Some(p @ (Punct::PlusPlus | Punct::MinusMinus)) => {
+                    let tok = self.bump().span;
+                    let op = if p == Punct::PlusPlus { UnaryOp::PostInc } else { UnaryOp::PostDec };
+                    let base = e;
+                    e = self.s.act_on_unary(op, e, loc);
+                    self.s.note_written_operator(e, tok, loc, Loc::INVALID, &[base]);
                 }
                 _ => return Some(e),
             }
         }
+    }
+
+    /// A subscript after `e` (its `[` at `loc`, the current token):
+    /// the expression-list, the `]`, the Sema action and the
+    /// subscript's written `operator` entry.
+    fn parse_subscript_suffix(&mut self, e: ExprId, loc: Loc) -> ExprId {
+        let tok = self.bump().span;
+        // C++23 [expr.sub]: an expression-list (possibly
+        // empty, possibly braced-init-lists). Its delayed
+        // typos are held (WP-330): clang's
+        // `ParsePostfixExpressionSuffix` corrects the base's at
+        // the `]` and drops the index of a subscript missing
+        // its `]`, whose typos then wait for the end of the
+        // translation unit.
+        let mark = self.s.begin_delayed_typos();
+        let args = if self.at(Punct::RSquare) {
+            Some(Vec::new())
+        } else if self.std < Std::Cxx23 && !self.at(Punct::LBrace) {
+            // Before C++23 the index is one expression, so a
+            // top-level comma is the comma operator
+            // ([expr.sub]/1 in C++20, [depr.comma.subscript];
+            // clang `ParsePostfixExpressionSuffix`).
+            let outer = std::mem::replace(&mut self.expr_invalid, false);
+            let a = self.with_greater_op(true, Self::parse_expression);
+            let a = a.filter(|_| !std::mem::replace(&mut self.expr_invalid, outer));
+            a.map(|a| vec![a])
+        } else {
+            self.with_greater_op(true, |p| p.parse_expr_list(Punct::RSquare))
+        };
+        let Some(args) = args else {
+            // `ParseExpressionList` corrects what it parsed,
+            // then the base. The subscript is `ExprError`
+            // and its `]` is matched (WP-399).
+            self.s.flush_delayed_typos(mark);
+            self.s.correct_delayed_typos_in(e);
+            let _ = self.expect_closing(Punct::RSquare, Punct::LSquare, loc);
+            self.expr_invalid = true;
+            return self.s.act_on_error_expr(&[e], loc);
+        };
+        self.s.correct_delayed_typos_in(e);
+        if !self.at(Punct::RSquare) {
+            // clang's `ParsePostfixExpressionSuffix`: no `]`
+            // after the list makes the subscript `ExprError`
+            // with no Sema action (WP-399).
+            self.s.drop_delayed_typos(mark);
+            let _ = self.expect_closing(Punct::RSquare, Punct::LSquare, loc);
+            self.expr_invalid = true;
+            return self.s.act_on_error_expr(&[e], loc);
+        }
+        self.s.end_delayed_typos(mark);
+        let rsquare = self.expect_closing(Punct::RSquare, Punct::LSquare, loc);
+        // A subscript whose Sema action fails is `ExprError`
+        // (`i[1]` on an `int`): an expression-list skips to
+        // its `,` (WP-399).
+        let errors = self.s.diags.error_count();
+        let r = self.s.act_on_subscript_args(e, &args, loc, rsquare);
+        if self.s.records_written_refs() {
+            let ops: Vec<ExprId> = std::iter::once(e).chain(args).collect();
+            self.s.note_written_operator(r, tok, loc, rsquare, &ops);
+        }
+        if self.s.diags.error_count() > errors && self.s.is_error_expr(r) {
+            self.expr_invalid = true;
+        }
+        r
     }
 
     /// `p->~T()` / `x.~T()` / `p->~X<T>()` after `.`/`->`, at the `~`
@@ -3120,22 +3151,28 @@ impl Parser<'_, '_> {
         }
         match &n.class {
             NumberClass::Integer(l) => {
-                let ud = suffix_loc(t.span.hi, l.ud_suffix);
-                if let Some(u) = l.ud_suffix {
+                let ud = self.ud_suffix_span(&t, &sp, l.ud_suffix);
+                let at = ud.map_or(t.span.hi, |u| u.lo);
+                if let (Some(u), Some(r)) = (l.ud_suffix, ud) {
                     // [lex.ext]/3: the raw form is the spelling without
                     // the ud-suffix.
                     let raw = &sp[..sp.len() - u.len()];
-                    return self.s.act_on_integer_udl(l, raw, t.span.lo, ud);
+                    let e = self.s.act_on_integer_udl(l, raw, t.span.lo, at);
+                    self.s.note_written_udl(e, &[r]);
+                    return e;
                 }
-                self.s.act_on_integer_literal(l, t.span.lo, ud)
+                self.s.act_on_integer_literal(l, t.span.lo, at)
             }
             NumberClass::Floating(l) => {
-                let ud = suffix_loc(t.span.hi, l.ud_suffix);
-                if let Some(u) = l.ud_suffix {
+                let ud = self.ud_suffix_span(&t, &sp, l.ud_suffix);
+                let at = ud.map_or(t.span.hi, |u| u.lo);
+                if let (Some(u), Some(r)) = (l.ud_suffix, ud) {
                     let raw = &sp[..sp.len() - u.len()];
-                    return self.s.act_on_float_udl(l, raw, t.span.lo, ud);
+                    let e = self.s.act_on_float_udl(l, raw, t.span.lo, at);
+                    self.s.note_written_udl(e, &[r]);
+                    return e;
                 }
-                self.s.act_on_float_literal(l, t.span.lo, ud)
+                self.s.act_on_float_literal(l, t.span.lo, at)
             }
             NumberClass::Invalid => self.s.act_on_error_expr(&[], t.span.lo),
         }
@@ -3151,8 +3188,30 @@ impl Parser<'_, '_> {
         if c.has_error {
             return self.s.act_on_error_expr(&[], t.span.lo);
         }
-        let ud = suffix_loc(t.span.hi, c.ud_suffix);
-        self.s.act_on_char_literal(&c, t.span.lo, ud)
+        let ud = self.ud_suffix_span(&t, &sp, c.ud_suffix);
+        let e = self.s.act_on_char_literal(&c, t.span.lo, ud.map_or(t.span.hi, |u| u.lo));
+        if let Some(r) = ud {
+            self.s.note_written_udl(e, &[r]);
+        }
+        e
+    }
+
+    /// The source range of the ud-suffix `suffix` ending the spelling
+    /// `sp` of literal token `t` ([lex.ext]): its own bytes, located
+    /// through any line splice in the token (spec/ast.md §18.13.4), so
+    /// never the token's last `suffix.len()` bytes when it was cleaned.
+    fn ud_suffix_span(&self, t: &Token, sp: &str, suffix: Option<&str>) -> Option<Span> {
+        let n = suffix?.len();
+        let lo = if t.flags.contains(TokFlags::NEEDS_CLEANING)
+            && let Some(text) = self.sm.span_text(t.span)
+        {
+            let off = kiln_lex::source_offset(text, t.kind, self.lex_opts.trigraphs, sp.len() - n);
+            t.span.lo.with_offset(u32::try_from(off).unwrap_or(u32::MAX))
+        } else {
+            let n = u32::try_from(n).unwrap_or(u32::MAX);
+            t.span.hi.to_raw().checked_sub(n).map_or(t.span.hi, Loc::from_raw)
+        };
+        Some(Span::new(lo, t.span.hi))
     }
 
     /// True at a string literal.
@@ -3227,12 +3286,20 @@ impl Parser<'_, '_> {
         if error && !unevaluated {
             return Some(self.s.act_on_error_expr(&[], toks[0].span.lo));
         }
-        let ud = toks
+        // Every suffixed piece's ud-suffix names the literal operator the
+        // concatenation calls; sema's call is at the first one.
+        let uds: Vec<Span> = toks
             .iter()
             .zip(&pieces)
-            .find(|(_, p)| p.0.ud_suffix.is_some())
-            .map_or(Loc::INVALID, |(t, p)| suffix_loc(t.span.hi, p.0.ud_suffix));
-        Some(self.s.act_on_string_literal(&pieces, unevaluated, ud))
+            .zip(&spellings)
+            .filter_map(|((t, p), sp)| self.ud_suffix_span(t, sp, p.0.ud_suffix))
+            .collect();
+        let ud = uds.first().map_or(Loc::INVALID, |u| u.lo);
+        let e = self.s.act_on_string_literal(&pieces, unevaluated, ud);
+        if !uds.is_empty() {
+            self.s.note_written_udl(e, &uds);
+        }
+        Some(e)
     }
 
     /// The value of the unevaluated string literal token `t` (for a
@@ -3252,11 +3319,4 @@ impl Parser<'_, '_> {
             _ => Some(String::new()),
         }
     }
-}
-
-/// The location of a literal's ud-suffix: its last `suffix.len()` bytes
-/// before the token end `hi` ([lex.ext]).
-fn suffix_loc(hi: Loc, suffix: Option<&str>) -> Loc {
-    let n = suffix.map_or(0, str::len);
-    u32::try_from(n).ok().and_then(|n| hi.to_raw().checked_sub(n)).map_or(hi, Loc::from_raw)
 }

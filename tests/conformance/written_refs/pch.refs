@@ -24,6 +24,24 @@ refs_pch.h:22:35-22:36  expr  'p' -> p@refs_pch.h:22:30 in=lead@refs_pch.h:22:13
 refs_pch.h:22:40-22:46  nns  'pch_ns' -> pch_ns@refs_pch.h:4:11 q=::refs_pch.h:22:38 in=lead@refs_pch.h:22:13
 refs_pch.h:22:48-22:50  nns  'Pt' -> pch_ns::Pt@refs_pch.h:6:8 q=refs_pch.h:22:40 in=lead@refs_pch.h:22:13
 refs_pch.h:22:53-22:55  member  'Pt' -> pch_ns::Pt::~Pt@refs_pch.h:6:8 q=refs_pch.h:22:48 tilde=refs_pch.h:22:52 in=lead@refs_pch.h:22:13
+refs_pch.h:27:40-27:41  expr  'i' -> i@refs_pch.h:27:22 in=pch_ns::Grid::operator[]@refs_pch.h:27:7
+refs_pch.h:29:8-29:10  type  'Pt' -> pch_ns::Pt@refs_pch.h:6:8 in=pch_ns::operator+@refs_pch.h:29:11
+refs_pch.h:29:21-29:23  type  'Pt' -> pch_ns::Pt@refs_pch.h:6:8 in=a@refs_pch.h:29:24
+refs_pch.h:29:27-29:29  type  'Pt' -> pch_ns::Pt@refs_pch.h:6:8 in=b@refs_pch.h:29:30
+refs_pch.h:29:43-29:44  expr  'a' -> a@refs_pch.h:29:24 in=pch_ns::operator+@refs_pch.h:29:11
+refs_pch.h:29:45-29:46  member  'x' -> pch_ns::Pt::x@refs_pch.h:7:7 in=pch_ns::operator+@refs_pch.h:29:11
+refs_pch.h:29:49-29:50  expr  'b' -> b@refs_pch.h:29:30 in=pch_ns::operator+@refs_pch.h:29:11
+refs_pch.h:29:51-29:52  member  'x' -> pch_ns::Pt::x@refs_pch.h:7:7 in=pch_ns::operator+@refs_pch.h:29:11
+refs_pch.h:30:61-30:62  expr  'v' -> v@refs_pch.h:30:45 in=pch_ns::operator""_px@refs_pch.h:30:12
+refs_pch.h:31:17-31:21  type  'Grid' -> pch_ns::Grid@refs_pch.h:26:8 in=g@refs_pch.h:31:22
+refs_pch.h:31:25-31:27  type  'Pt' -> pch_ns::Pt@refs_pch.h:6:8 in=p@refs_pch.h:31:28
+refs_pch.h:31:40-31:41  expr  'g' -> g@refs_pch.h:31:22 in=pch_ns::cell@refs_pch.h:31:12
+refs_pch.h:31:43-31:44  expr  'p' -> p@refs_pch.h:31:28 in=pch_ns::cell@refs_pch.h:31:12
+refs_pch.h:31:47-31:48  expr  'p' -> p@refs_pch.h:31:28 in=pch_ns::cell@refs_pch.h:31:12
+refs_pch.h:31:45-31:46  operator  '+' -> pch_ns::operator+@refs_pch.h:29:11 in=pch_ns::cell@refs_pch.h:31:12
+refs_pch.h:31:50-31:51  member  'x' -> pch_ns::Pt::x@refs_pch.h:7:7 in=pch_ns::cell@refs_pch.h:31:12
+refs_pch.h:31:41-31:42  operator  '[' -> pch_ns::Grid::operator[]@refs_pch.h:27:7 close=refs_pch.h:31:51 in=pch_ns::cell@refs_pch.h:31:12 how=member
+refs_pch.h:31:56-31:59  ud-suffix  '_px' -> pch_ns::operator""_px@refs_pch.h:30:12 in=pch_ns::cell@refs_pch.h:31:12
 10:1-10:7  nns  'pch_ns' -> pch_ns@refs_pch.h:4:11 in=boxed@10:18
 10:9-10:12  template  'Box' -> pch_ns::Box@refs_pch.h:12:27 q=10:1 in=boxed@10:18
 12:10-12:11  expr  'v' -> v@11:19 in=after_pch@11:5

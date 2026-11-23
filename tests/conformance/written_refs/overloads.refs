@@ -37,4 +37,5 @@
 33:23-33:26  expr  'act' -> lib::act@12:5 in=calls@28:5 how=adl adl-ns=lib@9:11 adl-cls=lib::Tag@10:8
 33:27-33:28  expr  'g' -> g@28:35 in=calls@28:5
 33:31-33:32  expr  'g' -> g@28:35 in=calls@28:5
+33:29-33:30  operator  '+' -> lib::operator+@13:5 in=calls@28:5 how=adl
 33:34-33:35  expr  'r' -> r@31:7 in=calls@28:5

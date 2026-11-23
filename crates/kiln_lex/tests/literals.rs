@@ -146,3 +146,18 @@ fn lex_literal_spliced() {
     assert_eq!(l.spellings, ["\"ab\""]);
     assert!(l.tokens[0].has(TokFlags::NEEDS_CLEANING));
 }
+
+/// A ud-suffix names the identifier its universal-character-names spell
+/// ([lex.ext]/1); a malformed one is kept as written.
+#[test]
+fn ud_suffix_name_decodes_ucns() {
+    use kiln_lex::literal::ud_suffix_name;
+    for spelled in ["_\\u00e9", "_\\U000000e9", "_\\u{e9}", "_\\N{LATIN SMALL LETTER E WITH ACUTE}"]
+    {
+        assert_eq!(ud_suffix_name(spelled), "_\u{e9}", "{spelled}");
+    }
+    assert_eq!(ud_suffix_name("_x\\u00e9y"), "_x\u{e9}y");
+    assert!(matches!(ud_suffix_name("_km"), std::borrow::Cow::Borrowed("_km")));
+    assert_eq!(ud_suffix_name("_\\u00"), "_\\u00");
+    assert_eq!(ud_suffix_name("_\\N{NO SUCH NAME}"), "_\\N{NO SUCH NAME}");
+}

@@ -772,3 +772,122 @@ fn pack_index_and_member_variable_template_names() {
         assert_eq!(targs, 1, "`d.twice<7>` keeps its template arguments");
     });
 }
+
+const UDL: &str = "using Z = decltype(sizeof 0);\n\
+                   int operator\"\"_n(unsigned long long v) { return int(v); }\n\
+                   Z operator\"\"_s(const char *, Z n) { return n; }\n\
+                   Z operator\"\"_s(const char8_t *, Z n) { return n; }\n\
+                   Z operator\"\"_s(const char16_t *, Z n) { return n; }\n\
+                   Z operator\"\"_s(const char32_t *, Z n) { return n; }\n\
+                   Z operator\"\"_s(const wchar_t *, Z n) { return n; }\n\
+                   int operator\"\"_\u{e9}(unsigned long long v) { return int(v); }\n\
+                   #define BODY 3_n\n\
+                   #define ARG(x) x\n\
+                   #define PASTE(n) n##_n\n\
+                   int a = 1_n + ARG(2_n) + BODY + PASTE(4);\n\
+                   int b = 5_\\\n\
+                   n;\n\
+                   Z c = R\"x(r)x\"_s + u8\"p\"_s + L\"q\"_s + u\"r\"_s + U\"s\"_s;\n\
+                   int d = 6_\\u00e9;\n";
+
+/// The range of a ud-suffix entry (spec/ast.md §18.13.4): the suffix's
+/// own bytes, so its editable file range is the suffix in a file and in
+/// a macro argument, none in a macro body or from `##` (no file bytes
+/// spell it alone); a line splice in the suffix is inside the range, a
+/// universal-character-name is spelled verbatim; raw and prefixed
+/// strings end in their suffix the same way. Never the token's last
+/// `len` cleaned bytes.
+#[test]
+fn ud_suffix_ranges_are_the_suffix_bytes() {
+    with_ast(UDL, |ast, sm| {
+        let t = &ast.written_refs;
+        let suffixes: Vec<_> =
+            t.iter().filter(|(_, r)| r.role == RefRole::UdSuffix).map(|(_, r)| *r).collect();
+        assert_eq!(suffixes.len(), 11, "every suffixed literal");
+        let text = |r: &kiln_ast::written_refs::WrittenRef| {
+            sm.editable_file_range(r.range).map(|(_, lo, hi)| &UDL[lo as usize..hi as usize])
+        };
+        let got: Vec<Option<&str>> = suffixes.iter().map(text).collect();
+        assert_eq!(
+            got,
+            [
+                Some("_n"),
+                Some("_n"),
+                None,
+                None,
+                Some("_\\\nn"),
+                Some("_s"),
+                Some("_s"),
+                Some("_s"),
+                Some("_s"),
+                Some("_s"),
+                Some("_\\u00e9"),
+            ]
+        );
+        for r in &suffixes {
+            assert!(r.entity.is_some(), "every suffix names its literal operator");
+            let f = r.entity.unwrap();
+            assert_eq!(
+                ast.decls.get(f).name().kind(),
+                kiln_ast::names::DeclNameKind::LiteralOperator,
+                "a literal operator"
+            );
+        }
+        // The literal operator call joins its entry: its callee is at the
+        // suffix.
+        let at_suffix = (1..=ast.exprs.len())
+            .map(|i| kiln_ast::ExprId::new(i as u32))
+            .filter(|&e| ast.is_udl_call(e))
+            .all(|e| {
+                let mut c = ast.exprs.callee(e);
+                while ast.exprs.get(c).kind() == kiln_ast::expr::ExprKind::ImplicitCastExpr {
+                    c = ast.exprs.operand(c);
+                }
+                let lo = ast.exprs.get(c).loc();
+                suffixes.iter().any(|r| r.range.lo == lo)
+            });
+        assert!(at_suffix, "every literal operator callee is at a suffix entry");
+    });
+}
+
+const OPS: &str = "struct V { int &operator[](int); int operator()(int) const; };\n\
+                   struct O { int operator<=>(const O &) const; bool operator==(const O &) const; };\n\
+                   int use(V v, O a, O b) {\n\
+                   \x20 bool r = a < b, s = a != b;\n\
+                   \x20 return v[1] + v(2) + r + s;\n\
+                   }\n";
+
+/// Operator entries through the API (spec/ast.md §18.13): a `[]` or
+/// `()` entry spans its opening token and keeps its closing one
+/// (`WrittenRefs::close`), how is `member` for a member operator, and a
+/// rewritten comparison's entry is flagged.
+#[test]
+fn operator_entries_through_the_api() {
+    use kiln_ast::written_refs::{REF_REVERSED, REF_REWRITTEN, RefLookup};
+    with_ast(OPS, |ast, sm| {
+        let t = &ast.written_refs;
+        let sub = entry_at(t, sm, (5, 11));
+        assert_eq!(t.get(sub).role, RefRole::Operator);
+        assert_eq!(t.get(sub).how, RefLookup::Member);
+        assert_eq!(line_col(sm, t.close(sub).expect("a `]`")), (5, 13));
+        let call = entry_at(t, sm, (5, 18));
+        assert_eq!(line_col(sm, t.close(call).expect("a `)`")), (5, 20));
+        let less = entry_at(t, sm, (4, 14));
+        assert_eq!(t.get(less).flags & (REF_REWRITTEN | REF_REVERSED), REF_REWRITTEN);
+        assert!(t.close(less).is_none());
+        let ne = entry_at(t, sm, (4, 25));
+        assert_eq!(t.get(ne).flags & REF_REWRITTEN, REF_REWRITTEN);
+        let name = |id| {
+            let mut s = String::new();
+            kiln_ast::types::TypeNames::write_decl_name(
+                ast,
+                t.get(id).entity.unwrap(),
+                true,
+                &mut s,
+            );
+            s
+        };
+        assert_eq!(name(less), "O::operator<=>");
+        assert_eq!(name(ne), "O::operator==");
+    });
+}

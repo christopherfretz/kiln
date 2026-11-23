@@ -272,7 +272,7 @@ impl Sema<'_, '_> {
     }
 
     /// A class or enumeration operand ([over.match.oper]/1).
-    fn overloadable_operand(&self, e: ExprId) -> bool {
+    pub(crate) fn overloadable_operand(&self, e: ExprId) -> bool {
         let t = self.ety(e);
         self.ast.types.as_record(t).is_some() || self.ast.types.as_enum(t).is_some()
     }

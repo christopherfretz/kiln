@@ -12,7 +12,7 @@
 //! | `entries`, `pending`, `extra`, `adl_sets`, `udir_cache`, `designators` | state: the main table, its pending patches and provenance |
 //! | `specs` (dropped rows included, so `SpecRefId`s stay), `spec_nodes`, `spec_udirs` | state: the per-specialization table, its pattern nodes and their using-directives |
 //! | `unrecorded` | state |
-//! | `leads` | state: the leading `::` and `~` tokens (WP-2326) |
+//! | `leads` | state: the leading `::` and `~` tokens (WP-2326) and the closing `]`/`)` of an `operator` entry (WP-2820) |
 //! | `found_rows`, `found_sets`, `found_decls` | state: the found sets of the dependent entries (§18.12, WP-2472) |
 //! | `adl_index`, `spec_seen`, `found_index` | rebuilt from `adl_sets`, the live rows of `specs` and `found_sets` |
 //! | `inst_target`, `spec_pending`, `spec_last`, `spec_key`, `colons` | transient: scratch of one declaration or one instantiation, empty at rest |
@@ -25,7 +25,8 @@ use kiln_source::Loc;
 
 use super::{
     AdlSet, AdlSetId, FoundDecl, FoundKey, FoundSetId, FoundSetRec, PatternNode, QualLink,
-    RefExtra, RefLead, SPEC_DEAD, SpecRef, Unrecorded, WrittenRef, WrittenRefId, WrittenRefs,
+    RefExtra, RefLead, RefRole, SPEC_DEAD, SpecRef, Unrecorded, WrittenRef, WrittenRefId,
+    WrittenRefs,
 };
 use crate::Ast;
 use crate::ids::{DeclId, ExprId};
@@ -96,13 +97,16 @@ impl WrittenRefs {
             }
         }
         // Leads: by entry, once each, a `::` only on a global qualifier,
-        // a specifier's first token only on a specifier qualifier.
+        // a specifier's first token only on a specifier qualifier, a
+        // closing token only on an `operator` entry.
         let leads_ok = s.leads.windows(2).all(|w| w[0].entry < w[1].entry)
             && s.leads.iter().all(|l| {
                 entry_ok(l.entry) && {
-                    let link = s.entries[l.entry.index()].qualifier.link();
+                    let e = &s.entries[l.entry.index()];
+                    let link = e.qualifier.link();
                     (!l.colon.is_valid() || link == QualLink::Global)
                         && (!l.spec.is_valid() || link == QualLink::Specifier)
+                        && (!l.close.is_valid() || e.role == RefRole::Operator)
                 }
             });
         if !leads_ok {
@@ -374,7 +378,37 @@ mod tests {
         let mut bad = new_ast();
         bad.written_refs.set_on(true);
         let ec = bad.written_refs.push(entry(RefQualifier::NONE)).unwrap();
-        bad.written_refs.set_lead(ec, Some(Loc::from_raw(3)), None);
+        bad.written_refs.set_lead(ec, Some(Loc::from_raw(3)), None, None);
+        let bytes = put(&bad);
+        let mut rd = Reader::new(&bytes);
+        assert!(new_ast().get_written_refs(&mut rd, true, 0).is_err());
+    }
+
+    /// Stage 6 (WP-2820): an `operator` entry's closing token and its
+    /// rewritten flags round trip; a closing token on an entry of another
+    /// role is rejected.
+    #[test]
+    fn operator_closes_round_trip_and_a_close_off_an_operator_is_rejected() {
+        use crate::written_refs::{REF_REVERSED, REF_REWRITTEN};
+        let mut ast = new_ast();
+        ast.written_refs.set_on(true);
+        let flags = REF_REWRITTEN | REF_REVERSED;
+        let op = WrittenRef { role: RefRole::Operator, flags, ..entry(RefQualifier::NONE) };
+        let eo = ast.written_refs.push(op).unwrap();
+        ast.written_refs.set_close(eo, Loc::from_raw(7));
+        let ud = WrittenRef { role: RefRole::UdSuffix, ..entry(RefQualifier::NONE) };
+        let eu = ast.written_refs.push(ud).unwrap();
+        let bytes = put(&ast);
+        let mut back = new_ast();
+        let mut rd = Reader::new(&bytes);
+        back.get_written_refs(&mut rd, true, 0).expect("read");
+        assert_eq!(back.written_refs.close(eo), Some(Loc::from_raw(7)));
+        assert_eq!(back.written_refs.get(eo).flags, flags);
+        assert_eq!(back.written_refs.get(eu).role, RefRole::UdSuffix);
+        let mut bad = new_ast();
+        bad.written_refs.set_on(true);
+        let ec = bad.written_refs.push(entry(RefQualifier::NONE)).unwrap();
+        bad.written_refs.set_close(ec, Loc::from_raw(3));
         let bytes = put(&bad);
         let mut rd = Reader::new(&bytes);
         assert!(new_ast().get_written_refs(&mut rd, true, 0).is_err());

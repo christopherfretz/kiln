@@ -1,0 +1,22 @@
+12:25-12:26  type  'A' -> A@10:8 in=(anonymous)@12:28 how=injected
+16:12-16:14  type  'FP' -> FP@14:7 in=Callable::operator int (*)(int)@16:3
+19:10-19:11  type  'A' -> A@10:8 in=a@19:12
+19:15-19:16  type  'A' -> A@10:8 in=b@19:17
+19:20-19:28  type  'Callable' -> Callable@15:8 in=c@19:29
+20:3-20:4  expr  'a' -> a@19:12 in=use@19:6
+20:7-20:8  expr  'b' -> b@19:17 in=use@19:6
+20:5-20:6  operator  '=' -> A::operator=@10:8 in=use@19:6 how=member
+21:3-21:4  expr  'a' -> a@19:12 in=use@19:6
+21:8-21:9  expr  'b' -> b@19:17 in=use@19:6
+21:5-21:7  operator  '==' -> A::operator==@12:8 in=use@19:6 how=member
+22:3-22:4  expr  'a' -> a@19:12 in=use@19:6
+22:8-22:9  expr  'b' -> b@19:17 in=use@19:6
+22:5-22:7  operator  '!=' -> A::operator==@12:8 in=use@19:6 rewritten how=member
+23:3-23:4  expr  'c' -> c@19:29 in=use@19:6
+23:4-23:5  operator  '(' -> Callable::operator int (*)(int)@16:3 close=23:6 in=use@19:6 how=member
+24:31-24:32  expr  'x' -> x@24:19 in=use(A, A, Callable)::(lambda)::operator()@24:12
+25:3-25:4  expr  'l' -> l@24:8 in=use@19:6
+25:4-25:5  operator  '(' -> use(A, A, Callable)::(lambda)::operator()@24:12 close=25:6 in=use@19:6 how=member
+26:32-26:33  expr  'x' -> x@26:20 in=use(A, A, Callable)::(lambda)::operator()@26:12
+27:3-27:4  expr  'g' -> g@26:8 in=use@19:6
+27:4-27:5  operator  '(' -> use(A, A, Callable)::(lambda)::operator()<int>@26:12 found=use(A, A, Callable)::(lambda)::operator()@26:12 close=27:6 in=use@19:6 how=member
