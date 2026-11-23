@@ -1,0 +1,29 @@
+tok Add k.def:30:a0@b0[0]<k.def:32
+tok , k.def:30:b1
+tok Sub k.def:37:a0@b0[0]<k.def:39
+tok , k.def:37:b1
+tok case k.def:30:b0
+tok Add k.def:30:a0@b1[0]<k.def:32
+tok : k.def:30:b2
+tok case k.def:37:b0
+tok Sub k.def:37:a0@b1[0]<k.def:39
+tok : k.def:37:b2
+def def-twice.cpp:464 K(n) file dir def-twice.cpp:456..def-twice.cpp:471 = n , ended undef k.def:44
+param def-twice.cpp:464 0 n def-twice.cpp:466 uses b0:plain
+def def-twice.cpp:535 K(n) file dir def-twice.cpp:527..def-twice.cpp:547 = case n : ended undef k.def:44
+param def-twice.cpp:535 0 n def-twice.cpp:537 uses b1:plain
+undef k.def:44 K ends def-twice.cpp:464 in i1
+undef k.def:44 K ends def-twice.cpp:535 in i2
+exp k.def:30 K def def-twice.cpp:464 end k.def:35 args a0=k.def:32..k.def:35/1 in i1
+exp k.def:37 K def def-twice.cpp:464 end k.def:42 args a0=k.def:39..k.def:42/1 in i1
+exp k.def:30 K def def-twice.cpp:535 end k.def:35 args a0=k.def:32..k.def:35/1 in i2
+exp k.def:37 K def def-twice.cpp:535 end k.def:42 args a0=k.def:39..k.def:42/1 in i2
+inc def-twice.cpp:472 include "Inputs/k.def" name def-twice.cpp:481..def-twice.cpp:495 entered file k.def ctx i1
+inc def-twice.cpp:548 include "Inputs/k.def" name def-twice.cpp:557..def-twice.cpp:571 entered file k.def ctx i2
+cond k.def:0 ifndef not-taken cond k.def:7..k.def:9 group k.def:9..k.def:23 in i1
+read k.def:0 tested K def-twice.cpp:464 at k.def:8 in i1
+cond k.def:23 endif closes open k.def:0 cond k.def:29..k.def:29 in i1
+cond k.def:0 ifndef not-taken cond k.def:7..k.def:9 group k.def:9..k.def:23 in i2
+read k.def:0 tested K def-twice.cpp:535 at k.def:8 in i2
+cond k.def:23 endif closes open k.def:0 cond k.def:29..k.def:29 in i2
+record complete

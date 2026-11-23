@@ -1,0 +1,18 @@
+tok xyz paste-chain.cpp:517:paste(b0..b4)
+tok _tail paste-chain.cpp:536:b2
+tok head_ paste-chain.cpp:548:b0
+tok q paste-chain.cpp:561:a1@b2[0]<paste-chain.cpp:568
+def paste-chain.cpp:432 CAT3(a, b, c) file dir paste-chain.cpp:424..paste-chain.cpp:457 = a ## b ## c
+param paste-chain.cpp:432 0 a paste-chain.cpp:437 uses b0:paste
+param paste-chain.cpp:432 1 b paste-chain.cpp:440 uses b2:paste
+param paste-chain.cpp:432 2 c paste-chain.cpp:443 uses b4:paste
+def paste-chain.cpp:466 LEFT(a) file dir paste-chain.cpp:458..paste-chain.cpp:484 = a ## _tail
+param paste-chain.cpp:466 0 a paste-chain.cpp:471 uses b0:paste
+def paste-chain.cpp:493 RIGHT(a) file dir paste-chain.cpp:485..paste-chain.cpp:512 = head_ ## a
+param paste-chain.cpp:493 0 a paste-chain.cpp:499 uses b2:paste
+exp paste-chain.cpp:517 CAT3 def paste-chain.cpp:432 end paste-chain.cpp:529 args a0=paste-chain.cpp:522..paste-chain.cpp:523/1 a1=paste-chain.cpp:525..paste-chain.cpp:526/1 a2=paste-chain.cpp:528..paste-chain.cpp:529/1
+exp paste-chain.cpp:536 LEFT def paste-chain.cpp:466 end paste-chain.cpp:541 args a0=paste-chain.cpp:541..paste-chain.cpp:541/0
+exp paste-chain.cpp:548 RIGHT def paste-chain.cpp:493 end paste-chain.cpp:554 args a0=paste-chain.cpp:554..paste-chain.cpp:554/0
+exp paste-chain.cpp:561 CAT3 def paste-chain.cpp:432 end paste-chain.cpp:571 args a0=paste-chain.cpp:566..paste-chain.cpp:566/0 a1=paste-chain.cpp:568..paste-chain.cpp:569/1 a2=paste-chain.cpp:571..paste-chain.cpp:571/0
+made paste-chain.cpp:517:paste(b0..b4) xyz = paste-chain.cpp:517:a0@b0[0]<paste-chain.cpp:522 ## paste-chain.cpp:517:a1@b2[0]<paste-chain.cpp:525 ## paste-chain.cpp:517:a2@b4[0]<paste-chain.cpp:528
+record complete

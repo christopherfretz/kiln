@@ -10,7 +10,9 @@ inc two-contexts.cpp:359 include "Inputs/ctx.h" name two-contexts.cpp:368..two-c
 inc two-contexts.cpp:394 include "Inputs/wrap.h" name two-contexts.cpp:403..two-contexts.cpp:418 entered file wrap.h ctx i2
 inc wrap.h:20 include "ctx.h" name wrap.h:29..wrap.h:36 entered file ctx.h ctx i3 in i2
 cond ctx.h:0 ifdef taken cond ctx.h:6..ctx.h:10 group ctx.h:10..ctx.h:20 in i1
+read ctx.h:0 tested CTX two-contexts.cpp:348 at ctx.h:7 in i1
 cond ctx.h:20 endif closes open ctx.h:0 cond ctx.h:26..ctx.h:26 in i1
 cond ctx.h:0 ifdef taken cond ctx.h:6..ctx.h:10 group ctx.h:10..ctx.h:20 in i3
+read ctx.h:0 tested CTX wrap.h:8 at ctx.h:7 in i3
 cond ctx.h:20 endif closes open ctx.h:0 cond ctx.h:26..ctx.h:26 in i3
 record complete

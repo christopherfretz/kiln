@@ -55,6 +55,17 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   clang's derived flag and the class chain), so `int B::*` and
   `int D::*` holding one member differ (WP-2210, WP-2212;
   spec/eval-session.md §4.1).
+- The preprocessing record's stage 3 (WP-2112, stage 3 of 4): the
+  operands of every paste and `#__VA_OPT__` and the argument of every
+  `#x` (`PpRecord::made`); the reads of every evaluated condition
+  (names tested, expansions entered, identifiers left as 0, each with
+  the definition bound, and a partial flag when an error cut the
+  condition off); the value and operand of every `__has_include` and
+  feature query; every `push_macro`/`pop_macro` as an event paired with
+  its push; and `enclosing`/`cond_at`, the innermost conditional group
+  holding a location. `-fkiln-dump-pp-record` prints them as `made`,
+  `read`, `query`, `push` and `pop` lines. No change with recording off
+  (spec/pp.md "Preprocessing record").
 - The written-reference table records what each dependent name of a
   template resolves to in every specialization (stage 4, WP-1933;
   spec/ast.md §18.9), in a separate table keyed by (pattern entry,

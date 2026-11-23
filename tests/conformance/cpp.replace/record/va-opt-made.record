@@ -1,0 +1,18 @@
+tok "a1 2 b" va-opt-made.cpp:629:str(b1..b7)
+tok "" va-opt-made.cpp:655:str(b1..b7)
+tok nm va-opt-made.cpp:665:paste(b0..b4)
+tok o va-opt-made.cpp:679:a0@b0[0]<va-opt-made.cpp:682
+def va-opt-made.cpp:524 VS(...) file dir va-opt-made.cpp:516..va-opt-made.cpp:563 = # __VA_OPT__ ( a ## __VA_ARGS__ b )
+param va-opt-made.cpp:524 0 __VA_ARGS__ va-opt-made.cpp:527 uses b5:str/va-opt
+def va-opt-made.cpp:572 VP(x, ...) file dir va-opt-made.cpp:564..va-opt-made.cpp:611 = x ## __VA_OPT__ ( __VA_ARGS__ )
+param va-opt-made.cpp:572 0 x va-opt-made.cpp:575 uses b0:paste
+param va-opt-made.cpp:572 1 __VA_ARGS__ va-opt-made.cpp:578 uses b4:plain/va-opt
+exp va-opt-made.cpp:629 VS def va-opt-made.cpp:524 end va-opt-made.cpp:635 args a0=va-opt-made.cpp:632..va-opt-made.cpp:635/2
+exp va-opt-made.cpp:655 VS def va-opt-made.cpp:524 end va-opt-made.cpp:658 args elided
+exp va-opt-made.cpp:665 VP def va-opt-made.cpp:572 end va-opt-made.cpp:672 args a0=va-opt-made.cpp:668..va-opt-made.cpp:669/1 a1=va-opt-made.cpp:671..va-opt-made.cpp:672/1
+exp va-opt-made.cpp:679 VP def va-opt-made.cpp:572 end va-opt-made.cpp:683 args a0=va-opt-made.cpp:682..va-opt-made.cpp:683/1 elided
+made va-opt-made.cpp:629:paste(b3..b5) a1 = va-opt-made.cpp:629:b3 ## va-opt-made.cpp:629:a0@b5[0]<va-opt-made.cpp:632
+made va-opt-made.cpp:629:str(b1..b7) "a1 2 b" va-opt va-opt-made.cpp:629:paste(b3..b5) va-opt-made.cpp:629:a0@b5[1]<va-opt-made.cpp:634 va-opt-made.cpp:629:b6
+made va-opt-made.cpp:655:str(b1..b7) "" va-opt
+made va-opt-made.cpp:665:paste(b0..b4) nm = va-opt-made.cpp:665:a0@b0[0]<va-opt-made.cpp:668 ## va-opt-made.cpp:665:a1@b4[0]<va-opt-made.cpp:671
+record complete

@@ -21,7 +21,9 @@ exp k.def:37 K def x-macro.cpp:510 end k.def:42 args a0=k.def:39..k.def:42/1 in 
 inc x-macro.cpp:446 include "Inputs/k.def" name x-macro.cpp:455..x-macro.cpp:469 entered file k.def ctx i1
 inc x-macro.cpp:523 include "Inputs/k.def" name x-macro.cpp:532..x-macro.cpp:546 entered file k.def ctx i2
 cond k.def:0 ifndef not-taken cond k.def:7..k.def:9 group k.def:9..k.def:23 in i1
+read k.def:0 tested K x-macro.cpp:438 at k.def:8 in i1
 cond k.def:23 endif closes open k.def:0 cond k.def:29..k.def:29 in i1
 cond k.def:0 ifndef not-taken cond k.def:7..k.def:9 group k.def:9..k.def:23 in i2
+read k.def:0 tested K x-macro.cpp:510 at k.def:8 in i2
 cond k.def:23 endif closes open k.def:0 cond k.def:29..k.def:29 in i2
 record complete

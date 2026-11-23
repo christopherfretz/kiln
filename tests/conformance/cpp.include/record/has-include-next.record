@@ -1,0 +1,9 @@
+def builtin:__has_include_next __has_include_next builtin
+exp hn.h:4 __has_include_next def builtin:__has_include_next end hn.h:29 in-directive in i1
+query hn.h:4 __has_include_next <hn.h> = 1 name hn.h:23..hn.h:29 file hn.h dir 1 in i1
+inc has-include-next.cpp:452 include <hn.h> name has-include-next.cpp:461..has-include-next.cpp:467 entered file hn.h dir 0 ctx i1
+inc hn.h:31 include_next <hn.h> name hn.h:45..hn.h:51 entered file hn.h dir 1 ctx i2 in i1
+cond hn.h:0 if taken cond hn.h:3..hn.h:30 group hn.h:30..hn.h:52 in i1
+read hn.h:0 expanded __has_include_next builtin:__has_include_next at hn.h:4 exp hn.h:4 in i1
+cond hn.h:52 endif closes open hn.h:0 cond hn.h:58..hn.h:58 in i1
+record complete

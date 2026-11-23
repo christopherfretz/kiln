@@ -1,0 +1,27 @@
+def reads.cpp:683 F(x) file dir reads.cpp:675..reads.cpp:689 = x
+param reads.cpp:683 0 x reads.cpp:685 uses b0:plain
+def reads.cpp:731 D file dir reads.cpp:723..reads.cpp:743 = defined ( E )
+def reads.cpp:778 FN(x) file dir reads.cpp:770..reads.cpp:785 = x
+param reads.cpp:778 0 x reads.cpp:781 uses b0:plain
+exp reads.cpp:694 F def reads.cpp:683 end reads.cpp:697 in-directive args a0=reads.cpp:696..reads.cpp:697/1
+exp reads.cpp:748 D def reads.cpp:731 end reads.cpp:748 in-directive
+cond reads.cpp:591 if not-taken cond reads.cpp:594..reads.cpp:614 group reads.cpp:614..reads.cpp:628
+read reads.cpp:591 tested A undefined at reads.cpp:603
+read reads.cpp:591 left B undefined at reads.cpp:609
+cond reads.cpp:628 endif closes open reads.cpp:591 cond reads.cpp:634..reads.cpp:634
+cond reads.cpp:635 if not-taken cond reads.cpp:638..reads.cpp:654 group reads.cpp:654..reads.cpp:668
+read reads.cpp:635 tested C undefined at reads.cpp:652
+cond reads.cpp:668 endif closes open reads.cpp:635 cond reads.cpp:674..reads.cpp:674
+cond reads.cpp:690 if not-taken cond reads.cpp:693..reads.cpp:702 group reads.cpp:702..reads.cpp:716
+read reads.cpp:690 expanded F reads.cpp:683 at reads.cpp:694 exp reads.cpp:694
+read reads.cpp:690 left G undefined at reads.cpp:694:a0@b0[0]<reads.cpp:696
+read reads.cpp:690 left H undefined at reads.cpp:701
+cond reads.cpp:716 endif closes open reads.cpp:690 cond reads.cpp:722..reads.cpp:722
+cond reads.cpp:744 if not-taken cond reads.cpp:747..reads.cpp:749 group reads.cpp:749..reads.cpp:763
+read reads.cpp:744 expanded D reads.cpp:731 at reads.cpp:748 exp reads.cpp:748
+read reads.cpp:744 tested E undefined at reads.cpp:748:b2
+cond reads.cpp:763 endif closes open reads.cpp:744 cond reads.cpp:769..reads.cpp:769
+cond reads.cpp:786 if taken cond reads.cpp:789..reads.cpp:800 group reads.cpp:800..reads.cpp:809
+read reads.cpp:786 left FN reads.cpp:778 at reads.cpp:790
+cond reads.cpp:809 endif closes open reads.cpp:786 cond reads.cpp:815..reads.cpp:815
+record complete

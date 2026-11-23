@@ -15,6 +15,7 @@ use kiln_source::{ExpansionKind, Loc, Span};
 
 use crate::callbacks::{FileChange, PragmaInfo, PragmaIntroducer, PragmaMessageKind};
 use crate::preprocessor::{Frame, Marker, Preprocessor};
+use crate::record::StackKind;
 use crate::tok::PpTok;
 
 /// True for a token clang calls `tok::string_literal` (an ordinary,
@@ -128,16 +129,20 @@ impl Preprocessor<'_, '_> {
         }
         let text = destringize(&self.spelling(&s.tok));
         let old = self.rec_cur;
+        let mut exp = u32::MAX;
         if let Some((def, parent)) = rec {
-            self.rec_cur = self.rec_builtin_expansion(&def, at.lo, rp.tok.span.lo, parent);
+            exp = self.rec_builtin_expansion(&def, at.lo, rp.tok.span.lo, parent);
+            self.rec_cur = exp;
         }
         let toks = self.lex_pragma_string(&text, Span::new(at.lo, rp.tok.span.hi), at);
         self.rec_cur = old;
+        let old_pragma = std::mem::replace(&mut self.rec_pragma, exp);
         self.push_stream(toks, false);
         let depth = self.frames.len();
         let saved = (self.in_directive, self.dir_eod.take());
         self.in_directive = true;
         self.do_pragma(PragmaIntroducer::Operator, at, at.lo);
+        self.rec_pragma = old_pragma;
         while !self.lex_unexpanded().is_eod_or_eof() {}
         // Everything above the (exhausted) pragma stream was popped on
         // the way to its `Eod`; drop the stream without propagating its
@@ -214,7 +219,7 @@ impl Preprocessor<'_, '_> {
             // Consumed without effect (`mark` is not even lexed by clang).
             Some("mark" | "region" | "endregion") => {}
             Some(n @ ("push_macro" | "pop_macro")) => {
-                self.pragma_push_pop(&first, n == "push_macro");
+                self.pragma_push_pop(&first, n == "push_macro", start);
             }
             Some("message") => self.pragma_message(&first, None, PragmaMessageKind::Message),
             Some(ns @ ("GCC" | "clang")) => {
@@ -410,8 +415,8 @@ impl Preprocessor<'_, '_> {
 
     /// `#pragma push_macro("name")` / `pop_macro("name")` (clang
     /// `ParsePragmaPushOrPopMacro`, `HandlePragmaPushMacro`,
-    /// `HandlePragmaPopMacro`).
-    fn pragma_push_pop(&mut self, t: &PpTok, push: bool) {
+    /// `HandlePragmaPopMacro`). `start` is the `#` or the `_Pragma`.
+    fn pragma_push_pop(&mut self, t: &PpTok, push: bool, start: Loc) {
         let what = if push { "push_macro" } else { "pop_macro" };
         let malformed = DiagId::pp_pragma_push_pop_malformed;
         let lp = self.lex();
@@ -436,17 +441,24 @@ impl Preprocessor<'_, '_> {
         }
         let text = sp.get(1..sp.len().saturating_sub(1)).unwrap_or("");
         let name = self.interner.intern(text);
+        let exp = self.rec_pragma;
         if push {
             let cur = self.macros.get_rc(name).cloned();
             if let Some(d) = &cur {
                 // Allow the pushed definition to be redefined later.
                 d.allow_redef.set(true);
             }
+            if let Some(r) = self.record.as_deref_mut() {
+                r.stack_event(start, name, StackKind::Push, cur.as_ref(), None, exp);
+            }
             self.pushed.entry(name).or_default().push(cur);
             return;
         }
         let Some(stack) = self.pushed.get_mut(&name) else {
             self.emit(Diag::new(DiagId::pp_pragma_pop_without_push, t.tok.span).arg(text));
+            if let Some(r) = self.record.as_deref_mut() {
+                r.stack_event(start, name, StackKind::PopUnmatched, None, None, exp);
+            }
             return;
         };
         let def = stack.pop().flatten();
@@ -457,7 +469,8 @@ impl Preprocessor<'_, '_> {
         if self.record.is_some() {
             let cur = self.macros.get_rc(name).cloned();
             if let Some(r) = self.record.as_deref_mut() {
-                r.pop(t.tok.span.lo, def.as_ref(), cur.as_ref());
+                r.stack_event(start, name, StackKind::Pop, def.as_ref(), cur.as_ref(), exp);
+                r.pop(start, def.as_ref(), cur.as_ref());
             }
         }
         match def {

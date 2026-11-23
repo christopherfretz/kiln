@@ -18,4 +18,5 @@ tok ) stringize-check.cpp:548:b12
 def stringize-check.cpp:501 CHECK(c) file dir stringize-check.cpp:493..stringize-check.cpp:530 = ( ( c ) ? 0 : fail ( # c ) )
 param stringize-check.cpp:501 0 c stringize-check.cpp:507 uses b2:plain b10:str
 exp stringize-check.cpp:548 CHECK def stringize-check.cpp:501 end stringize-check.cpp:562 args a0=stringize-check.cpp:554..stringize-check.cpp:562/6
+made stringize-check.cpp:548:str(b9..b10) "L::ok(x)" arg 0
 record complete

@@ -1,0 +1,56 @@
+tok 1 has-include.cpp:795:builtin
+tok 0 has-include.cpp:847:builtin
+tok 1 has-include.cpp:900:builtin
+tok 1 has-include.cpp:948:builtin
+tok 1 has-include.cpp:985:builtin
+tok 1 has-include.cpp:1021:builtin
+def builtin:__has_include __has_include builtin
+def has-include.cpp:585 HDR file dir has-include.cpp:577..has-include.cpp:600 = "present.h"
+def has-include.cpp:655 ANGLED file dir has-include.cpp:647..has-include.cpp:673 = < present . h >
+def builtin:__has_cpp_attribute __has_cpp_attribute builtin
+def builtin:__has_feature __has_feature builtin
+def builtin:__has_warning __has_warning builtin
+def builtin:__is_identifier __is_identifier builtin
+def builtin:__has_builtin __has_builtin builtin
+exp has-include.cpp:484 __has_include def builtin:__has_include end has-include.cpp:509 in-directive
+exp has-include.cpp:533 __has_include def builtin:__has_include end has-include.cpp:555 in-directive
+exp has-include.cpp:619 HDR def has-include.cpp:585 end has-include.cpp:619 in-directive
+exp has-include.cpp:605 __has_include def builtin:__has_include end has-include.cpp:622 in-directive
+exp has-include.cpp:692 ANGLED def has-include.cpp:655 end has-include.cpp:692 in-directive
+exp has-include.cpp:678 __has_include def builtin:__has_include end has-include.cpp:698 in-directive
+exp has-include.cpp:722 __has_cpp_attribute def builtin:__has_cpp_attribute end has-include.cpp:751 in-directive
+exp has-include.cpp:795 __has_feature def builtin:__has_feature end has-include.cpp:830
+exp has-include.cpp:847 __has_cpp_attribute def builtin:__has_cpp_attribute end has-include.cpp:884
+exp has-include.cpp:900 __has_cpp_attribute def builtin:__has_cpp_attribute end has-include.cpp:931
+exp has-include.cpp:948 __has_warning def builtin:__has_warning end has-include.cpp:969
+exp has-include.cpp:985 __is_identifier def builtin:__is_identifier end has-include.cpp:1004
+exp has-include.cpp:1021 __has_builtin def builtin:__has_builtin end has-include.cpp:1051
+query has-include.cpp:484 __has_include <present.h> = 1 name has-include.cpp:498..has-include.cpp:509 file present.h dir 0
+query has-include.cpp:533 __has_include "nope.h" = 0 name has-include.cpp:547..has-include.cpp:555
+query has-include.cpp:605 __has_include "present.h" = 1 name has-include.cpp:619..has-include.cpp:622 macro file present.h dir 0
+query has-include.cpp:678 __has_include <present.h> = 1 name has-include.cpp:692..has-include.cpp:698 macro file present.h dir 0
+query has-include.cpp:722 __has_cpp_attribute nodiscard = 201907 name has-include.cpp:742..has-include.cpp:751
+query has-include.cpp:795 __has_feature cxx_rvalue_references = 1 name has-include.cpp:809..has-include.cpp:830
+query has-include.cpp:847 __has_cpp_attribute no_such_attribute = 0 name has-include.cpp:867..has-include.cpp:884
+query has-include.cpp:900 __has_cpp_attribute gnu::unused = 1 name has-include.cpp:920..has-include.cpp:931
+query has-include.cpp:948 __has_warning -Wall = 1 name has-include.cpp:962..has-include.cpp:969
+query has-include.cpp:985 __is_identifier foo = 1 name has-include.cpp:1001..has-include.cpp:1004
+query has-include.cpp:1021 __has_builtin __builtin_expect = 1 name has-include.cpp:1035..has-include.cpp:1051
+cond has-include.cpp:480 if taken cond has-include.cpp:483..has-include.cpp:510 group has-include.cpp:510..has-include.cpp:522
+read has-include.cpp:480 expanded __has_include builtin:__has_include at has-include.cpp:484 exp has-include.cpp:484
+cond has-include.cpp:522 endif closes open has-include.cpp:480 cond has-include.cpp:528..has-include.cpp:528
+cond has-include.cpp:529 if not-taken cond has-include.cpp:532..has-include.cpp:556 group has-include.cpp:556..has-include.cpp:570
+read has-include.cpp:529 expanded __has_include builtin:__has_include at has-include.cpp:533 exp has-include.cpp:533
+cond has-include.cpp:570 endif closes open has-include.cpp:529 cond has-include.cpp:576..has-include.cpp:576
+cond has-include.cpp:601 if taken cond has-include.cpp:604..has-include.cpp:623 group has-include.cpp:623..has-include.cpp:640
+read has-include.cpp:601 expanded HDR has-include.cpp:585 at has-include.cpp:619 exp has-include.cpp:619
+read has-include.cpp:601 expanded __has_include builtin:__has_include at has-include.cpp:605 exp has-include.cpp:605
+cond has-include.cpp:640 endif closes open has-include.cpp:601 cond has-include.cpp:646..has-include.cpp:646
+cond has-include.cpp:674 if taken cond has-include.cpp:677..has-include.cpp:699 group has-include.cpp:699..has-include.cpp:711
+read has-include.cpp:674 expanded ANGLED has-include.cpp:655 at has-include.cpp:692 exp has-include.cpp:692
+read has-include.cpp:674 expanded __has_include builtin:__has_include at has-include.cpp:678 exp has-include.cpp:678
+cond has-include.cpp:711 endif closes open has-include.cpp:674 cond has-include.cpp:717..has-include.cpp:717
+cond has-include.cpp:718 if taken cond has-include.cpp:721..has-include.cpp:763 group has-include.cpp:763..has-include.cpp:774
+read has-include.cpp:718 expanded __has_cpp_attribute builtin:__has_cpp_attribute at has-include.cpp:722 exp has-include.cpp:722
+cond has-include.cpp:774 endif closes open has-include.cpp:718 cond has-include.cpp:780..has-include.cpp:780
+record complete

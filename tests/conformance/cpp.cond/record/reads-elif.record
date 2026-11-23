@@ -1,0 +1,8 @@
+def command-line:A A command-line = 1
+exp reads-elif.cpp:331 A def command-line:A end reads-elif.cpp:331 in-directive
+cond reads-elif.cpp:327 if taken cond reads-elif.cpp:330..reads-elif.cpp:332 group reads-elif.cpp:332..reads-elif.cpp:340
+read reads-elif.cpp:327 expanded A command-line:A at reads-elif.cpp:331 exp reads-elif.cpp:331
+cond reads-elif.cpp:340 elif not-evaluated open reads-elif.cpp:327 cond reads-elif.cpp:345..reads-elif.cpp:347 group reads-elif.cpp:347..reads-elif.cpp:355
+cond reads-elif.cpp:355 else not-taken open reads-elif.cpp:327 cond reads-elif.cpp:360..reads-elif.cpp:360 group reads-elif.cpp:360..reads-elif.cpp:368
+cond reads-elif.cpp:368 endif closes open reads-elif.cpp:327 cond reads-elif.cpp:374..reads-elif.cpp:374
+record complete

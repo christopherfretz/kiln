@@ -1,4 +1,5 @@
 cond nested-skipped.cpp:361 ifdef not-taken cond nested-skipped.cpp:367..nested-skipped.cpp:383 group nested-skipped.cpp:383..nested-skipped.cpp:446
+read nested-skipped.cpp:361 tested UNDEFINED_MACRO undefined at nested-skipped.cpp:368
 cond nested-skipped.cpp:384 if dead cond nested-skipped.cpp:389..nested-skipped.cpp:391 group nested-skipped.cpp:391..nested-skipped.cpp:429
 cond nested-skipped.cpp:392 ifndef dead cond nested-skipped.cpp:403..nested-skipped.cpp:405 group nested-skipped.cpp:405..nested-skipped.cpp:406
 cond nested-skipped.cpp:406 elif dead open nested-skipped.cpp:392 cond nested-skipped.cpp:415..nested-skipped.cpp:417 group nested-skipped.cpp:417..nested-skipped.cpp:418

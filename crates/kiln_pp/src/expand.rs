@@ -888,7 +888,16 @@ impl Preprocessor<'_, '_> {
             k += 1;
         }
         let lo = vc.loc.unwrap_or(close.lo);
+        if let Some(r) = self.record.as_deref_mut() {
+            r.ops_clear();
+            for t in cat.iter().take_while(|t| !t.is_eof()) {
+                r.op(t.tok.span.lo);
+            }
+        }
         let mut r = self.stringify(&cat, vc.charify, Span::new(lo, close.hi), cx.name_span);
+        if let Some(rec) = self.record.as_deref_mut() {
+            rec.made_ops(r.tok.span.lo, false, true);
+        }
         self.give_buf(cat);
         if vc.ls_for_stringified {
             r.tok.flags.insert(TokFlags::LEADING_SPACE);
@@ -975,6 +984,12 @@ impl Preprocessor<'_, '_> {
     ) -> PpTok {
         let start = lhs.tok.span.lo;
         let mut buf = std::mem::take(&mut self.paste_buf);
+        // While recording: the operands' locations before pasting.
+        let mut invalid = false;
+        if let Some(r) = self.record.as_deref_mut() {
+            r.ops_clear();
+            r.op(start);
+        }
         loop {
             let op = s[*idx].tok.span;
             if s[*idx].is_paste_op() {
@@ -1001,7 +1016,11 @@ impl Preprocessor<'_, '_> {
                     }
                 }
             }
+            if let Some(r) = self.record.as_deref_mut() {
+                r.op(rhs.tok.span.lo);
+            }
             let Some(t) = res else {
+                invalid = true;
                 let l = self.add_exp(op.lo, 2, cx.exp, ExpansionKind::Macro { name: cx.name_span });
                 self.rec_entry(l, op.lo, EntryKind::InvalidPaste, self.rec_cur);
                 self.emit(
@@ -1036,6 +1055,9 @@ impl Preprocessor<'_, '_> {
             ExpansionKind::Macro { name: cx.name_span },
         );
         self.rec_entry(l, lhs.tok.span.lo, EntryKind::Paste, self.rec_cur);
+        if let Some(r) = self.record.as_deref_mut() {
+            r.made_ops(l, invalid, false);
+        }
         lhs.tok.span = Span::new(l, l.with_offset(len));
         lhs
     }
@@ -1292,6 +1314,28 @@ impl Preprocessor<'_, '_> {
         let mut kind = TokKind::PpNumber;
         // The token whose location the result takes (clang reuses `Tok`).
         let mut at = t.tok.span;
+        // While recording: a query's value (its row is made with its
+        // expansion).
+        let mut query = None;
+        if pending.is_some()
+            && !matches!(
+                b,
+                Builtin::Pragma
+                    | Builtin::Line
+                    | Builtin::File
+                    | Builtin::BaseFile
+                    | Builtin::FileName
+                    | Builtin::Date
+                    | Builtin::Time
+                    | Builtin::Timestamp
+                    | Builtin::IncludeLevel
+                    | Builtin::Counter
+                    | Builtin::FltEvalMethod
+            )
+            && let Some(r) = self.record.as_deref_mut()
+        {
+            r.query_begin();
+        }
         match b {
             Builtin::Pragma => return self.handle_pragma_op(t, pending),
             Builtin::Line => {
@@ -1353,6 +1397,7 @@ impl Preprocessor<'_, '_> {
                 match self.eval_has_include(t, b == Builtin::HasIncludeNext) {
                     Ok((v, rparen)) => {
                         let _ = write!(text, "{}", u32::from(v));
+                        query = Some(u32::from(v));
                         at = rparen;
                     }
                     Err(r) => return Some(r),
@@ -1361,6 +1406,7 @@ impl Preprocessor<'_, '_> {
             Builtin::HasEmbed => match self.eval_has_embed(t) {
                 Ok((v, rparen)) => {
                     let _ = write!(text, "{v}");
+                    query = Some(v);
                     at = rparen;
                 }
                 Err(r) => return Some(r),
@@ -1379,6 +1425,7 @@ impl Preprocessor<'_, '_> {
                         if v > 1 {
                             text.push('L');
                         }
+                        query = Some(v);
                         at = rparen;
                     }
                     Err(r) => return Some(r),
@@ -1388,6 +1435,9 @@ impl Preprocessor<'_, '_> {
         let old = self.rec_cur;
         if let Some((def, parent)) = pending {
             self.rec_cur = self.rec_builtin_expansion(&def, t.tok.span.lo, at.lo, parent);
+            if let (Some(v), Some(r)) = (query, self.record.as_deref_mut()) {
+                r.query_end(self.rec_cur, v);
+            }
         }
         let mut r = PpTok::new(self.scratch_tok(&text, kind, at, name_span, EntryKind::Builtin));
         self.rec_cur = old;
@@ -1501,50 +1551,85 @@ impl Preprocessor<'_, '_> {
         }
     }
 
+    /// `__has_cpp_attribute` / `__has_c_attribute`: the value and the token
+    /// read past the operand, if any (`operand` is filled while recording).
+    fn has_attribute_op(
+        &mut self,
+        b: Builtin,
+        tok: PpTok,
+        operand: &mut Option<(String, Span)>,
+    ) -> (u32, Option<PpTok>) {
+        let rec = self.record.is_some();
+        let mut next = None;
+        let v = if let Some(first) = self.feature_ident(&tok) {
+            let colons = self.lex_unexpanded();
+            let (scope, attr, last) = if colons.is_punct(Punct::ColonColon) {
+                let n = self.lex();
+                (Some(first), self.feature_ident(&n), n.tok.span)
+            } else {
+                next = Some(colons);
+                (None, Some(first), tok.tok.span)
+            };
+            match attr {
+                Some(a) => {
+                    let scope = scope.map(|s| self.interner.as_str(s));
+                    let a = self.interner.as_str(a);
+                    if rec {
+                        let t = match scope {
+                            Some(s) => format!("{s}::{a}"),
+                            None => a.to_owned(),
+                        };
+                        *operand = Some((t, Span::new(tok.tok.span.lo, last.hi)));
+                    }
+                    if b == Builtin::HasCAttribute {
+                        self.features.has_c_attribute(scope, a)
+                    } else {
+                        self.features.has_cpp_attribute(scope, a)
+                    }
+                }
+                None => 0,
+            }
+        } else {
+            0
+        };
+        (v, next)
+    }
+
     /// The operand evaluation of one feature-like builtin, starting at
     /// `tok` (the lambdas passed to `EvaluateFeatureLikeBuiltinMacro`).
     fn feature_op(&mut self, b: Builtin, tok: PpTok) -> OpResult {
         let mut next = None;
+        // While recording: the operand's text and last token.
+        let rec = self.record.is_some();
+        let mut operand: Option<(String, Span)> = None;
         let value = match b {
             Builtin::IsIdentifier => {
+                if rec {
+                    operand = Some((self.spelling(&tok.tok).into_owned(), tok.tok.span));
+                }
                 let id =
                     tok.ident().is_some_and(|s| !self.features.is_keyword(self.interner.as_str(s)));
                 u32::from(id)
             }
             Builtin::HasWarning => {
-                let (v, n) = self.has_warning(tok);
+                let (v, n) = self.has_warning(tok, &mut operand);
                 next = n;
                 u32::from(v)
             }
             Builtin::HasCppAttribute | Builtin::HasCAttribute => {
-                if let Some(first) = self.feature_ident(&tok) {
-                    let colons = self.lex_unexpanded();
-                    let (scope, attr) = if colons.is_punct(Punct::ColonColon) {
-                        let n = self.lex();
-                        (Some(first), self.feature_ident(&n))
-                    } else {
-                        next = Some(colons);
-                        (None, Some(first))
-                    };
-                    match attr {
-                        Some(a) => {
-                            let scope = scope.map(|s| self.interner.as_str(s));
-                            let a = self.interner.as_str(a);
-                            if b == Builtin::HasCAttribute {
-                                self.features.has_c_attribute(scope, a)
-                            } else {
-                                self.features.has_cpp_attribute(scope, a)
-                            }
-                        }
-                        None => 0,
-                    }
-                } else {
-                    0
-                }
+                let (v, n) = self.has_attribute_op(b, tok, &mut operand);
+                next = n;
+                v
             }
             Builtin::BuildingModule => {
-                if tok.ident().is_none() {
-                    self.emit(Diag::new(DiagId::pp_expected_id_building_module, tok.tok.span));
+                match tok.ident() {
+                    None => {
+                        self.emit(Diag::new(DiagId::pp_expected_id_building_module, tok.tok.span));
+                    }
+                    Some(s) if rec => {
+                        operand = Some((self.interner.as_str(s).to_owned(), tok.tok.span));
+                    }
+                    Some(_) => {}
                 }
                 0
             }
@@ -1552,6 +1637,9 @@ impl Preprocessor<'_, '_> {
                 None => 0,
                 Some(s) => {
                     let n = self.interner.as_str(s);
+                    if rec {
+                        operand = Some((n.to_owned(), tok.tok.span));
+                    }
                     let f = &*self.features;
                     match b {
                         Builtin::HasFeature => u32::from(f.has_feature(n)),
@@ -1577,6 +1665,13 @@ impl Preprocessor<'_, '_> {
                 }
             },
         };
+        if let Some((text, span)) = operand {
+            let lo = self.rec_file_span(Span::new(span.lo, span.lo)).lo;
+            let hi = self.rec_file_span(Span::new(span.hi, span.hi)).hi;
+            if let Some(r) = self.record.as_deref_mut() {
+                r.query_operand(&text, Span::new(lo, hi));
+            }
+        }
         OpResult { value, next }
     }
 
@@ -1591,7 +1686,11 @@ impl Preprocessor<'_, '_> {
 
     /// `__has_warning("-Wname")`: `(value, token lexed after the
     /// strings)` (clang `FinishLexStringLiteral` without expansion).
-    fn has_warning(&mut self, first: PpTok) -> (bool, Option<PpTok>) {
+    fn has_warning(
+        &mut self,
+        first: PpTok,
+        operand: &mut Option<(String, Span)>,
+    ) -> (bool, Option<PpTok>) {
         let is_str = |t: &PpTok| {
             matches!(
                 t.kind(),
@@ -1615,6 +1714,10 @@ impl Preprocessor<'_, '_> {
             cur = self.lex_unexpanded();
         }
         let Some(name) = self.string_value(&toks) else { return (false, Some(cur)) };
+        if self.record.is_some() {
+            let hi = toks.last().map_or(first.tok.span.hi, |t| t.span.hi);
+            *operand = Some((name.clone(), Span::new(first.tok.span.lo, hi)));
+        }
         if name.len() < 3 || !name.starts_with("-W") {
             self.emit(Diag::new(DiagId::pp_has_warning_invalid_option, first.tok.span));
             return (false, Some(cur));

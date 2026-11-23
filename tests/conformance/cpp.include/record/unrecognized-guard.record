@@ -2,7 +2,9 @@ def leaky.h:24 LEAKY_H file dir leaky.h:16..leaky.h:31 = in i1
 inc unrecognized-guard.cpp:416 include "Inputs/leaky.h" name unrecognized-guard.cpp:425..unrecognized-guard.cpp:441 entered file leaky.h ctx i1
 inc unrecognized-guard.cpp:442 include "Inputs/leaky.h" name unrecognized-guard.cpp:451..unrecognized-guard.cpp:467 entered file leaky.h ctx i2
 cond leaky.h:0 ifndef taken cond leaky.h:7..leaky.h:15 group leaky.h:15..leaky.h:43 in i1
+read leaky.h:0 tested LEAKY_H undefined at leaky.h:8 in i1
 cond leaky.h:43 endif closes open leaky.h:0 cond leaky.h:49..leaky.h:49 in i1
 cond leaky.h:0 ifndef not-taken cond leaky.h:7..leaky.h:15 group leaky.h:15..leaky.h:43 in i2
+read leaky.h:0 tested LEAKY_H leaky.h:24 at leaky.h:8 in i2
 cond leaky.h:43 endif closes open leaky.h:0 cond leaky.h:49..leaky.h:49 in i2
 record complete

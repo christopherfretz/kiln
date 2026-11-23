@@ -211,7 +211,7 @@ impl<'a> Preprocessor<'a, '_> {
 
     /// While recording: the file range of a header name at `span` (a
     /// macro-expanded name: its invocation).
-    fn rec_file_span(&self, span: Span) -> Span {
+    pub(crate) fn rec_file_span(&self, span: Span) -> Span {
         if self.sm.is_macro_loc(span.lo) { self.sm.expansion_span(span.lo) } else { span }
     }
 
@@ -886,6 +886,11 @@ struct IfCx<'p, 'a, 'd> {
     /// How many of `rec` are filled; `None` once more than
     /// [`IF_REC`] tokens were read.
     rec_len: Option<usize>,
+    /// While recording: the end of the line was read.
+    saw_end: bool,
+    /// While recording: the last identifier `next_unexpanded` returned
+    /// (the operand of `defined`).
+    last_name: Loc,
 }
 
 impl<'p, 'a, 'd> IfCx<'p, 'a, 'd> {
@@ -897,6 +902,35 @@ impl<'p, 'a, 'd> IfCx<'p, 'a, 'd> {
             used_defined: false,
             rec: [crate::preprocessor::eof_tok(Span::INVALID); IF_REC],
             rec_len: Some(0),
+            saw_end: false,
+            last_name: Loc::INVALID,
+        }
+    }
+
+    /// While recording: the token `t` was read with expansion. An
+    /// identifier other than `defined`, an operator name and `true` /
+    /// `false` is left after expansion: a `Left` read.
+    fn rec_next(&mut self, t: &Token) {
+        match t.kind {
+            TokKind::Eod | TokKind::Eof => self.saw_end = true,
+            TokKind::Identifier(s) if s != self.pp.syms.defined => {
+                let pp = &mut *self.pp;
+                let name = pp.interner.as_str(s);
+                let cxx = pp.opts.c.is_none();
+                if cxx && OPERATOR_NAMES.iter().any(|(n, _)| *n == name) {
+                    return;
+                }
+                if pp.opts.c.is_none_or(|c| c >= kiln_lex::CStd::C23)
+                    && matches!(name, "true" | "false")
+                {
+                    return;
+                }
+                let d = pp.macros.get_rc(s).cloned();
+                if let Some(r) = pp.record.as_deref_mut() {
+                    r.read(true, t.span.lo, s, d.as_ref());
+                }
+            }
+            _ => {}
         }
     }
 
@@ -974,6 +1008,9 @@ impl IfContext for IfCx<'_, '_, '_> {
             return e;
         }
         let t = self.pp.lex().tok;
+        if self.pp.record.is_some() {
+            self.rec_next(&t);
+        }
         let t = self.record(t);
         self.filter(t)
     }
@@ -983,11 +1020,25 @@ impl IfContext for IfCx<'_, '_, '_> {
             return e;
         }
         let t = self.pp.lex_unexpanded().tok;
+        if self.pp.record.is_some() {
+            match t.kind {
+                TokKind::Eod | TokKind::Eof => self.saw_end = true,
+                TokKind::Identifier(_) => self.last_name = t.span.lo,
+                _ => {}
+            }
+        }
         let t = self.record(t);
         self.filter(t)
     }
 
     fn is_defined(&mut self, name: Symbol) -> bool {
+        if self.pp.record.is_some() {
+            let d = self.pp.macros.get_rc(name).cloned();
+            let at = std::mem::replace(&mut self.last_name, Loc::INVALID);
+            if let Some(r) = self.pp.record.as_deref_mut() {
+                r.read(false, at, name, d.as_ref());
+            }
+        }
         self.used_defined = true;
         match self.pp.macros.get(name) {
             Some(d) => {
@@ -1057,6 +1108,9 @@ impl Preprocessor<'_, '_> {
         let old_q = std::mem::replace(&mut self.quiet_lex, false);
         let mut ev = self.evaluator.take();
         let mut nested = self.nested_eval;
+        if let Some(r) = self.record.as_deref_mut() {
+            r.begin_reads();
+        }
         let v = {
             let mut cx = IfCx::new(self, false);
             let v = match ev.as_mut() {
@@ -1068,6 +1122,12 @@ impl Preprocessor<'_, '_> {
             };
             let ndef = cx.ifndef_macro();
             cx.pp.if_ndef = ndef;
+            // The evaluator returned before the end of the line: an error
+            // cut the condition off.
+            let partial = !cx.saw_end;
+            if let Some(r) = cx.pp.record.as_deref_mut() {
+                r.end_reads(partial);
+            }
             v
         };
         if self.evaluator.is_none() {
@@ -1117,10 +1177,35 @@ impl Preprocessor<'_, '_> {
         name: &PpTok,
         prev: u32,
     ) -> u32 {
+        if self.record.is_none() {
+            return u32::MAX;
+        }
         let end = self.dir_end;
+        // The innermost open conditional's latest row holds an opener.
+        let outer = if kind.is_opener() {
+            self.cur_file_ref().and_then(|f| f.conds.last()).map_or(u32::MAX, |c| c.rec)
+        } else {
+            u32::MAX
+        };
         match self.record.as_deref_mut() {
-            Some(r) => r.push_cond(kind, outcome, hash, name.tok.span.hi, end, prev),
+            Some(r) => r.push_cond(kind, outcome, hash, name.tok.span.hi, end, prev, outer),
             None => u32::MAX,
+        }
+    }
+
+    /// While recording: the read of an `#ifdef`-like directive, the name
+    /// and its token (`None`: no name, an error).
+    fn rec_tested(&mut self, name: Option<(Symbol, Loc)>) {
+        if self.record.is_none() {
+            return;
+        }
+        let d = name.and_then(|(s, _)| self.macros.get_rc(s).cloned());
+        if let Some(r) = self.record.as_deref_mut() {
+            r.begin_reads();
+            if let Some((s, at)) = name {
+                r.read(false, at, s, d.as_ref());
+            }
+            r.end_reads(name.is_none());
         }
     }
 
@@ -1171,12 +1256,14 @@ impl Preprocessor<'_, '_> {
     /// `#ifdef` / `#ifndef`.
     fn do_ifdef(&mut self, name: PpTok, ndef: bool, read_before: bool) {
         let kind = if ndef { CondKind::Ifndef } else { CondKind::Ifdef };
-        let Some((s, _)) = self.read_macro_name(false) else {
+        let Some((s, st)) = self.read_macro_name(false) else {
+            self.rec_tested(None);
             let rec = self.rec_cond(kind, CondOutcome::NotTaken, self.dir_hash, &name, u32::MAX);
             self.mi_enter(None, rec);
             self.skip_excluded(name.tok.span, false, false, rec);
             return;
         };
+        self.rec_tested(Some((s, st.tok.span.lo)));
         self.check_eod(if ndef { "ifndef" } else { "ifdef" }, false);
         let defined = match self.macros.get(s) {
             Some(d) => {
@@ -1451,6 +1538,7 @@ impl Preprocessor<'_, '_> {
         } else {
             self.quiet_lex = false;
             let r = self.read_macro_name(false);
+            self.rec_tested(r.as_ref().map(|(s, t)| (*s, t.tok.span.lo)));
             let v = match r {
                 Some((s, _)) => {
                     self.check_eod(n, false);
@@ -1851,6 +1939,7 @@ impl Preprocessor<'_, '_> {
     /// `tok` replacing the builtin.
     pub(crate) fn eval_has_include(&mut self, t: PpTok, next: bool) -> Result<(bool, Span), PpTok> {
         let lookup_from = if next { self.include_next_start(t.tok.span) } else { None };
+        let e0 = self.record.as_deref().map(crate::record::PpRecord::exp_count);
         let (lparen, h) = self.has_open(t, true)?;
         let mut close = self.lex();
         while close.kind() == TokKind::Comment {
@@ -1869,6 +1958,15 @@ impl Preprocessor<'_, '_> {
         let Some((fname, angled)) = self.include_name(&h.tok, close.tok.span) else {
             return Ok((false, close.tok.span));
         };
+        if let Some(e0) = e0 {
+            let written = self.spelling(&h.tok).into_owned();
+            let name = self.rec_file_span(h.tok.span);
+            if let Some(r) = self.record.as_deref_mut() {
+                let from_macro = r.exp_count() > e0;
+                r.query_operand(&written, name);
+                r.query_file(None, None, from_macro);
+            }
+        }
         let req = IncludeRequest {
             kind: if next { IncludeKind::HasIncludeNext } else { IncludeKind::HasInclude },
             name: fname,
@@ -1880,7 +1978,14 @@ impl Preprocessor<'_, '_> {
         };
         let found = {
             crate::profile::time!(t_has_include_ns);
-            self.resolve_include(&req).is_some()
+            let r = self.resolve_include(&req);
+            if let (Some(rec), Some(r)) = (self.record.as_deref_mut(), &r)
+                && let Some(e0) = e0
+            {
+                let from_macro = rec.exp_count() > e0;
+                rec.query_file(Some(r.file), r.lookup_index, from_macro);
+            }
+            r.is_some()
         };
         Ok((found, close.tok.span))
     }
@@ -2156,6 +2261,13 @@ impl Preprocessor<'_, '_> {
         let Some((name, angled)) = self.include_name(&h.tok, h.tok.span) else {
             return Err(cur);
         };
+        if self.record.is_some() {
+            let written = self.spelling(&h.tok).into_owned();
+            let span = self.rec_file_span(h.tok.span);
+            if let Some(r) = self.record.as_deref_mut() {
+                r.query_operand(&written, span);
+            }
+        }
         let req = EmbedRequest {
             name,
             angled,

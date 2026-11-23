@@ -1,0 +1,14 @@
+tok 1 paste-invalid.cpp:674:paste(b0..b1)
+tok + paste-invalid.cpp:674:b2
+tok xy paste-invalid.cpp:692:paste(b0..b3)
+tok - paste-invalid.cpp:692:b4
+def paste-invalid.cpp:613 BAD(a) file dir paste-invalid.cpp:605..paste-invalid.cpp:626 = a ## +
+param paste-invalid.cpp:613 0 a paste-invalid.cpp:617 uses b0:paste
+def paste-invalid.cpp:635 BAD2(a, b) file dir paste-invalid.cpp:627..paste-invalid.cpp:657 = a ## b ## -
+param paste-invalid.cpp:635 0 a paste-invalid.cpp:640 uses b0:paste
+param paste-invalid.cpp:635 1 b paste-invalid.cpp:643 uses b2:paste
+exp paste-invalid.cpp:674 BAD def paste-invalid.cpp:613 end paste-invalid.cpp:679 args a0=paste-invalid.cpp:678..paste-invalid.cpp:679/1
+exp paste-invalid.cpp:692 BAD2 def paste-invalid.cpp:635 end paste-invalid.cpp:701 args a0=paste-invalid.cpp:697..paste-invalid.cpp:698/1 a1=paste-invalid.cpp:700..paste-invalid.cpp:701/1
+made paste-invalid.cpp:674:paste(b0..b1) 1 = paste-invalid.cpp:674:a0@b0[0]<paste-invalid.cpp:678 ## paste-invalid.cpp:674:b2 invalid
+made paste-invalid.cpp:692:paste(b0..b3) xy = paste-invalid.cpp:692:a0@b0[0]<paste-invalid.cpp:697 ## paste-invalid.cpp:692:a1@b2[0]<paste-invalid.cpp:700 ## paste-invalid.cpp:692:b4 invalid
+record complete

@@ -22,6 +22,9 @@ use kiln_source::{ExpansionKind, FileId, Loc, SourceManager, Span};
 
 use crate::macros::MacroDef;
 
+mod stage3;
+pub use stage3::{Made, Query, Read, ReadKind, StackEvent, StackKind};
+
 /// A definition's index in [`PpRecord::defs`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DefIx(u32);
@@ -41,6 +44,14 @@ impl ExpIx {
     /// The index.
     pub fn index(self) -> usize {
         self.0 as usize
+    }
+
+    /// The expansion at position `i` of [`PpRecord::exps`].
+    ///
+    /// # Panics
+    /// If `i` does not fit in a `u32`.
+    pub fn from_index(i: usize) -> ExpIx {
+        ExpIx(u32::try_from(i).expect("an expansion index"))
     }
 }
 
@@ -75,7 +86,8 @@ pub enum DefEnd {
     Undef(Loc),
     /// Replaced by a redefinition.
     Replaced(DefIx),
-    /// Replaced by the `pop_macro` at the location.
+    /// Replaced by a `pop_macro`: the location is its event's `at` (the
+    /// `#`, or the `_Pragma` token), see [`PpRecord::stack_events`].
     Popped(Loc),
 }
 
@@ -738,6 +750,9 @@ pub struct PpRecord {
     onces: Vec<Loc>,
     /// The main file (its own range is the root context).
     pub(crate) main_file: Option<FileId>,
+    /// Stage 3: made-token operands, condition reads, queries, push/pop
+    /// events, conditional nesting.
+    s3: stage3::Stage3,
 }
 
 /// A conditional's kind and outcome bits.
@@ -770,13 +785,32 @@ impl PpRecord {
             inc_bases: Vec::new(),
             onces: Vec::new(),
             main_file: None,
+            s3: stage3::Stage3::default(),
         }
     }
 
     /// A conditional directive; `prev` is the latest row of its
-    /// conditional (`NONE` for an opener, or a stray directive). Returns
-    /// its index (`NONE` once full).
+    /// conditional (`NONE` for an opener, or a stray directive), `outer`
+    /// (for an opener) the row whose group holds it (`NONE`: none). An
+    /// evaluated row takes the reads of the condition just evaluated.
+    /// Returns its index (`NONE` once full).
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn push_cond(
+        &mut self,
+        kind: CondKind,
+        outcome: CondOutcome,
+        hash: Loc,
+        cond: Loc,
+        end: Loc,
+        prev: u32,
+        outer: u32,
+    ) -> u32 {
+        let c = self.push_cond_row(kind, outcome, hash, cond, end, prev);
+        self.attach_cond(c, kind, outcome, outer);
+        c
+    }
+
+    fn push_cond_row(
         &mut self,
         kind: CondKind,
         outcome: CondOutcome,
@@ -994,7 +1028,8 @@ impl PpRecord {
         self.undefs.push(Undef { hash, name_loc, name, source, ended });
     }
 
-    /// `pop_macro` at `at` made `restored` current, replacing `current`.
+    /// `pop_macro` at `at` (its event's `at`) made `restored` current,
+    /// replacing `current`.
     pub(crate) fn pop(
         &mut self,
         at: Loc,
@@ -1258,7 +1293,8 @@ impl PpRecord {
             + self.incs.capacity() * size_of::<Inclusion>()
             + self.incs.iter().map(|x| x.written.len()).sum::<usize>()
             + self.inc_bases.capacity() * size_of::<(Loc, u32)>()
-            + self.onces.capacity() * size_of::<Loc>();
+            + self.onces.capacity() * size_of::<Loc>()
+            + self.s3.bytes();
         for d in &self.defs {
             if Rc::strong_count(&d.def) == 1 {
                 let m = &d.def;
@@ -1408,6 +1444,8 @@ struct Dumper<'r, 's> {
     /// Each inclusion's instance number (from 1, in order; 0: not
     /// entered), or for a `-include` line, its ordinal among them.
     inst: Vec<u32>,
+    /// The key of each `pop_macro` event by its `at`.
+    pop_keys: FxHashMap<Loc, String>,
 }
 
 impl<'r, 's> Dumper<'r, 's> {
@@ -1424,8 +1462,15 @@ impl<'r, 's> Dumper<'r, 's> {
                 }
             })
             .collect();
-        let mut dumper =
-            Dumper { r, sm, interner, exp_keys: Vec::with_capacity(r.exps.len()), undef_src, inst };
+        let mut dumper = Dumper {
+            r,
+            sm,
+            interner,
+            exp_keys: Vec::with_capacity(r.exps.len()),
+            undef_src,
+            inst,
+            pop_keys: FxHashMap::default(),
+        };
         // The nearest ancestor (or self) whose name is in a file, and the
         // count of expansions keyed under each.
         let mut anchor: Vec<u32> = Vec::with_capacity(r.exps.len());
@@ -1447,6 +1492,12 @@ impl<'r, 's> Dumper<'r, 's> {
                 count[a as usize] += 1;
                 let k = format!("{}/{}", dumper.exp_keys[a as usize], count[a as usize]);
                 dumper.exp_keys.push(k);
+            }
+        }
+        for ev in r.stack_events() {
+            if ev.kind() == StackKind::Pop {
+                let k = dumper.stack_key(ev);
+                dumper.pop_keys.insert(ev.at, k);
             }
         }
         dumper
@@ -1549,7 +1600,10 @@ impl<'r, 's> Dumper<'r, 's> {
     fn write(&self, out: &mut String) {
         self.write_defs(out);
         self.write_undefs(out);
+        self.write_stack(out);
         self.write_exps(out);
+        self.write_mades(out);
+        self.write_queries(out);
         self.write_incs(out);
         self.write_conds(out);
         self.write_onces(out);
@@ -1660,6 +1714,7 @@ impl<'r, 's> Dumper<'r, 's> {
             }
             self.ctx(out, x.hash);
             out.push('\n');
+            self.write_reads(out, c);
         }
     }
 
@@ -1741,7 +1796,8 @@ impl<'r, 's> Dumper<'r, 's> {
                     let _ = write!(out, " ended replaced {}", self.def_key(n));
                 }
                 DefEnd::Popped(at) => {
-                    let _ = write!(out, " ended popped {}", self.loc(at));
+                    let k = self.pop_keys.get(&at).cloned().unwrap_or_else(|| self.loc(at));
+                    let _ = write!(out, " ended popped {k}");
                 }
             }
             if x.source == DefSource::File {
@@ -1873,7 +1929,9 @@ impl<'r, 's> Dumper<'r, 's> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ArgRow, Conditional, Definition, Expansion, Inclusion, Undef};
+    use super::{
+        ArgRow, Conditional, Definition, Expansion, Inclusion, Read, StackEvent, Undef, stage3,
+    };
     use kiln_source::Loc;
     use std::mem::size_of;
 
@@ -1888,5 +1946,9 @@ mod tests {
         assert_eq!(size_of::<(Loc, u32)>(), 8);
         assert_eq!(size_of::<Conditional>(), 20);
         assert_eq!(size_of::<Inclusion>(), 72);
+        assert_eq!(size_of::<Read>(), 16);
+        assert_eq!(size_of::<StackEvent>(), 20);
+        assert_eq!(size_of::<stage3::QueryRow>(), 32);
+        assert_eq!(size_of::<(u32, u32)>(), 8);
     }
 }
