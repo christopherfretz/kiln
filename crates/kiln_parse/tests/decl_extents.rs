@@ -100,6 +100,17 @@ fn off_records_nothing() {
     assert!(!tu.ast.memory().rows.iter().any(|r| r.name == "decl_extents"));
 }
 
+/// The table holds no spare capacity once the parse ends (spec/ast.md
+/// §19.8, WP-2092): what it reserves is what it uses.
+#[test]
+fn the_parse_trims_the_table() {
+    let (_, _, tu) = parse(true);
+    let mem = tu.ast.memory();
+    let row = mem.rows.iter().find(|r| r.name == "decl_extents").expect("a decl_extents row");
+    assert!(row.count > 0);
+    assert_eq!(row.reserved_bytes, row.live_bytes);
+}
+
 /// Every declaration of the parse that is not implicit has a row.
 #[test]
 fn every_written_declaration_has_a_row() {

@@ -1,3 +1,5 @@
+ImportDecl 'extents_mod'  full=10:1-10:20 ; keyword=10:1-10:7 'import' name=10:8-10:19 'extents_mod'
+ModuleDecl 'extents_mod'  full=extents_mod.cppm:2:1-extents_mod.cppm:2:27 ; export=extents_mod.cppm:2:1-extents_mod.cppm:2:7 'export' keyword=extents_mod.cppm:2:8-extents_mod.cppm:2:14 'module' name=extents_mod.cppm:2:15-extents_mod.cppm:2:26 'extents_mod'
 Export '(anonymous)'  full=extents_mod.cppm:4:1-extents_mod.cppm:11:2 }
 Namespace 'geo'  full=extents_mod.cppm:4:1-extents_mod.cppm:11:2 } name=extents_mod.cppm:4:18-extents_mod.cppm:4:21 'geo' body=extents_mod.cppm:4:22-extents_mod.cppm:11:2
 CXXRecord 'geo::Pt'  full=extents_mod.cppm:5:1-extents_mod.cppm:8:3 ; own=extents_mod.cppm:5:1-extents_mod.cppm:8:2 name=extents_mod.cppm:5:8-extents_mod.cppm:5:10 'Pt' body=extents_mod.cppm:5:11-extents_mod.cppm:8:2

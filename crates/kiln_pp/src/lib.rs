@@ -67,8 +67,8 @@ pub use include::{
 pub use lookups::{Found, Lookup, LookupForm, LookupLog};
 pub use macros::{AttrMacro, MacroDef, MacroTable};
 pub use modules::{
-    DirectiveKind, ImageImport, ModuleDirective, ModuleOptions, StdModuleCache, StdModuleFile,
-    has_module_lines, header_unit_key, header_unit_key_in,
+    DirectiveKind, DirectiveParts, ImageImport, ModuleDirective, ModuleOptions, StdModuleCache,
+    StdModuleFile, has_module_lines, header_unit_key, header_unit_key_in,
 };
 pub use options::{ClangCompat, MetaHint, MetaHintLib, MetaProbe, PpOptions};
 pub use predef::{

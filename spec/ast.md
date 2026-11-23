@@ -3101,12 +3101,17 @@ body, without re-lexing. `kiln_ast::decl_extents`; the field
 - **Read access** (all on `DeclExtents`): `is_on()`, `get(d)`,
   `iter()` (every declaration with a row in `DeclId` order, a shared row
   once per declaration), `len()` (rows, a shared row once),
+  `module_decls()` (the module and import declarations' rows, §19.9),
   `dump(ast, sm, main)` (§19.7). Helpers on the row: `semi()` (the `;`
   as a span), `qualified_name()` (`[qual, name.hi)`), `prefix()` (the
   decl-specifier part shared by a declarator group).
-- **Writes** go through `set(d, e)`, `entry(d)`, `share(alias, d)` and
-  `get_mut(d)` (no-ops when off), `forget(d)` (a declaration the
-  parse made and dropped) and `mark()`/`truncate(mark)` (§19.6).
+- **Writes** go through `set(d, e)`, `entry(d)`, `share(alias, d)`,
+  `push_module_decl(m)` and `get_mut(d)` (no-ops when off), `forget(d)`
+  (a declaration the parse made and dropped), `mark()`/`truncate(mark)`
+  (§19.6) and `shrink_to_fit()`, which the parser calls once the
+  translation unit is parsed (after the end-of-unit instantiations,
+  which add no rows), so the table holds no spare capacity (WP-2092,
+  §19.8).
 
 ### 19.2 The row (44 bytes, a `size_of` unit test)
 
@@ -3207,18 +3212,38 @@ declaration keeps its row (WP-1932; the identifier-accounting test of
   (dropping the later rows and their aliases) are there for any rollback
   and unit-tested.
 - **PCH.** The table is written into snapshots (§17; FORMAT_VERSION
-  129), with its on bit; the consumer then sets that bit from its own
+  129; 146 since WP-2091, which adds the module and import declarations'
+  rows), with its on bit; the consumer then sets that bit from its own
   options. `-fkiln-decl-extents` is part of the PCH identity (a producer
   and a consumer must agree); `-fkiln-dump-decl-extents` is not, and
   makes the producer take two passes.
-- **Module images** (spec/modules.md §11.11; IMAGE_VERSION 62). A
-  module unit parsed with the table on carries a row per record that
-  has one and per parameter of a function record, located in the
-  image's location space; an importer whose table is on gives the
-  declarations it builds the same rows (a template sharing its
-  pattern's again). Declarations inside bodies are not carried; an
-  extent location the image cannot carry fails the record as any other
-  location does. A unit replayed from source records its rows by
+- **Module images** (spec/modules.md §11.11; IMAGE_VERSION 62, 79
+  since WP-2091). A module unit parsed with the table on carries a row
+  per record that has one and per parameter of a function record,
+  located in the image's location space; an importer whose table is on
+  gives the declarations it builds the same rows (a template sharing its
+  pattern's again). The declarations inside bodies are records once a
+  carried body names them, so they have their rows too: the locals of an
+  inline function, of an inline variable's initializer or of a
+  template's pattern (instantiated in the importer or not), a
+  declarator group's declarators, lambdas' parameters, init-captures
+  and locals, block-scope classes and enumerations and their members,
+  structured bindings, init-statements' and conditions' variables.
+  A requires-expression's parameters, which are not records, are
+  carried by their index among the image's requires-expression
+  parameters (WP-2091). So a declaration reached through an imported
+  definition has the row it has when the unit is parsed; only its
+  `DeclId`, and so its place in the dump, differ. A body the image does
+  not carry (a non-inline function's, which no importer reaches) has no
+  rows in an importer built from the image, while replay parses it and
+  records them. The module and import declarations (§19.9): an importer
+  that replays the image's preamble (a partition, a unit with imports)
+  preprocesses it and records their rows as replay does; an image
+  without a preamble carries its module declaration's row, and the
+  importer records it where it enters the unit. An extent location the
+  image cannot carry fails the record (the image, for a
+  requires-expression parameter or the module declaration) as any
+  other location does. A unit replayed from source records its rows by
   parsing. The module cache key includes `decl-extents`.
 
 ### 19.7 The dump
@@ -3234,45 +3259,106 @@ Positions are spelling locations, prefixed with the file's base name and
 `:` outside the main file. `own=` is printed when it differs from
 `full`; `<text>` is the name's source text; `exp=` the expansion point of
 a `full` that starts in a macro. A lambda in a qualified name prints as
-`(lambda at <file>:L:C)` without directories. The harness directive
+`(lambda at <file>:L:C)` without directories. A module or import
+declaration's row (§19.9) prints before the row of the first
+declaration made after it (at the end when none is):
+
+```
+<ModuleDecl|ImportDecl|HeaderImportDecl> '<name>'  full=<L:C>-<L:C> <;|-> [export=.. '<text>'] keyword=.. '<text>' [name=.. '<text>'] [partition=.. '<text>'] [attrs=.. '<text>']
+```
+
+`<name>` is the source text from the module-name to the end of the
+partition (`M.N:P`, `:P`, `<h>`). The harness directive
 `decl-extents: <golden>` (spec/harness.md) compares the dump with a
-golden file.
+golden file; `decl-extents: <golden> unordered` compares the two as
+sorted lines, for an importer built from a module image, whose
+`DeclId`s follow the image's record order rather than the parse's.
 
 ### 19.8 Cost
 
 Measured with a release build on aarch64, `-fsyntax-only -std=c++26`
-(WP-2090; `-fkiln-memory-report` for the table and AST totals, peak RSS
-from the OS):
+(WP-2090, remeasured by WP-2092 once the parse trims the table;
+`-fkiln-memory-report` for the table and AST totals, "live" the bytes in
+use and "reserved" the bytes held, peak RSS from the OS):
 
-- *`<bits/stdc++.h>`* (libstdc++ 14): 168,688 declarations in the arena,
-  89,071 with a row (the rest are implicit or instantiated). The table
-  holds 4,547,312 bytes live: 51 bytes per row (44 for the row, the
+- *`<bits/stdc++.h>`* (libstdc++ 14): 89,294 declarations with a row
+  (the rest of the arena's are implicit or instantiated). The table
+  holds 4,557,124 bytes live: 51 bytes per row (44 for the row, the
   index's 4 per arena declaration spread over the rows), 27 per arena
-  declaration. Accounted memory grows from 42.9 MB to 47.4 MB (+10.6%),
-  peak RSS from about 91.6 MB to 96.0 MB (+4.7%); compile time is
-  within noise (0.9-1.3 s either way).
+  declaration; it reserved 6.40 MB before the trim and reserves exactly
+  what it uses after it. Accounted memory grows from 42.95 MB to
+  47.50 MB live (+10.6%), and from 63.19 MB to 67.75 MB reserved (69.59
+  MB before the trim); peak RSS from about 92.0 MB to 96.5 MB (+4.9%);
+  compile time is within noise (1.3-2.5 s either way on a loaded host).
 - *A synthetic TU of 320,000 written declarations* (20,000 namespaces,
-  each with a class of three fields and a method, a function of two
-  parameters, a variable group, a typedef and an enumeration): 320,000
-  rows, 15,360,300 bytes live (48 bytes per row) and 25.6 MB reserved
-  (vector doubling). Accounted memory grows from 47.0 MB to 62.4 MB
-  (+33%: every declaration is written and there are no instantiations
-  to dilute it), peak RSS from 90.9 MB to 107.2 MB (+18%); compile time
-  is within noise (0.7-0.9 s).
-- *Off* (the default): accounted memory is byte-identical to the build
-  before the table, peak RSS and compile time are within noise, and the
-  bench/oven counters are identical.
+  each with a class of three fields and a method declaration, a
+  function declaration of two parameters, a group of two variables, a
+  typedef and an enumeration of three enumerators, one line per
+  namespace): 320,000 rows, 15,360,300 bytes live (48 bytes per row);
+  the table reserved 25.6 MB before the trim (vector doubling) and
+  reserves 15.36 MB after it. Accounted memory grows from 26.18 MB to
+  41.54 MB live (+59%: every declaration is written, there are no
+  bodies or instantiations to dilute it), and from 41.43 MB to 56.79 MB
+  reserved (67.03 MB before the trim); peak RSS from 53.9 MB to 70.0 MB
+  (+30%), the same before and after the trim, which comes after the
+  peak; compile time is within noise (0.4-0.6 s).
+- *Off* (the default): the memory report is byte-identical to the build
+  before the table (and to the build before WP-2091), peak RSS and
+  compile time are within noise, module images are byte-identical but
+  for the version word and the file's trailing hash, and the bench/oven
+  counters are identical.
 
-So the table stays opt-in: a tenth of the AST on a header-heavy TU and a
-third on one made only of written declarations is too much to charge
-every compilation.
+So the table stays opt-in: a tenth of the AST on a header-heavy TU and
+more than half on one made only of written declarations is too much to
+charge every compilation.
 
-Tests: `crates/kiln_ast/src/decl_extents.rs` (row size, off records
-nothing, set and share, `semi`/`prefix`, truncation, lambda names),
-`crates/kiln_parse/tests/decl_extents.rs` (the API on parsed source),
+### 19.9 Module and import declarations (WP-2091)
+
+A module-declaration ([module.unit]/1) and a module-import-declaration
+([module.import]/1) are preprocessing directives ([cpp.module],
+[cpp.import]) that make no declaration node: sema acts on them
+(spec/modules.md §4) and nothing has a `DeclId` to key a row by. The
+row shape of §19.2 does not fit them either: it has no field for the
+keyword, the partition or the attributes, and its `own`, `qual`,
+`body` and `specs_end` mean nothing for them. So they are a kind of row
+of their own, `ModuleDeclExtent` (64 bytes, a `size_of` unit test),
+kept in source order in `module_decls()`:
+
+| field | type | meaning |
+|---|---|---|
+| `full` | `Span` | from `export`, or else the keyword, to the `;` |
+| `export` | `Span` | `export`; invalid when not exported |
+| `keyword` | `Span` | `module` or `import` |
+| `name` | `Span` | the module-name with every dotted component (`a.b`), or the header-name of a header unit (`<h>`, `"h"`); invalid for `import :P;` |
+| `partition` | `Span` | the module-partition, from its `:` to its last component |
+| `attrs` | `Span` | the attribute-specifier-seq before the `;` (the tokens the preprocessor skips to it) |
+| `semi` | `Span` | the `;`; invalid when it is missing (an error; `full` then ends at the last part) |
+| `before` | `u32` | the index of the first declaration made after it, the dump's position (§19.7) |
+| `kind` | `ModuleDeclKind` | `Module`, `Import` (a named module or a partition) or `HeaderImport` |
+
+The preprocessor notes the parts' ranges while it reads the directive
+(`kiln_pp::DirectiveParts` on the `ModuleDirective` event) whether the
+table is on or not; the parser makes the row when it hands the event to
+sema, so an `export import` (`export` set), the module declarations and
+imports of every unit it reads (the imported units' and header units'
+too) and the imports of a non-module unit all have rows. The global
+module fragment's `module;` and the private module fragment's
+`module :private;` are not module-declarations and have none, nor does
+a directive the preprocessor rejected. Rows of a unit built from a
+module image: §19.6.
+
+Tests: `crates/kiln_ast/src/decl_extents.rs` (row sizes, off records
+nothing, set and share, `semi`/`prefix`, truncation, lambda names,
+module rows only when on, the trimmed capacity),
+`crates/kiln_parse/tests/decl_extents.rs` (the API on parsed source,
+capacity equal to length after the parse),
 `crates/kiln_driver/src/snap_tests.rs` (`snapshot_round_trip_decl_extents`)
 and `tests/conformance/decl_extents/` (one per case of §19.2-§19.6,
-macros, templates, a PCH and a module-image round trip).
+macros, templates, a PCH and module-image round trips:
+`module-image.cpp`/`module-replay.cpp` for an image without a preamble,
+`module-bodies-image.cpp`/`module-bodies-replay.cpp` for the
+declarations inside bodies, a partition, attributes, `export import`
+and a header unit).
 
 ## 20. Public tables for tooling clients (WP-2024)
 
