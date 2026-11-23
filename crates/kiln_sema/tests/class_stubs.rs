@@ -70,6 +70,7 @@ fn class_features_once_stubbed_are_silent() {
         let init = MemInitInfo {
             id: MemInitId::Ident(name(s, "x").as_ident().unwrap()),
             loc: L,
+            end: L,
             init: Initializer::Paren(vec![one], L, L),
             pack_expansion: false,
         };

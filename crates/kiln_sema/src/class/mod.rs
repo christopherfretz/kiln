@@ -75,8 +75,12 @@ pub enum MemInitId {
 pub struct MemInitInfo {
     /// What is initialized.
     pub id: MemInitId,
-    /// Where the mem-initializer-id was written.
+    /// Where the mem-initializer-id was written (its first token, the
+    /// qualifier's if any).
     pub loc: Loc,
+    /// The mem-initializer's last token: `)`, `}`, or the `...` of a pack
+    /// expansion (spec/ast.md §8.6).
+    pub end: Loc,
     /// `( expression-list )` ([`Initializer::Paren`], possibly empty) or a
     /// braced-init-list ([`Initializer::List`]).
     pub init: Initializer,

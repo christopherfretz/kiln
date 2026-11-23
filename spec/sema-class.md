@@ -1746,7 +1746,8 @@ Each written initializer is a full-expression; so is each implicit one
 an immediate-escalation site for an implicitly defined constructor
 ([expr.const]/20; WP-158: `struct E { B b; }` with a consteval `B()`
 escalates `E()`, the reason naming the member). In a template the list is
-kept unbuilt until instantiation (`inst.pattern_mem_inits`), but the
+kept unbuilt until instantiation (the `Ast` record
+`Ast::pattern_mem_inits`, spec/ast.md §8.6, WP-3026), but the
 non-dependent immediate invocations of each written initializer are
 finished at the definition (`finish_immediate_parts`), and checked again
 in each instantiation (sema.md §8 "Templates"; WP-227). `reference member

@@ -1639,6 +1639,14 @@ impl Ast {
         self.decls.ctor_inits(ctor, &self.lists)
     }
 
+    /// The ctor-initializer of constructor definition `ctor` in a
+    /// template (the pattern), as written (spec/ast.md §8.6, WP-3026):
+    /// `None` for a constructor that is no pattern (its resolved list is
+    /// [`Ast::ctor_inits`]) and for a pattern without mem-initializers.
+    pub fn pattern_mem_inits(&self, ctor: DeclId) -> Option<&crate::templates::PatternMemInits> {
+        self.templates.pattern_mem_inits.get(ctor)
+    }
+
     // -- instantiation accounting (§13 Q6) -----------------------------
 
     /// Starts an instantiation. Nested calls nest; the outermost

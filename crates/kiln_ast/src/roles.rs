@@ -1103,6 +1103,7 @@ pub static COLD_MAPS: &[ColdMapRoles] = &[
     cold("TemplateTables", "defaults", D, Role::Record("TemplateArg")),
     cold("TemplateTables", "inherited_defaults", D, D),
     cold("TemplateTables", "trailing_requires", D, E),
+    cold("TemplateTables", "pattern_mem_inits", D, Role::Record("PatternMemInits")),
     cold("TemplateTables", "expr_targs", E, Role::ArgList),
     cold("TemplateTables", "expr_nns", E, Role::Nns),
     cold("TemplateTables", "expr_begin", E, L),

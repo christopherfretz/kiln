@@ -414,28 +414,7 @@ impl Sema<'_, '_> {
             if sub.sema.kind_of(f) == DeclKind::CXXConstructor {
                 // A constructor template's ctor-initializer, as a class
                 // template member's (`templ/class.rs`).
-                let (inits, colon) = sub
-                    .sema
-                    .inst
-                    .pattern_mem_inits
-                    .get(&pdef)
-                    .cloned()
-                    .unwrap_or((Vec::new(), lbrace));
-                for info in &inits {
-                    match sub.mem_initializer(info) {
-                        Ok(v) => {
-                            for i in &v {
-                                sub.sema.act_on_mem_initializer(f, i);
-                            }
-                        }
-                        Err(_) => sub.sema.note_failed_mem_initializer(f),
-                    }
-                }
-                inits_failed = sub.sema.instantiated_mem_inits_failed(f);
-                if sub.sema.inst.failed_mem_inits.contains(&pdef) {
-                    sub.sema.note_failed_mem_initializer(f);
-                }
-                sub.sema.act_on_mem_initializers(f, &[], colon);
+                inits_failed = sub.ctor_initializer(f, pdef, lbrace);
             }
             let b = sub.body(body);
             let discarded = std::mem::take(&mut sub.discarded);

@@ -1283,3 +1283,142 @@ fn token_table_cost() {
     let (tokens, rows, files, bytes) = r.value.unwrap();
     eprintln!("tokens {tokens} rows {rows} file-tokens {files} bytes {bytes}");
 }
+
+/// Pattern constructors of every kind (spec/ast.md §8.6, WP-3026); a
+/// designated braced list is refused by the image writer (the source
+/// fallback), so it is not here. Compiles with clang 19 and 22.
+const PATTERN_INITS_SRC: &str = "\
+struct B { B(int); };
+template <class T> struct Base { Base(T); };
+template <class T> struct Field { T x; Field(T a) : x(a) {} };
+template <class T> struct Anon { union { int i; T t; }; Anon() : i(0) {} };
+template <class T> struct NonDep : B { NonDep() : B(1) {} };
+template <class T> struct Dep : Base<T> { Dep(T t) : Base<T>(t) {} };
+template <class T> struct DelegA { DelegA(int); DelegA() : DelegA(0) {} };
+template <class T> struct DelegB { DelegB(int); DelegB() : DelegB<T>(0) {} };
+template <class... Bs> struct Pack : Bs... { Pack(int a) : Bs(a)... {} };
+template <class T> struct Braced { T x; int a[2]; Braced() : x{1}, a{1, {2}} {} };
+template <class T> struct MemTmpl { T x; template <class U> MemTmpl(U u) : x(u) {} };
+template <class T> struct Outer { struct Inner { T v; Inner() : v() {} }; };
+struct NonTmpl { int v; template <class U> NonTmpl(U u) : v(u) {} };
+";
+
+/// The shape of a braced list: its clauses' kinds, nested lists in braces.
+fn list(ast: &Ast, e: kiln_ast::ExprId) -> String {
+    let items: Vec<String> = ast
+        .lists
+        .iter::<kiln_ast::ExprId>(ast.exprs.init_list_inits(e))
+        .map(|x| match ast.exprs.get(x).kind() {
+            kiln_ast::expr::ExprKind::InitListExpr => list(ast, x),
+            k => format!("{k:?}"),
+        })
+        .collect();
+    format!("{{{}}}", items.join(" "))
+}
+
+/// Every pattern constructor's record, one string each, sorted: its
+/// class, the `:`, and per mem-initializer the id, range, pack flag and
+/// the initializer's expression kinds (lists nested), by line and column.
+fn pattern_inits_of(ast: &Ast, sm: &kiln_source::SourceManager) -> Vec<String> {
+    use std::fmt::Write as _;
+
+    use kiln_ast::templates::{PatternMemInitArgs, PatternMemInitId};
+    let names = kiln_ast::diag_names::DiagNames::new(ast, Some(sm), 19);
+    let lc = |l: kiln_source::Loc| {
+        sm.line_col(sm.spelling_loc(l))
+            .map_or_else(|| "?".to_owned(), |x| format!("{}:{}", x.line, x.col))
+    };
+    let ident =
+        |d: DeclId| ast.decls.get(d).name().as_ident().map_or("", |s| ast.symbols().as_str(s));
+    let mut out: Vec<String> = ast
+        .decls
+        .ids()
+        .filter_map(|d| {
+            let p = ast.pattern_mem_inits(d)?;
+            let class = ast.decls.get(d).ctx().map_or("", ident);
+            let mut s = format!("{class} {}{}", lc(p.colon), if p.failed { " failed" } else { "" });
+            for m in &p.inits {
+                let id = match m.id {
+                    PatternMemInitId::Member(f) => {
+                        format!("{:?} {}", ast.decls.get(f).kind(), ident(f))
+                    }
+                    PatternMemInitId::Type { ty, ident } => format!(
+                        "'{}'{}",
+                        kiln_ast::types::print_type(
+                            &ast.types,
+                            &names,
+                            ty,
+                            kiln_ast::types::PrintOptions::SUGARED
+                        ),
+                        ident.map_or(String::new(), |s| format!(" as {}", ast.symbols().as_str(s)))
+                    ),
+                    PatternMemInitId::Ident(s) => format!("ident {}", ast.symbols().as_str(s)),
+                };
+                let init = match &m.init {
+                    PatternMemInitArgs::Paren { args, lparen, rparen } => {
+                        let k: Vec<String> = args
+                            .iter()
+                            .map(|&a| format!("{:?}", ast.exprs.get(a).kind()))
+                            .collect();
+                        format!("({})@{}..{}", k.join(" "), lc(*lparen), lc(*rparen))
+                    }
+                    PatternMemInitArgs::List(e) => list(ast, *e),
+                };
+                let pack = if m.pack_expansion { " ..." } else { "" };
+                let _ = write!(s, "; {id} [{}..{}]{pack} {init}", lc(m.loc), lc(m.end));
+            }
+            Some(s)
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+/// The mem-initializer records of pattern constructors through a module
+/// image with the unit's source blanked (the importer builds them from
+/// the image alone) equal the records of the unit itself.
+#[test]
+fn pattern_mem_inits_through_a_module_image() {
+    let s = Scratch::new("pattern-inits");
+    let unit = format!("export module m;\nexport {{\n{PATTERN_INITS_SRC}}}\n");
+    let cppm = s.write("m.cppm", unit.as_bytes());
+    let cl = argv(&["-fsyntax-only", "-std=c++26", "-x", "c++-module", &cppm]);
+    let r = run_front_end("kiln++", &cl, quiet(), |fe| pattern_inits_of(fe.ast, fe.sm)).unwrap();
+    assert_eq!(r.errors, 0, "{:?}", r.first_error);
+    let direct = r.value.unwrap();
+    assert_eq!(direct.len(), 11, "{direct:#?}");
+    let pcm = s.path("m.pcm");
+    let out =
+        Command::new(std::path::Path::new(env!("CARGO_BIN_EXE_kiln")).with_file_name("kiln++"))
+            .args([
+                "-v",
+                "-std=c++26",
+                "-fkiln-bmi-image",
+                "--precompile",
+                "-x",
+                "c++-module",
+                &cppm,
+                "-o",
+                &pcm,
+            ])
+            .output()
+            .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stderr}");
+    assert!(stderr.contains("with a declaration image of "), "{stderr}");
+    let mut c = kiln_pp::bmi::read(&std::fs::read(&pcm).unwrap()).unwrap();
+    let text = &mut c.files[0].text;
+    *text = text.bytes().map(|b| if b == b'\n' { '\n' } else { ' ' }).collect();
+    let blank = s.write("blank.pcm", &kiln_pp::bmi::write(&c));
+    let user = s.write("user.cpp", b"import m;\n");
+    let cl = argv(&[
+        "-fsyntax-only",
+        "-std=c++26",
+        "-fkiln-bmi-image",
+        &format!("-fmodule-file=m={blank}"),
+        &user,
+    ]);
+    let r = run_front_end("kiln++", &cl, quiet(), |fe| pattern_inits_of(fe.ast, fe.sm)).unwrap();
+    assert_eq!(r.errors, 0, "{:?}", r.first_error);
+    assert_eq!(r.value.unwrap(), direct);
+}

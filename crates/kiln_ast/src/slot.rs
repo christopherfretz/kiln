@@ -179,6 +179,7 @@ const COLD_MAP_NAMES: &[&str] = &[
     "oper_lookup",
     "overrides",
     "pack_index_origin",
+    "pattern_mem_inits",
     "pseudo_dtor_first",
     "pseudo_dtor_name",
     "record_pack",

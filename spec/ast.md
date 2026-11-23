@@ -119,6 +119,7 @@ After a node is created its header and side record are immutable, except:
 | lookup tables, specialization maps, `layouts`, `virtuals`, `vtables`, `consts`, `types` | insert-only | sema / Oven / `kiln_abi` |
 | cold `member_overload` `template_args` (§5.10) | once, when the parser reaches the template-id after the overloaded access | sema |
 | `templates.oper_lookups` (§8.5) | insert-only; one set per dependent operator expression, at its creation | sema / module-image importer |
+| `templates.pattern_mem_inits` (§8.6) | once per constructor definition in a template, at the end of its ctor-initializer | sema / module-image importer |
 | `WrittenRefs` entries (§18) | append-only; `entity`/`found` of an overloaded name patched once by overload resolution; `enclosing` narrowed by declaration claims | parser / sema |
 
 **Instantiation adds nodes, never rewrites patterns**: substituting a
@@ -1213,6 +1214,117 @@ Tests: `crates/kiln_parse/tests/sema_facts.rs`
 (`dependent_operator_definition_set`, `fold_operator_definition_set`),
 `oper_lookup.rs` unit tests,
 `tests/conformance/module.interface/image-oper-lookup-run.cpp`.
+
+### 8.6 Pattern mem-initializers (WP-3026)
+A constructor defined in a template (a member of a class template, of a
+member class of one, a constructor template, a member template of a
+class template) is not checked as a whole at its definition: its
+mem-initializers are kept as written and resolved again by every
+instantiation ([temp.res.general]/6, [temp.dep]). They are `Ast` state,
+one record per such constructor definition, and Sema's instantiation
+reads that record and nothing else:
+
+- `templates.pattern_mem_inits: ColdMap<DeclId, PatternMemInits>` (map
+  name and memory row `pattern_mem_inits`),
+  keyed by the constructor definition. Query
+  `Ast::pattern_mem_inits(ctor) -> Option<&PatternMemInits>`; written
+  once (`AstBuilder::set_pattern_mem_inits`) at the end of the
+  ctor-initializer by Sema and by the module-image importer.
+- `PatternMemInits { colon, failed, inits }`: the `:`; `failed` when a
+  mem-initializer failed its definition-time check (diagnosed; the
+  instantiations then add no implicit initializers, [class.base.init]/9
+  is not applied after an error); the mem-initializers in written order.
+- `PatternMemInit { id, loc, end, pack_expansion, init }`: `loc` is the
+  first token of the mem-initializer-id (its qualifier included), `end`
+  its last token (`)`, `}`, or the `...` of a pack expansion); the written
+  range is `loc..=end`.
+- `PatternMemInitId`: `Member(d)` for a non-static data member or an
+  anonymous union's member (`Field` or `IndirectField`) of the class;
+  `Type { ty, ident }` for a base or the class itself (a delegating
+  constructor), `ty` as the definition resolved it: `B`, a dependent
+  `Base<T>` (`TemplateSpecialization` of the parameter), the injected
+  class `S<T>` for `S(..)` or `S<T>(..)`, a pack `Bs` for `Bs(a)...`,
+  with `ident` the identifier when each instantiation looks it up again
+  ([class.base.init]/2: `B(1)`, `S(0)`) and `None` when the type is
+  bound at the definition (a qualified name, a template-id, `decltype`, a
+  splice, a template parameter's name such as `T()` or `Bs(a)...`, or a
+  typedef found outside a class with dependent bases); `Ident(s)` for an identifier the definition
+  could not resolve (diagnosed, `failed` set; the instantiations skip it).
+- `PatternMemInitArgs`: `Paren { args, lparen, rparen }` for `( list )`,
+  the arguments' `ExprId`s (dependent ones as built at the definition);
+  `List(e)` for a braced-init-list, `e` an `InitListExpr` of type `void`
+  whose clauses are the written expressions, a nested braced list again
+  such an `InitListExpr` and a designated clause `.q = 1` a
+  `DesignatedInitExpr` (the same shape as any dependent braced list,
+  §5.6). An instantiation substitutes these expressions; it never
+  re-parses.
+
+Why this shape: the record is the syntax a tooling client needs (which
+entity each mem-initializer names, where, and with which expressions)
+and nothing semantic, so it is the same for every instantiation and
+survives a snapshot as plain data; a cold map keyed by the constructor
+costs nothing for the constructors that are no patterns. A constructor
+that is no pattern (a non-template class's non-template constructor, or
+any instantiation) does not get a record: its resolved initializers,
+implicit ones included, are `ColdDeclData::ctor_inits` (§2.4,
+`Ast::ctor_inits`), as before. A failed constructor whose definition is
+`INVALID` keeps no list.
+
+Carriage: PCH snapshots carry the map with the `Ast` (§17; snapshot
+format 166). Module images carry the record with the constructor
+(spec/modules.md §11; image version 89): a `Member` by its name, looked
+up again in the importing class; a braced list decomposed and rebuilt; an
+image is refused (the source fallback) for a designated clause and for a
+failed record.
+
+The dump (§11) does not print the record. clang's dump of a pattern
+constructor shows each `CXXCtorInitializer` with its argument list as a
+`ParenListExpr 'NULL TYPE'` (or the written `InitListExpr 'void'`) only
+where the member or an argument is dependent, and the initialization as
+built at the definition otherwise (`v(1)` an `IntegerLiteral`, `c()` a
+`CXXConstructExpr`, `w()` an `ImplicitValueInitExpr`); the record keeps
+the written arguments only, so matching clang would need a second,
+resolved list per pattern constructor.
+
+Tests: `crates/kiln_parse/tests/pattern_mem_inits.rs` (every kind, a
+failed and an unresolved one, the record after a prefix snapshot
+round trip), `crates/kiln_driver/tests/front_end.rs`
+(`pattern_mem_inits_through_a_module_image`).
+
+### 8.7 Pattern syntax and the AST (WP-3027)
+Sema side tables that hold parsed syntax of a pattern; each is either
+reachable from the `Ast` or names the row that puts it there.
+
+- the mem-initializers of a constructor in a template: reachable
+  through `Ast::pattern_mem_inits` (§8.6).
+- default member initializers of a class template's fields: reachable
+  through the pattern field's `FieldData.init`.
+- default arguments of a template's functions: reachable through the
+  pattern parameter's `ParamData.default_arg`.
+- a pattern's `noexcept(e)`: reachable through `ExcSpec::NoexceptExpr` on
+  the pattern's function type (`ExcSpec::Deferred` names the pattern).
+- requires-clauses: reachable through `TemplateParamList.requires` and
+  `templates.trailing_requires`.
+- both branches of a constexpr-if in a pattern: reachable through the
+  pattern's `IfData`.
+- `explicit(e)`: reachable through `ColdDeclData::explicit_expr`.
+- dependent attribute arguments: reachable through `AttrNode` operands
+  and the dependent type nodes.
+- friends of a dependent class (the written name and template arguments,
+  the special member and qualifier, the member friend of a dependent
+  specialization, a method friend's dependent qualifier): their names as
+  written references with WP-3008; the written qualifier, the friend's
+  own template-head and trailing requires-clause not yet, row WP-3124.
+- the template-head of a partial specialization defined after its
+  declaration: not yet, row WP-3120.
+- the written placeholder of a structured binding declaration and of
+  each declarator of a multi-declarator group in a pattern: not yet, row
+  WP-3121.
+- a template template parameter written without `class`/`typename`: not
+  yet, row WP-3122.
+- location-only tables (keyword, placeholder, `...` and attribute
+  positions of pattern syntax whose tree is on the `Ast`): not yet, row
+  WP-3123, only if a tooling client asks.
 
 ## 9. Constant values
 ### 9.1 `ConstStore` (`kiln_ast::consts`, WP-043)

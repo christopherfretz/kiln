@@ -2976,8 +2976,9 @@ back) and a dependent member access `this->x`, `t.f`
 name, an index into `pnames` since a dependent member name is no
 declaration of the image and is not gated; bits 1 for `->`, and the
 operator location as cold annotation 16). Mem-initializers of a
-constructor of a class template live in sema side tables
-(`pattern_mem_inits`), which the image carries since WP-1310 (see
+constructor of a class template are the `Ast` record
+`templates.pattern_mem_inits` (spec/ast.md §8.6; a Sema side table
+before WP-3026), which the image carries since WP-1310 (see
 "Pattern mem-initializers" below; before, such a constructor fell back,
 since instantiating it without them would silently default-initialize
 its bases and members). A non-template class's
@@ -3156,17 +3157,21 @@ function and variable templates ("a template specialization").
 
 **Pattern mem-initializers (WP-1310).** A constructor definition in a
 class template (or a constructor template's pattern) keeps its
-mem-initializers as parsed (`pattern_mem_inits`), not as
-`CtorInit`s: each instantiation substitutes into them and checks the
+mem-initializers as written (`Ast::pattern_mem_inits`, spec/ast.md
+§8.6), not as `CtorInit`s: each instantiation substitutes into them and checks the
 result as the parser's action would ([temp.inst]/4,
 [class.base.init]). A section of their own (after the explicit
 instantiations) lists, per such constructor record in ascending order,
-the `:` location and each mem-initializer: its mem-initializer-id (an
-index into `pnames` for an identifier, or the type the parser
-resolved), where it was written, whether it is a pack expansion
-(`B(args)...`) and its initializer (`= expression`, a parenthesized
-list with its parentheses, or a braced-init-list, nested at most 64
-deep). The expressions are records of the bodies section. The
+the `:` location and each mem-initializer: its mem-initializer-id
+(since WP-3026, image version 89: tag 0 an unresolved identifier, an
+index into `pnames`; 1 a type as resolved; 2 a member by its name,
+looked up again in the importing class (a field or an anonymous
+union's member; an identifier if lookup finds none); 3 a type written
+as an identifier, the type and the name), its first and last token,
+whether it is a pack expansion (`B(args)...`) and its initializer (tag
+1 a parenthesized list with its parentheses, tag 2 a braced-init-list,
+nested at most 64 deep, rebuilt as the type-`void` `InitListExpr` the
+parser builds). The expressions are records of the bodies section. The
 validator requires a constructor record, valid expression slots,
 names and types; the reader installs the list on the constructor once
 the bodies are built, before anything can instantiate it. Still

@@ -10,6 +10,19 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- The mem-initializers of a constructor defined in a template on the
+  `Ast` (WP-3026, spec/ast.md §8.6): `Ast::pattern_mem_inits(ctor)` gives
+  the `:`, a `failed` flag and, per mem-initializer in written order, the
+  member, base or delegated-to type the definition resolved (or the
+  identifier when it names nothing), the written range, the pack
+  expansion and the initializer's expressions (a braced list as a
+  type-`void` `InitListExpr`). It is the one record instantiation reads,
+  and PCH snapshots (format 166) and module images (version 89) carry
+  it. A pack expansion `m(args)...` whose name is neither a member nor a
+  type is now reported at the definition, as clang does.
+- An inventory of the Sema tables that hold a template's parsed syntax
+  off the `Ast` (WP-3027, spec/ast.md §8.7), each reachable from the
+  `Ast` or with its follow-up row (WP-3120..WP-3124).
 - The maker of a string kiln makes itself (WP-3000, spec/ast.md §5.8.1):
   `ExprArena::string_maker(origin)` and `Ast::string_maker_of(value)`
   lead a pointer to a source-location, reflection or contract-site

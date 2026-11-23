@@ -1130,6 +1130,27 @@ impl<'a> AstBuilder<'a> {
         self.ast.decls.set_ctor_inits(ctor, inits, &mut self.ast.lists)
     }
 
+    /// Sets the ctor-initializer of constructor definition `ctor` in a
+    /// template, as written (write-once, at the definition; spec/ast.md
+    /// §8.6, WP-3026).
+    ///
+    /// # Errors
+    /// If already set.
+    ///
+    /// # Panics
+    /// If `ctor` is not a constructor.
+    pub fn set_pattern_mem_inits(
+        &mut self,
+        ctor: DeclId,
+        inits: crate::templates::PatternMemInits,
+    ) -> Result<(), AlreadySet> {
+        assert!(
+            self.ast.decls.get(ctor).kind() == DeclKind::CXXConstructor,
+            "pattern mem-initializers on a non-constructor"
+        );
+        self.ast.templates.pattern_mem_inits.insert(ctor, inits)
+    }
+
     /// Records the virtual functions `method` overrides ([class.virtual]/2;
     /// write-once, at its declaration). An empty slice records nothing.
     ///
