@@ -9,6 +9,7 @@ mod diag_parse;
 pub(crate) mod directives;
 pub(crate) mod discover;
 pub(crate) mod external;
+mod host_error;
 mod inst_report;
 mod pp_tokens;
 mod report;
@@ -480,14 +481,25 @@ pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
             .map(|p| if p.exists() || p.is_absolute() { p.clone() } else { root.join(p) })
             .collect()
     };
-    let mut cases = discover::discover(&root, &inputs, opts.filter.as_deref())?;
+    let mut cases = match discover::discover(&root, &inputs, opts.filter.as_deref()) {
+        // The host's file server ran out of descriptors (spec/harness.md
+        // "Host errors"): once more after the pause.
+        Err(e) if host_error::is_descriptor_shortage(&e) => {
+            eprintln!("xtask test: host error during discovery ({e}); retrying once");
+            std::thread::sleep(host_error::PAUSE);
+            discover::discover(&root, &inputs, opts.filter.as_deref())?
+        }
+        r => r?,
+    };
     if opts.bmi_kind.is_some() {
         // The module-file variant runs only tests with `module:` or
         // `header-unit:` lines (the runner skips any other, should one
-        // slip through).
+        // slip through). A test that cannot be read here is kept: its run
+        // reports the error, where dropping it would shrink the run
+        // without a word.
         cases.retain(|c| {
             std::fs::read_to_string(&c.path)
-                .is_ok_and(|t| t.contains("//@ module:") || t.contains("//@ header-unit:"))
+                .map_or(true, |t| t.contains("//@ module:") || t.contains("//@ header-unit:"))
         });
     }
     if cases.is_empty() {
@@ -763,6 +775,11 @@ fn run_all(cfg: &runner::Config, cases: &[discover::TestCase], jobs: usize) -> V
                     let i = next.fetch_add(1, Ordering::Relaxed);
                     let Some(case) = cases.get(i) else { break };
                     let r = runner::run_test(cfg, case, i);
+                    // A run that failed for want of descriptors on the host
+                    // runs once more, in a scratch directory of its own
+                    // (spec/harness.md "Host errors").
+                    let again = || runner::run_test(cfg, case, cases.len() + i);
+                    let r = host_error::retry_on_host_error(r, host_error::PAUSE, again);
                     slots.lock().expect("no worker panics while holding the lock")[i] = Some(r);
                 }
             });

@@ -1081,6 +1081,16 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- xtask (harness): no `core` dumps and honest host errors (WP-2762,
+  WP-2780). xtask turns core dumps off for itself at startup, so no
+  compiler, oracle, test binary, cargo test or extents clang it starts
+  leaves a `core` file in the working tree. Bursts of "Too many open
+  files" (EMFILE) in CI came from the host's shared file server, not from
+  a descriptor leak in the harness (its process holds at most about
+  twenty throughout a corpus run): a test that fails that way now runs
+  once more after a pause, a second such failure is the new status HOST
+  instead of the test's FAIL or ERROR, the summary counts both, and the
+  module-file lanes no longer drop a test they could not read.
 - An array bound whose value is known but whose expression is
   instantiation-dependent (`char (*)[sizeof(sizeof(f(T())))]`) keeps its
   expression on the constant array type (WP-2720, spec/types.md §7.2

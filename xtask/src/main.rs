@@ -103,7 +103,7 @@ commands:
               lint, fmt --check, clippy
               -D warnings, cargo test, then the corpus twice: xtask test --compiler
               clang++-N (the corpus self-check; skipped when clang++-N is not on PATH) and
-              xtask test with kiln; fails on any FAIL, XPASS, ERROR or KILLED in either
+              xtask test with kiln; fails on any FAIL, XPASS, ERROR, KILLED or HOST in either
               (contract in spec/harness.md \"CI\"); a cargo step failing with error[E0463]
               is rerun once; `--quick` skips the clang self-check (local iteration only);
               `--oracle-only` keeps only what depends on KILN_ORACLE (the second-oracle gate)
@@ -118,6 +118,9 @@ environment:
 ";
 
 fn main() -> ExitCode {
+    // Before anything else: no child of this run writes a core dump
+    // (spec/harness.md "Resource limits", WP-2762). May re-exec xtask.
+    util::process::exec_without_core_dumps();
     // An interrupted run ends with the signal's status, after the signal
     // thread's cleanup, never with the command's own (spec/harness.md
     // "Jobserver", Signals).
@@ -580,7 +583,7 @@ fn ci_steps(args: impl Iterator<Item = String>) -> ExitCode {
         ExitCode::SUCCESS
     } else {
         eprintln!(
-            "xtask ci: FAILED: a corpus run has a FAIL, XPASS, ERROR or KILLED, or could not \
+            "xtask ci: FAILED: a corpus run has a FAIL, XPASS, ERROR, KILLED or HOST, or could not \
              run (see above)"
         );
         ExitCode::FAILURE

@@ -97,11 +97,12 @@ pub const DEFAULT_MEM_LIMIT_MIB: u64 = 8192;
 ///
 /// `std::process::Command` has no rlimit API, and `#![forbid(unsafe_code)]`
 /// rules out `pre_exec` and FFI, so [`MemLimit::wrap`] runs the child through
-/// POSIX `sh`: `sh -c 'ulimit -v "$1" || exit 125; shift; exec "$@"'
-/// kiln-mem-limit <KiB> <program> <args...>`. `exec` replaces the shell, so
-/// the capped process keeps the pid the caller waits on (timeouts, process
-/// groups and GNU time's RSS are unaffected) and the limit is inherited by
-/// its children.
+/// POSIX `sh`: `sh -c 'ulimit -c 0 2>/dev/null; ulimit -v "$1" || exit 125;
+/// shift; exec "$@"' kiln-mem-limit <KiB> <program> <args...>`. `exec`
+/// replaces the shell, so the capped process keeps the pid the caller waits
+/// on (timeouts, process groups and GNU time's RSS are unaffected) and the
+/// limits are inherited by its children. Core dumps go off in the same
+/// shell (WP-2762): a capped compiler that crashes writes no `core`.
 ///
 /// A process over the cap sees its allocations fail: Rust aborts with
 /// `memory allocation of N bytes failed`, C++ throws `std::bad_alloc`, the
@@ -135,7 +136,10 @@ impl MemLimit {
         }
         let mut c = Command::new("sh");
         c.arg("-c")
-            .arg(format!("ulimit -v \"$1\" || exit {}; shift; exec \"$@\"", Self::ULIMIT_FAILED))
+            .arg(format!(
+                "ulimit -c 0 2>/dev/null; ulimit -v \"$1\" || exit {}; shift; exec \"$@\"",
+                Self::ULIMIT_FAILED
+            ))
             .arg("kiln-mem-limit")
             .arg(self.mib.saturating_mul(1024).to_string())
             .arg(cmd.get_program());
@@ -165,17 +169,83 @@ fn clone_command(from: &Command, mut to: Command) -> Command {
 /// signal at once: a core dump, or a core-dump helper such as apport or
 /// systemd-coredump on a loaded host, took long enough to hit the
 /// harness's run timeout (WP-1888). The program, arguments, working
-/// directory and explicit environment are kept.
+/// directory and explicit environment are kept. When core dumps are
+/// already off in this process ([`core_dumps_off_here`]: xtask turned them
+/// off for itself at startup, [`exec_without_core_dumps`]) the child
+/// inherits that, and `cmd` is returned as a copy with no wrapper.
 pub fn without_core_dumps(cmd: &Command) -> Command {
-    if !cfg!(unix) {
+    if !cfg!(unix) || core_dumps_off_here() {
         return clone_command(cmd, Command::new(cmd.get_program()));
     }
+    no_core_wrapper(cmd)
+}
+
+/// `sh -c 'ulimit -c 0 2>/dev/null; exec "$@"' kiln-no-core <cmd...>`.
+fn no_core_wrapper(cmd: &Command) -> Command {
     let mut c = Command::new("sh");
     c.arg("-c")
         .arg("ulimit -c 0 2>/dev/null; exec \"$@\"")
         .arg("kiln-no-core")
         .arg(cmd.get_program());
     clone_command(cmd, c)
+}
+
+/// Set on the xtask that [`exec_without_core_dumps`] re-executes, so that
+/// it is tried once per run whatever the outcome.
+pub const NO_CORE_ENV: &str = "KILN_XTASK_NO_CORE";
+
+/// Turns core dumps off for this process and every process it will start
+/// (WP-2762; `spec/harness.md` "Resource limits"). Called first thing in
+/// xtask's `main`: unless they are off already ([`core_dumps_off_here`])
+/// or [`NO_CORE_ENV`] is set, the process replaces itself (same pid, same
+/// descriptors, process group and signal dispositions) with `sh -c 'ulimit
+/// -c 0 2>/dev/null; exec "$@"' kiln-no-core <this executable> <args...>`,
+/// which `exec`s xtask again with `RLIMIT_CORE` 0. Children inherit the
+/// limit, so a crashing compiler, oracle, test binary, cargo test or
+/// extents clang leaves no `core` in its working directory, whatever
+/// route started it. `setrlimit` itself needs FFI, which
+/// `#![forbid(unsafe_code)]` rules out; `CommandExt::exec` is safe. Returns
+/// only when nothing was executed (not Unix, already off, tried once, or
+/// the `exec` failed: the run then goes on with the host's setting).
+pub fn exec_without_core_dumps() {
+    #[cfg(unix)]
+    {
+        if std::env::var_os(NO_CORE_ENV).is_some() || core_dumps_off_here() {
+            return;
+        }
+        let Ok(exe) = std::env::current_exe() else { return };
+        let mut again = Command::new(exe);
+        again.args(std::env::args_os().skip(1));
+        let _ = std::os::unix::process::CommandExt::exec(&mut core_off_reexec(&again));
+    }
+}
+
+/// What [`exec_without_core_dumps`] executes in place of xtask: `again`
+/// (xtask's executable and arguments) under `ulimit -c 0`, with
+/// [`NO_CORE_ENV`] set.
+fn core_off_reexec(again: &Command) -> Command {
+    let mut c = no_core_wrapper(again);
+    c.env(NO_CORE_ENV, "1");
+    c
+}
+
+/// Is this process's soft `RLIMIT_CORE` 0? Read once from
+/// `/proc/self/limits` (`false` where it cannot be read, as off Linux).
+pub fn core_dumps_off_here() -> bool {
+    static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *OFF.get_or_init(|| {
+        std::fs::read_to_string("/proc/self/limits").is_ok_and(|l| core_limit_is_zero(&l))
+    })
+}
+
+/// The `Max core file size` row of a `/proc/<pid>/limits` text has a soft
+/// limit of 0.
+fn core_limit_is_zero(limits: &str) -> bool {
+    limits
+        .lines()
+        .find_map(|l| l.strip_prefix("Max core file size"))
+        .and_then(|rest| rest.split_whitespace().next())
+        .is_some_and(|soft| soft == "0")
 }
 
 /// `cmd` under `limit`, or a copy of it when there is none.
@@ -1055,6 +1125,142 @@ mod tests {
         assert_eq!(o.status.and_then(|s| s.signal()), Some(11), "{}", o.describe_end());
         assert_eq!(o.describe_end(), "killed by signal 11");
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The entries of `/proc/self/fd` and `/proc/self/task`: this process's
+    /// descriptors and threads.
+    #[cfg(target_os = "linux")]
+    fn fds_and_threads() -> (usize, usize) {
+        let n = |d: &str| std::fs::read_dir(d).map_or(0, Iterator::count);
+        (n("/proc/self/fd"), n("/proc/self/task"))
+    }
+
+    /// [`child_runs_keep_no_descriptors_inner`] in a process of its own:
+    /// this test binary again, one test thread (no other test opens or
+    /// closes anything meanwhile, so the counts compare exactly) and no
+    /// jobserver (2000 token waits on a shared pool took minutes).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn child_runs_keep_no_descriptors() {
+        let inner = "util::process::tests::child_runs_keep_no_descriptors_inner";
+        let o = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", inner, "--ignored", "--test-threads=1", "--nocapture"])
+            .env_remove("MAKEFLAGS")
+            .output()
+            .unwrap();
+        let out = String::from_utf8_lossy(&o.stdout);
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(o.status.success() && out.contains("1 passed"), "{out}\n{err}");
+    }
+
+    /// 2000 children started by every route of the harness's child-process
+    /// path (capped and wrapped `run`, `run_with_input`, `run_streaming`,
+    /// `run_measured`, a spawn that fails, a timeout) leave this process's
+    /// descriptor and thread counts exactly where they were: no pipe, child
+    /// handle or reader thread outlives its run (WP-2780).
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "run by child_runs_keep_no_descriptors in a process of its own"]
+    fn child_runs_keep_no_descriptors_inner() {
+        const RUNS: usize = 2000;
+        let dir = scratch("fds");
+        let rss_file = dir.join("rss.txt");
+        let cap = MemLimit::from_mib(DEFAULT_MEM_LIMIT_MIB);
+        let t = Duration::from_secs(60);
+        let one = |i: usize| match i % 8 {
+            0..=3 => {
+                let o = run(&mut limited(&without_core_dumps(&Command::new("true")), cap), t);
+                assert!(o.unwrap().success());
+            }
+            4 => {
+                let mut c = Command::new("sh");
+                c.args(["-c", "cat >/dev/null; echo err >&2"]);
+                let o = run_with_input(&mut limited(&c, cap), Some(b"input\n"), t).unwrap();
+                assert_eq!(o.stderr_str(), "err\n");
+            }
+            5 => {
+                let read = |mut p: std::process::ChildStdout| {
+                    let mut s = String::new();
+                    let _ = p.read_to_string(&mut s);
+                    s
+                };
+                let (o, s) = run_streaming(Command::new("echo").arg("x"), t, read).unwrap();
+                assert!(o.success() && s.as_deref() == Some("x\n"));
+            }
+            6 => {
+                let m =
+                    run_measured(&Command::new("true"), &RssProbe::Unavailable, &rss_file, t, cap);
+                assert!(m.unwrap().status.is_some_and(|s| s.success()));
+            }
+            _ if i % 80 == 7 => {
+                let o = run(Command::new("sleep").arg("5"), Duration::from_millis(20)).unwrap();
+                assert!(o.timed_out());
+            }
+            _ => assert!(run(&mut Command::new(dir.join("no-such-program")), t).is_err()),
+        };
+        // The first runs initialize what is set up once per process.
+        (0..8).for_each(&one);
+        let (fds, threads) = fds_and_threads();
+        (0..RUNS).for_each(&one);
+        let (fds_after, threads_after) = fds_and_threads();
+        assert_eq!(fds_after, fds, "descriptors before and after {RUNS} runs");
+        assert_eq!(threads_after, threads, "threads before and after {RUNS} runs");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// No crashing child leaves a `core` in its working directory (WP-2762):
+    /// not under [`without_core_dumps`], not under a [`MemLimit`] (every
+    /// capped compile and run), and not as a child of the xtask that
+    /// [`exec_without_core_dumps`] executes (here a shell in its place,
+    /// whose own child crashes: the limit is inherited).
+    #[cfg(unix)]
+    #[test]
+    fn crashing_children_leave_no_core() {
+        use std::os::unix::process::ExitStatusExt as _;
+        let dir = scratch("crash");
+        let crash = || {
+            let mut c = Command::new("sh");
+            c.args(["-c", "kill -SEGV $$"]).current_dir(&dir);
+            c
+        };
+        let t = Duration::from_secs(30);
+        let cap = MemLimit { mib: DEFAULT_MEM_LIMIT_MIB };
+        for mut c in [no_core_wrapper(&crash()), without_core_dumps(&crash()), cap.wrap(&crash())] {
+            let o = run(&mut c, t).unwrap();
+            assert_eq!(o.status.and_then(|s| s.signal()), Some(11), "{}", o.describe_end());
+        }
+        let mut xtask = Command::new("sh");
+        xtask
+            .args([
+                "-c",
+                "sh -c 'kill -SEGV $$'; printf '%s %s' \"$?\" \"$KILN_XTASK_NO_CORE\"; ulimit -c",
+            ])
+            .current_dir(&dir);
+        let o = run(&mut core_off_reexec(&xtask), t).unwrap();
+        assert_eq!(o.stdout_str(), "139 10\n", "{}", o.stderr_str());
+        let left: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok()?.file_name().into_string().ok())
+            .filter(|n| n == "core" || n.starts_with("core."))
+            .collect();
+        assert!(left.is_empty(), "core dumps left in {}: {left:?}", dir.display());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// `/proc/<pid>/limits`' core row: soft limit 0 or not.
+    #[test]
+    fn reads_the_core_limit() {
+        let row = |soft: &str| {
+            format!(
+                "Limit                     Soft Limit           Hard Limit           Units     \n\
+                 Max file size             unlimited            unlimited            bytes     \n\
+                 Max core file size        {soft:<20} unlimited            bytes     \n"
+            )
+        };
+        assert!(core_limit_is_zero(&row("0")));
+        assert!(!core_limit_is_zero(&row("unlimited")));
+        assert!(!core_limit_is_zero(&row("1024")));
+        assert!(!core_limit_is_zero(""));
     }
 
     /// The wrapper keeps the program's arguments (quoting included), working

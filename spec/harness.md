@@ -45,7 +45,7 @@ cargo xtask test [options] [paths...]
 exist; `tests/debuginfo` is a default root everywhere, its tests SKIP
 without gdb and lldb-19, see "Debugger tests").
 
-Exit status: **0** when there is no FAIL, XPASS, ERROR or KILLED (XFAIL and
+Exit status: **0** when there is no FAIL, XPASS, ERROR, KILLED or HOST (XFAIL and
 SKIP are allowed); **1** when there is at least one; **2** for a usage error, an
 infrastructure error (kiln build failed, compiler not runnable, scratch dir not
 creatable), or an empty test selection.
@@ -1627,9 +1627,10 @@ has an **address-space cap** (`RLIMIT_AS`), on by default:
   the bare cap.
 - **Mechanism.** `std::process::Command` has no rlimit API and the harness
   is `#![forbid(unsafe_code)]` (no `pre_exec`), so the command is run as
-  `sh -c 'ulimit -v "$1" || exit 125; shift; exec "$@"' kiln-mem-limit <KiB>
-  <program> <args...>`, with the original working directory and
-  environment. `exec` keeps the pid, so timeouts, process-group kills and
+  `sh -c 'ulimit -c 0 2>/dev/null; ulimit -v "$1" || exit 125; shift; exec
+  "$@"' kiln-mem-limit <KiB> <program> <args...>`, with the original
+  working directory and environment (core dumps go off in the same shell,
+  below). `exec` keeps the pid, so timeouts, process-group kills and
   peak-RSS measurement are unaffected, and children inherit the cap. If the
   cap cannot be set (a lower hard limit), the wrapper exits 125 and the test
   is an **ERROR**.
@@ -1646,15 +1647,32 @@ has an **address-space cap** (`RLIMIT_AS`), on by default:
     memory`.
   The decision is `util::process::out_of_memory`. A process that fails
   otherwise under the cap is judged as usual (crash, wrong output, ...).
-- **No core dumps for test binaries** (WP-1888). The `run` test's
-  binaries (the compiler's and the oracle's) run under `sh -c 'ulimit -c
-  0 2>/dev/null; exec "$@"' kiln-no-core <program> <args...>`
-  (`util::process::without_core_dumps`, inside the cap's wrapper), so a
-  binary that crashes is reported by its signal ("killed by signal N") at
-  once. Writing a core, or a core-dump helper such as apport or
-  systemd-coredump on a loaded hosted runner, had taken past the
-  timeout, and the crash read as "timed out". The compiler and oracle
-  compiles keep the host's core-dump setting.
+- **No core dumps** (WP-1888, WP-2762). No process xtask starts writes a
+  core. First thing in `main`, xtask replaces itself (same pid,
+  descriptors, process group) with `sh -c 'ulimit -c 0 2>/dev/null; exec
+  "$@"' kiln-no-core <xtask> <args...>`
+  (`util::process::exec_without_core_dumps`), unless its soft
+  `RLIMIT_CORE` is 0 already (`/proc/self/limits`) or
+  `KILN_XTASK_NO_CORE` is set (the re-executed xtask sets it, so this
+  happens once; if the `exec` fails the run goes on with the host's
+  setting). Every child inherits the limit, whatever route started it:
+  the compilers and oracles of `xtask test`, the `run` tests' binaries,
+  the cargo steps of `xtask ci` and their test binaries, the extents
+  runner's clang, the libc++, libstdc++ and GCC testsuite runners. One
+  process-wide limit rather than a wrapper per call site, because a call
+  site without the wrapper had left 12 MB `core` files in the working
+  tree (a crashing clang in `xtask extents --update-baseline`, the
+  crashing fixtures of xtask's own tests), and `setrlimit` needs FFI,
+  which `#![forbid(unsafe_code)]` rules out. Where xtask's code runs
+  without its `main` (its unit tests under plain `cargo test`), the
+  cap's wrapper above and `util::process::without_core_dumps` (`sh -c
+  'ulimit -c 0 2>/dev/null; exec "$@"' kiln-no-core <program>
+  <args...>`, around the `run` tests' binaries; a plain copy when the
+  limit is 0 already) do the same per child. A binary that crashes is
+  reported by its signal ("killed by signal N") at once: writing a core,
+  or a core-dump helper such as apport or systemd-coredump on a loaded
+  hosted runner, had taken past the timeout, and the crash read as
+  "timed out".
 - The outcome is **KILLED**, with the reason `memory limit <N> MiB` (the
   budget, without the stack allowance). The details name the process (the
   compiler, the oracle, the test binary, the oracle's binary), the cap and
@@ -1666,6 +1684,56 @@ has an **address-space cap** (`RLIMIT_AS`), on by default:
 The run header names the default cap (`mem limit: <N> MiB` or `none`).
 `cargo xtask bench` applies the same cap to its measured compiles
 (`spec/bench.md` "Resource limits").
+
+### Host errors
+
+**Cause** (WP-2780, measured on the aarch64 development container). `cargo
+xtask ci --quick` failed in bursts with EMFILE, "Too many open files (os
+error 24)": `cannot read test`, `kiln-mem-limit: 1: exec: .../kiln++: Too
+many open files`, the compiler failing to read its input, `ld` failing to
+create its output, xtask failing to list a corpus directory, and at the
+same time cargo test binaries and `rustfmt` in other steps. A rerun of the
+failed tests always passed. The harness does not leak: sampled every 3 s
+over the 8435 tests of `tests/conformance` and the `--bmi-kind 2
+--bmi-image` lane, the xtask process held 3 to 21 descriptors (about two
+pipes per running test) with no growth from start to end, its largest
+child 90 (`ld`; the per-process limit there is 524288), and the
+kernel-wide count (`/proc/sys/fs/file-nr`) stayed between 1100 and 3500. The
+processes that failed include fresh ones (`ld`, `sh`) that cannot have
+reached a per-process limit, and every failing path is on the checkout's
+file system, a virtiofs share of the VM host that the containers of
+several agents use at once; the bursts hit independent runs of different
+checkouts in the same minutes. The share's file server on the host runs
+out of descriptors and answers opens with EMFILE. Nothing in one run can
+prevent that, so the harness makes the failure honest and cheap:
+
+- A test whose result is a failure (FAIL, XPASS, ERROR, KILLED) and whose
+  details, reason or command log have a line reporting a descriptor
+  shortage (`Too many open files`, which covers ENFILE's `Too many open
+  files in system`, or `(os error 24)` / `(os error 23)`) runs once more,
+  after a pause of 5 s, in a scratch directory of its own
+  (`test::host_error`).
+- The second run's outcome is the result, with a note `[host error, run
+  again: <first run's line>]` on its result line, printed even for a PASS.
+  If the second run hits a descriptor shortage too, the status is
+  **HOST**: no verdict on the test, a failure of the run, never masked by
+  `xfail`, and its details give both runs' lines.
+- Discovery that fails with a descriptor shortage is tried once more after
+  the same pause. The module-file lanes (`--bmi-kind`) keep a test whose
+  file cannot be read when they select the tests with `module:` or
+  `header-unit:` lines (it used to be dropped without a word); its run
+  reports the error.
+- The summary counts both: `H host errors; R host retries; ` ("Output").
+- The descriptor discipline of `util::process`, which the test
+  `child_runs_keep_no_descriptors` holds over 2000 runs: every pipe of a
+  child (stdin, stdout, stderr) is owned by the run that spawned it, and
+  dropped once the child is reaped and the readers have finished; no
+  `Child`, pipe or `File` is kept in a long-lived collection (the live
+  table holds pids only); every descriptor xtask opens is close-on-exec
+  (Rust's `std` opens them so), so a child inherits only its three standard
+  streams. The jobserver is the fifo form (`MAKEFLAGS` names a path that a
+  client opens itself, "Jobserver"), so no descriptor is handed down to
+  children either.
 
 Bench budgets are the bench's own: `mem<=N` caps a measured compile's
 address space as above, and `budget-time: <ms>` (spec/bench.md
@@ -1951,7 +2019,9 @@ The outcomes are evaluated in this order:
    **KILLED** ("Resource limits"), and a broken test (missing `stdout-file`
    or `run-stdin-file`, oracle rejection, oracle hang or crash (a clang
    oracle's after its one retry, "Oracle"), I/O error)
-   is **ERROR**, both even when an `xfail` marker applies.
+   is **ERROR**, both even when an `xfail` marker applies. A failure for
+   want of descriptors on the host runs the test once more, and a second
+   one is **HOST** ("Host errors"), also never masked by `xfail`.
 5. Otherwise, a failure is **FAIL**, or **XFAIL** if an `xfail` marker
    applies. Success is **PASS**, or **XPASS** if an `xfail` marker applies.
    An XPASS counts as a failure, so the stale marker gets removed.
@@ -1968,15 +2038,20 @@ Output goes to stdout:
 - One block per result, in name order. A result line is
   `<STATUS> <name> [(<reason>)]`. With `-v`, the line ends with the elapsed time `[<secs>s]`.
 - PASS results are printed only with `-v`, unless they carry an oracle
-  advisory ("Oracle", "GCC oracle"). SKIP, XFAIL and the failure statuses are always
+  advisory ("Oracle", "GCC oracle") or were run again after a host error
+  ("Host errors"). SKIP, XFAIL and the failure statuses are always
   printed.
 - A failure result is followed by indented details (unified line diffs with
   `-expected +actual`, or `-oracle +actual`) and the commands that were run.
 - Last comes the summary:
 
 ```
-test result: ok|FAILED. P passed; F failed; X xfail; XP xpass; S skipped; E errors; K killed; [G compared with gcc; ][A advisory; ]T tests in S.SSs
+test result: ok|FAILED. P passed; F failed; X xfail; XP xpass; S skipped; E errors; K killed; [H host errors; R host retries; ][G compared with gcc; ][A advisory; ]T tests in S.SSs
 ```
+
+`H host errors; R host retries; ` appears only when a test was run again
+after a host error ("Host errors"): H is the number of HOST results, R
+the number of tests run twice (H included).
 
 `G compared with gcc; ` appears only when G > 0: the number of tests GCC
 compiled to a verdict (accepted or rejected, "GCC oracle"); a comparison
@@ -2369,7 +2444,7 @@ if the first fails, so one cannot hide the other:
 `ci` then prints one line per corpus run, `xtask ci: corpus (<run>): <line>`,
 where `<line>` is the run's summary line ("Output"), `skipped (<reason>)`, or
 `error: <message>`. **`ci` passes only if** every step of 1–2 succeeds and
-no corpus run has a FAIL, XPASS, ERROR or KILLED (XFAIL and SKIP are allowed)
+no corpus run has a FAIL, XPASS, ERROR, KILLED or HOST (XFAIL and SKIP are allowed)
 or an infrastructure error; otherwise it exits 1. The decision is
 `test::report::ci_corpus_passes`. A kiln gap is therefore recorded as
 `xfail(kiln):` (or `skip(kiln):`) with the reason, never left failing.
@@ -2961,6 +3036,17 @@ or infrastructure error. Parse errors name their line.
   arguments, working directory and environment survive the wrapper;
   `mem_limit_stops_a_hog`; `out_of_memory_signatures`;
   `kiln_stack_reservation`).
+- Descriptors and core dumps (WP-2780, WP-2762; "Host errors", "Resource
+  limits"), in `xtask/src/util/process.rs`: `child_runs_keep_no_descriptors`
+  (2000 runs by every route of the child-process path leave the process's
+  descriptor and thread counts exactly unchanged; Linux; it runs
+  `child_runs_keep_no_descriptors_inner` in a process of its own, with one
+  test thread and no jobserver), `crashing_children_leave_no_core`
+  (a crash under `without_core_dumps`, under the cap's wrapper and as a
+  child of the re-executed xtask ends by its signal and leaves no `core`),
+  `reads_the_core_limit`; in `xtask/src/test/host_error.rs`:
+  `classifies_descriptor_shortages` and `retries_once_and_reports_the_host`;
+  `host_retries_are_shown_and_counted` (report.rs).
 - Header-differential mode and `%{gcc_toolchain}` (WP-484):
   `meta_header_mode_selection` and `meta_header_directive_errors`
   (tests.rs), `gcc_install_prefix_is_four_up_from_install` and

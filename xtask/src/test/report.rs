@@ -10,10 +10,11 @@ use super::runner::{Status, TestResult, indent};
 use crate::bench::record::human_time;
 
 /// Per-status counts, how many results are advisory (the GCC oracle's
-/// comparison was dropped; `spec/harness.md` "GCC oracle"), and how many
-/// were compared with the GCC oracle.
+/// comparison was dropped; `spec/harness.md` "GCC oracle"), how many
+/// were compared with the GCC oracle, and how many were run twice after a
+/// host error (`spec/harness.md` "Host errors").
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Counts(pub BTreeMap<Status, usize>, pub usize, pub usize);
+pub struct Counts(pub BTreeMap<Status, usize>, pub usize, pub usize, pub usize);
 
 impl Counts {
     pub fn of(results: &[TestResult]) -> Self {
@@ -25,7 +26,13 @@ impl Counts {
             m,
             results.iter().filter(|r| r.advisory.is_some()).count(),
             results.iter().filter(|r| r.gcc_compared).count(),
+            results.iter().filter(|r| r.host_retry.is_some()).count(),
         )
+    }
+
+    /// Results run a second time after a host error.
+    pub fn host_retries(&self) -> usize {
+        self.3
     }
 
     /// Results the GCC oracle's verdict or output was compared with.
@@ -52,7 +59,7 @@ impl Counts {
 /// reason.
 pub fn format_result(r: &TestResult, verbose: bool) -> String {
     let mut s = String::new();
-    if r.status == Status::Pass && !verbose && r.advisory.is_none() {
+    if r.status == Status::Pass && !verbose && r.advisory.is_none() && r.host_retry.is_none() {
         return s;
     }
     let _ = write!(s, "{:<6} {}", r.status.label(), r.name);
@@ -61,6 +68,9 @@ pub fn format_result(r: &TestResult, verbose: bool) -> String {
     }
     if let Some(a) = &r.advisory {
         let _ = write!(s, " [{a}]");
+    }
+    if let Some(h) = &r.host_retry {
+        let _ = write!(s, " [host error, run again: {h}]");
     }
     if r.updated {
         s.push_str(" [updated .expected]");
@@ -164,7 +174,8 @@ fn skip_key(why: &str) -> String {
 }
 
 /// The final summary line; `A advisory; ` appears before the total only
-/// when a GCC comparison was dropped.
+/// when a GCC comparison was dropped, `H host errors; ` and `R host
+/// retries; ` only when a test failed for want of descriptors on the host.
 pub fn format_summary(counts: &Counts, total: usize, elapsed: Duration) -> String {
     let verdict = if counts.failed() { "FAILED" } else { "ok" };
     let gcc = match counts.gcc_compared() {
@@ -175,8 +186,12 @@ pub fn format_summary(counts: &Counts, total: usize, elapsed: Duration) -> Strin
         0 => String::new(),
         n => format!("{n} advisory; "),
     };
+    let host = match (counts.get(Status::Host), counts.host_retries()) {
+        (0, 0) => String::new(),
+        (h, r) => format!("{h} host errors; {r} host retries; "),
+    };
     format!(
-        "test result: {verdict}. {} passed; {} failed; {} xfail; {} xpass; {} skipped; {} errors; {} killed; {gcc}{advisory}{total} tests in {:.2}s\n",
+        "test result: {verdict}. {} passed; {} failed; {} xfail; {} xpass; {} skipped; {} errors; {} killed; {host}{gcc}{advisory}{total} tests in {:.2}s\n",
         counts.get(Status::Pass),
         counts.get(Status::Fail),
         counts.get(Status::XFail),
@@ -217,11 +232,11 @@ impl CorpusOutcome {
         m.insert(Status::Pass, passed);
         m.insert(Status::Fail, failed);
         m.insert(Status::Skip, total.saturating_sub(passed + failed));
-        Self::Ran { counts: Counts(m, 0, 0), total, elapsed }
+        Self::Ran { counts: Counts(m, 0, 0, 0), total, elapsed }
     }
 
     /// Does this run let `ci` pass? A run passes when it has no FAIL, XPASS,
-    /// ERROR or KILLED (XFAIL and SKIP are allowed); a skipped run passes (the
+    /// ERROR, KILLED or HOST (XFAIL and SKIP are allowed); a skipped run passes (the
     /// caller decides which runs may be skipped); an infrastructure error
     /// fails.
     pub fn passes(&self) -> bool {
@@ -386,6 +401,7 @@ mod tests {
             updated: false,
             advisory: None,
             gcc_compared: false,
+            host_retry: None,
             elapsed: Duration::ZERO,
         }
     }
@@ -429,6 +445,36 @@ mod tests {
         );
         assert!(Counts::of(&[r(Status::XPass)]).failed());
         assert!(Counts::of(&[r(Status::Error)]).failed());
+    }
+
+    /// A test run again after a host error is printed even when it passed,
+    /// with the first run's line; HOST fails the run; the summary counts
+    /// both (spec/harness.md "Host errors").
+    #[test]
+    fn host_retries_are_shown_and_counted() {
+        let mut p = r(Status::Pass);
+        p.host_retry = Some("cannot read test: Too many open files (os error 24)".into());
+        assert_eq!(
+            format_result(&p, false),
+            "PASS   tests/x.cpp [host error, run again: cannot read test: Too many open files (os error 24)]\n"
+        );
+        let c = Counts::of(&[p.clone(), r(Status::Pass)]);
+        assert!(!c.failed());
+        assert_eq!(
+            format_summary(&c, 2, Duration::from_millis(10)),
+            "test result: ok. 2 passed; 0 failed; 0 xfail; 0 xpass; 0 skipped; 0 errors; 0 killed; 0 host errors; 1 host retries; 2 tests in 0.01s\n"
+        );
+        let mut h = r(Status::Host);
+        h.host_retry = p.host_retry.clone();
+        assert!(
+            format_result(&h, false).starts_with("HOST   tests/x.cpp [host error, run again: ")
+        );
+        let c = Counts::of(&[p, h]);
+        assert!(c.failed());
+        assert!(
+            format_summary(&c, 2, Duration::ZERO)
+                .contains("; 0 errors; 0 killed; 1 host errors; 2 host retries; ")
+        );
     }
 
     #[test]
