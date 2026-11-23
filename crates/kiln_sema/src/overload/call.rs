@@ -469,6 +469,7 @@ impl Sema<'_, '_> {
             && let Some(e) =
                 self.implicit_member_template_id(name, cands, naming, nns, explicit, loc)
         {
+            self.keep_template_id_end(ule, e);
             let Some(x) = self.member_overload(e) else {
                 // `this` is type-dependent: resolved at instantiation.
                 return ControlFlow::Break(Some(e));
@@ -927,13 +928,31 @@ impl Sema<'_, '_> {
         e
     }
 
-    /// The `>` closing the template-id `ule` names, kept on the reference
-    /// `e` resolved from it (clang's `getEndLoc` of the reference).
+    /// The last token of the name `ule` (a template-id's `>`, an
+    /// operator name's last token), kept on the reference `e` resolved
+    /// from it (clang's `getEndLoc` of the reference), and for a member
+    /// access through an implicit `this` the qualifier's begin
+    /// (spec/ast.md §21).
     pub(crate) fn keep_template_id_end(&mut self, ule: ExprId, e: ExprId) {
-        if let Some(end) = self.ast.exprs.end_loc(ule)
-            && matches!(self.ast.exprs.get(e).kind(), ExprKind::DeclRefExpr | ExprKind::MemberExpr)
-        {
+        let kind = self.ast.exprs.get(e).kind();
+        if !matches!(
+            kind,
+            ExprKind::DeclRefExpr | ExprKind::MemberExpr | ExprKind::CXXDependentScopeMemberExpr
+        ) {
+            return;
+        }
+        if let Some(end) = self.ast.exprs.end_loc(ule) {
             self.set_template_id_end(e, end);
+        }
+        if kind != ExprKind::DeclRefExpr
+            && matches!(
+                self.ast.exprs.get(ule).kind(),
+                ExprKind::MemberExpr | ExprKind::UnresolvedLookupExpr
+            )
+            && let Some(&b) = self.ast.templates.expr_begin.get(ule)
+            && self.ast.templates.expr_begin.get(e).is_none()
+        {
+            let _ = self.ast.templates.expr_begin.insert(e, b);
         }
     }
 }

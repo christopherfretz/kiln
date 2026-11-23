@@ -818,6 +818,17 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   it reaches work an earlier exhaustion stopped. New
   `RunError::is_host()`: an unknown kind is kiln's failure of the run,
   never the host's.
+- More expressions have a written extent for tooling clients (WP-2350..
+  WP-2353, spec/ast.md §21): a dependent template-id keeps its `>` and an
+  operator-function name its end (`this->f<T>`, `T::template v<int>`,
+  `operator==(a, b)`, `x.operator()<1>`); a qualified name through an
+  implicit `this` (`B::f`) and a qualified concept-id (`ns::C<T>`) keep
+  their qualifier's begin; a pseudo-destructor keeps the end of its type
+  (`p->~T`), a designated initializer its designator (`.x = 1`), a
+  parenthesized aggregate initialization its parentheses (`S s(1, 2)`);
+  and a substituted template argument maps to the parameter's name. The
+  locations live in the cold maps only; a designator keeps its `.`, so
+  PCH snapshots change format (`FORMAT_VERSION` 153).
 
 - Breaking, for tooling clients (WP-2411, spec/eval-session.md §2):
   `with_eval_session` takes its command line as words with no `@file`

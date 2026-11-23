@@ -837,7 +837,7 @@ impl Sema<'_, '_> {
             .map(|x| {
                 let (designator, x) = if ex.get(x).kind() == ExprKind::DesignatedInitExpr {
                     let ds = ex.designators(x).iter().map(|d| match *d {
-                        AstDesignator::Field { name, loc } => Designator::Field(name, loc),
+                        AstDesignator::Field { name, loc } => Designator::Field(name, loc, loc),
                         AstDesignator::Index { index, loc } => Designator::Index(index, loc),
                         AstDesignator::Range { first, last, loc, ellipsis } => {
                             Designator::Range(first, last, loc, ellipsis)

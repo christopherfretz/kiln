@@ -1152,14 +1152,17 @@ impl Sema<'_, '_> {
         self.builder().unresolved_lookup_in(name, &decls, false, None, Some(list), dep, loc)
     }
 
-    /// The qualified function or variable template-id `e` named at `loc`
-    /// begins at its qualifier `begin` (clang's `OverloadExpr::getBeginLoc`,
-    /// `DeclRefExpr::getBeginLoc`).
+    /// The qualified function or variable template-id or concept-id `e`
+    /// named at `loc` begins at its qualifier `begin` (clang's
+    /// `OverloadExpr::getBeginLoc`, `DeclRefExpr::getBeginLoc`,
+    /// `ConceptSpecializationExpr::getBeginLoc`).
     pub fn set_template_id_begin(&mut self, e: ExprId, begin: Loc, loc: Loc) {
         if begin != loc
             && matches!(
                 self.ast.exprs.get(e).kind(),
-                ExprKind::UnresolvedLookupExpr | ExprKind::DeclRefExpr
+                ExprKind::UnresolvedLookupExpr
+                    | ExprKind::DeclRefExpr
+                    | ExprKind::ConceptSpecializationExpr
             )
         {
             let _ = self.ast.templates.expr_begin.insert(e, begin);
@@ -2099,17 +2102,25 @@ impl Sema<'_, '_> {
                 let ds: Vec<kiln_ast::expr::Designator> =
                     it.designator.iter().map(|d| self.designator_ast(d)).collect();
                 let loc = it.designator[0].loc();
+                // Its first token (spec/ast.md §21): the first
+                // designator's `.` or `[`, a GNU `name:`'s name.
+                let begin = match it.designator[0] {
+                    crate::init::Designator::Field(_, _, dot) => dot,
+                    _ => loc,
+                };
                 // A designated pack expansion `.x = u...` is the
                 // expansion of the designated clause (clang parses the
                 // `...` after the whole designation).
-                match crate::templ::pack::expr_pattern(self, e) {
-                    Some(pat) => {
-                        let ellipsis = self.ast.exprs.get(e).loc();
-                        let d = self.builder().designated_init(&ds, pat, loc);
-                        let keep = self.clang_compat >= 22;
-                        self.builder().pack_expansion_expr(d, ellipsis, keep)
-                    }
-                    None => self.builder().designated_init(&ds, e, loc),
+                if let Some(pat) = crate::templ::pack::expr_pattern(self, e) {
+                    let ellipsis = self.ast.exprs.get(e).loc();
+                    let d = self.builder().designated_init(&ds, pat, loc);
+                    let _ = self.ast.templates.expr_begin.insert(d, begin);
+                    let keep = self.clang_compat >= 22;
+                    self.builder().pack_expansion_expr(d, ellipsis, keep)
+                } else {
+                    let d = self.builder().designated_init(&ds, e, loc);
+                    let _ = self.ast.templates.expr_begin.insert(d, begin);
+                    d
                 }
             };
             inits.push(e);

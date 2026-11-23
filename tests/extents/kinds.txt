@@ -63,3 +63,12 @@ quirk tests/conformance/class.copy.elision/no-elide-constructors-run.cpp:1315 cl
 # A base initializer `B{...}` that picks an initializer-list constructor:
 # clang 19 gives the construction the range of the type name alone.
 quirk tests/conformance/templates/ctad/over.match.class.deduct-init-list.cpp:1067 clang's initializer-list construction of a base ends at its name
+# A dependent-scope operator name `X::operator()`, `Base::operator=`:
+# clang 19 ends the DependentScopeDeclRefExpr (and an `&` of it) at the
+# `operator` keyword, not at the operator's last token.
+quirk tests/conformance/expr.prim.req.general/address-of-overload-requirement.cpp:509 clang's `&X::operator()` ends at `operator`
+quirk tests/conformance/expr.prim.req.general/address-of-overload-requirement.cpp:510 clang's dependent `X::operator()` ends at `operator`
+quirk tests/conformance/namespace.udecl/hide-member-template-chain.cpp:1074 clang's dependent `Base::operator=` ends at `operator`
+quirk tests/conformance/namespace.udecl/hide-member-template-chain.cpp:1335 clang's dependent `Base::operator=` ends at `operator`
+quirk tests/conformance/namespace.udecl/hide-member-template-chain.cpp:1432 clang's dependent `Base::operator=` ends at `operator`
+quirk tests/conformance/namespace.udecl/hide-member-template-instantiated.cpp:829 clang's dependent `Base::operator=` ends at `operator`

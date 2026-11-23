@@ -3805,6 +3805,19 @@ This section is the promise kiln makes, and where it makes none.
   keeps the `__extension__`, `__builtin_choose_expr` or `_Generic`
   around its callee, as clang converts the object in place (before,
   only parentheses were kept, and the call began at the member).
+- WP-2350..WP-2353 record more in the same two cold maps (the
+  `end_loc` side table and `templates.expr_begin`), only where the
+  location is not the node's own: the last token of an id-expression or
+  member designator that is not one token (an operator- or
+  conversion-function-id, a dependent template-id's `>`, a
+  pseudo-destructor's destroyed type, always), recorded by the parser
+  after the name (`Sema::keep_name_extent`) and kept on the reference or
+  member access the call resolves it to; the qualifier begin of a member
+  access through an implicit `this` and of a qualified concept-id; the
+  `.` or `[` a `DesignatedInitExpr` begins with; and the `(` or the cast
+  a `CXXParenListInitExpr` begins with (`Sema::keep_paren_list_begin`).
+  Sema's `init::Designator::Field` keeps its `.`, which changes the PCH
+  snapshot schema (no node or image change).
 
 ### 21.2 Decisions
 
@@ -3830,16 +3843,30 @@ This section is the promise kiln makes, and where it makes none.
   is its object.
 - **Brace elision**: a list whose braces were elided begins at its first
   written initializer and ends at its last; one a designator opens
-  (`.a.y = 3`'s list of `a`) begins inside the designator, whose parts
+  (`.a.y = 3`'s list of `a`) begins inside the designator, at a part
   the tree does not keep, and is `None` (`ExprFlags::DESIGNATED`).
+- **Designated clauses** (a `DesignatedInitExpr`, kept in a dependent
+  list): from the first designator's `.` or `[` (a GNU `name:`'s name)
+  to the initializer's last token.
+- **Parenthesized aggregate initialization** (`CXXParenListInitExpr`):
+  from its `(` (`S s(1, 2)`, `S(1, 2)`, `new S(1, 2)`, `m(1, 2)` in a
+  mem-initializer) or, made by a cast, from the cast's first token
+  (`static_cast<S>(1)`, `(S)1`), as clang's `getBeginLoc`, to its stored
+  end (the `)`; a C-style cast's operand). One whose begin was not
+  recorded is `None`.
+- **Substituted template arguments**: a `SubstNonTypeTemplateParmExpr`
+  (the value of a non-type template argument in an instantiated
+  member's initializer) is the one token of the parameter's name it
+  replaces.
 - **Rewritten operators** (`a != b` as `!(a == b)`, a comparison
   through `<=>`): the `CXXRewrittenBinaryOperator` has the written
   extent, from its first written operand to its last; the nodes built
   inside it are ordinary nodes, whose implicit parts are `None`.
 - **Implicit-this member access** (`x` in a member function) begins at
-  the member's name; with a qualifier (`B::x`), whose begin the tree
-  does not keep, it is `None`, as is a qualified `DeclRefExpr` whose
-  begin was not recorded.
+  the member's name; with a qualifier (`B::x`, `T::x` naming a member of
+  a dependent base) at the qualifier, whose begin the parser records; a
+  qualified access or `DeclRefExpr` whose begin was not recorded is
+  `None`.
 - First token: the first operand for binary, conditional, subscript,
   call, member-call, postfix and overloaded non-prefix operators, and
   the pattern of a pack expansion or a pack index; the
@@ -3854,10 +3881,12 @@ This section is the promise kiln makes, and where it makes none.
   parentheses are a `ParenExpr`); the list of a compound literal; the
   node itself for one-token literals, `this`, postfix operators, the
   `...` of a pack expansion and an ext-vector accessor; the last
-  piece of a concatenated string literal; a plain identifier name. A
-  name that is an operator, conversion or destructor name, or that has
-  template arguments (a variable template specialization always has),
-  with no stored end: `None`.
+  piece of a concatenated string literal; a plain identifier name; the
+  stored last token of a name that is not one token (an operator,
+  conversion or destructor name, template arguments) and of a
+  pseudo-destructor's destroyed type (`p->~T`, `x.~decltype(x)`). Such
+  a name with no stored end (a variable template specialization always
+  has template arguments): `None`.
 
 ### 21.3 Kinds that may be `None`
 
@@ -3875,40 +3904,37 @@ Two reasons recur, named here once:
 - **(W) a wrapper of a `None`**: an implicit wrapper (21.2) whose written
   node has none.
 
-The counts are stage 1's at WP-2327 (`None` / all nodes of the kind);
+The counts are stage 1's at WP-2350 (`None` / all nodes of the kind);
 the baseline, not this table, is the gate.
 
 | Kind | `None` | Reasons |
 |---|---|---|
 | `ArrayInitIndexExpr`, `ArrayInitLoopExpr` | 15/15 each | nothing written: an array member's copy in an implicit or defaulted copy |
 | `ArraySubscriptExpr` | 138/1522 | M; the element accesses of a defaulted comparison |
-| `BinaryOperator` | 11053/27430 | M (most: test macros over comparisons); a range-`for`'s `__begin != __end`; a defaulted comparison's operations |
+| `BinaryOperator` | 11038/27448 | M (most: test macros over comparisons); a range-`for`'s `__begin != __end`; a defaulted comparison's operations |
 | `CStyleCastExpr` | 623/2112 | M |
-| `CXXBindTemporaryExpr`, `MaterializeTemporaryExpr`, `ExprWithCleanups`, `ConstantExpr`, `ImplicitCastExpr` | 2294/2928, 2430/4617, 1436/3263, 9/1180, 8940/56488 | W; M |
-| `CXXBoolLiteralExpr`, `CXXNullPtrLiteralExpr`, `GNUNullExpr`, `FloatingLiteral`, `IntegerLiteral`, `StringLiteral` | 417/1912, 1/561, 1/54, 152/1029, 9938/39099, 344/2919 | M |
-| `CXXConstructExpr` | 3860/6304 | M; a default construction (`S s;`, an element or member with no initializer): nothing written |
+| `CXXBindTemporaryExpr`, `MaterializeTemporaryExpr`, `ExprWithCleanups`, `ConstantExpr`, `ImplicitCastExpr` | 2294/2930, 2430/4618, 1434/3265, 9/1180, 8891/56549 | W; M |
+| `CXXBoolLiteralExpr`, `CXXNullPtrLiteralExpr`, `GNUNullExpr`, `FloatingLiteral`, `IntegerLiteral`, `StringLiteral` | 417/1912, 1/561, 1/54, 152/1029, 9938/39112, 344/2919 | M |
+| `CXXConstructExpr` | 3862/6314 | M; a default construction (`S s;`, an element or member with no initializer): nothing written |
 | `CXXDefaultArgExpr`, `CXXDefaultInitExpr` | 352/352, 522/522 | nothing written: the parameter's or member's default |
-| `CXXDependentScopeMemberExpr` | 136/511 | M; a member template-id (`this->f<T>`, whose `>` the tree does not keep); a qualified member (`this->B::f`) through an implicit `this`; an operator name (`x.operator()<1>`) |
+| `CXXDependentScopeMemberExpr` | 54/512 | M; a member named by a dependent using-declarator (`using T::f;` then `f()`: the qualifier is the declarator's, not written at the name); an implicit `this->operator T` (a conversion-function-id naming a dependent type) |
 | `CXXFoldExpr` | 5/151 | the fold of a constrained pack (`C... Ts`, 21.2): no parentheses written |
-| `CXXFunctionalCastExpr`, `CXXUnresolvedConstructExpr`, `CXXStaticCastExpr`, `CXXNoexceptExpr`, `CXXThrowExpr`, `LambdaExpr`, `OffsetOfExpr`, `TypeTraitExpr`, `UnaryExprOrTypeTraitExpr`, `CompoundAssignOperator` | 2492/5382, 94/495, 105/624, 29/171, 16/229, 45/970, 12/85, 68/1760, 141/1852, 256/1148 | M (`CXXStaticCastExpr`: one in an implicit member's body) |
-| `CXXMemberCallExpr`, `CallExpr`, `MemberExpr`, `DeclRefExpr` | 2728/4801, 1483/12748, 4510/12276, 6316/45673 | M; the calls and names a coroutine, a range-`for`, a structured binding or a defaulted function makes (promise, awaiter, `begin`/`end`, `get`); the `operator()` a lambda call names; a qualified name through an implicit `this` (`B::x`) or with an unrecorded qualifier begin; a name with template arguments whose `>` is not kept |
+| `CXXFunctionalCastExpr`, `CXXUnresolvedConstructExpr`, `CXXStaticCastExpr`, `CXXNoexceptExpr`, `CXXThrowExpr`, `LambdaExpr`, `OffsetOfExpr`, `TypeTraitExpr`, `UnaryExprOrTypeTraitExpr`, `CompoundAssignOperator` | 2492/5382, 94/496, 105/624, 29/171, 16/229, 45/970, 12/85, 68/1760, 141/1855, 256/1150 | M (`CXXStaticCastExpr`: one in an implicit member's body) |
+| `CXXMemberCallExpr`, `CallExpr`, `MemberExpr`, `DeclRefExpr` | 2710/4809, 1472/12766, 4351/12292, 6272/45728 | M; the calls and names a coroutine, a range-`for`, a structured binding or a defaulted function makes (promise, awaiter, `begin`/`end`, `get`); the `operator()` a lambda call names; a conversion function's implicit call; a qualified name of a member without an object (`&B::f`, a static `B::s<0>` through an implicit `this`): its qualifier begin is not recorded |
 | `CXXOperatorCallExpr` | 73/1197 | M; a range-`for`'s `++__begin`/`*__begin` and a defaulted comparison's operations on class iterators and members |
-| `CXXParenListInitExpr` | 71/71 | the parenthesized aggregate initialization of a variable (`S s(1, 2)`) or a cast (`static_cast<int[3]>(42)`): the parentheses belong to the declarator or the cast, which the node does not keep |
-| `CXXPseudoDestructorExpr` | 85/85 | the end of the destroyed type (`p->~T`, `x.~decltype(x)`) is not kept |
+| `CXXParenListInitExpr` | 3/71 | the parenthesized aggregate initialization of an array `new` (`new int[](1, 2, 3)`) or of an element of a nested array (`R[2][2]({R(4)})`): the parentheses are not kept |
 | `CXXStdInitializerListExpr` | 2/71 | W (a list sema builds) |
-| `CXXThisExpr` | 2515/2918 | an implicit `this`; M |
+| `CXXThisExpr` | 2517/2921 | an implicit `this`; M |
 | `CoawaitExpr` | 48/58 | an implicit `co_await` (an initial or final suspend point) |
-| `ConceptSpecializationExpr` | 142/761 | a type-constraint's immediately-declared constraint (`C<X> T` is `C<T, X>`): not written as an expression; a qualified concept-id whose qualifier begin is not recorded; M |
+| `ConceptSpecializationExpr` | 125/761 | a type-constraint's immediately-declared constraint (`C<X> T` is `C<T, X>`): not written as an expression; M |
 | `ConditionalOperator` | 239/1025 | M; a defaulted comparison's operations |
-| `DependentScopeDeclRefExpr`, `UnresolvedLookupExpr` | 58/304, 261/651 | M; a template-id whose `>` the tree does not keep (`T::template v<int>`); an operator name (`operator==(a, b)`) |
-| `DesignatedInitExpr`, `DesignatedInitUpdateExpr` | 48/48, 19/19 | the designator's parts are not kept (21.2) |
+| `DependentScopeDeclRefExpr`, `UnresolvedLookupExpr` | 34/304, 249/651 | M; an `UnresolvedLookupExpr` of a dependent operator (`m[is...]`, an operator lookup at instantiation): no name written |
+| `DesignatedInitUpdateExpr` | 19/19 | the update of an earlier initializer by a later designator (`{.a = x, .a.b = 1}`): not mapped |
 | `ImplicitValueInitExpr`, `NoInitExpr`, `OpaqueValueExpr` | 861/861, 26/26, 117/117 | nothing written |
 | `InitListExpr` | 398/4357 | a list sema builds for an element or member with no initializer (at the enclosing `}`); a list a designator opens; M |
-| `PackExpansionExpr` | 5/93 | its pattern has none (an expansion of a braced construction) |
 | `ParenExpr` | 9412/11054 | M (the parentheses of a macro body, `#define F(x) (x)`) |
 | `PseudoObjectExpr` | 5/5 | the operations a defaulted comparison makes |
-| `SubstNonTypeTemplateParmExpr` | 10/10 | the value of a template argument in an instantiated member's initializer: written as the parameter's name, not mapped |
-| `UnaryOperator` | 1894/7587 | M; a range-`for`'s `++__begin` and `*__begin` |
+| `UnaryOperator` | 1887/7590 | M; a range-`for`'s `++__begin` and `*__begin` |
 
 ### 21.4 The dump (`-fkiln-dump-expr-extents`)
 

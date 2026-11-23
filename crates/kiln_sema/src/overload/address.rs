@@ -1242,6 +1242,7 @@ impl Sema<'_, '_> {
             }
             self.resolve_written_ref(x, d, Some(f));
             let r = self.finish_member_winner(&m, d, f, loc);
+            self.keep_template_id_end(x, r);
             return Some(self.rebuild_parens(e, r));
         }
         if !complain {

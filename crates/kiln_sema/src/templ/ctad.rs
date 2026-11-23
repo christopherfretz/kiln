@@ -1153,7 +1153,7 @@ impl Sema<'_, '_> {
                 if !braced {
                     break;
                 }
-                let Designator::Field(name, _) = *d else { return None };
+                let Designator::Field(name, ..) = *d else { return None };
                 if item.designator.len() > 1 {
                     return None;
                 }

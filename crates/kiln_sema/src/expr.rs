@@ -583,6 +583,42 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Records the written extent of the name `e` an id-expression or a
+    /// member designator formed (spec/ast.md §21, WP-2350, WP-2351):
+    /// `last`, its last token, when that is not its own location (an
+    /// operator- or conversion-function-id, a template-id, a destroyed
+    /// type), and `begin`, where an id-expression's qualifier begins,
+    /// for a member access through an implicit `this` (`B::f` in a
+    /// member function). Nothing is recorded for a one-token name.
+    pub fn keep_name_extent(&mut self, e: ExprId, begin: Option<Loc>, last: Loc) {
+        let n = *self.ast.exprs.get(e);
+        match n.kind() {
+            ExprKind::DeclRefExpr
+            | ExprKind::UnresolvedLookupExpr
+            | ExprKind::DependentScopeDeclRefExpr => {}
+            ExprKind::MemberExpr | ExprKind::CXXDependentScopeMemberExpr => {
+                // An id-expression naming a member has an implicit object.
+                if let Some(b) = begin
+                    && b != n.loc()
+                    && b.is_valid()
+                    && self.ast.templates.expr_begin.get(e).is_none()
+                {
+                    let _ = self.ast.templates.expr_begin.insert(e, b);
+                }
+            }
+            // `p->~T`, `x.~decltype(x)`: its destroyed type's last token,
+            // which may be its own location.
+            ExprKind::CXXPseudoDestructorExpr => {
+                self.set_template_id_end(e, last);
+                return;
+            }
+            _ => return,
+        }
+        if last != n.loc() {
+            self.set_template_id_end(e, last);
+        }
+    }
+
     // -- full-expressions --------------------------------------------------------
 
     /// The end of a full-expression ([intro.execution]/5): resolves the
@@ -7724,6 +7760,7 @@ impl Sema<'_, '_> {
                 // no-op cast of the initialized prvalue, as is the result
                 // of a conversion function (CWG2327).
                 if self.ast.exprs.get(x).kind() == ExprKind::ImplicitCastExpr {
+                    self.keep_paren_list_begin(x, loc);
                     self.mark_explicit(x, e);
                     return self.explicit_cast(style, CastKind::NoOp, x, ty, loc, rparen);
                 }
@@ -7734,6 +7771,9 @@ impl Sema<'_, '_> {
                     return self.recover(ty, &[x], loc);
                 }
                 let kind = if self.ast.exprs.get(x).kind() == ExprKind::CXXParenListInitExpr {
+                    // The cast of one operand begins it, `T(a)` too, as
+                    // clang (spec/ast.md §21).
+                    self.keep_paren_list_begin(x, loc);
                     CastKind::NoOp
                 } else {
                     CastKind::ConstructorConversion
