@@ -1,0 +1,60 @@
+11:64-11:65  type  'V' -> V@11:46 in=A@11:8
+12:65-12:66  type  'V' -> V@12:47 in=B@12:8
+13:65-13:66  nns  'Y' -> Y@13:26 in=Pair@13:36
+13:68-13:72  type  'type' -> (dependent) q=13:65 in=Pair@13:36
+13:68-13:72  type  'type' -> B::type@12:18 spec=Pair<A, B>@13:36
+15:36-15:37  type  'T' -> T@14:17 in=Box::conv@15:48
+15:39-15:40  type  'U' -> U@15:19 in=Box::conv@15:48
+15:31-15:35  nns  'Pair' -> Pair@13:36 in=Box::conv@15:48
+15:43-15:47  type  'type' -> (dependent) q=15:31 in=Box::conv@15:48
+15:43-15:47  type  'type' -> Pair<A, B>::type@13:49 spec=Box<A>::conv<B>@15:48
+15:59-15:60  type  'U' -> U@15:19 in=(anonymous)@15:62
+16:14-16:15  nns  'U' -> U@15:19 in=Box::r@16:36
+16:33-16:34  type  'T' -> T@14:17 in=Box::r@16:36
+16:26-16:32  template  'rebind' -> (dependent) q=16:14 in=Box::r@16:36
+16:26-16:32  template  'rebind' -> B::rebind@12:56 spec=Box<A>::conv<B>@15:48
+17:21-17:22  nns  'T' -> T@14:17 in=Box::conv@15:48
+17:24-17:28  type  'type' -> (dependent) q=17:21 in=Box::conv@15:48
+17:24-17:28  type  'type' -> A::type@11:18 spec=Box<A>::conv<B>@15:48
+17:36-17:37  expr  'r' -> Box::r@16:36 in=Box::conv@15:48
+20:34-20:35  type  'T' -> T@20:17 in=(anonymous)@20:37
+21:30-21:31  type  'U' -> U@21:21 in=(anonymous)@21:33
+22:14-22:15  nns  'U' -> U@21:21 in=(lambda at tests/conformance/written_refs/inst-rebuilt.cpp:21:12)::v@22:22
+22:17-22:21  type  'type' -> (dependent) q=22:14 in=(lambda at tests/conformance/written_refs/inst-rebuilt.cpp:21:12)::v@22:22
+22:17-22:21  type  'type' -> B::type@12:18 spec=lam(const A &)::(lambda)::operator()<B>@21:12
+23:19-23:20  type  'T' -> T@20:17 in=(lambda at tests/conformance/written_refs/inst-rebuilt.cpp:21:12)::w@23:31
+23:22-23:23  type  'U' -> U@21:21 in=(lambda at tests/conformance/written_refs/inst-rebuilt.cpp:21:12)::w@23:31
+23:14-23:18  nns  'Pair' -> Pair@13:36 in=(lambda at tests/conformance/written_refs/inst-rebuilt.cpp:21:12)::w@23:31
+23:26-23:30  type  'type' -> (dependent) q=23:14 in=(lambda at tests/conformance/written_refs/inst-rebuilt.cpp:21:12)::w@23:31
+23:26-23:30  type  'type' -> Pair<A, B>::type@13:49 spec=lam(const A &)::(lambda)::operator()<B>@21:12
+24:14-24:15  nns  'U' -> U@21:21 in=(lambda at tests/conformance/written_refs/inst-rebuilt.cpp:21:12)::r@24:36
+24:33-24:34  type  'T' -> T@20:17 in=(lambda at tests/conformance/written_refs/inst-rebuilt.cpp:21:12)::r@24:36
+24:26-24:32  template  'rebind' -> (dependent) q=24:14 in=(lambda at tests/conformance/written_refs/inst-rebuilt.cpp:21:12)::r@24:36
+24:26-24:32  template  'rebind' -> B::rebind@12:56 spec=lam(const A &)::(lambda)::operator()<B>@21:12
+25:18-25:19  expr  'v' -> (lambda at tests/conformance/written_refs/inst-rebuilt.cpp:21:12)::v@22:22 in=lam(const type-parameter-0-0 &)::(lambda)::operator()@21:12
+25:22-25:23  expr  'w' -> (lambda at tests/conformance/written_refs/inst-rebuilt.cpp:21:12)::w@23:31 in=lam(const type-parameter-0-0 &)::(lambda)::operator()@21:12
+25:33-25:34  expr  'r' -> (lambda at tests/conformance/written_refs/inst-rebuilt.cpp:21:12)::r@24:36 in=lam(const type-parameter-0-0 &)::(lambda)::operator()@21:12
+28:23-28:24  expr  'x' -> x@27:20 in=(lambda at tests/conformance/written_refs/inst-rebuilt.cpp:27:12)::y@28:32
+28:27-28:31  type  'type' -> (dependent) in=(lambda at tests/conformance/written_refs/inst-rebuilt.cpp:27:12)::y@28:32
+28:27-28:31  type  'type' -> A::type@11:18 spec=lam(const A &)::(lambda)::operator()<A>@27:12
+28:27-28:31  type  'type' -> B::type@12:18 spec=lam(const A &)::(lambda)::operator()<B>@27:12
+29:23-29:24  expr  'x' -> x@27:20 in=(lambda at tests/conformance/written_refs/inst-rebuilt.cpp:27:12)::z@29:46
+29:43-29:44  type  'T' -> T@20:17 in=(lambda at tests/conformance/written_refs/inst-rebuilt.cpp:27:12)::z@29:46
+29:36-29:42  template  'rebind' -> (dependent) in=(lambda at tests/conformance/written_refs/inst-rebuilt.cpp:27:12)::z@29:46
+29:36-29:42  template  'rebind' -> A::rebind@11:55 spec=lam(const A &)::(lambda)::operator()<A>@27:12
+29:36-29:42  template  'rebind' -> B::rebind@12:56 spec=lam(const A &)::(lambda)::operator()<B>@27:12
+30:18-30:19  expr  'y' -> (lambda at tests/conformance/written_refs/inst-rebuilt.cpp:27:12)::y@28:32 in=lam(const type-parameter-0-0 &)::(lambda)::operator()@27:12
+30:29-30:30  expr  'z' -> (lambda at tests/conformance/written_refs/inst-rebuilt.cpp:27:12)::z@29:46 in=lam(const type-parameter-0-0 &)::(lambda)::operator()@27:12
+32:10-32:11  expr  'f' -> f@21:8 in=lam@20:24
+32:12-32:13  type  'B' -> B@12:8 in=lam@20:24
+32:19-32:20  expr  'g' -> g@27:8 in=lam@20:24
+32:21-32:22  type  'A' -> A@11:8 in=lam@20:24
+32:28-32:29  expr  'g' -> g@27:8 in=lam@20:24
+32:30-32:31  type  'B' -> B@12:8 in=lam@20:24
+34:17-34:18  type  'A' -> A@11:8 in=b@34:20
+34:13-34:16  template  'Box' -> Box@14:27 in=b@34:20
+34:35-34:36  expr  'b' -> b@34:20 in=run@34:5
+34:37-34:41  member  'conv' -> Box<A>::conv<B>@15:48 found=Box<A>::conv@15:48 in=run@34:5
+34:42-34:43  type  'B' -> B@12:8 in=run@34:5
+34:49-34:52  expr  'lam' -> lam<A>@20:24 found=lam@20:24 in=run@34:5 how=both adl-ns=:: adl-cls=A@11:8
+34:53-34:54  type  'A' -> A@11:8 in=run@34:5

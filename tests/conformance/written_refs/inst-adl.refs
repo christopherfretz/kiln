@@ -2,7 +2,7 @@
 16:40-16:41  type  'T' -> T@16:17 in=b@16:43
 17:3-17:10  expr  'swap_in' -> (dependent) in=exchange@16:25
 17:3-17:10  expr  'swap_in' -> lib::swap_in@24:6 spec=exchange<lib::Item>@16:25 how=adl adl-ns=lib@20:11 adl-cls=lib::Item@21:8
-17:3-17:10  expr  'swap_in' -> other::swap_in<Item>@29:25 found=other::swap_in@29:25 spec=exchange<other::Thing<lib::Item>>@16:25 how=adl adl-ns=other@27:11,lib@20:11 adl-cls=other::Thing@28:27,lib::Item@21:8
+17:3-17:10  expr  'swap_in' -> other::swap_in<lib::Item>@29:25 found=other::swap_in@29:25 spec=exchange<other::Thing<lib::Item>>@16:25 how=adl adl-ns=other@27:11,lib@20:11 adl-cls=other::Thing@28:27,lib::Item@21:8
 17:3-17:10  expr  'swap_in' -> swap_in@14:6 spec=exchange<int>@16:25 adl-ns=
 17:11-17:12  expr  'a' -> a@16:37 in=exchange@16:25
 17:14-17:15  expr  'b' -> b@16:43 in=exchange@16:25

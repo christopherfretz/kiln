@@ -30,6 +30,43 @@ struct AnnotMix {
     reported: bool,
 }
 
+/// True for the thread-safety attributes whose GNU spelling clang parses
+/// late (its `LateAttrParseStandard`): their arguments are expressions
+/// naming capabilities (clang's thread-safety analysis, which kiln does
+/// not run), which kiln parses only to record their names (spec/ast.md
+/// §18.8).
+fn late_tsa_attr(name: &str) -> bool {
+    matches!(
+        kiln_ast::attr::normalize_attr_name(name),
+        "acquire_capability"
+            | "acquire_shared_capability"
+            | "acquired_after"
+            | "acquired_before"
+            | "assert_capability"
+            | "assert_exclusive_lock"
+            | "assert_shared_capability"
+            | "assert_shared_lock"
+            | "exclusive_lock_function"
+            | "exclusive_locks_required"
+            | "exclusive_trylock_function"
+            | "guarded_by"
+            | "lock_returned"
+            | "locks_excluded"
+            | "pt_guarded_by"
+            | "release_capability"
+            | "release_generic_capability"
+            | "release_shared_capability"
+            | "requires_capability"
+            | "requires_shared_capability"
+            | "shared_lock_function"
+            | "shared_locks_required"
+            | "shared_trylock_function"
+            | "try_acquire_capability"
+            | "try_acquire_shared_capability"
+            | "unlock_function"
+    )
+}
+
 /// True for the attributes whose arguments are expressions.
 fn takes_expr_args(name: &str) -> bool {
     let n = kiln_ast::attr::normalize_attr_name(name);
@@ -1144,7 +1181,10 @@ impl Parser<'_, '_> {
             let Some(name) = self.attr_name() else { break };
             let loc = self.bump().span.lo;
             let args = match decl {
-                Some(d) if d.is_function_declarator() && self.sees_params(name) => {
+                Some(d)
+                    if d.is_function_declarator()
+                        && (self.sees_params(name) || self.records_tsa_now(name)) =>
+                {
                     let scope = self.s.act_on_start_trailing_requires(d);
                     let args = self.parse_attr_args(name);
                     self.s.act_on_end_trailing_requires(scope);
@@ -1199,6 +1239,67 @@ impl Parser<'_, '_> {
         self.gnu_attr_end = self.prev_lo();
     }
 
+    /// Whether the arguments of attribute `name` are a thread-safety
+    /// attribute's that the table records now (spec/ast.md §18.8): not in
+    /// a class's member-specification, where they wait for the class.
+    fn records_tsa_now(&self, name: Symbol) -> bool {
+        self.s.records_written_refs()
+            && late_tsa_attr(self.s.ast.symbols().as_str(name))
+            && self.late.last().is_none_or(|c| self.s.context() != c.record)
+    }
+
+    /// The arguments of thread-safety attribute `name`, at its `(`, while
+    /// the table records (spec/ast.md §18.8): consumed as when they are
+    /// skipped (clang `SkipUntil(r_paren)`), and parsed for their names,
+    /// now or, in a class's member-specification, once the class is
+    /// complete, as clang parses them.
+    fn note_tsa_args(&mut self) {
+        let mut toks = Vec::new();
+        self.take_into(&mut toks);
+        self.capture_until(&[Punct::RParen], &mut toks, false, true);
+        let end = toks.last().map_or(self.loc(), |t| t.span.hi);
+        let toks = crate::class::LateToks { toks, end };
+        if let Some(c) = self.late.last_mut()
+            && self.s.context() == c.record
+        {
+            c.attrs.push(toks);
+            return;
+        }
+        self.replay_tsa_args(toks);
+    }
+
+    /// Parses saved thread-safety attribute arguments `( e, ... )` as
+    /// unevaluated operands for their names alone: their diagnostics are
+    /// dropped (kiln does not analyse them; a name that is not found is
+    /// an entry with no entity, as an undeclared name's), no pattern node
+    /// is remembered (nothing instantiates them), and the attribute keeps
+    /// no argument.
+    pub(crate) fn replay_tsa_args(&mut self, toks: crate::class::LateToks) {
+        self.begin_replay(toks.toks, toks.end);
+        self.s.diags.hold();
+        let from = self.s.diags.held_len();
+        self.s.enter_unevaluated();
+        let nodes = self.s.ast.written_refs.set_pattern_nodes(false);
+        self.bump();
+        while !self.at(Punct::RParen) && !self.at_eof() {
+            let e = if self.at_string() {
+                self.parse_string_literal(true)
+            } else {
+                self.parse_assignment_expr()
+            };
+            if e.is_none() || self.eat(Punct::Comma).is_none() {
+                break;
+            }
+        }
+        self.s.ast.written_refs.set_pattern_nodes(nodes);
+        self.s.exit_unevaluated();
+        for i in from..self.s.diags.held_len() {
+            self.s.diags.drop_held(i);
+        }
+        self.s.diags.release();
+        self.finish_replay();
+    }
+
     /// Whether attribute name `name` is `enable_if` or `diagnose_if` (or
     /// `__enable_if__`, `__diagnose_if__`), whose arguments see the
     /// function's parameters.
@@ -1226,6 +1327,13 @@ impl Parser<'_, '_> {
     /// The arguments of attribute `name`, if any: `Some(args)`, or `None`
     /// after a syntax error.
     pub(crate) fn parse_attr_args(&mut self, name: Symbol) -> Option<Vec<AttrArg>> {
+        if self.s.records_written_refs()
+            && self.at(Punct::LParen)
+            && late_tsa_attr(self.s.ast.symbols().as_str(name))
+        {
+            self.note_tsa_args();
+            return Some(Vec::new());
+        }
         let Some(open) = self.eat(Punct::LParen) else { return Some(Vec::new()) };
         let text = self.s.ast.symbols().as_str(name).to_owned();
         if !takes_expr_args(&text) {

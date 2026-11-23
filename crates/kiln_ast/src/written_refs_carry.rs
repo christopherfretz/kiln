@@ -10,7 +10,7 @@
 //! | field | class |
 //! |---|---|
 //! | `entries`, `pending`, `extra`, `adl_sets`, `udir_cache`, `designators` | state: the main table, its pending patches and provenance |
-//! | `specs` (dropped rows included, so `SpecRefId`s stay), `spec_nodes` | state: the per-specialization table and its pattern nodes |
+//! | `specs` (dropped rows included, so `SpecRefId`s stay), `spec_nodes`, `spec_udirs` | state: the per-specialization table, its pattern nodes and their using-directives |
 //! | `unrecorded` | state |
 //! | `adl_index`, `spec_seen` | rebuilt from `adl_sets` and the live rows of `specs` |
 //! | `inst_target`, `spec_pending`, `spec_last`, `spec_key` | transient: scratch of one declaration or one instantiation, empty at rest |
@@ -40,6 +40,7 @@ pub struct WrittenRefsSection {
     designators: Vec<(Loc, WrittenRefId)>,
     specs: Vec<SpecRef>,
     spec_nodes: Vec<(PatternNode, WrittenRefId)>,
+    spec_udirs: Vec<((WrittenRefId, DeclId), DeclId)>,
     unrecorded: Vec<Unrecorded>,
 }
 
@@ -64,6 +65,7 @@ impl WrittenRefs {
             designators: sorted(&self.designators),
             specs: self.specs.clone(),
             spec_nodes: sorted(&self.spec_nodes),
+            spec_udirs: sorted(&self.spec_udirs),
             unrecorded: self.unrecorded.clone(),
         }
     }
@@ -87,6 +89,7 @@ impl WrittenRefs {
             && s.extra.iter().all(|&(id, x)| entry_ok(id) && set_ok(x.adl))
             && s.designators.iter().all(|&(_, id)| entry_ok(id))
             && s.spec_nodes.iter().all(|&(_, id)| entry_ok(id))
+            && s.spec_udirs.iter().all(|&((id, _), _)| entry_ok(id))
             && s.specs.iter().all(|r| entry_ok(r.entry) && set_ok(r.adl));
         if !ok {
             return Err("a written-reference id out of range");
@@ -106,6 +109,7 @@ impl WrittenRefs {
         }
         Ok(WrittenRefs {
             on,
+            no_nodes: false,
             entries: s.entries,
             pending: s.pending.into_iter().collect(),
             extra: s.extra.into_iter().collect(),
@@ -116,6 +120,7 @@ impl WrittenRefs {
             inst_target: None,
             specs: s.specs,
             spec_nodes: s.spec_nodes.into_iter().collect(),
+            spec_udirs: s.spec_udirs.into_iter().collect(),
             spec_pending: HashMap::new(),
             spec_seen,
             spec_last: None,

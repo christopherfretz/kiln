@@ -766,6 +766,15 @@ impl Substituter<'_, '_, '_> {
                 if i == d {
                     return Err(SubstFail);
                 }
+                // What the name names in this specialization: the
+                // declaration the using-declaration's shadow stands for
+                // (spec/ast.md §18.9.4).
+                if self.sema.ast.written_refs.has_pattern_nodes() {
+                    let s = self.sema.ast.using_shadows(i).next();
+                    let e = s.map(|s| self.sema.ast.strip_shadow(s));
+                    let at = self.written(WrittenKey::Type(q), loc);
+                    self.note_spec_type(q, at, e, s, None);
+                }
                 Ok(self.decl_type(i))
             }
             TypeView::Record(d) | TypeView::Enum(d) => {
@@ -791,7 +800,9 @@ impl Substituter<'_, '_, '_> {
                 if self.nns_still_dependent(n) {
                     // Substituted with dependent arguments (an alias
                     // template named in a template): still dependent.
-                    return Ok(self.sema.ast.types.dependent_name(keyword, n, name));
+                    let r = self.sema.ast.types.dependent_name(keyword, n, name);
+                    self.note_spec_still_dependent(q, loc, r);
+                    return Ok(r);
                 }
                 let ctx = self.nns_context(n, self.written(WrittenKey::Nns(nns), loc))?;
                 // Diagnosed at the name as written (§5.8).
@@ -1071,11 +1082,13 @@ impl Substituter<'_, '_, '_> {
                 let n = self.nns(nns, loc)?;
                 let args = self.args(args, loc)?;
                 if self.nns_still_dependent(n) {
-                    return Ok(self
+                    let r = self
                         .sema
                         .ast
                         .types
-                        .dependent_template_specialization(keyword, n, name, args));
+                        .dependent_template_specialization(keyword, n, name, args);
+                    self.note_spec_still_dependent(q, loc, r);
+                    return Ok(r);
                 }
                 // `T::template X<args>` ([temp.names]/5): the member
                 // template of the substituted class, diagnosed at `X`.

@@ -1,0 +1,33 @@
+15:15-15:18  nns  'lib' -> lib@9:11 in=(tu)
+15:20-15:24  type  'Item' -> lib::Item@10:8 q=15:15 in=(tu)
+17:38-17:39  type  'T' -> T@17:17 in=t@17:41
+18:12-18:13  nns  'T' -> T@17:17 in=k@18:20
+18:15-18:19  type  'kind' -> (dependent) q=18:12 in=k@18:20
+18:15-18:19  type  'kind' -> lib::Item::kind@12:9 spec=measure<lib::Item>@17:24
+19:10-19:11  expr  't' -> t@17:41 in=measure@17:24
+19:12-19:16  member  'size' -> (dependent) in=measure@17:24
+19:12-19:16  member  'size' -> lib::Item::size@11:7 spec=measure<lib::Item>@17:24
+19:38-19:39  expr  'k' -> k@18:20 in=measure@17:24
+22:3-22:4  type  'T' -> T@21:17 in=Holder::t@22:5
+23:28-23:29  expr  't' -> Holder::t@22:5 in=Holder::get@23:7
+23:30-23:34  member  'size' -> (dependent) in=Holder::get@23:7
+23:30-23:34  member  'size' -> lib::Item::size@11:7 spec=Holder<lib::Item>::get@23:7
+27:19-27:24  type  'Alias' -> Alias@15:7 in=a@27:7
+27:11-27:18  expr  'measure' -> measure<Alias>@17:24 found=measure@17:24 in=a@27:7 adl-ns=lib@9:11 adl-cls=lib::Item@10:8
+27:26-27:31  type  'Alias' -> Alias@15:7 in=a@27:7
+28:18-28:23  type  'Alias' -> Alias@15:7 in=b@28:7
+28:11-28:17  template  'Holder' -> Holder@21:27 in=b@28:7
+28:27-28:30  member  'get' -> Holder<lib::Item>::get@23:7 in=b@28:7
+29:19-29:22  nns  'lib' -> lib@9:11 in=c@29:7
+29:24-29:28  type  'Item' -> lib::Item@10:8 q=29:19 in=c@29:7
+29:11-29:18  expr  'measure' -> measure<Alias>@17:24 found=measure@17:24 in=c@29:7 adl-ns=lib@9:11 adl-cls=lib::Item@10:8
+29:30-29:33  nns  'lib' -> lib@9:11 in=c@29:7
+29:35-29:39  type  'Item' -> lib::Item@10:8 q=29:30 in=c@29:7
+30:18-30:21  nns  'lib' -> lib@9:11 in=d@30:7
+30:23-30:27  type  'Item' -> lib::Item@10:8 q=30:18 in=d@30:7
+30:11-30:17  template  'Holder' -> Holder@21:27 in=d@30:7
+30:31-30:34  member  'get' -> Holder<lib::Item>::get@23:7 in=d@30:7
+31:10-31:11  expr  'a' -> a@27:7 in=run@26:5
+31:14-31:15  expr  'b' -> b@28:7 in=run@26:5
+31:18-31:19  expr  'c' -> c@29:7 in=run@26:5
+31:22-31:23  expr  'd' -> d@30:7 in=run@26:5

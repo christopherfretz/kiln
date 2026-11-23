@@ -1,0 +1,70 @@
+17:32-17:33  type  'T' -> T@16:17 in=Sized@17:9
+18:3-18:4  expr  't' -> t@17:35 in=Sized@17:9
+18:5-18:9  member  'size' -> (dependent) in=Sized@17:9
+18:5-18:9  member  'size' -> V::size@13:16 spec=Sized@17:9
+18:5-18:9  member  'size' -> W::size@14:16 spec=Sized@17:9
+19:12-19:13  nns  'T' -> T@16:17 in=Sized@17:9
+19:15-19:25  type  'value_type' -> (dependent) q=19:12 in=Sized@17:9
+19:15-19:25  type  'value_type' -> V::value_type@13:49 spec=Sized@17:9
+19:15-19:25  type  'value_type' -> W::value_type@14:49 spec=Sized@17:9
+22:23-22:24  type  'T' -> T@21:17 in=Small@22:9
+22:17-22:22  concept  'Sized' -> Sized@17:9 in=Small@22:9
+22:45-22:46  nns  'T' -> T@21:17 in=Small@22:9
+22:48-22:58  type  'value_type' -> (dependent) q=22:45 in=Small@22:9
+22:48-22:58  type  'value_type' -> V::value_type@13:49 spec=Small@22:9
+22:48-22:58  type  'value_type' -> W::value_type@14:49 spec=Small@22:9
+23:35-23:36  type  'T' -> T@23:17 in=(tu)
+23:29-23:34  concept  'Sized' -> Sized@17:9 in=(tu)
+23:52-23:53  type  'T' -> T@23:17 in=t@23:55
+23:67-23:68  expr  't' -> t@23:55 in=len@23:42
+23:69-23:73  member  'size' -> (dependent) in=len@23:42
+23:69-23:73  member  'size' -> V::size@13:16 spec=len<V>@23:42
+23:69-23:73  member  'size' -> W::size@14:16 spec=len<W>@23:42
+24:35-24:36  type  'T' -> T@24:17 in=(tu)
+24:29-24:34  concept  'Sized' -> Sized@17:9 in=(tu)
+24:54-24:55  type  'T' -> T@24:17 in=(anonymous)@24:57
+25:35-25:36  type  'T' -> T@25:17 in=t@25:38
+25:61-25:62  expr  't' -> t@25:38 in=len2@25:24
+25:63-25:67  member  'size' -> (dependent) in=len2@25:24
+25:63-25:67  member  'size' -> V::size@13:16 spec=len2@25:24
+27:34-27:35  type  'T' -> T@26:17 in=Box::get@27:7
+27:28-27:33  concept  'Sized' -> Sized@17:9 in=Box::get@27:7
+29:35-29:36  type  'T' -> T@29:17 in=(anonymous)@29:38
+30:35-30:36  type  'T' -> T@30:17 in=(tu)
+30:29-30:34  concept  'Small' -> Small@22:9 in=(tu)
+30:53-30:54  type  'T' -> T@30:17 in=(anonymous)@30:56
+31:35-31:36  type  'T' -> T@31:17 in=t@31:38
+32:28-32:29  expr  't' -> t@31:38 in=body@31:24
+32:30-32:34  member  'size' -> (dependent) in=body@31:24
+32:30-32:34  member  'size' -> V::size@13:16 spec=body<V>@31:24
+32:48-32:49  expr  't' -> t@31:38 in=body@31:24
+32:50-32:54  member  'size' -> (dependent) in=body@31:24
+32:50-32:54  member  'size' -> V::size@13:16 spec=body<V>@31:24
+36:3-36:4  type  'V' -> V@13:8 in=v@36:5
+36:8-36:9  type  'W' -> W@14:8 in=w@36:10
+36:13-36:14  type  'N' -> N@15:8 in=n@36:15
+37:10-37:13  expr  'len' -> len<V>@23:42 found=len@23:42 in=use@35:5 how=both adl-ns=:: adl-cls=V@13:8
+37:14-37:15  expr  'v' -> v@36:5 in=use@35:5
+37:19-37:22  expr  'len' -> len<W>@23:42 found=len@23:42 in=use@35:5 how=both adl-ns=:: adl-cls=W@14:8
+37:23-37:24  expr  'w' -> w@36:10 in=use@35:5
+37:28-37:33  expr  'again' -> again<V>@24:42 found=again@24:42 in=use@35:5 how=both adl-ns=:: adl-cls=V@13:8
+37:34-37:35  expr  'v' -> v@36:5 in=use@35:5
+37:39-37:43  expr  'len2' -> len2<V>@25:24 found=len2@25:24 in=use@35:5 how=both adl-ns=:: adl-cls=V@13:8
+37:44-37:45  expr  'v' -> v@36:5 in=use@35:5
+37:53-37:54  type  'V' -> V@13:8 in=use@35:5
+37:49-37:52  template  'Box' -> Box@26:27 in=use@35:5
+37:58-37:61  member  'get' -> Box<V>::get@27:7 in=use@35:5
+37:66-37:70  expr  'pick' -> pick<V>@30:42 found=pick@30:42 in=use@35:5 how=both adl-ns=:: adl-cls=V@13:8
+37:71-37:72  expr  'v' -> v@36:5 in=use@35:5
+38:10-38:14  expr  'pick' -> pick<W>@29:24 found=pick@29:24 in=use@35:5 how=both adl-ns=:: adl-cls=W@14:8
+38:15-38:16  expr  'w' -> w@36:10 in=use@35:5
+38:20-38:24  expr  'pick' -> pick<N>@29:24 found=pick@29:24 in=use@35:5 how=both adl-ns=:: adl-cls=N@15:8
+38:25-38:26  expr  'n' -> n@36:15 in=use@35:5
+38:30-38:34  expr  'body' -> body<V>@31:24 found=body@31:24 in=use@35:5 how=both adl-ns=:: adl-cls=V@13:8
+38:35-38:36  expr  'v' -> v@36:5 in=use@35:5
+38:40-38:44  expr  'body' -> body<N>@31:24 found=body@31:24 in=use@35:5 how=both adl-ns=:: adl-cls=N@15:8
+38:45-38:46  expr  'n' -> n@36:15 in=use@35:5
+38:56-38:57  type  'V' -> V@13:8 in=use@35:5
+38:50-38:55  concept  'Sized' -> Sized@17:9 in=use@35:5
+38:67-38:68  type  'W' -> W@14:8 in=use@35:5
+38:61-38:66  concept  'Sized' -> Sized@17:9 in=use@35:5

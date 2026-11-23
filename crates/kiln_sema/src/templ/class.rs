@@ -3012,8 +3012,20 @@ impl Substituter<'_, '_, '_> {
         };
         let mut last = None;
         for (nns, name) in declarators {
+            // What the declarator names in this specialization (stage 4,
+            // spec/ast.md §18.9.4; one branch while nothing is recorded).
+            let errors = self
+                .sema
+                .ast
+                .written_refs
+                .has_pattern_nodes()
+                .then(|| self.sema.diags.error_count());
             if self.nns_still_dependent(nns) {
-                last = self.sema.still_dependent_class_using(nns, name, loc, inheriting).or(last);
+                let r = self.sema.still_dependent_class_using(nns, name, loc, inheriting);
+                if let Some(e) = errors {
+                    self.sema.note_written_spec_using(m, r, None, e);
+                }
+                last = r.or(last);
                 continue;
             }
             let ctx = self.nns_context(nns, qloc)?;
@@ -3026,8 +3038,12 @@ impl Substituter<'_, '_, '_> {
                 self.sema.check_using_declarator_access(Some(q), name, loc);
             }
             let reverse = std::mem::replace(&mut self.sema.reverse_using_shadows, resolved);
-            last = self.sema.instantiate_class_using(q, name, loc, inheriting).or(last);
+            let r = self.sema.instantiate_class_using(q, name, loc, inheriting);
             self.sema.reverse_using_shadows = reverse;
+            if let Some(e) = errors {
+                self.sema.note_written_spec_using(m, r, Some((nns, ctx, name)), e);
+            }
+            last = r.or(last);
         }
         Ok(last)
     }
@@ -3040,25 +3056,33 @@ impl Substituter<'_, '_, '_> {
         let Some(pnns) = self.sema.ast.using_qualifier(m) else { return Ok(None) };
         let Some(name) = self.sema.ast.decls.get(m).name().as_ident() else { return Ok(None) };
         let qloc = self.qualifier_begin(pnns, loc);
+        // What the declarator names in this specialization (stage 4,
+        // spec/ast.md §18.9.4; one branch while nothing is recorded).
+        let errors =
+            self.sema.ast.written_refs.has_pattern_nodes().then(|| self.sema.diags.error_count());
         let nns = self.nns(pnns, qloc)?;
         if self.nns_still_dependent(nns) {
-            return Ok(Some(self.sema.still_dependent_using_typename(
-                nns,
-                DeclName::ident(name),
-                loc,
-            )));
+            let r = self.sema.still_dependent_using_typename(nns, DeclName::ident(name), loc);
+            if let Some(e) = errors {
+                self.sema.note_written_spec_using(m, Some(r), None, e);
+            }
+            return Ok(Some(r));
         }
         let ctx = self.nns_context(nns, qloc)?;
         let q = crate::using::Qualifier { ctx, nns, loc: qloc };
         self.sema.check_using_declarator_access(Some(q), DeclName::ident(name), loc);
-        Ok(self.sema.act_on_using_typename_declarator(
+        let r = self.sema.act_on_using_typename_declarator(
             loc,
             Some(q),
             DeclName::ident(name),
             loc,
             false,
             None,
-        ))
+        );
+        if let Some(e) = errors {
+            self.sema.note_written_spec_using(m, r, Some((nns, ctx, DeclName::ident(name))), e);
+        }
+        Ok(r)
     }
 
     /// Instantiates pattern member `m` of `spec` with `f`. A member whose

@@ -326,6 +326,126 @@ fn specs_are_order_independent() {
     assert_eq!(a, rows(&swapped));
 }
 
+/// The pattern entry of the dependent name at `line:col` (its id).
+fn entry_at(
+    t: &kiln_ast::written_refs::WrittenRefs,
+    sm: &SourceManager,
+    at: (u32, u32),
+) -> kiln_ast::written_refs::WrittenRefId {
+    t.iter().find(|(_, r)| line_col(sm, r.range.lo) == at).map(|(id, _)| id).expect("an entry")
+}
+
+const SAT: &str = "struct V { int size() const { return 1; } };\n\
+                   struct W { int size() const { return 2; } };\n\
+                   template <class T> concept Sized = requires(const T &t) { t.size(); };\n\
+                   template <class T> requires Sized<T> int f(const T &) { return 1; }\n\
+                   template <class T> requires Sized<T> int g(const T &) { return 2; }\n\
+                   int run() { return f(V{}) + g(V{}) + g(W{}); }\n";
+
+/// Names in constraints (spec/ast.md §18.9.2, WP-2223): the rows of
+/// `t.size()` in the concept are keyed by the concept, one per distinct
+/// resolution. `g<V>` satisfies the atom `f<V>` already satisfied (a
+/// cache hit that skips the substitution): the rows are the same as
+/// when `g<V>` checks it first, and none is there twice.
+#[test]
+fn constraint_rows_survive_cache_hits() {
+    let rows = |src: &str| {
+        let mut v = Vec::new();
+        with_ast(src, |ast, sm| {
+            let t = &ast.written_refs;
+            let entry = entry_at(t, sm, (3, 61));
+            let pos = |d: kiln_ast::DeclId| line_col(sm, ast.decls.get(d).loc());
+            v = t.specs_of(entry).map(|(_, r)| (r.entity.map(pos), pos(r.spec))).collect();
+            let n = v.len();
+            v.sort_unstable();
+            v.dedup();
+            assert_eq!(v.len(), n, "no row twice");
+        });
+        v
+    };
+    let both = rows(SAT);
+    // V::size and W::size, keyed by the concept `Sized` (3:28).
+    assert_eq!(both, [(Some((1, 16)), (3, 28)), (Some((2, 16)), (3, 28))]);
+    let first_g = SAT.replace("f(V{}) + g(V{})", "g(V{}) + f(V{})");
+    assert_ne!(first_g, SAT);
+    assert_eq!(rows(&first_g), both);
+    let no_f = SAT.replace("f(V{}) + g(V{})", "g(V{})");
+    assert_eq!(rows(&no_f), both);
+}
+
+/// Using-declarations with a dependent qualifier (spec/ast.md §18.9.4,
+/// WP-2222): a rename of `V::size` by the table also edits the
+/// `using T::size;` of the class template instantiated with `V`, and the
+/// name a `using typename T::t;` introduced, used as a type, has a row
+/// naming `V::t` with `found` the shadow.
+#[test]
+fn rename_by_table_finds_dependent_using_declarations() {
+    let src = "struct V { int size() const { return 1; } using t = int; };\n\
+               template <class T> struct D : T {\n\
+               \x20 using T::size;\n\
+               \x20 using typename T::t;\n\
+               \x20 t get() const { return size(); }\n\
+               };\n\
+               int run() { return D<V>{}.get(); }\n";
+    with_ast(src, |ast, sm| {
+        let t = &ast.written_refs;
+        let using = entry_at(t, sm, (3, 12));
+        let (_, row) = t.specs_of(using).next().expect("the using-declarator's row");
+        let size = row.entity.expect("V::size");
+        assert_eq!(line_col(sm, ast.decls.get(size).loc()), (1, 16));
+        assert_eq!(row.found, None, "the using-declaration is the declaration");
+        let mut at: Vec<(u32, u32)> =
+            t.specs_naming(size).map(|(_, r)| line_col(sm, t.get(r.entry).range.lo)).collect();
+        at.sort_unstable();
+        at.dedup();
+        assert_eq!(at, [(3, 12), (5, 26)], "the using-declarator and the call");
+        let ty = entry_at(t, sm, (5, 3));
+        let (_, row) = t.specs_of(ty).next().expect("the type's row");
+        let target = row.entity.expect("V::t");
+        assert_eq!(line_col(sm, ast.decls.get(target).loc()), (1, 49));
+        let shadow = row.found.expect("the shadow");
+        assert_eq!(line_col(sm, ast.decls.get(shadow).loc()), (4, 21));
+    });
+}
+
+/// The using-directive of a per-specialization row (spec/ast.md §18.9.1,
+/// WP-2220): ordinary lookup at the template's definition found `f`
+/// through `using namespace a;`, and the row says so.
+#[test]
+fn spec_rows_name_their_using_directive() {
+    let src = "namespace a { void f(int); void f(long); }\n\
+               using namespace a;\n\
+               template <class T> void run(T t) { f(t); }\n\
+               void use() { run(1); }\n";
+    with_ast(src, |ast, sm| {
+        let t = &ast.written_refs;
+        let call = entry_at(t, sm, (3, 36));
+        let (_, row) = t.specs_of(call).next().expect("the call's row");
+        let udir = row.udir.expect("found through the directive");
+        assert_eq!(line_col(sm, ast.decls.get(udir).loc()), (2, 1));
+    });
+}
+
+/// Thread-safety attribute arguments (spec/ast.md §18.8, WP-2170): a name
+/// that lookup does not find is an entry with no entity, as an undeclared
+/// name is anywhere else, and is not diagnosed (kiln skips the attribute,
+/// WP-606); a member named before its declaration is found once the
+/// class is complete.
+#[test]
+fn thread_safety_arguments_are_entries() {
+    let src = "struct M {};\n\
+               void f() __attribute__((requires_capability(no_such_mutex)));\n\
+               struct S { int x __attribute__((guarded_by(mu))); M mu; };\n";
+    with_ast(src, |ast, sm| {
+        let t = &ast.written_refs;
+        let missing = t.get(entry_at(t, sm, (2, 45)));
+        assert!(missing.entity.is_none(), "no entity for a name not found");
+        let later = t.get(entry_at(t, sm, (3, 44)));
+        let mu = later.entity.expect("the member declared after the attribute");
+        assert_eq!(line_col(sm, ast.decls.get(mu).loc()), (3, 53));
+    });
+}
+
 /// Stage 5 (spec/ast.md §18.10.1): a prefix parsed with the table on,
 /// written to a snapshot with its source manager and interner, restored
 /// into a fresh `Sema` that records and continued with a main file. A

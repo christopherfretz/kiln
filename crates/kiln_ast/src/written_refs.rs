@@ -341,6 +341,10 @@ pub struct RefMark {
 #[derive(Clone, Debug, Default)]
 pub struct WrittenRefs {
     on: bool,
+    /// Pattern nodes are not remembered: names parsed for the table
+    /// alone, in no body and never instantiated (thread-safety attribute
+    /// arguments, spec/ast.md §18.8).
+    no_nodes: bool,
     entries: Vec<WrittenRef>,
     /// Entries of overloaded names awaiting overload resolution, by the
     /// overload set's expression.
@@ -368,6 +372,11 @@ pub struct WrittenRefs {
     /// The pattern node of each dependent entry, for the substituter to
     /// find the entry from the node it rebuilds (§18.9.4).
     spec_nodes: HashMap<PatternNode, WrittenRefId>,
+    /// The using-directive through which ordinary lookup at a dependent
+    /// entry's definition found a declaration (the entry, the
+    /// declaration's first declaration), for the rows of the
+    /// specializations that select it (§18.9.1).
+    spec_udirs: HashMap<(WrittenRefId, DeclId), DeclId>,
     /// Rebuilt overload sets awaiting overload resolution in an
     /// instantiation: their pattern entry and specialization.
     spec_pending: HashMap<ExprId, (WrittenRefId, DeclId)>,
@@ -423,6 +432,10 @@ pub enum PatternNode {
     /// A dependent type (`typename T::type`, `T::template X<U>`) written
     /// with its name at the location.
     Type(QualType, Loc),
+    /// A using-declarator with a dependent qualifier in a class template
+    /// (`using T::size;`, `using typename T::type;`): its
+    /// `UnresolvedUsingValue` or `UnresolvedUsingTypename` member.
+    Decl(DeclId),
 }
 
 /// The id of a per-specialization entry (index + 1).
@@ -447,7 +460,7 @@ impl SpecRefId {
 pub const SPEC_DEAD: u8 = 0x80;
 
 /// What one dependent name of a template pattern resolved to in one
-/// specialization (spec/ast.md §18.9; 24 bytes).
+/// specialization (spec/ast.md §18.9; 28 bytes).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, kiln_snap::Snap)]
 pub struct SpecRef {
     /// The pattern's entry (in the main table, `DEPENDENT`).
@@ -460,6 +473,9 @@ pub struct SpecRef {
     pub found: Option<DeclId>,
     /// The argument-dependent set of a call's lookup (§18.7.4).
     pub adl: Option<AdlSetId>,
+    /// The using-directive ordinary lookup found the selected declaration
+    /// through at the pattern's definition (§18.7.3, §18.9.1).
+    pub udir: Option<DeclId>,
     /// [`REF_UNRESOLVED`], [`REF_MEMBER`] (the entry's).
     pub flags: u8,
     /// How lookup found the name (§18.7.2).
@@ -685,9 +701,16 @@ impl WrittenRefs {
     /// Remembers that the dependent entry `id` was made from the pattern
     /// node `n` (§18.9.4); nothing when off.
     pub fn note_pattern_node(&mut self, n: PatternNode, id: WrittenRefId) {
-        if self.on {
+        if self.on && !self.no_nodes {
             self.spec_nodes.insert(n, id);
         }
+    }
+
+    /// Stops (`false`) or resumes remembering pattern nodes and their
+    /// using-directives, for names parsed for the table alone that no
+    /// instantiation rebuilds (§18.8); returns the previous setting.
+    pub fn set_pattern_nodes(&mut self, on: bool) -> bool {
+        !std::mem::replace(&mut self.no_nodes, !on)
     }
 
     /// True when some dependent entry has a pattern node: the
@@ -700,6 +723,28 @@ impl WrittenRefs {
     /// Every pattern node and its entry, in no particular order.
     pub fn pattern_nodes(&self) -> impl Iterator<Item = (PatternNode, WrittenRefId)> + '_ {
         self.spec_nodes.iter().map(|(&n, &id)| (n, id))
+    }
+
+    /// Remembers that ordinary lookup of dependent entry `id` at its
+    /// definition found `decl` (a first declaration) through the
+    /// using-directive `udir` (§18.9.1); nothing when off.
+    pub fn note_pattern_udir(&mut self, id: WrittenRefId, decl: DeclId, udir: DeclId) {
+        if self.on && !self.no_nodes {
+            self.spec_udirs.insert((id, decl), udir);
+        }
+    }
+
+    /// The using-directive ordinary lookup of dependent entry `id` found
+    /// `decl` (a first declaration) through at the definition.
+    #[inline]
+    pub fn pattern_udir(&self, id: WrittenRefId, decl: DeclId) -> Option<DeclId> {
+        if self.spec_udirs.is_empty() { None } else { self.spec_udirs.get(&(id, decl)).copied() }
+    }
+
+    /// Every (entry, declaration) with its using-directive, in no
+    /// particular order.
+    pub fn pattern_udirs(&self) -> impl Iterator<Item = ((WrittenRefId, DeclId), DeclId)> + '_ {
+        self.spec_udirs.iter().map(|(&k, &v)| (k, v))
     }
 
     /// The dependent entry made from the pattern node `n`.
@@ -935,6 +980,7 @@ impl WrittenRefs {
         self.extra.retain(|id, _| id.index() < n);
         self.designators.retain(|_, id| id.index() < n);
         self.spec_nodes.retain(|_, id| id.index() < n);
+        self.spec_udirs.retain(|(id, _), _| id.index() < n);
         self.spec_pending.retain(|_, (id, _)| id.index() < n);
         for r in &mut self.specs {
             if r.entry.index() >= n {
@@ -992,11 +1038,14 @@ impl WrittenRefs {
         let node = (size_of::<(PatternNode, WrittenRefId)>() as u64) * 2;
         let pend = (size_of::<(ExprId, (WrittenRefId, DeclId))>() as u64) * 2;
         let seen = (size_of::<(SpecRef, u32)>() as u64) * 2;
+        let udir = (size_of::<((WrittenRefId, DeclId), DeclId)>() as u64) * 2;
         let live = self.specs.len() as u64 * row
+            + self.spec_udirs.len() as u64 * udir
             + self.spec_nodes.len() as u64 * node
             + self.spec_pending.len() as u64 * pend
             + self.spec_seen.len() as u64 * seen;
         let reserved = self.specs.capacity() as u64 * row
+            + self.spec_udirs.capacity() as u64 * udir
             + self.spec_nodes.capacity() as u64 * node
             + self.spec_pending.capacity() as u64 * pend
             + self.spec_seen.capacity() as u64 * seen;
@@ -1069,7 +1118,7 @@ impl WrittenRefs {
             let (f, lc) = pos2(loc);
             f + &lc
         };
-        let decl = |d: DeclId, out: &mut String| {
+        let decl_in = |names: &crate::diag_names::DiagNames<'_>, d: DeclId, out: &mut String| {
             let mut s = String::new();
             // A function or template parameter prints unqualified, as a
             // local variable does.
@@ -1088,6 +1137,12 @@ impl WrittenRefs {
             out.push('@');
             out.push_str(&pos(ast.decls.get(d).loc()));
         };
+        let decl = |d: DeclId, out: &mut String| decl_in(&names, d, out);
+        // A per-specialization line prints its specializations with their
+        // canonical arguments, whichever spelling instantiated them
+        // first (§18.9.5).
+        let canon = names.canonical_args();
+        let canon_decl = |d: DeclId, out: &mut String| decl_in(&canon, d, out);
         let mut out = String::new();
         self.dump_unrecorded(sm, &mut out);
         // The per-specialization entries of each pattern entry (§18.9.5).
@@ -1145,7 +1200,7 @@ impl WrittenRefs {
             // instantiation does not show (§18.9.5).
             if let Some(v) = by_entry.get(&id) {
                 let head = format!("{lo}-{hi}  {}  '{text}' -> ", r.role.spelling());
-                self.dump_specs(r, v, &head, ast, &names, &pos, &decl, &mut out);
+                self.dump_specs(r, v, &head, ast, &canon, &pos, &canon_decl, &mut out);
             }
         }
         out
@@ -1174,7 +1229,7 @@ impl WrittenRefs {
             if !ast.decls.get(d).kind().is_function()
                 && let Some((_, info)) = ast.spec_info(d)
             {
-                crate::types::write_arg_list_of(&ast.types, names, d, info.print_args, &mut s);
+                names.write_spec_args(names, d, info.print_args, &mut s);
             }
             if s.is_empty() {
                 s.push_str("(anonymous)");
@@ -1200,6 +1255,9 @@ impl WrittenRefs {
                 if sr.how != sr.default_how(r) {
                     l.push_str(" how=");
                     l.push_str(sr.how.spelling());
+                }
+                if let Some(u) = sr.udir {
+                    dump_udir(u, ast, names, pos, &mut l);
                 }
                 if let Some(set) = self.spec_adl_set(sr) {
                     dump_adl(set, ast, pos, decl, &mut l);
@@ -1231,19 +1289,29 @@ impl WrittenRefs {
             out.push_str(r.how.spelling());
         }
         if let Some(u) = self.using_directive(id) {
-            out.push_str(" udir=");
-            let mut s = String::new();
-            if let Some(n) = ast.using_target(u) {
-                names.write_decl_name(n, true, &mut s);
-            }
-            out.push_str(&s);
-            out.push('@');
-            out.push_str(&pos(ast.decls.get(u).loc()));
+            dump_udir(u, ast, names, pos, out);
         }
         if let Some(set) = self.adl_set(id) {
             dump_adl(set, ast, pos, decl, out);
         }
     }
+}
+
+/// The `udir=` field of a dump line (spec/ast.md §18.7.5): the
+/// nominated namespace at the directive's location.
+fn dump_udir(
+    u: DeclId,
+    ast: &crate::Ast,
+    names: &crate::diag_names::DiagNames<'_>,
+    pos: &dyn Fn(Loc) -> String,
+    out: &mut String,
+) {
+    out.push_str(" udir=");
+    if let Some(n) = ast.using_target(u) {
+        names.write_decl_name(n, true, out);
+    }
+    out.push('@');
+    out.push_str(&pos(ast.decls.get(u).loc()));
 }
 
 /// The `adl-ns=`, `adl-cls=` and `adl-enum=` fields of a dump line
@@ -1447,14 +1515,15 @@ mod tests {
             entity: Some(DeclId::new(entity)),
             found: None,
             adl: None,
+            udir: None,
             flags: 0,
             how: RefLookup::Member,
         }
     }
 
     #[test]
-    fn spec_row_is_24_bytes() {
-        assert_eq!(size_of::<SpecRef>(), 24);
+    fn spec_row_is_28_bytes() {
+        assert_eq!(size_of::<SpecRef>(), 28);
         assert_eq!(size_of::<Option<SpecRefId>>(), 4);
     }
 
@@ -1462,7 +1531,9 @@ mod tests {
     fn off_records_no_pattern_nodes() {
         let mut t = WrittenRefs::default();
         t.note_pattern_node(PatternNode::Expr(ExprId::new(3)), WrittenRefId::from_index(0));
+        t.note_pattern_udir(WrittenRefId::from_index(0), DeclId::new(3), DeclId::new(4));
         assert!(!t.has_pattern_nodes());
+        assert_eq!(t.pattern_udir(WrittenRefId::from_index(0), DeclId::new(3)), None);
         assert_eq!(t.pattern_entry(PatternNode::Expr(ExprId::new(3))), None);
         assert_eq!(t.spec_mem(), (0, 0));
     }
@@ -1505,8 +1576,13 @@ mod tests {
         assert_eq!(t.spec_len(), 3);
         // Rolling the main table back drops the rows of its entries.
         t.note_pattern_node(PatternNode::Expr(ExprId::new(7)), w1);
+        t.note_pattern_udir(w0, DeclId::new(30), DeclId::new(31));
+        t.note_pattern_udir(w1, DeclId::new(30), DeclId::new(32));
+        assert_eq!(t.pattern_udir(w1, DeclId::new(30)), Some(DeclId::new(32)));
         t.truncate(RefMark { entries: 1, decls: 0 });
         assert_eq!(t.pattern_entry(PatternNode::Expr(ExprId::new(7))), None);
+        assert_eq!(t.pattern_udir(w1, DeclId::new(30)), None);
+        assert_eq!(t.pattern_udir(w0, DeclId::new(30)), Some(DeclId::new(31)));
         assert!(t.specs().all(|(_, r)| r.entry == w0));
         assert_eq!(t.spec_len(), 2);
     }
