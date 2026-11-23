@@ -79,13 +79,16 @@ impl Parser<'_, '_> {
     fn parse_local_labels(&mut self, stmts: &mut Vec<StmtId>) {
         while let Some(at) = self.eat_kw(Kw::Label) {
             let mut decls = Vec::new();
+            let mut names = Vec::new();
             loop {
                 let Some(name) = self.ident() else {
                     self.expected_here("identifier");
                     break;
                 };
-                let loc = self.bump().span.lo;
-                decls.push(self.s.act_on_local_label(name, loc));
+                let span = self.bump().span;
+                let l = self.s.act_on_local_label(name, span.lo);
+                decls.push(l);
+                names.push((l, span));
                 if self.eat(Punct::Comma).is_none() {
                     break;
                 }
@@ -93,6 +96,7 @@ impl Parser<'_, '_> {
             if self.eat(Punct::Semi).is_none() {
                 self.s.error(DiagId::parse_expected_semi_declaration, self.prev_end());
             }
+            self.ext_local_labels(&names, at);
             if !decls.is_empty() {
                 stmts.push(self.s.act_on_decl_stmt(&decls, at));
             }
@@ -553,7 +557,7 @@ impl Parser<'_, '_> {
         if let Some(name) = self.ident()
             && self.peek_is(1, Punct::Colon)
         {
-            self.bump();
+            let name_span = self.bump().span;
             self.bump();
             // GNU attributes after the colon are the label's (kiln keeps
             // none); a C++11 attribute-specifier-seq there starts the
@@ -566,6 +570,7 @@ impl Parser<'_, '_> {
                 self.parse_gnu_attributes(&mut label_attrs);
             }
             let l = self.s.act_on_label(name, loc);
+            self.ext_label(l, ext_lead, name_span);
             let sub = self.parse_labeled_sub(in_stmt_expr);
             return Some(self.s.act_on_label_stmt(l, sub, loc));
         }

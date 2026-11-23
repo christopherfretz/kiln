@@ -1049,6 +1049,19 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   out-of-line definition's constant-initialization check records it
   (WP-2504, spec/ast.md §9.2): a later read reuses it instead of
   evaluating the initializer again.
+- Declaration extents: an elaborated-type-specifier whose qualifier
+  names a class template specialization (`struct O<int>::S *p;`,
+  `friend struct O<char>::S;`) no longer gives the instantiated member a
+  row with the specifier's name and qualifier, and a friend declaration
+  naming an implicit specialization (`friend struct n::V<int>;`) adds no
+  row: a specifier that names a class declared elsewhere records
+  nothing (WP-2629).
+- Declaration extents: a label (`l:`, from its attributes to the `:`), a
+  GNU local label declaration (`__label__ l;`, the label's first row,
+  its definition the second) and a postcondition's result name
+  (`post (r: ...)`, its result-name-introducer) have rows; range-for,
+  exception-declaration, expansion-statement and requires-expression
+  parameter rows are pinned by tests (WP-2630).
 - A global `operator new` or `operator delete` declared after a class
   template whose pattern befriends it is one function with the implicit
   declaration and the instantiated friend, before or after the

@@ -3712,7 +3712,8 @@ body, without re-lexing. `kiln_ast::decl_extents`; the field
   `template void t(short);`, `template int v<int>;`,
   `template void S<long>::m();`, `template int S<long>::sm;`, an
   explicit instantiation of a constructor) and an `extern template`
-  declaration of any of these. A row is keyed by (`DeclId`, ordinal):
+  declaration of any of these, and a label's definition (`l:`) after a
+  GNU local label declaration of it (`__label__ l;`, WP-2630). A row is keyed by (`DeclId`, ordinal):
   the *n*th declaration of the entity written under that `DeclId` is its
   *n*th row, in source order, and no later declaration overwrites an
   earlier one's row. `get(d)` (and `Ast::decl_extent(d)`) is `d`'s last
@@ -3723,12 +3724,23 @@ body, without re-lexing. `kiln_ast::decl_extents`; the field
   class template specialization): the explicitly instantiated
   specialization when nothing declared it before, else the explicit
   specialization it names (which then has a row before it).
-- **No row**: implicit declarations (special members, implicit
-  deduction guides, builtins, injected class names, a lambda's closure
-  type and its members), instantiations and their members (a client
-  maps a specialization to its pattern with `template_info` and reads
-  the pattern's row), the parameter a `(void)` clause makes and drops,
-  and the declarations an error recovery skipped.
+- **No row**: implicit declarations (special members and their
+  parameters, implicit deduction guides, builtins, injected class names,
+  a lambda's closure type and its members, a requires-expression's body,
+  the scope of its parameters), instantiations and their members (a
+  client maps a specialization to its pattern with `template_info` and
+  reads the pattern's row) and every other copy a substitution makes of
+  a written declaration (an instantiated function's parameters and
+  locals, an expansion statement's copies of its body per element,
+  [stmt.expand], a satisfaction check's requires-expression parameters),
+  the parameter a `(void)` clause makes and drops, and the declarations
+  an error recovery skipped. An elaborated-type-specifier that names a
+  class or enumeration declared elsewhere declares nothing and adds no
+  row ([dcl.type.elab]), qualified or not, and also when its qualifier
+  names a class template specialization whose member lookup instantiates
+  (`struct O<int>::S *p;`: the member is an instantiation, WP-2629); one
+  that declares its class (`struct S *p;` with `S` undeclared,
+  `friend class F;` with `F` undeclared) has the class's row.
   An explicit specialization and an explicit instantiation are written
   declarations: the row is the specialization's (or the member's, for
   `template void S<long>::m();`), its range that of the declaration that
@@ -3738,8 +3750,9 @@ body, without re-lexing. `kiln_ast::decl_extents`; the field
   explicit instantiation of a function template without template
   arguments (`template void t(short);`, the specialization deduced,
   [temp.explicit]/8) has the name `t`. A friend declaration naming a
-  specialization that has a row (`friend struct Q<int>;`) declares
-  nothing new and adds none (§19.5).
+  specialization (`friend struct Q<int>;`) declares nothing new and
+  adds none, whether the specialization has a row or is implicit
+  (§19.5).
 - **Read access** (all on `DeclExtents`): `is_on()`, `get(d)` (the last
   row), `rows_of(d)` (every row, in source order), `iter()` (every row,
   by declaration in `DeclId` order and a declaration's rows in source
@@ -3825,8 +3838,14 @@ variable of a range-based for or expansion statement ([stmt.ranged],
 [stmt.expand]), up to its declarator: the range after `:` is not
 part of it), init-captures (from their first token, `&`, `...` or the
 name, to the initializer's last; the variable [expr.prim.lambda.capture]/6
-declares), a requires-expression's parameters, access specifiers
-(`public:`), and a declaration an error cut short. The optional `;` after an in-class member function definition
+declares), a requires-expression's parameters, a label (from its
+attribute-specifier-seq, or else its identifier, to the `:`, or to the
+last GNU attribute after it: `l: __attribute__((unused));`), a
+postcondition's result name (its result-name-introducer, from the
+identifier to the `:`, [dcl.contract.res]), access specifiers
+(`public:`), and a declaration an error cut short. A GNU local label
+declaration (`__label__ a, b;`) ends at its `;`; each label's `own` and
+`name` are its identifier (WP-2630). The optional `;` after an in-class member function definition
 is not part of it.
 
 ### 19.4 Namespaces
@@ -3859,7 +3878,10 @@ H::h(G&);`, `friend B::~B();`) declares nothing new: the earlier
 declaration keeps its row (WP-1932; the identifier-accounting test of
 §18.8 found the overwrite); so does one naming a class template
 specialization with a row (`friend struct Q<int>;` after `template <>
-struct Q<int> {};`, WP-2470). The `Friend` has its own row either way.
+struct Q<int> {};`, WP-2470), and one naming an implicit specialization
+or a member of one (`friend struct V<int>;`, `friend struct
+O<char>::S;`) adds none (WP-2629). The `Friend` has its own row either
+way.
 
 ### 19.6 Locations, speculation, PCH, modules
 
@@ -4022,14 +4044,17 @@ Tests: `crates/kiln_ast/src/decl_extents.rs` (row sizes, off records
 nothing, set and share, `semi`/`prefix`, truncation, lambda names,
 module rows only when on, the trimmed capacity),
 `crates/kiln_parse/tests/decl_extents.rs` (the API on parsed source,
-capacity equal to length after the parse),
+capacity equal to length after the parse; `every_written_declaration_has_a_row`:
+every declaration of a source of every kind has a row but implicit
+declarations and copies, and no instantiation has one),
 `crates/kiln_driver/src/snap_tests.rs` (`snapshot_round_trip_decl_extents`)
 and `tests/conformance/decl_extents/` (one per case of §19.2-§19.6,
 macros, templates, a PCH and module-image round trips:
 `module-image.cpp`/`module-replay.cpp` for an image without a preamble,
 `module-bodies-image.cpp`/`module-bodies-replay.cpp` for the
 declarations inside bodies, a partition, attributes, `export import`
-and a header unit).
+and a header unit; `elaborated-refs.cpp`, `stmt-decls.cpp` and
+`contract-result.cpp` for WP-2629/WP-2630).
 
 ## 20. Public tables for tooling clients (WP-2024)
 

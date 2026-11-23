@@ -3010,9 +3010,21 @@ impl Parser<'_, '_> {
         // (`enum class E : int;` twice) is a written declaration of its own:
         // a new row of `d` (spec/ast.md §19.1; WP-2470).
         let redeclared = reused && use_ == TagUse::Declaration;
+        // A reference or friend has a row only when it declared the tag
+        // itself (`struct S *p;` with `S` undeclared, [basic.scope.pdecl]/7;
+        // `friend class F;` with `F` undeclared): a new declaration at this
+        // name. One naming a class declared elsewhere declares nothing, not
+        // even a member its qualifier made by instantiation
+        // (`struct O<int>::S *p;`, spec/ast.md §19.1; WP-2629).
+        let declared_here = || {
+            d.index() as usize > decls_before
+                && name.is_some_and(|(_, l)| self.s.ast.decls.get(d).loc() == l)
+        };
         let ext = self.ext_on()
-            && (!reused || redeclared)
-            && (use_ != TagUse::Reference || d.index() as usize >= decls_before);
+            && match use_ {
+                TagUse::Reference | TagUse::Friend => declared_here(),
+                _ => !reused || redeclared,
+            };
         if ext {
             if redeclared {
                 self.ext_redecl(d);
@@ -3266,13 +3278,16 @@ impl Parser<'_, '_> {
             if use_ != TagUse::Reference
                 && let Some(d) = rec
             {
-                // A friend naming a specialization written before it
-                // declares nothing new: the earlier row stays (spec/ast.md
-                // §19.5). Any other declaration of a specialization with a
-                // row (a repeated explicit or partial specialization, an
-                // explicit instantiation after a declaration of it) writes
-                // a row of its own (§19.1; WP-2470).
-                if !(use_ == TagUse::Friend && self.s.ast.decl_extents.get(d).is_some()) {
+                // A friend naming a specialization declares nothing new
+                // ([class.friend]/3; it can declare no explicit or partial
+                // specialization): an earlier row stays (spec/ast.md §19.5),
+                // and an implicit specialization (`friend struct
+                // n::V<int>;`) gets none (WP-2629). Any other declaration of
+                // a specialization with a row (a repeated explicit or
+                // partial specialization, an explicit instantiation after a
+                // declaration of it) writes a row of its own (§19.1;
+                // WP-2470).
+                if use_ != TagUse::Friend {
                     self.ext_redecl(d);
                     self.ext_tag_head(d, kw_loc, ext_qual, Span::new(name_loc, name_end));
                     ds.tag_extent = self.ext_on();

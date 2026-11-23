@@ -1,0 +1,27 @@
+Namespace 'n'  full=15:1-19:2 } name=15:11-15:12 'n' body=15:13-19:2
+CXXRecord 'n::S'  full=16:1-16:13 ; own=16:1-16:12 name=16:8-16:9 'S' body=16:10-16:12
+Enum 'n::E'  full=17:1-17:15 ; own=17:1-17:14 name=17:6-17:7 'E' body=17:8-17:14
+EnumConstant 'n::e0'  full=17:10-17:12 - name=17:10-17:12 'e0'
+TemplateTypeParm 'n::(anonymous)'  full=18:11-18:16 -
+CXXRecord 'n::V'  full=18:1-18:30 ; own=18:18-18:29 name=18:25-18:26 'V' body=18:27-18:29
+ClassTemplate 'n::V'  full=18:1-18:30 ; own=18:18-18:29 name=18:25-18:26 'V' body=18:27-18:29
+TemplateTypeParm 'T'  full=20:11-20:18 - name=20:17-20:18 'T'
+CXXRecord 'O'  full=20:1-23:3 ; own=20:20-23:2 name=20:27-20:28 'O' body=20:29-23:2
+ClassTemplate 'O'  full=20:1-23:3 ; own=20:20-23:2 name=20:27-20:28 'O' body=20:29-23:2
+CXXRecord 'O::S'  full=21:3-21:15 ; own=21:3-21:14 name=21:10-21:11 'S' body=21:12-21:14
+Enum 'O::E'  full=22:3-22:17 ; own=22:3-22:16 name=22:8-22:9 'E' body=22:10-22:16
+EnumConstant 'O::e1'  full=22:12-22:14 - name=22:12-22:14 'e1'
+Var 'p'  full=24:1-24:16 ; own=24:13-24:15 name=24:14-24:15 'p' specs-end=24:12
+Var 'e'  full=25:1-25:13 ; own=25:11-25:12 name=25:11-25:12 'e' specs-end=25:10
+Var 'q'  full=26:1-26:21 ; own=26:18-26:20 name=26:19-26:20 'q' specs-end=26:17
+Var 'f'  full=27:1-27:19 ; own=27:17-27:18 name=27:17-27:18 'f' specs-end=27:16
+CXXRecord 'F'  full=28:1-33:3 ; own=28:1-33:2 name=28:8-28:9 'F' body=28:10-33:2
+Friend 'F::(anonymous)'  full=29:3-29:22 ;
+Friend 'F::(anonymous)'  full=30:3-30:28 ;
+Friend 'F::(anonymous)'  full=31:3-31:27 ;
+CXXRecord 'Fr'  full=32:3-32:19 ; own=32:10-32:18 name=32:16-32:18 'Fr'
+Friend 'F::(anonymous)'  full=32:3-32:19 ;
+CXXRecord 'Fresh'  full=34:1-34:17 ; own=34:1-34:13 name=34:8-34:13 'Fresh'
+Var 'r'  full=34:1-34:17 ; own=34:14-34:16 name=34:15-34:16 'r' specs-end=34:13
+CXXRecord 'R'  full=35:1-35:10 ; own=35:1-35:9 name=35:8-35:9 'R'
+CXXRecord 'R'  full=36:1-36:10 ; own=36:1-36:9 name=36:8-36:9 'R'
