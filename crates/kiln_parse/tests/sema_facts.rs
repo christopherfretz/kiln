@@ -188,3 +188,36 @@ fn dependent_operator_definition_set() {
     let ol = &ast.templates.oper_lookups;
     assert!(ol.set_count() < ol.len(), "equal sets are interned once");
 }
+
+/// [basic.scope.scope]/5 (P2169): a non-static data member `_` is
+/// name-independent unless it is a member of an anonymous union (or
+/// anonymous struct), also in an instantiation; a member of a named
+/// union, a later `_` of the class and an automatic variable are
+/// (WP-2477).
+#[test]
+fn anonymous_union_member_is_not_name_independent() {
+    let (ast, i) = parse(
+        "struct S { union { int _; }; int _; union U { int _; } u; };\n\
+         template <class T> struct Q { union { T _; }; T _; };\n\
+         Q<int> q;\n\
+         void f() { union { int _; }; int _ = 1; }\n",
+    );
+    let mut got: Vec<(bool, bool)> = Vec::new();
+    for d in ast.decls.ids() {
+        let n = ast.decls.get(d);
+        if !matches!(n.kind(), kiln_ast::decl::DeclKind::Field | kiln_ast::decl::DeclKind::Var)
+            || name(&ast, &i, d) != "_"
+        {
+            continue;
+        }
+        let in_anonymous = n
+            .ctx()
+            .and_then(|c| ast.decls.record(c))
+            .is_some_and(|r| r.defn.contains(kiln_ast::decl::DefinitionBits::ANONYMOUS));
+        got.push((in_anonymous, n.misc().name_independent()));
+    }
+    assert!(got.len() >= 8, "{got:?}");
+    for (in_anonymous, independent) in got {
+        assert_eq!(independent, !in_anonymous);
+    }
+}

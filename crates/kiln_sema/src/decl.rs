@@ -7045,7 +7045,9 @@ impl Sema<'_, '_> {
         // [basic.scope.scope]/5 (P2169): a non-static data member `_` is
         // name-independent and conflicts with no earlier declaration of
         // the class (/6: a member function or a static data member `_`
-        // too; clang 22 still reports those as duplicates).
+        // too; clang 22 still reports those as duplicates). A member of
+        // an anonymous union is not: the bit is cleared when the union
+        // turns out anonymous (`act_on_anonymous_record`).
         let independent = name.is_some_and(|n| self.is_placeholder_name(n));
         // A class or enumeration of the same name is hidden, not
         // redeclared ([basic.scope.hiding]/2; clang `CheckFieldDecl`):
@@ -12500,7 +12502,12 @@ impl Sema<'_, '_> {
         let mut req = String::new();
         kiln_ast::types::TypeNames::write_expr(
             &kiln_ast::dump::AstNames {
+                // Unnamed classes and closures with their location
+                // (`sizeof((lambda at a.cpp:3:12))`), as clang prints them.
+                sources: Some(self.diags.sm()),
                 scoped_nns: self.clang_compat >= 22,
+                local_scopes: self.clang_compat >= 22,
+                closure_as_lambda: self.clang_compat >= 22,
                 ..kiln_ast::dump::AstNames::new(&self.ast).canonical_expr_types()
             },
             c,
@@ -12871,6 +12878,15 @@ impl Sema<'_, '_> {
         for m in members {
             let mn = *self.ast.decls.get(m);
             let Some(name) = mn.name().as_ident() else { continue };
+            // [basic.scope.scope]/5: a non-static data member `_` is
+            // name-independent unless it is a member of an anonymous
+            // union, which is known only now (`union { int _; } u;` names
+            // its union); an anonymous struct's (an extension) likewise.
+            // So it conflicts with an earlier `_` of the scope it is
+            // injected into, below (clang 22 and GCC 16.1 accept).
+            if mn.kind() == DeclKind::Field && mn.misc().name_independent() {
+                self.ast.decls.set_name_independent(m, false);
+            }
             let chain: Vec<DeclId> = match mn.kind() {
                 DeclKind::Field => vec![obj, m],
                 DeclKind::IndirectField => {
@@ -13816,13 +13832,33 @@ impl Sema<'_, '_> {
 
     /// An ambiguous lookup `decls` of `_` ([basic.scope.scope]/5, P2169)
     /// that clang words as a placeholder ambiguity: the first declaration
-    /// (in source order) is name-independent.
+    /// (in source order) is a placeholder by clang's `isPlaceholderVar`.
     pub(crate) fn placeholder_ambiguity(&self, decls: &[DeclId]) -> bool {
         decls.len() > 1
             && decls
                 .iter()
                 .min_by_key(|&&d| self.ast.decls.get(d).loc())
-                .is_some_and(|&d| self.ast.decls.get(d).misc().name_independent())
+                .is_some_and(|&d| self.clang_placeholder(d))
+    }
+
+    /// Whether clang's `isPlaceholderVar` holds for `d`, a declaration of
+    /// `_`: a name-independent declaration, and also every non-static
+    /// data member and a member of an anonymous union of automatic
+    /// storage duration, which [basic.scope.scope]/5 does not make
+    /// name-independent (a member of an anonymous union) but clang counts.
+    fn clang_placeholder(&self, d: DeclId) -> bool {
+        let n = self.ast.decls.get(d);
+        match n.kind() {
+            _ if n.misc().name_independent() => true,
+            DeclKind::Field => true,
+            DeclKind::IndirectField => {
+                let chain = self.ast.indirect_field_chain(d);
+                self.ast.lists.iter::<DeclId>(chain).next().is_some_and(|o| {
+                    self.ast.decls.get(o).kind() == DeclKind::Field || self.has_automatic_storage(o)
+                })
+            }
+            _ => false,
+        }
     }
 
     /// clang's `err_reference_to_placeholder_ambiguous` for `decls` at

@@ -38,11 +38,17 @@ pub struct OperCandidate {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 pub struct OperSetId(u32);
 
-/// Where an interned set's candidates are.
-#[derive(Clone, Copy, Debug, kiln_snap::Snap)]
-struct SetSpan {
-    start: u32,
-    len: u32,
+/// Where an interned set's candidates are in the table's candidate
+/// array ([`OperLookups::span`]): `len` candidates from index `start`,
+/// in lookup order. [`OperLookups::candidates`] returns the slice; a
+/// client that keeps sets by position (an index of its own, a copy of
+/// the array) reads the span.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
+pub struct SetSpan {
+    /// The index of the set's first candidate.
+    pub start: u32,
+    /// The number of candidates (0 for a set whose lookup found none).
+    pub len: u32,
 }
 
 /// The definition-context operator lookup sets, by dependent operator
@@ -131,6 +137,11 @@ impl OperLookups {
         self.by_expr.get(e).copied()
     }
 
+    /// Where the candidates of the interned set `id` are ([`SetSpan`]).
+    pub fn span(&self, id: OperSetId) -> SetSpan {
+        self.sets[id.0 as usize]
+    }
+
     /// The candidates of the interned set `id`, in lookup order.
     pub fn candidates(&self, id: OperSetId) -> &[OperCandidate] {
         let s = self.sets[id.0 as usize];
@@ -204,6 +215,19 @@ mod tests {
         assert_eq!(table.of(ExprId::new(5)), Some(&[c(1, 1), c(2, 3)][..]));
         assert_eq!(table.of(ExprId::new(6)), Some(&[][..]));
         assert_eq!(table.of(ExprId::new(7)), None);
+    }
+
+    #[test]
+    fn spans_locate_the_candidates() {
+        let mut t = OperLookups::new();
+        let a = t.intern(&[c(1, 1), c(2, 3)]);
+        let empty = t.intern(&[]);
+        let b = t.intern(&[c(4, 4)]);
+        assert_eq!(t.span(a), SetSpan { start: 0, len: 2 });
+        assert_eq!(t.span(empty), SetSpan { start: 2, len: 0 });
+        assert_eq!(t.span(b), SetSpan { start: 2, len: 1 });
+        let SetSpan { start, len } = t.span(b);
+        assert_eq!(t.candidates(b), &t.cands[start as usize..(start + len) as usize]);
     }
 
     #[test]

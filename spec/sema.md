@@ -10292,7 +10292,19 @@ Each rule names the libc++ test it fixed and its corpus test.
   named `_` is name-independent when it is a block-scope variable of
   automatic storage duration, a structured binding not at namespace
   scope, an init-capture (spec/sema-lambda.md §2) or a non-static data
-  member. Redeclaring such a `_` in the same scope is not a conflict;
+  member of other than an anonymous union. A member `_` of an anonymous
+  union (or anonymous struct, an extension) is injected into the
+  enclosing scope as an ordinary declaration: it conflicts with an
+  earlier `_` there or in the same union (`member of anonymous union
+  redeclares '_'`), and a later name-independent `_` does not conflict
+  with it; its `name_independent` bit, set while the union could still
+  be named, is cleared when the union proves anonymous (WP-2477; clang
+  19/22 and GCC 16.1 accept the conflicting forms, kiln follows the
+  text: `basic.scope.scope/p2169-anon-union-member.cpp`). A use that
+  finds it with a later name-independent `_` keeps clang's placeholder
+  wording, since clang's `isPlaceholderVar` counts every data member
+  (`p2169-anon-union-member-ambiguous.cpp`). Redeclaring
+  such a `_` in the same scope is not a conflict;
   before C++26 it is `sema_ext_placeholder_var`
   (`-Wc++26-extensions`). A *use* of `_` that finds more than one is
   `sema_placeholder_ambiguous` with a `note_placeholder_declared` per

@@ -66,6 +66,17 @@ pub struct AstNames<'a> {
     /// debug-information `PrintingCallbacks::remapPath`, after
     /// `-fdebug-prefix-map`: the last matching `(old, new)` pair wins).
     pub path_prefix_map: &'a [(String, String)],
+    /// clang 22's `TypePrinter::AppendScope`: an enclosing class or
+    /// enumeration that is unnamed or declared inside a function prints
+    /// its qualified name through the functions (`f()::L::In`,
+    /// `O::(unnamed struct)::In`; spec/types.md §12). Set under
+    /// `-fclang-compat=22` for a failed `static_assert` requirement and
+    /// `__PRETTY_FUNCTION__`.
+    pub local_scopes: bool,
+    /// The key printer (spec/types.md §12.1, [`Self::for_keys`]): every
+    /// name with its whole scope, through functions, a null pointer
+    /// argument with its type. Never set for diagnostics.
+    pub key: bool,
 }
 
 impl std::fmt::Debug for AstNames<'_> {
@@ -86,6 +97,8 @@ impl<'a> AstNames<'a> {
             scoped_spec_args: false,
             debug_info: false,
             path_prefix_map: &[],
+            local_scopes: false,
+            key: false,
         }
     }
 
@@ -100,6 +113,8 @@ impl<'a> AstNames<'a> {
             scoped_spec_args: false,
             debug_info: false,
             path_prefix_map: &[],
+            local_scopes: false,
+            key: false,
         }
     }
 
@@ -127,6 +142,199 @@ impl<'a> AstNames<'a> {
     pub fn canonical_expr_types(mut self) -> Self {
         self.expr_types = PrintOptions { canonical: true, ..PrintOptions::CANONICAL };
         self
+    }
+
+    /// The names of the key printer (spec/types.md §12.1) over `ast`,
+    /// whose unnamed classes and closures print their location in
+    /// `sources`: [`Self::type_key`].
+    pub fn for_keys(ast: &'a Ast, sources: &'a SourceManager) -> Self {
+        AstNames { key: true, ..AstNames::with_sources(ast, sources) }
+    }
+
+    /// The key of type `q` (spec/types.md §12.1): its canonical type
+    /// printed so that two different types never print alike. Every name
+    /// carries its whole scope, inline namespaces and enclosing functions
+    /// included (`n::f(int)::Local`, `k<int>()::L`, `C::m() const::L`,
+    /// `g()::(lambda at a.cpp:3:12)::operator()()::LL`); a local class or
+    /// enumeration after the first of its name in its function adds its
+    /// ordinal (`f()::L#2`); a specialization prints all its converted
+    /// arguments, canonical; a null pointer argument of a parameter with
+    /// a deduced type prints with its type (`S<(int *)nullptr>`). The
+    /// diagnostic printers follow clang instead, which prints some of
+    /// these alike (`store<Local>`, `S<nullptr>`).
+    pub fn type_key(&self, q: QualType) -> String {
+        let names = AstNames { key: true, ..*self };
+        let mut s = String::new();
+        write_type(&self.ast.types, &names, q, PrintOptions::CANONICAL, &mut s);
+        s
+    }
+
+    /// The key printer's name of declaration `d`: its whole scope
+    /// ([`Self::write_key_scope`]) and its own component.
+    fn write_key_name(&self, d: DeclId, out: &mut String) {
+        self.write_key_scope(self.ast.decls.get(d).ctx(), 0, out);
+        self.write_key_component(d, out);
+    }
+
+    /// One component of a key: the name (an unnamed class with its
+    /// location, `(lambda at F:L:C)`), and a local tag's ordinal.
+    fn write_key_component(&self, d: DeclId, out: &mut String) {
+        let kind = self.ast.decls.get(d).kind();
+        let tag = matches!(
+            kind,
+            DeclKind::CXXRecord
+                | DeclKind::ClassTemplateSpecialization
+                | DeclKind::ClassTemplatePartialSpecialization
+                | DeclKind::Enum
+        );
+        if self.is_unnamed(d) {
+            if let Some(td) = self.ast.decls.typedef_for_anon(d) {
+                self.write_name(td, out);
+            } else if kind == DeclKind::Namespace {
+                out.push_str("(anonymous namespace)");
+            } else if tag {
+                self.write_unnamed_tag(d, out);
+            }
+            return;
+        }
+        self.write_name(d, out);
+        if tag {
+            let n = self.local_tag_ordinal(d);
+            if n > 0 {
+                let _ = write!(out, "#{}", n + 1);
+            }
+        }
+    }
+
+    /// How many classes and enumerations of the name of local tag `d`
+    /// its function declares before it (0 for other declarations): the
+    /// discriminator the mangling gives (`_ZZ1fvE1L_0`), counted over
+    /// the declarations made between the function and `d`.
+    fn local_tag_ordinal(&self, d: DeclId) -> u32 {
+        let first = self.ast.first(d);
+        let n = self.ast.decls.get(first);
+        let Some(f) = n.ctx().filter(|&c| self.ast.decls.get(c).kind().is_function()) else {
+            return 0;
+        };
+        let Some(name) = n.name().as_ident() else { return 0 };
+        let mut count = 0;
+        for i in f.index() + 1..first.index() {
+            let x = DeclId::new(i);
+            let xn = self.ast.decls.get(x);
+            if xn.ctx() == Some(f)
+                && matches!(xn.kind(), DeclKind::CXXRecord | DeclKind::Enum)
+                && xn.name().as_ident() == Some(name)
+                && self.ast.first(x) == x
+            {
+                count += 1;
+            }
+        }
+        count
+    }
+
+    /// The key printer's scope of a declaration in `ctx`, each component
+    /// followed by `::`: namespaces (inline ones too), classes with all
+    /// their converted arguments, closures by location, and functions as
+    /// `f<args>(params) quals`; linkage specifications, export blocks and
+    /// unscoped enumerations are transparent.
+    fn write_key_scope(&self, ctx: Option<DeclId>, depth: u32, out: &mut String) {
+        let Some(c) = ctx else { return };
+        if depth > MAX_DEPTH {
+            out.push_str("...::");
+            return;
+        }
+        let n = self.ast.decls.get(c);
+        let kind = n.kind();
+        if kind == DeclKind::TranslationUnit {
+            return;
+        }
+        self.write_key_scope(n.ctx(), depth + 1, out);
+        match kind {
+            DeclKind::Enum if self.ast.is_transparent(c) => {}
+            k if k.is_function() => {
+                self.write_key_component(c, out);
+                if let Some((_, info)) = self.ast.spec_info(c) {
+                    let args = self.ast.types.canonical_args(info.args);
+                    crate::types::write_arg_list_scoped_of(&self.ast.types, self, c, args, out);
+                }
+                out.push('(');
+                if let Some(p) = n.ty().and_then(|t| self.ast.types.proto(t)) {
+                    let params = self.ast.types.params(p);
+                    for (i, &q) in params.iter().enumerate() {
+                        if i > 0 {
+                            out.push_str(", ");
+                        }
+                        write_type(&self.ast.types, self, q, PrintOptions::CANONICAL, out);
+                    }
+                    if p.variadic() {
+                        out.push_str(if params.is_empty() { "..." } else { ", ..." });
+                    }
+                    out.push(')');
+                    let info = p.info();
+                    let quals = info.this_quals();
+                    for (on, s) in [
+                        (quals.is_const(), " const"),
+                        (quals.is_volatile(), " volatile"),
+                        (quals.is_restrict(), " __restrict"),
+                    ] {
+                        if on {
+                            out.push_str(s);
+                        }
+                    }
+                    out.push_str(match info.ref_qual() {
+                        crate::types::RefQual::LValue => " &",
+                        crate::types::RefQual::RValue => " &&",
+                        crate::types::RefQual::None => "",
+                    });
+                } else {
+                    out.push(')');
+                }
+                out.push_str("::");
+            }
+            DeclKind::Namespace
+            | DeclKind::CXXRecord
+            | DeclKind::ClassTemplateSpecialization
+            | DeclKind::ClassTemplatePartialSpecialization
+            | DeclKind::Enum => {
+                self.write_key_component(c, out);
+                if let Some(args) = self.key_spec_args(c) {
+                    crate::types::write_arg_list_scoped_of(&self.ast.types, self, c, args, out);
+                }
+                out.push_str("::");
+            }
+            _ => {}
+        }
+    }
+
+    /// The arguments a class template specialization's key prints: all
+    /// its converted arguments, canonical (`None` for other records).
+    fn key_spec_args(&self, d: DeclId) -> Option<crate::ids::ArgListId> {
+        if self.ast.decls.get(d).kind() != DeclKind::CXXRecord {
+            return None;
+        }
+        self.ast.spec_info(d).map(|(_, s)| self.ast.types.canonical_args(s.args))
+    }
+
+    /// Whether class or enumeration `d` is unnamed and has no typedef
+    /// name for linkage purposes.
+    fn unnamed_tag(&self, d: DeclId) -> bool {
+        self.is_unnamed(d) && self.ast.decls.typedef_for_anon(d).is_none()
+    }
+
+    /// Whether a function encloses `d`.
+    fn in_function(&self, d: DeclId) -> bool {
+        let mut cur = self.ast.decls.get(d).ctx();
+        let mut depth = 0;
+        while let Some(c) = cur
+            && depth <= MAX_DEPTH
+        {
+            if self.ast.decls.get(c).kind().is_function() {
+                return true;
+            }
+            cur = self.ast.decls.get(c).ctx();
+            depth += 1;
+        }
+        false
     }
 
     /// Appends the unqualified name of `d` as the dump prints it
@@ -465,7 +673,18 @@ impl<'a> AstNames<'a> {
                         return;
                     }
                     let tag = self.ast.decls.record(d).map_or(TagKind::Struct, |r| r.tag);
-                    out.push_str("(anonymous ");
+                    // clang 22 names an unnamed class that is not an
+                    // anonymous member `(unnamed struct)` in a scope.
+                    let anonymous = self
+                        .ast
+                        .decls
+                        .record(d)
+                        .is_some_and(|r| r.defn.contains(DefinitionBits::ANONYMOUS));
+                    out.push_str(if self.local_scopes && !anonymous {
+                        "(unnamed "
+                    } else {
+                        "(anonymous "
+                    });
                     out.push_str(tag.keyword());
                     out.push(')');
                 }
@@ -544,6 +763,24 @@ impl<'a> AstNames<'a> {
         let n = self.ast.decls.get(ctx);
         let kind = n.kind();
         if kind == DeclKind::TranslationUnit || kind.is_function() {
+            return;
+        }
+        let tag = matches!(
+            kind,
+            DeclKind::CXXRecord
+                | DeclKind::ClassTemplateSpecialization
+                | DeclKind::ClassTemplatePartialSpecialization
+                | DeclKind::Enum
+        );
+        if self.local_scopes
+            && tag
+            && self.ast.closure_lambda(ctx).is_none()
+            && (self.unnamed_tag(ctx) || self.in_function(ctx))
+        {
+            // clang 22: the context's qualified name (`printQualifiedName`),
+            // through functions and unnamed classes (`n::f(int)::L::In`,
+            // `O::(unnamed struct)::In`).
+            self.write_scope_chain(ctx, depth, true, out);
             return;
         }
         self.append_scope(n.ctx(), depth + 1, out);
@@ -1670,6 +1907,9 @@ impl TypeNames for AstNames<'_> {
     }
 
     fn specialization_args(&self, decl: DeclId) -> Option<crate::ids::ArgListId> {
+        if self.key {
+            return self.key_spec_args(decl);
+        }
         self.ast.spec_print_args(decl)
     }
 
@@ -1678,14 +1918,14 @@ impl TypeNames for AstNames<'_> {
     /// `'A<N::X>':'A<X>'` after `template<> struct A<X>` (WP-1816). Not
     /// in debug information, whose names print the converted arguments.
     fn args_as_written(&self, decl: DeclId) -> Option<crate::ids::ArgListId> {
-        if self.debug_info || self.ast.decls.get(decl).kind() != DeclKind::CXXRecord {
+        if self.debug_info || self.key || self.ast.decls.get(decl).kind() != DeclKind::CXXRecord {
             return None;
         }
         self.ast.templates.args_as_written(decl)
     }
 
     fn preferred_name(&self, decl: DeclId) -> Option<QualType> {
-        if self.debug_info {
+        if self.debug_info || self.key {
             return None;
         }
         self.ast.preferred_name_of(decl)
@@ -1696,6 +1936,9 @@ impl TypeNames for AstNames<'_> {
     }
 
     fn converted_args(&self, decl: DeclId) -> Option<crate::ids::ArgListId> {
+        if self.key {
+            return self.key_spec_args(decl);
+        }
         if self.ast.decls.get(decl).kind() != DeclKind::CXXRecord {
             return None;
         }
@@ -1708,6 +1951,10 @@ impl TypeNames for AstNames<'_> {
     }
 
     fn write_decl_name(&self, decl: DeclId, scoped: bool, out: &mut String) {
+        if self.key {
+            self.write_key_name(decl, out);
+            return;
+        }
         let n = self.ast.decls.get(decl);
         let tag = matches!(
             n.kind(),
@@ -1766,7 +2013,23 @@ impl TypeNames for AstNames<'_> {
         self.ast.consts.print(value, &self.ast.strings, self, &opts, out);
     }
 
-    fn write_value_typed(&self, _ty: QualType, value: ConstValueId, out: &mut String) {
+    fn write_value_typed(&self, ty: QualType, value: ConstValueId, out: &mut String) {
+        // The key printer keeps a null pointer's type, which clang's
+        // `TemplateArgument::print` drops (`S<nullptr>` for both
+        // `S<(int *)nullptr>` and `S<(char *)nullptr>`; spec/types.md
+        // §12.1).
+        if self.key
+            && matches!(self.ast.consts.scalar(value), Some(Scalar::Null { .. }))
+            && !matches!(
+                self.ast.types.canonical_view(ty),
+                TypeView::Builtin(crate::types::BuiltinType::NullPtr)
+            )
+        {
+            out.push('(');
+            write_type(&self.ast.types, self, ty, PrintOptions::CANONICAL, out);
+            out.push_str(")nullptr");
+            return;
+        }
         let opts = ValueOptions {
             include_type: true,
             ..ValueOptions::with_style(PrintStyle::TemplateArg)
@@ -1819,6 +2082,11 @@ impl PrintEnv for AstNames<'_> {
         // The object of a CWG 3135 holding variable is named as its
         // binding (`b`, `n::b.y`).
         let decl = self.ast.holding_object_binding(decl).unwrap_or(decl);
+        if self.key {
+            // `&x` of a static local `x` names its function (`&f()::x`).
+            self.write_key_name(decl, out);
+            return;
+        }
         self.write_qualified_spec_name(decl, out);
     }
 
@@ -1837,7 +2105,8 @@ impl PrintEnv for AstNames<'_> {
     }
 
     fn type_name(&self, ty: QualType, out: &mut String) {
-        write_type(&self.ast.types, self, ty, PrintOptions::SUGARED, out);
+        let opts = if self.key { PrintOptions::CANONICAL } else { PrintOptions::SUGARED };
+        write_type(&self.ast.types, self, ty, opts, out);
     }
 
     fn arg_type_name(&self, ty: QualType, out: &mut String) {
@@ -1859,7 +2128,11 @@ impl PrintEnv for AstNames<'_> {
                 _ => false,
             };
             if same {
-                self.write_qualified_spec_name(m, out);
+                if self.key {
+                    self.write_key_name(m, out);
+                } else {
+                    self.write_qualified_spec_name(m, out);
+                }
                 return true;
             }
         }

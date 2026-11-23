@@ -159,7 +159,7 @@ struct DeclNode {        // 28 bytes
     kind: DeclKind,      // u8 (§4.2)
     flags: DeclFlags,    // u8: INVALID IMPLICIT USED REFERENCED HAS_ATTRS
                          //     HAS_LEXICAL_CTX DEPENDENT_CTX INJECTED
-    misc: DeclMisc,      // u16: access(2) friend(2) local_extern(1) module_ownership(3)
+    misc: DeclMisc,      // u16: access(2) friend(2) local_extern(1) reserved(3, zero)
                          //      name_independent(1, P2169 `_`) linkage cache(3) visibility(2)
                          //      first(1) definition(1)
     name: DeclName,      // u32
@@ -178,6 +178,10 @@ struct DeclNode {        // 28 bytes
   a non-redeclarable declaration is its own definition. A template decl
   is first when its pattern is first and describes it; a concept always
   is; `Ast::set_definition(d)` sets `d`'s definition bit.
+- The three reserved bits are zero: no declaration header records module
+  ownership; the owner is `Ast::modules.owner(d)` (spec/modules.md), and
+  the never-called `DeclMisc::with_module_ownership` and its enum were
+  removed (WP-2477).
 - The lexical context is stored in a sparse map `lexical_ctx: FxHashMap<
   DeclId, DeclId>` only when it differs from `ctx` (out-of-line member
   definitions, friends, local externs): flag `HAS_LEXICAL_CTX`.
@@ -1069,7 +1073,9 @@ unqualified lookup (spec/sema-templates.md §3.5 "Operators"). The set is
   shares the set of its pattern.
 - Query `Ast::dependent_oper_candidates(e) -> Option<&[OperCandidate]>`;
   `OperLookups::set_of(e)` gives the interned id (equal ids are equal
-  sets).
+  sets), `OperLookups::span(id) -> SetSpan { start, len }` where its
+  candidates are in the candidate array (public, WP-2477, for tooling
+  clients that keep sets by position).
 - Written by sema at the expression (`note_dependent_oper`,
   spec/sema-overload.md §2.6) and by the module-image importer, which
   carries the set with the expression (`COLD_OPER`, spec/modules.md
@@ -3998,7 +4004,18 @@ sequence, the one `TypeContext::profile` interns. A typed walk of
 those words (which of them are canonical type, nested-name-specifier,
 argument-list, template-name and declaration ids) is not public yet.
 
-### 20.5 Stability
+### 20.5 Printed names: diagnostic, dump, key (WP-2477, WP-2545)
+
+A client that keys anything on a printed type name uses the key printer,
+`kiln_ast::dump::AstNames::for_keys(ast, sources).type_key(q)`: two
+different types never print alike there. The diagnostic printer
+(`DiagNames`, clang's text) and the dump printer (`AstNames`, the AST
+dump's and debug information's text) follow clang, which prints, for
+example, `S<(int *)nullptr>` and `S<(char *)nullptr>` both as
+`S<nullptr>`, and a `Local` class of `f()` and one of `g()` both as
+`Local`. spec/types.md §12.1 states which printer prints what.
+
+### 20.6 Stability
 
 Every value in these tables (a row's roles, an enum maximum, a field's
 bits, a named constant, a descriptor) is stable within a snapshot

@@ -24,8 +24,8 @@
 use kiln_ast::consts::Scalar;
 use kiln_ast::decl::{
     Access, ConstexprKind, CtorInitKind, DeclFlags, DeclKind, Defaulted, DefinitionBits, EnumData,
-    FnSpec, FnStorage, FriendKind, FriendTarget, InitStyle, ModuleOwnership, ParamData, TagKind,
-    TemplLinkKind, TlsKind, VarSpec, VarStorage,
+    FnSpec, FnStorage, FriendKind, FriendTarget, InitStyle, ParamData, TagKind, TemplLinkKind,
+    TlsKind, VarSpec, VarStorage,
 };
 use kiln_ast::modules::{Owner, UnitKind};
 use kiln_ast::names::{DeclName, DeclNameView, OverloadedOperator};
@@ -4167,10 +4167,7 @@ impl Writer<'_, '_, '_> {
         if m.friend() != FriendKind::None {
             self.friend_gate(d)?;
         }
-        if m.local_extern()
-            || m.name_independent()
-            || m.module_ownership() != ModuleOwnership::Unowned
-        {
+        if m.local_extern() || m.name_independent() {
             return Err("a declaration with local scope");
         }
         let access = m.access() as u8;

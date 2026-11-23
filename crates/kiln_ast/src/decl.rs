@@ -415,26 +415,12 @@ pub enum FriendKind {
     Undeclared = 2,
 }
 
-/// Module ownership of a declaration ([module.reach], M4).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug, kiln_snap::Snap)]
-#[repr(u8)]
-pub enum ModuleOwnership {
-    /// Not owned by a named module.
-    #[default]
-    Unowned = 0,
-    /// Visible.
-    Visible = 1,
-    /// Visible when imported.
-    VisibleWhenImported = 2,
-    /// Reachable when imported.
-    ReachableWhenImported = 3,
-    /// Module-private.
-    ModulePrivate = 4,
-}
-
 /// `DeclNode.misc` (spec/ast.md §4.1): `access(2) friend(2)
-/// local_extern(1) module_ownership(3) name_independent(1)
-/// linkage_cache(3) visibility(2) first(1) definition(1)`.
+/// local_extern(1) reserved(3) name_independent(1) linkage_cache(3)
+/// visibility(2) first(1) definition(1)`. The reserved bits are zero:
+/// a declaration's owning module is the module table's
+/// ([`crate::modules::ModuleTable::owner`]), not a bit of its header
+/// (WP-2477).
 ///
 /// `first` and `definition` are query caches the arena owns (WP-655):
 /// set, the declaration is its entity's first declaration
@@ -496,21 +482,6 @@ impl DeclMisc {
     #[must_use]
     pub const fn with_local_extern(self, v: bool) -> Self {
         self.with_field(4, 1, v as u16)
-    }
-    /// Module ownership.
-    pub const fn module_ownership(self) -> ModuleOwnership {
-        match self.field(5, 3) {
-            1 => ModuleOwnership::Visible,
-            2 => ModuleOwnership::VisibleWhenImported,
-            3 => ModuleOwnership::ReachableWhenImported,
-            4 => ModuleOwnership::ModulePrivate,
-            _ => ModuleOwnership::Unowned,
-        }
-    }
-    /// With module ownership `m`.
-    #[must_use]
-    pub const fn with_module_ownership(self, m: ModuleOwnership) -> Self {
-        self.with_field(5, 3, m as u16)
     }
     /// A name-independent declaration (P2169 `_`, [basic.scope.scope]/5).
     pub const fn name_independent(self) -> bool {
@@ -2741,6 +2712,14 @@ impl DeclArena {
     pub fn set_access(&mut self, d: DeclId, a: Access) {
         let n = &mut self.nodes[d.index() as usize];
         n.misc = n.misc.with_access(a);
+    }
+
+    /// Clears or sets the name-independent bit of `d` ([`DeclMisc`]):
+    /// sema clears it on the members of an anonymous union once the
+    /// union is known to be anonymous ([basic.scope.scope]/5).
+    pub fn set_name_independent(&mut self, d: DeclId, v: bool) {
+        let n = &mut self.nodes[d.index() as usize];
+        n.misc = n.misc.with_name_independent(v);
     }
 
     /// Sets a function's body (write-once, §2.4).

@@ -812,6 +812,14 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Changed
 
+- `kiln_ast::dump::AstNames::for_keys` / `type_key` print a type as a
+  key: unlike the diagnostic text, two different types never print alike
+  (a typed null pointer argument keeps its type, a local class its
+  enclosing function and a block ordinal, an unnamed class or closure its
+  location; spec/types.md §12.1). `oper_lookup::SetSpan` is public, with
+  `OperLookups::span`. The unused `DeclMisc` module-ownership bits are
+  removed (the owner is `ModuleTable::owner`) (WP-2477, WP-2545).
+
 - Breaking, for tooling clients (WP-2480, WP-2502, WP-2500, WP-2503;
   spec/eval-session.md §8, §9): what a failed evaluation-session run
   hands over. `RunError` moved from `kiln_oven` to `kiln_sema::session`
@@ -998,6 +1006,17 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 - A designated initializer list nested N deep in a template keeps N + 1
   written lists, not (N + 1)(N + 2)/2: the written forms of the inner
   lists are shared (WP-2478).
+- Under `-fclang-compat=22`, a class nested in a local class or in an
+  unnamed class prints in a canonical diagnostic, `__PRETTY_FUNCTION__`
+  and a failed requirement as clang 22 prints it: with its enclosing
+  function and parameter types (`store<n::f(int, ...)::Local::In>`) and
+  `O::(unnamed struct)::In`; clang 19's form skips an unnamed enclosing
+  class (`O::In`). A closure in a failed `static_assert` requirement
+  prints `(lambda at file:line:col)` under both releases (WP-2545).
+- A `_` member of an anonymous union or anonymous struct is no longer
+  marked name-independent ([basic.scope.scope]/5); an ambiguous use of it
+  keeps clang's placeholder wording (WP-2477).
+
 - `EvalSession::variable_value` instantiates on demand a static data
   member's initializer that nothing instantiated (an in-class `constexpr`
   member of a class template specialization, an out-of-line `const` one),

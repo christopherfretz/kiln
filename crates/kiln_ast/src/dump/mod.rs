@@ -349,6 +349,8 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 scoped_spec_args: false,
                 debug_info: false,
                 path_prefix_map: &[],
+                local_scopes: false,
+                key: false,
             },
             opts,
             out,

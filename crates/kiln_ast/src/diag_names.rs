@@ -254,6 +254,27 @@ impl<'s> DiagNames<'s> {
                             .decls
                             .enumeration(self.ast.definition(c).unwrap_or(c))
                             .is_some_and(crate::decl::EnumData::is_scoped) => {}
+                // clang 22 `AppendScope`: an unnamed class, or a class or
+                // enumeration declared in a function, prints its qualified
+                // name through the functions (`printQualifiedName`:
+                // `n::f(int)::L::In`, `O::(unnamed struct)::In`).
+                DeclKind::CXXRecord | DeclKind::Enum
+                    if is_type
+                        && self.clang_compat >= 22
+                        && self.ast.closure_lambda(c).is_none()
+                        && (self.unnamed_tag(c) || self.in_local_scope(c)) =>
+                {
+                    let mut s = String::new();
+                    self.write_decl_scope(c, &mut s);
+                    self.write_scope_tag(c, &mut s);
+                    chain.push(s);
+                    break;
+                }
+                // clang 19 `AppendScope` prints nothing for an unnamed
+                // class (its enclosing scopes stay: `O::In`).
+                DeclKind::CXXRecord | DeclKind::Enum if is_type && self.unnamed_tag(c) => {
+                    name_in_scope = n.name();
+                }
                 DeclKind::CXXRecord | DeclKind::Enum => {
                     let mut s = String::new();
                     self.write_unscoped(c, &mut s);
@@ -372,6 +393,32 @@ impl DiagNames<'_> {
         for c in chain.iter().rev() {
             out.push_str(c);
             out.push_str("::");
+        }
+    }
+
+    /// Whether class or enumeration `d` is unnamed and has no typedef
+    /// name for linkage purposes.
+    fn unnamed_tag(&self, d: DeclId) -> bool {
+        self.ast.decls.get(d).name().is_empty() && self.ast.decls.typedef_for_anon(d).is_none()
+    }
+
+    /// Class or enumeration `c` as the last component of clang 22's
+    /// qualified scope name: its name with its arguments, or
+    /// `(unnamed struct)` (`(anonymous union)` for an anonymous member,
+    /// `(unnamed enum)`), without a location.
+    fn write_scope_tag(&self, c: DeclId, s: &mut String) {
+        if !self.unnamed_tag(c) {
+            self.write_scope_component(c, s);
+            return;
+        }
+        match self.ast.decls.record(c) {
+            Some(r) => {
+                let anonymous = r.defn.contains(crate::decl::DefinitionBits::ANONYMOUS);
+                s.push_str(if anonymous { "(anonymous " } else { "(unnamed " });
+                s.push_str(r.tag.keyword());
+                s.push(')');
+            }
+            None => s.push_str("(unnamed enum)"),
         }
     }
 
