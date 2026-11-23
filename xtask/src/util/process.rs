@@ -329,6 +329,53 @@ pub fn run_with_input(
     Ok(Output { status, stdout, stderr, elapsed: start.elapsed() })
 }
 
+/// The stack of [`run_streaming`]'s reader thread (address space; only what
+/// is used is resident).
+const STREAM_READER_STACK: usize = 256 << 20;
+
+/// Like [`run`], but the child's standard output goes to `read` as it
+/// arrives (on a thread of its own) instead of being captured, so an
+/// output of any size is read in the memory `read` needs; the returned
+/// [`Output`] has an empty `stdout`. `read` should read to the end of
+/// the stream: a child blocked on a full pipe is killed at `timeout`.
+pub fn run_streaming<T: Send + 'static>(
+    cmd: &mut Command,
+    timeout: Duration,
+    read: impl FnOnce(std::process::ChildStdout) -> T + Send + 'static,
+) -> io::Result<(Output, Option<T>)> {
+    let _slot = crate::jobs::global().acquire();
+    let start = Instant::now();
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(cmd, 0);
+    let spawning = LIVE.begin_spawn()?;
+    let child = cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn();
+    let _live = spawning.spawned(child.as_ref().map(Child::id).ok(), Stop::Kill);
+    let mut child = child?;
+    let pid = child.id();
+    let pipe = child.stdout.take().expect("stdout is piped");
+    // A big stack: `read` may recurse once per level of a deep tree.
+    let out_reader =
+        thread::Builder::new().stack_size(STREAM_READER_STACK).spawn(move || read(pipe))?;
+    let err_reader = spawn_reader(&mut child, false);
+    let mut delay = Duration::from_millis(1);
+    let status = loop {
+        if let Some(s) = child.try_wait()? {
+            break Some(s);
+        }
+        if start.elapsed() >= timeout {
+            kill_group(pid);
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
+        thread::sleep(delay);
+        delay = (delay * 2).min(Duration::from_millis(25));
+    };
+    let value = out_reader.join().ok();
+    let stderr = err_reader.join().unwrap_or_default();
+    Ok((Output { status, stdout: Vec::new(), stderr, elapsed: start.elapsed() }, value))
+}
+
 fn spawn_reader(child: &mut Child, stdout: bool) -> thread::JoinHandle<Vec<u8>> {
     let mut pipe: Box<dyn Read + Send> = if stdout {
         Box::new(child.stdout.take().expect("stdout is piped"))

@@ -3333,13 +3333,12 @@ impl Sema<'_, '_> {
         rparen: Loc,
     ) -> ExprId {
         use kiln_ast::expr::{ExprFlags, StorageDuration, ValueCategory};
-        let _ = rparen;
         if self.is_err_expr(e) || self.is_error_type(ty) {
             return self.recover(self.non_reference(ty), &[e], loc);
         }
         if self.ast.types.is_dependent(ty) || self.expr_is_type_dependent(e) {
             let to = self.non_reference(ty);
-            return self.builder().cast(
+            let r = self.builder().cast(
                 ExprKind::BuiltinBitCastExpr,
                 CastKind::Dependent,
                 e,
@@ -3349,6 +3348,9 @@ impl Sema<'_, '_> {
                 loc,
                 ExprFlags::NONE,
             );
+            // The `)` (clang's `getEndLoc`), for the written extent.
+            self.builder().record_end_loc(r, rparen);
+            return r;
         }
         let dest = self.non_reference(ty);
         if !self.require_complete(dest, loc) {
@@ -3412,7 +3414,7 @@ impl Sema<'_, '_> {
         } else {
             conv::strip_cv(self, dest)
         };
-        self.builder().cast(
+        let r = self.builder().cast(
             ExprKind::BuiltinBitCastExpr,
             CastKind::LValueToRValueBitCast,
             sub,
@@ -3421,7 +3423,9 @@ impl Sema<'_, '_> {
             None,
             loc,
             ExprFlags::NONE,
-        )
+        );
+        self.builder().record_end_loc(r, rparen);
+        r
     }
 }
 

@@ -69,6 +69,8 @@ pub fn lookup_char_name(name: &str) -> Option<NameMatch>; // \N{} names; never a
 pub mod literal;                                         // see "Literals" below
 pub fn dump(sm, &LexOptions, &[Token]) -> String; pub fn dump_source(text, LexOptions) -> String;
 pub fn token_end(sm, &Interner, loc: Loc, LexOptions) -> Option<Loc>;  // see "End of a token"
+pub fn token_range(sm, &Interner, first: Loc, last: Loc, LexOptions)
+    -> Option<(FileId, u32, u32)>;                                   // see "Token ranges"
 ```
 `Punct` covers every [lex.operators] token plus `^^`, `[:`, `:]` (C++26
 with `LexOptions::reflection`, P2996). `Punct::as_str()` is the primary spelling, `name()` clang's kind name.
@@ -101,6 +103,31 @@ Sema's own `token_end` (spec/sema.md §7.10.1) is a cheaper measure of the
 tokens it holds and stays separate. Tests: `tests/token_end.rs`, and
 `kiln_pp` `tests/editable_range.rs` (every token of preprocessed
 sources, macro locations included).
+
+### Token ranges (`token_range`, WP-2328)
+`token_range(sm, interner, first, last, opts) -> Option<(FileId, u32,
+u32)>` is the file text from the start of the token at `first` to the
+end of the token at `last` (byte offsets in `text(file)`, end exclusive),
+from the source manager alone, after the unit is built: `token_end` of
+`last` (above), then `SourceManager::editable_file_range` of the span
+(spec/source.md "Editable file ranges"), which is the one rule for every
+client: the range is file text when both tokens are; when both lie in
+one use of one macro argument, the argument as written; when the range
+covers whole macro invocations (it starts at the start and ends at the
+end of every expansion it is in), the invocations, from the macro name
+through the closing `)` (the name alone for an object-like macro),
+which wins when both apply (`ID(k + 1)` with `#define ID(x) x` is the
+invocation, as in clang's `makeFileCharRange`);
+anything else, `None` (a token of a replacement list that is not its
+first or last, two different arguments, a range from the file into the
+middle of an expansion, a pasted token, whose spelling is a scratch
+buffer). An empty or reversed range is `None` too. The fix-its of
+spec/sema.md §7.10.1 place their edits with the same
+`editable_range`, so a fix-it and a tooling client never disagree. Tests:
+`kiln_pp` `tests/editable_range.rs` (`token_range_from_token_starts`:
+file text, one argument, a whole function-like and object-like
+invocation, an end in a macro body, ends in different arguments, a
+stringized and a pasted token).
 
 ### Allocation
 `next()` does not allocate except: interning a new identifier spelling;

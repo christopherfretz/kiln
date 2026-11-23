@@ -312,6 +312,10 @@ impl ExprFlags {
     /// `SubstNonTypeTemplateParmExpr`: the parameter has (deduced)
     /// reference type (clang `isReferenceParameter`).
     pub const REFERENCE_PARAMETER: ExprFlags = ExprFlags(1 << 4);
+    /// `InitListExpr` without braces of its own that a designator opens
+    /// (`.a.y = 3`'s list of `a`): it has no written extent (spec/ast.md
+    /// §21.2).
+    pub const DESIGNATED: ExprFlags = ExprFlags(1 << 4);
     /// `CXXNewExpr` / `CXXDeleteExpr`: `::new` / `::delete` (dump `global`).
     pub const GLOBAL: ExprFlags = ExprFlags(1 << 4);
     /// `CXXNewExpr`: an array new; `CXXDeleteExpr`: deletes an array
@@ -2184,6 +2188,18 @@ impl ExprArena {
         let n = &mut self.nodes[e.index() as usize];
         assert!(n.kind == ExprKind::MemberExpr, "expected a member access, found {:?}", n.kind);
         n.bits |= ExprFlags::SPLICED.0;
+    }
+
+    /// Marks the brace-less list `e` as opened by a designator
+    /// ([`ExprFlags::DESIGNATED`]).
+    pub fn set_init_list_designated(&mut self, e: ExprId) {
+        let n = &mut self.nodes[e.index() as usize];
+        assert!(
+            n.kind == ExprKind::InitListExpr,
+            "expected an initializer list, found {:?}",
+            n.kind
+        );
+        n.bits |= ExprFlags::DESIGNATED.0;
     }
 
     /// Makes the prefix `++`/`--` `e` a prvalue: C17 6.5.3.1p2 defines

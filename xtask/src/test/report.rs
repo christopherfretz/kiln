@@ -210,6 +210,16 @@ impl CorpusOutcome {
         }
     }
 
+    /// A run of units that are not test files (`cargo xtask extents`):
+    /// `passed` and `failed` units of `total`, the rest skipped.
+    pub fn of_units(passed: usize, failed: usize, total: usize, elapsed: Duration) -> Self {
+        let mut m = BTreeMap::new();
+        m.insert(Status::Pass, passed);
+        m.insert(Status::Fail, failed);
+        m.insert(Status::Skip, total.saturating_sub(passed + failed));
+        Self::Ran { counts: Counts(m, 0, 0), total, elapsed }
+    }
+
     /// Does this run let `ci` pass? A run passes when it has no FAIL, XPASS,
     /// ERROR or KILLED (XFAIL and SKIP are allowed); a skipped run passes (the
     /// caller decides which runs may be skipped); an infrastructure error

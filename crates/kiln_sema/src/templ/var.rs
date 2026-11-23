@@ -882,6 +882,7 @@ impl Sema<'_, '_> {
                 return;
             };
             let Some((i, info)) = self.ast.spec_info(v).map(|(i, s)| (i, *s)) else { return };
+            self.note_explicit_inst_named(v);
             self.explicit_inst_visibility_attrs(v, attrs);
             let n = self.var_spec_inst_name(sid.template, info.print_args);
             self.check_explicit_inst_scope(sid.template, n, d.qualifier.is_some(), name_loc);
@@ -938,7 +939,7 @@ impl Sema<'_, '_> {
             self.emit(e);
             return;
         };
-        let m = self.ast.first(m);
+        let m = self.note_explicit_inst_named(m);
         self.note_written_inst_target(name_loc, m);
         let pattern = self.ast.instantiated_from(m).unwrap_or(m);
         let n = self.decl_name(m);

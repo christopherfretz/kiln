@@ -294,6 +294,7 @@ impl Preprocessor<'_, '_> {
             parsing_if: _,
             va_scope: _,
             date_time: _,
+            time_zone: _,
             paste_buf: _,
             in_directive: _,
             dir_eod: _,

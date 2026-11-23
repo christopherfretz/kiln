@@ -128,7 +128,25 @@ impl Sema<'_, '_> {
     /// Paired with [`Sema::act_explicit_inst_end`].
     pub fn act_explicit_inst_start(&mut self, extern_loc: Option<Loc>, loc: Loc) {
         self.templ.explicit_inst = Some((extern_loc, loc));
+        self.templ.explicit_inst_named = None;
         self.templ.explicit_depth = self.inst.stack.len();
+    }
+
+    /// The function or variable specialization, or the member of a class
+    /// template specialization, that the declarator of an explicit
+    /// instantiation just declared named (none after an error, and for a
+    /// class), for its row in the declaration-extent table (spec/ast.md
+    /// §19.1; WP-2470).
+    pub fn take_explicit_inst_named(&mut self) -> Option<DeclId> {
+        self.templ.explicit_inst_named.take()
+    }
+
+    /// The explicit instantiation being parsed names `d`; its first
+    /// declaration, the row's key, is returned.
+    pub(crate) fn note_explicit_inst_named(&mut self, d: DeclId) -> DeclId {
+        let first = self.ast.first(d);
+        self.templ.explicit_inst_named = Some(first);
+        first
     }
 
     /// [temp.explicit]/3: an explicit instantiation of a function or

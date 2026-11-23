@@ -709,6 +709,10 @@ pub struct Args {
     /// `-fkiln-dump-decl-extents` (`-fsyntax-only` and codegen): print the
     /// declaration-extent table (spec/ast.md §19.6).
     pub dump_decl_extents: bool,
+    /// `-fkiln-dump-expr-extents` (`-fsyntax-only`): print the written
+    /// extent of every expression of the written bodies (spec/ast.md
+    /// §21.4).
+    pub dump_expr_extents: bool,
     /// `-fkiln-pp-record`: keep the preprocessing record (spec/pp.md
     /// "Preprocessing record") and print nothing (to measure it).
     pub pp_record: bool,
@@ -2105,6 +2109,7 @@ impl Args {
                 self.decl_extents = true;
                 self.dump_decl_extents = true;
             }
+            "-fkiln-dump-expr-extents" => self.dump_expr_extents = true,
             "-fkiln-pp-record" => self.pp_record = true,
             "-fkiln-dump-pp-record" => self.dump_pp_record = true,
             "-fkiln-dump-pp-record=source-order" => {

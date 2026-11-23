@@ -12,7 +12,7 @@ use crate::arena::AppendVec;
 use crate::fx::FxHashMap;
 use crate::hash::content_hash;
 use crate::loc::{FileId, Loc, MACRO_BIT, Span};
-use crate::overlay::Overlay;
+use crate::overlay::{self, DirCache, Held, LoadFailures, Overlay, Resolved};
 use crate::workdir::WorkDir;
 
 mod snap;
@@ -581,9 +581,13 @@ pub struct SourceManager {
     /// The working directory relative paths open against
     /// ([`Self::set_work_dir`]).
     work_dir: OnceLock<WorkDir>,
-    /// Replacement contents of files ([`Self::set_overlay`]); never an
-    /// empty overlay.
+    /// The files of the run that differ from the disk
+    /// ([`Self::set_overlay`]); never an empty overlay.
     overlay: OnceLock<Arc<Overlay>>,
+    /// The directories the overlay's resolution `stat`ed (the run's).
+    overlay_dirs: Mutex<DirCache>,
+    /// The overlay's entries whose loader failed when this run read them.
+    overlay_failures: LoadFailures,
 }
 
 /// How the source-location builtins (`__builtin_FILE()`,
@@ -641,6 +645,27 @@ pub(crate) enum FileKey {
     /// The canonical path, where there is no inode number.
     #[cfg_attr(unix, allow(dead_code))]
     Canonical(PathBuf),
+    /// A file or directory an [`Overlay`] creates: the key of its deepest
+    /// ancestor directory on disk (the anchor) and the components below
+    /// it (spec/source.md "Overlay").
+    Created(Box<FileKey>, PathBuf),
+}
+
+impl FileKey {
+    /// The key of the path `rel` below the existing directory `anchor`.
+    pub(crate) fn created<S: AsRef<Path>>(anchor: &FileKey, rel: &[S]) -> FileKey {
+        FileKey::Created(Box::new(anchor.clone()), rel.iter().map(AsRef::as_ref).collect())
+    }
+
+    /// A directory's identity as header search compares directories
+    /// (`kiln_pp`'s `dir_identity`: `<dev>:<ino>` on Unix).
+    pub(crate) fn identity(&self) -> String {
+        match self {
+            FileKey::Unique(dev, ino) => format!("{dev}:{ino}"),
+            FileKey::Canonical(p) => p.to_string_lossy().into_owned(),
+            FileKey::Created(anchor, rel) => format!("{}/{}", anchor.identity(), rel.display()),
+        }
+    }
 }
 
 /// The [`FileKey`] of the file at `path`, whose metadata is `meta`.
@@ -655,6 +680,16 @@ pub(crate) fn file_key(_path: &Path, meta: &fs::Metadata) -> io::Result<FileKey>
 #[cfg(not(unix))]
 pub(crate) fn file_key(path: &Path, _meta: &fs::Metadata) -> io::Result<FileKey> {
     fs::canonicalize(path).map(FileKey::Canonical)
+}
+
+/// The error of a file whose overlay loader failed (noted in
+/// [`SourceManager::overlay_failures`]).
+fn load_failed() -> io::Error {
+    io::Error::other("the overlay's loader for this file failed")
+}
+
+fn is_a_directory() -> io::Error {
+    io::Error::new(io::ErrorKind::IsADirectory, "is a directory")
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -697,6 +732,8 @@ impl SourceManager {
             gcc_names: Mutex::new(FxHashMap::default()),
             work_dir: OnceLock::new(),
             overlay: OnceLock::new(),
+            overlay_dirs: Mutex::new(DirCache::default()),
+            overlay_failures: LoadFailures::default(),
         }
     }
 
@@ -708,12 +745,13 @@ impl SourceManager {
     }
 
     /// Sets the run's [`Overlay`] (spec/source.md "Overlay"): from then on
-    /// a load of a file the overlay names (by identity, through any path)
-    /// takes the overlay's bytes instead of reading the file, as if the
-    /// file held them ([`FileOrigin::Overlay`]); everything else (the
-    /// file's existence, its identity, the buffer's name, decoding, the
-    /// load report) is as for a file on disk. Call it before any load;
-    /// only the first call has an effect, and an empty overlay is none.
+    /// a load of a file the overlay replaces (by identity, through any
+    /// path) takes the overlay's bytes instead of reading the file, as if
+    /// the file held them ([`FileOrigin::Overlay`]); a file it creates
+    /// loads from its bytes as well, and a file it removes is not found.
+    /// Everything else (identity, the buffer's name, decoding, the load
+    /// report) is as for a file on disk. Call it before any load; only
+    /// the first call has an effect, and an empty overlay is none.
     pub fn set_overlay(&self, overlay: Arc<Overlay>) {
         if !overlay.is_empty() {
             let _ = self.overlay.set(overlay);
@@ -726,9 +764,36 @@ impl SourceManager {
         self.overlay.get()
     }
 
-    /// The overlay's bytes for the file identified by `key`, if overlaid.
-    fn overlaid(&self, key: &FileKey) -> Option<&Arc<[u8]>> {
-        self.overlay.get().and_then(|o| o.get(key))
+    /// The overlay's entries whose [`Loader`](crate::Loader) failed when
+    /// this run read them (such a file is not found in the run): a handle
+    /// that header search's `kiln_pp::OverlayFs` notes into as well.
+    pub fn overlay_failures(&self) -> &LoadFailures {
+        &self.overlay_failures
+    }
+
+    /// What the overlay holds for the file on disk identified by `key`.
+    fn overlaid(&self, key: &FileKey) -> Option<Held<'_>> {
+        self.overlay.get().and_then(|o| o.lookup(key))
+    }
+
+    /// [`Overlay::absent_path`] of `disk`, with this run's directory cache.
+    fn absent<'o>(&self, o: &'o Overlay, disk: &Path) -> Resolved<'o> {
+        o.absent_path(disk, &mut lock(&self.overlay_dirs))
+    }
+
+    /// Whether `path` (joined to the working directory) names a regular
+    /// file, the overlay's view when there is one: a file it creates is
+    /// one, a file it removes is not. A `stat`.
+    pub fn is_regular_file(&self, path: &Path) -> bool {
+        let disk = self.work_dir().join(path);
+        match self.overlay.get() {
+            None => disk.is_file(),
+            Some(o) => match o.resolve(&disk, &mut lock(&self.overlay_dirs)) {
+                Resolved::Disk { meta, .. } => meta.is_file(),
+                Resolved::Created { .. } => true,
+                Resolved::CreatedDir(_) | Resolved::Missing => false,
+            },
+        }
     }
 
     /// The working directory in effect ([`Self::set_work_dir`]).
@@ -871,6 +936,14 @@ impl SourceManager {
         let opened = fs::File::open(&disk).and_then(|f| f.metadata().map(|m| (f, m)));
         let (file, meta) = match opened {
             Ok(fm) => fm,
+            // A file the overlay creates was not there when the module
+            // file was built: loaded as it is now.
+            Err(_) if self.overlay.get().is_some() => {
+                return match self.load(path, true) {
+                    Ok(id) => Ok((id, Some(text))),
+                    Err(e) => Err((e, text)),
+                };
+            }
             Err(e) => return Err((e.into(), text)),
         };
         if !meta.is_file() || meta.len() != text.len() as u64 {
@@ -886,7 +959,8 @@ impl SourceManager {
         };
         drop(file);
         if self.overlaid(&key).is_some() {
-            // The expected text is the disk's, which the overlay replaces.
+            // The expected text is the disk's, which the overlay replaces
+            // (or removes).
             return match self.load(path, true) {
                 Ok(id) => Ok((id, Some(text))),
                 Err(e) => Err((e, text)),
@@ -914,22 +988,43 @@ impl SourceManager {
 
     fn load(&self, path: &Path, regular_only: bool) -> Result<FileId, LoadError> {
         let disk = self.work_dir().join(path);
-        let mut file = fs::File::open(&disk)?;
+        self.load_from(path, &disk, regular_only)
+    }
+
+    /// [`Self::load`] of the buffer named `path`, opened at `disk`.
+    fn load_from(&self, path: &Path, disk: &Path, regular_only: bool) -> Result<FileId, LoadError> {
+        let mut file = match fs::File::open(disk) {
+            Ok(f) => f,
+            Err(e) => {
+                return match self.overlay.get() {
+                    Some(o) => self.load_absent(o, path, disk, regular_only, e),
+                    None => Err(e.into()),
+                };
+            }
+        };
         let meta = file.metadata()?;
         if meta.is_dir() {
-            return Err(io::Error::new(io::ErrorKind::IsADirectory, "is a directory").into());
+            return Err(is_a_directory().into());
         }
         if regular_only && !meta.is_file() {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "not a regular file").into());
         }
-        let key = file_key(&disk, &meta)?;
+        let key = file_key(disk, &meta)?;
+        let replaced = match self.overlaid(&key) {
+            Some(Held::Removed) => return Err(overlay::not_found().into()),
+            Some(Held::Replaced(c)) => Some(c),
+            None => None,
+        };
         let mut by_path = lock(&self.by_path);
         if let Some(&id) = by_path.get(&key)
             && self.file(id).available_as_disk()
         {
             return Ok(id);
         }
-        let (bytes, origin) = if let Some(b) = self.overlaid(&key) {
+        let (bytes, origin) = if let Some(c) = replaced {
+            let Some(b) = c.bytes_noting(&self.overlay_failures) else {
+                return Err(load_failed().into());
+            };
             (b.to_vec(), Origin::Overlay)
         } else {
             if meta.len() >= FILE_SPACE_END {
@@ -943,6 +1038,45 @@ impl SourceManager {
         }
         let (text, report) = decode_utf8(bytes);
         let id = self.push_file(path.to_string_lossy().into(), text, report, origin)?;
+        by_path.insert(key, id);
+        Ok(id)
+    }
+
+    /// [`Self::load`] of `path` (`disk` joined), which the operating
+    /// system could not open (`error`): a file the overlay `o` creates
+    /// loads from its bytes, as a file on disk with them would; a path
+    /// that leaves a created directory with `..` loads what it reaches.
+    fn load_absent(
+        &self,
+        o: &Overlay,
+        path: &Path,
+        disk: &Path,
+        regular_only: bool,
+        error: io::Error,
+    ) -> Result<FileId, LoadError> {
+        let (key, content) = match self.absent(o, disk) {
+            Resolved::Created { key, content } => (key.0, content),
+            Resolved::CreatedDir(_) => return Err(is_a_directory().into()),
+            Resolved::Disk { redirected: Some(at), .. } => {
+                return self.load_from(path, &at, regular_only);
+            }
+            Resolved::Disk { redirected: None, .. } | Resolved::Missing => {
+                return Err(error.into());
+            }
+        };
+        let mut by_path = lock(&self.by_path);
+        if let Some(&id) = by_path.get(&key) {
+            return Ok(id);
+        }
+        let Some(bytes) = content.bytes_noting(&self.overlay_failures) else {
+            return Err(load_failed().into());
+        };
+        let bytes = bytes.to_vec();
+        if bytes.len() as u64 >= FILE_SPACE_END {
+            return Err(LoadError::LocSpaceExhausted);
+        }
+        let (text, report) = decode_utf8(bytes);
+        let id = self.push_file(path.to_string_lossy().into(), text, report, Origin::Overlay)?;
         by_path.insert(key, id);
         Ok(id)
     }
@@ -979,9 +1113,11 @@ impl SourceManager {
             return LazyFile::Missing;
         }
         let Ok(key) = file_key(path, &meta) else { return LazyFile::Missing };
-        if self.overlaid(&key).is_some() {
+        match self.overlaid(&key) {
+            Some(Held::Removed) => return LazyFile::Missing,
             // The recorded text is the disk's, which the overlay replaces.
-            return LazyFile::Changed;
+            Some(Held::Replaced(_)) => return LazyFile::Changed,
+            None => {}
         }
         let mut by_path = lock(&self.by_path);
         if let Some(&id) = by_path.get(&key) {
@@ -1044,8 +1180,14 @@ impl SourceManager {
     /// [`load_file`](Self::load_file) identifies it), without reading it.
     pub fn loaded_file(&self, path: &Path) -> Option<FileId> {
         let disk = self.work_dir().join(path);
-        let meta = fs::metadata(&disk).ok()?;
-        let key = file_key(&disk, &meta).ok()?;
+        let key = match fs::metadata(&disk) {
+            Ok(meta) => file_key(&disk, &meta).ok()?,
+            Err(_) => match self.absent(self.overlay.get()?, &disk) {
+                Resolved::Created { key, .. } => key.0,
+                Resolved::Disk { meta, redirected: Some(at), .. } => file_key(&at, &meta).ok()?,
+                _ => return None,
+            },
+        };
         lock(&self.by_path).get(&key).copied()
     }
 

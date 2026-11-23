@@ -13,6 +13,7 @@ mod diag_split;
 mod dist;
 mod doclinks;
 mod entity_lint;
+mod extents;
 mod features;
 mod gcc_tests;
 mod gen_pp;
@@ -59,6 +60,9 @@ commands:
   clang-neg   run clang's own C++ `-verify` tests through kiln and measure what kiln
               wrongly accepts (docs/status/accepts-invalid.md); informational, not part
               of ci (`cargo xtask clang-neg --help`; contract in spec/clang-neg.md)
+  extents     compare kiln's written extent of every expression with clang's source
+              range of the same node; stage 1 (tests/conformance) is part of ci
+              (`cargo xtask extents --help`; spec/harness.md \"Expression extents\")
   gcc-torture run GCC 16.1's C torture tests (gcc.c-torture execute, ieee, builtins,
               compile) through kiln at -O0/-O2, beside GCC 16.1 and clang-19, and write a
               per-case TSV and a summary; informational, not part of ci (`cargo xtask
@@ -127,6 +131,7 @@ fn command() -> ExitCode {
         Some("bench") => bench::main(args),
         Some("clang-ast") => clang_ast::main(args),
         Some("clang-neg") => clang_neg::main(args),
+        Some("extents") => extents::main(args),
         Some("gcc-torture") => gcc_tests::torture::main(args),
         Some("gxx-dg") => gcc_tests::gxx::main(args),
         Some("diag-split") => diag_split::main(args),
@@ -535,6 +540,17 @@ fn ci_steps(args: impl Iterator<Item = String>) -> ExitCode {
     // The snapshot (WP-1395), with `--pch-diff-require-restore`: a
     // consumer that stops restoring fails CI.
     let pch_snapshot = pch_diff(util::pch_diff::PchDiff::Snapshot);
+    // The expression-extent differential, stage 1 (spec/harness.md
+    // "Expression extents"): kiln's written extents against clang's
+    // source ranges over the conformance corpus, kiln only.
+    let extents = match &kiln {
+        Some(kiln) if !args.oracle_only => {
+            eprintln!("xtask ci: cargo xtask extents --kiln {}", kiln.display());
+            extents::ci(kiln, args.shard)
+        }
+        Some(_) => test::CorpusOutcome::Skipped("--oracle-only".to_owned()),
+        None => test::CorpusOutcome::Skipped("--step".to_owned()),
+    };
 
     let shard = args.shard.map_or_else(String::new, |s| format!(", shard {s}"));
     let self_check_name = format!("{corpus_compiler} self-check{shard}");
@@ -545,6 +561,7 @@ fn ci_steps(args: impl Iterator<Item = String>) -> ExitCode {
     let pch_replay_name = format!("kiln --pch-diff replay{shard}");
     let pch_snapshot_name =
         format!("kiln --pch-diff snapshot --pch-diff-require-restore --pch-diff-extra-dir{shard}");
+    let extents_name = format!("kiln extents{shard}");
     let runs = [
         (self_check_name.as_str(), self_check),
         (kiln_name.as_str(), kiln_mode),
@@ -553,6 +570,7 @@ fn ci_steps(args: impl Iterator<Item = String>) -> ExitCode {
         (bmi_image_name.as_str(), bmi_image),
         (pch_replay_name.as_str(), pch_replay),
         (pch_snapshot_name.as_str(), pch_snapshot),
+        (extents_name.as_str(), extents),
     ];
     for (name, run) in &runs {
         eprintln!("xtask ci: corpus ({name}): {}", run.line());

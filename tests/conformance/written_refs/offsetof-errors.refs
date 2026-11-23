@@ -1,0 +1,17 @@
+20:3-20:5  type  'In' -> In@14:8 in=M::b@20:6
+22:19-22:20  type  'M' -> M@18:8 in=S::a@22:21
+23:39-23:40  type  'S' -> S@22:8 in=o1@23:15
+23:42-23:43  designator  'a' -> S::a@22:21 in=o1@23:15
+23:44-23:46  designator  'zz' -> (unresolved) in=o1@23:15
+23:47-23:48  designator  'c' -> (unresolved) in=o1@23:15
+24:39-24:40  type  'S' -> S@22:8 in=o2@24:15
+24:42-24:43  designator  'a' -> S::a@22:21 in=o2@24:15
+24:44-24:45  designator  'b' -> M::b@20:6 in=o2@24:15
+24:49-24:53  designator  'bits' -> In::bits@15:7 in=o2@24:15
+24:54-24:55  designator  'c' -> (unresolved) in=o2@24:15
+25:39-25:40  type  'S' -> S@22:8 in=o3@25:15
+25:42-25:43  designator  'q' -> S::q@22:16 in=o3@25:15
+25:47-25:48  designator  'c' -> (unresolved) in=o3@25:15
+26:39-26:49  type  'Undeclared' -> (unresolved) in=o4@26:15
+26:51-26:52  designator  'x' -> (unresolved) in=o4@26:15
+26:53-26:54  designator  'y' -> (unresolved) in=o4@26:15

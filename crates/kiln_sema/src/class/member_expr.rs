@@ -2700,6 +2700,48 @@ impl Sema<'_, '_> {
     /// member access or `.*` / `->*`, [expr.call]/2), or names one with
     /// no object; `None` for other callees. `braced` as for
     /// [`Sema::convert_call_args`].
+    /// `callee` with the member access `ignore_parens` finds in it
+    /// replaced by `r` (the access with its object converted): the
+    /// parentheses, `__extension__`, `__builtin_choose_expr` and `_Generic`
+    /// around it are kept, as clang converts the object in place.
+    fn rebuild_callee_wrappers(&mut self, callee: ExprId, r: ExprId) -> ExprId {
+        let n = *self.ast.exprs.get(callee);
+        match n.kind() {
+            ExprKind::ParenExpr => {
+                let x = self.rebuild_callee_wrappers(self.ast.exprs.operand(callee), r);
+                let rp = self.ast.exprs.end_loc(callee).unwrap_or(n.loc());
+                self.builder().paren(x, n.loc(), rp)
+            }
+            ExprKind::UnaryOperator if self.ast.exprs.unary_op(callee) == UnaryOp::Extension => {
+                let x = self.rebuild_callee_wrappers(self.ast.exprs.operand(callee), r);
+                let ty = self.ast.exprs.get(x).ty();
+                self.builder().unary(UnaryOp::Extension, x, ty, n.loc(), ExprFlags::CANNOT_OVERFLOW)
+            }
+            ExprKind::ChooseExpr => {
+                let Some(pick) = self.ast.exprs.choose_chosen(callee) else { return r };
+                let [cond, lhs, rhs] = self.ast.exprs.choose_operands(callee);
+                let x = self.rebuild_callee_wrappers(pick, r);
+                let left = pick == lhs;
+                let (lhs, rhs) = if left { (x, rhs) } else { (lhs, x) };
+                let e = self.builder().choose_expr(cond, lhs, rhs, Some(left), n.loc());
+                if let Some(end) = self.ast.exprs.end_loc(callee) {
+                    self.builder().record_end_loc(e, end);
+                }
+                e
+            }
+            ExprKind::GenericSelectionExpr => {
+                let Some(pick) = self.ast.exprs.selected_operand(callee) else { return r };
+                let ctrl = self.ast.exprs.generic_control(callee, &self.ast.lists);
+                let mut assocs = self.ast.exprs.generic_assocs(callee, &self.ast.lists);
+                let Some(i) = assocs.iter().position(|a| a.expr == pick) else { return r };
+                assocs[i].expr = self.rebuild_callee_wrappers(pick, r);
+                let rp = self.ast.exprs.end_loc(callee).unwrap_or(n.loc());
+                self.builder().generic_selection(ctrl, &assocs, Some(i), n.loc(), rp)
+            }
+            _ => r,
+        }
+    }
+
     pub(crate) fn try_member_call(
         &mut self,
         callee: ExprId,
@@ -2736,8 +2778,9 @@ impl Sema<'_, '_> {
                 let Some(mem) = self.bind_object_argument(x, m) else {
                     return Some(self.recover_err(&kids, loc));
                 };
-                // `(b.f)(…)` keeps its parentheses.
-                let mem = if mem == x { callee } else { self.rebuild_parens(callee, mem) };
+                // `(b.f)(…)` keeps its parentheses, and the GNU wrappers
+                // `ignore_parens` looked through.
+                let mem = if mem == x { callee } else { self.rebuild_callee_wrappers(callee, mem) };
                 let fn_ty = self.ast.decls.get(m).ty().unwrap_or(QualType::ERROR);
                 (mem, Some(m), fn_ty)
             }

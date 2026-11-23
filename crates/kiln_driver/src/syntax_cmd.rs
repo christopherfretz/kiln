@@ -603,6 +603,7 @@ impl SyntaxJob<'_> {
             pp_record: false,
             events: crate::front_end::SearchEvents::default(),
             overlay: None,
+            overlay_failures: Vec::new(),
         };
         let (pp, _) =
             job.build_preprocessor_with(sm, engine, interner, inputs, true, Some(&hooks))?;
@@ -640,7 +641,7 @@ impl SyntaxJob<'_> {
         &self,
         sm: &'sm SourceManager,
         engine: &DiagEngine<'sm>,
-        tu: kiln_parse::ParsedTu,
+        mut tu: kiln_parse::ParsedTu,
         mut pp: kiln_pp::Preprocessor<'sm, '_>,
         deps: Option<crate::pp_cmd::SharedDeps>,
         main_id: Option<FileId>,
@@ -650,6 +651,9 @@ impl SyntaxJob<'_> {
     ) {
         let job = &self.0;
         let a = job.args;
+        // From the run's environment, not the process's (spec/driver.md
+        // "Front-end library entry").
+        tu.ast.written_refs.set_raw_dump(crate::env::wref_raw(&a.env));
         let Finish { interner, popts, verify, dump_opts, hooks } = fin;
         let entry = hooks.is_some() || a.no_side_outputs;
         job.note_image_imports(&pp);
@@ -683,6 +687,7 @@ impl SyntaxJob<'_> {
             None
         };
         let pp_record_row = crate::pp_record_row(&pp);
+        let lex_options = *pp.lex_options();
         drop(pp);
         result.dep_list = deps;
         job.write_image_reports(sm, tu.image_census.as_ref(), engine);
@@ -713,6 +718,10 @@ impl SyntaxJob<'_> {
         }
         if a.dump_decl_extents {
             result.output.push_str(&tu.ast.decl_extents.dump(&tu.ast, sm, main_id));
+        }
+        if a.dump_expr_extents {
+            let x = kiln_parse::ExprExtents::new(&tu.ast, sm, interner, lex_options);
+            result.output.push_str(&x.dump());
         }
         if let Some(d) = pp_record {
             result.output.push_str(&d);
@@ -787,6 +796,7 @@ impl SyntaxJob<'_> {
             let _ = writeln!(err, "{s}");
         }
         engines.done(&engine);
+        hooks.pp.overlay_failures = sm.overlay_failures().list();
     }
 }
 

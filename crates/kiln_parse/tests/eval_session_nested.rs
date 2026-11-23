@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use kiln_diag::{DiagEngine, DiagOptions, Diagnostic, MemorySink};
+use kiln_diag::{DiagEngine, DiagOptions, Diagnostic, Level, MemorySink};
 use kiln_parse::{
     CancelToken, ConstexprLimits, EvalSession, HostCalls, HostError, HostOut, ParseOptions,
     RunBudget, RunError, RunReport, RunValue, parse_preprocessed_retained,
@@ -497,6 +497,12 @@ fn every_run_reaching_a_refused_host_call_fails_identically() {
             text.contains("note: in instantiation of static data member 'H<int>::v'"),
             "{text}"
         );
+        // WP-2330: one error for the refusal (the initializer's), one for
+        // the entry; the read of `H<int>::v` re-folds its initializer
+        // without reporting the call again as speculative.
+        assert!(!text.contains("speculative"), "{text}");
+        let errors = first.diagnostics.iter().filter(|d| d.level == Level::Error).count();
+        assert_eq!(errors, 2, "{text}");
         for n in 2..=5 {
             let r = s.run(e, &mut Seven, RunBudget::PROGRAM, &CancelToken::new());
             assert_eq!(r.result, first.result, "run {n}");

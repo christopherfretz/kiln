@@ -128,6 +128,7 @@ linker prints its version; Meson's linker probe, WP-920), and `-c
 | `-fkiln-written-refs` | records the written-reference table (spec/ast.md §18) without printing it, for a tooling client of the library API and for PCH and module-file producers: a snapshot or declaration image made with it carries the table to consumers that record (spec/ast.md §18.10); part of neither identity |
 | `-fkiln-decl-extents` | records the declaration-extent table (spec/ast.md §19; off otherwise) for a tooling client of the library API; part of the PCH and module-file identity, and its rows are carried in PCH snapshots and module images |
 | `-fkiln-dump-decl-extents` | implies `-fkiln-decl-extents`; with `-fsyntax-only` (to the output) or codegen (to standard output, before the IR): prints one line per declaration with a row in the §19.7 layout; a PCH producer with it takes two passes |
+| `-fkiln-dump-expr-extents` | kiln: with `-fsyntax-only` (to the output, after a declaration-extent dump): prints the written extent of every expression of the written bodies and initializers, one line per node in the spec/ast.md §21.4 layout (the input of `cargo xtask extents`, spec/harness.md "Expression extents"); records nothing, part of neither identity; a PCH producer with it takes two passes |
 | `-fkiln-dump-pp-record` | kiln: records the preprocessing record (spec/pp.md "Preprocessing record"; off otherwise) and prints it, one line per entry: with `-E` in place of the preprocessed text, after one `tok` line per output token at a macro location; with `-fsyntax-only` (to the output, after a written-reference dump) or codegen (to standard output, before the IR), the entries only. A PCH producer with it (or with `-fkiln-pp-record`) takes two passes and carries the header's record in its snapshot, which a recording consumer goes on from; a snapshot built without it leaves the consumer's record `restored`, with a `-v` note (spec/pp.md "Preprocessing record", stage 4; WP-2113). `=source-order` prints each condition's reads in source order (WP-2301). The harness's `pp-record:` directive runs it (spec/harness.md; WP-2110) |
 | `-fkiln-pp-record` | kiln: records the preprocessing record and drops it (to measure its cost; WP-2110). No output changes, except the `pp.record` row of `-fkiln-memory-report` |
 | `-fkiln-cfg-max-elems=N` | kiln: the element budget of one body's graph (default 33554432); a body over it builds no graph and its CFG-based warnings are skipped (spec/sema.md §7.5.1). A value that is not an integer is `invalid integral value` |
@@ -1688,8 +1689,10 @@ sequence; the evaluation session (spec/eval-session.md §2) uses it too.
   is not supported by the front-end library entry`): `-verify` and
   `-include-pch` (written, or made by the PCH probe of `-include`). The
   PCH snapshot phase does not run (a snapshot PCH is never consumed).
-  With `drv_front_end_overlay_input`: an `overlay` that replaces an input
-  of a module file of the command line (below).
+  With `drv_front_end_overlay_input`: an `overlay` that replaces or
+  removes an input of a module file of the command line; with
+  `drv_front_end_overlay_creates`: an `overlay` that creates any file,
+  with a module file on the command line (below).
 - Suppressed, not refused: nothing is written but diagnostics. No
   `-o`, no dependency file (`-MD` is still lexed to the end, as for
   `-fsyntax-only`), no module file, no `-fconstexpr-report=` /
@@ -1761,10 +1764,28 @@ every variable it consults from it and never from the process:
 `SOURCE_DATE_EPOCH` (`__DATE__` / `__TIME__`), `HOME` /
 `XDG_CACHE_HOME` and `KILN_MODULE_CACHE_*` (the module cache); the GCC
 driver run to locate libstdc++ gets exactly that environment.
-Developer switches that change no result (`KILN_BACKTRACE` /
-`RUST_BACKTRACE` of the panic hook, `KILN_PP_PROFILE` of the
-`pp-profile` build, `KILN_WREF_RAW` of the written-references dump)
-still read the process. `working_directory` (WP-2121, an
+The other variables kiln's crates read (WP-2122; `grep -rn 'env::var'
+crates/` is the inventory, each hit below), routed through the
+driver's environment (`Args::env`: the process's for the executable,
+`options.environment` for the entry) or process-wide:
+
+| variable | read by | verdict |
+|---|---|---|
+| `KILN_WREF_RAW` | the written-reference dump (`WrittenRefs::set_raw_dump`, set by the job before the closure runs) | routed: changes the dump a closure renders (`#<raw location> ` before each line); `front_end.rs` test `developer_switches_follow_the_environment` |
+| `KILN_STATS_LOG` | the statistics log (`stats::log_path`) | routed; the entry writes no log either way |
+| `KILN_HOD_STRICT` | hod's failure handling (`hod::strict`) | routed; code generation only |
+| `KILN_PCH_SNAPSHOT_PASSES` | the PCH snapshot producer (`single_pass_blocker`) | routed; the producer never runs in the entry |
+| `TMPDIR` | the crash reproducer's directory (`crash::reproducer_dir`) | routed; the entry writes no reproducer |
+| `KILN_BACKTRACE`, `RUST_BACKTRACE` | the panic hook (`crash.rs`) | process-wide: the hook is the process's, installed by the executable's `main`; the entry never touches it |
+| `KILN_PP_PROFILE` | the `pp-profile` build's counters (`kiln_pp` `profile.rs`) | process-wide: process-global counters printed to the process's standard error; no result changes |
+| `KILN_SNAP_TIMING` | the PCH snapshot producer's and consumer's timing lines (`pch_snapshot::timing`) | process-wide: lines on the process's standard error; neither runs in the entry |
+| `KILN_CHECK_OPT_PREDICATE` | the checked mode of the in-process back end's `opt` predicate (`codegen_cmd.rs`) | process-wide: a check that changes no output; code generation only |
+| `TMPDIR` (through `std::env::temp_dir`) | code generation's temporary directory (`codegen_cmd.rs` `TempDir`) | process-wide; code generation only |
+| `PATH` | `kiln-scan-deps` (`scan_deps.rs`) | process-wide: a process of its own |
+| `KILN_SNAP_REPORT`, `KILN_SNAP_OUT`, `KILN_SNAP_DECODE`, `KILN_GCC16_ROOT`, `KILN_UCD_NORMALIZATION_TEST` | unit tests (`snap_tests.rs`, `kiln_oven` `meta`, `kiln_lex` `unicode.rs`) | test-only |
+| `OUT_DIR`, `CARGO_MANIFEST_DIR`, `KILN_GIT_SHA` | build scripts (`kiln_diag`, `kiln_driver` `build.rs`) | build time |
+
+`working_directory` (WP-2121, an
 `Option<PathBuf>`, default `None`) is the run's working directory
 ("Working directory" below): `None` is the process's current directory,
 read once when the run starts; a relative one is relative to the
@@ -1773,27 +1794,42 @@ directories run at the same time, and a `-working-directory` of the
 command line wins (a relative one relative to `working_directory`).
 `@file`s are read from `working_directory`.
 
-`overlay` (WP-2390, an `Option<Arc<kiln_source::Overlay>>`, default
-`None`, shown by `Debug`) gives the run replacement contents for files
-that exist (spec/source.md "Overlay"): the job's source manager gets it
-before any load (`SourceManager::set_overlay`) and its header search's
-`RealFs` reads `#embed` resources through it. The run sees exactly what
-the same command sees over a copy of the tree in which the overlaid
-files hold the overlay's bytes: the same diagnostics, tokens, AST and
-files read, through every route (the main input, `#include` by any
-spelling or symbolic link, `#include_next`, `-include`, `#embed`,
-`__has_include`, `#pragma once` and include guards); buffers of
-overlaid files are `FileOrigin::Overlay`. An empty overlay is none
-(byte-identical results). The overlay belongs to the run: a later run
-in the same process without it reads the disk. Refused with the driver
-error `drv_front_end_overlay_input` (`the overlay replaces '<f>', an
-input of the module file '<m>'`), one per overlaid input, before the
-job: a module file of the command line (`-fmodule-file=`, named or not,
-or a module-file input) whose file table names an overlaid file; a
-module file found later (`-fprebuilt-module-path=`, the module cache)
-is refused at its import (`pp_module_file_overlaid`). A PCH never meets
-an overlay, since `-include-pch` is refused. There is no command-line
-flag for an overlay.
+`overlay` (WP-2390, WP-2391, an `Option<Arc<kiln_source::Overlay>>`,
+default `None`, shown by `Debug`) gives the run the files that differ
+from the disk: replaced, created and removed (spec/source.md
+"Overlay"). The job's source manager gets it before any load
+(`SourceManager::set_overlay`), and its header search, search list and
+`-fmodule-header` lookups run over `kiln_pp::OverlayFs` (a run without
+one keeps `RealFs`); an input exists if it exists in the tree the
+overlay describes (`existing_inputs`: a created main input does, a
+removed one is `no such file or directory`). The run sees exactly what
+the same command sees over a copy of the tree with the edit applied
+(replaced files holding the overlay's bytes, created files written with
+their directories, removed files unlinked): the same diagnostics,
+tokens, AST, files read, consulted paths and lookup log, through every
+route (the main input, `#include` by any spelling or symbolic link and
+with `..` out of a created directory, `#include_next`, `-include`,
+`#embed`, `__has_include`, `__has_embed`, `#pragma once` and include
+guards, a `-I` directory only the overlay makes exist); buffers of
+replaced and created files are `FileOrigin::Overlay`. An empty overlay
+is none (byte-identical results). The overlay belongs to the run: a
+later run in the same process without it reads the disk, and
+concurrent runs with different overlays each see their own. Refused
+before the job, for a module file of the command line
+(`-fmodule-file=`, named or not, or a module-file input): with the
+driver error `drv_front_end_overlay_input` (`the overlay replaces or
+removes '<f>', an input of the module file '<m>'`), one per such input,
+when its file table names a replaced or removed file; with
+`drv_front_end_overlay_creates` (`the overlay creates '<f>', which the
+module file '<m>' cannot be checked against`, naming the first created
+path), one per module file, when the overlay creates any file. A module
+file found later (`-fprebuilt-module-path=`, the module cache) is
+refused at its import (`pp_module_file_overlaid`,
+`pp_module_file_overlay_creates`). A PCH never meets an overlay, since
+`-include-pch` is refused. `FrontEndReport::overlay_failures` lists the
+entries whose lazy loader failed when the run read them (with the error
+text, in the order read): such a file is not found in the run, so a run
+with any is void. There is no command-line flag for an overlay.
 
 `front_end::std_config(std, options)` is the configuration the driver
 builds for `kiln++ -fsyntax-only -std=<std>` with no other flag
@@ -3555,10 +3591,13 @@ under the flag and under `SOURCE_DATE_EPOCH`),
 `tests/conformance/cpp.predefined/reproducible-timestamp.cpp`.
 
 Otherwise `__DATE__` and `__TIME__` come from the clock, and
-`__TIMESTAMP__` is `??? ??? ?? ??:??:?? ????` (clang: the current
-file's modification time; a deviation). The test harness does not pin
-the compiler's time: a corpus test that needs it passes
-`-fkiln-reproducible-time` (and skips clang).
+`__TIMESTAMP__` is the current file's modification time in local time,
+as clang's (WP-2331, spec/pp.md "Builtin macros"): the driver passes
+its environment's `TZ` to the preprocessor (`PpOptions::tz`). The test
+harness does not pin the compiler's time: a corpus test that needs it
+passes `-fkiln-reproducible-time` (and skips clang). Tests:
+`crates/kiln_driver/tests/driver.rs` `file_timestamps`,
+`tests/conformance/cpp.predefined/timestamp-file-time.cpp`.
 
 ## Deviations from clang 19
 

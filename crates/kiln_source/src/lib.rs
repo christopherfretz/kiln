@@ -22,8 +22,8 @@
 //!   hasher used by every compiler-internal hash table.
 //! - [`activity`]: the per-thread "current activity" breadcrumb that
 //!   internal-compiler-error reports read.
-//! - [`Overlay`]: replacement contents for files that exist, keyed by
-//!   file identity ([`SourceManager::set_overlay`]; tooling clients).
+//! - [`Overlay`]: the files of a run that differ from the disk (replaced,
+//!   created, removed; [`SourceManager::set_overlay`]; tooling clients).
 //! - [`WorkDir`]: the working directory relative paths open against
 //!   ([`SourceManager::set_work_dir`]; clang's `-working-directory`).
 //! - [`trace`]: the per-thread `-ftime-trace` recorder (Chrome trace
@@ -49,5 +49,7 @@ pub use manager::{
     LazyFile, LazyOutcome, LineCol, LoadError, LoadReport, LocSpaceExhausted, PresumedLoc,
     Replacement, SourceManager, SourcePathStyle, read_open_file,
 };
-pub use overlay::Overlay;
+pub use overlay::{
+    Content, CreatedDir, CreatedKey, DirCache, EntryState, LoadFailures, Loader, Overlay, Resolved,
+};
 pub use workdir::WorkDir;

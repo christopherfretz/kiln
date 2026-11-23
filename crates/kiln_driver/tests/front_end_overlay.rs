@@ -440,7 +440,9 @@ fn pch_and_module_file_inputs_refused() {
     let (value, errors, id, text) = refused(&t.0, &named, overlaid());
     assert_eq!((value, errors, id), (None, 1, Some(DiagId::drv_front_end_overlay_input)), "{text}");
     assert!(
-        text.contains("the overlay replaces 'm.cppm', an input of the module file 'm.pcm'"),
+        text.contains(
+            "the overlay replaces or removes 'm.cppm', an input of the module file 'm.pcm'"
+        ),
         "{text}"
     );
     let nameless = ["-fsyntax-only", "-std=c++26", "-fmodule-file=m.pcm", "a.cpp"];

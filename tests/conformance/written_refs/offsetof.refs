@@ -1,0 +1,30 @@
+19:3-19:5  type  'In' -> In@13:8 in=M::b@19:6
+23:3-23:4  type  'M' -> M@17:8 in=S::a@23:5
+29:39-29:40  type  'S' -> S@21:8 in=o1@29:25 exp=29:30
+29:42-29:43  designator  'a' -> S::a@23:5 in=o1@29:25 exp=29:30
+29:44-29:45  designator  'b' -> M::b@19:6 in=o1@29:25 exp=29:30
+29:49-29:50  designator  'c' -> In::c@14:7 in=o1@29:25 exp=29:30
+30:49-30:50  type  'S' -> S@21:8 in=o2@30:25
+30:52-30:53  designator  'u' -> S::S::(anonymous union at tests/conformance/written_refs/offsetof.cpp:24:3)::u@25:9 in=o2@30:25
+31:56-31:57  type  'S' -> S@21:8 in=o3@31:42 exp=31:47
+31:63-31:64  expr  'N' -> N@31:15 in=o3@31:42 exp=31:47
+31:59-31:60  designator  'a' -> S::a@23:5 in=o3@31:42 exp=31:47
+31:61-31:62  designator  'b' -> M::b@19:6 in=o3@31:42 exp=31:47
+31:66-31:67  designator  'd' -> In::d@15:7 in=o3@31:42 exp=31:47
+33:3-33:4  type  'T' -> T@32:17 in=Dep::t@33:5
+36:62-36:63  type  'T' -> T@36:17 in=o4@36:44 exp=36:49
+36:58-36:61  template  'Dep' -> Dep@32:27 in=o4@36:44 exp=36:49
+36:66-36:67  designator  't' -> (dependent) in=o4@36:44 exp=36:49
+36:68-36:69  designator  'c' -> (dependent) in=o4@36:44 exp=36:49
+37:58-37:59  type  'T' -> T@37:17 in=o5@37:44 exp=37:49
+37:61-37:62  designator  'a' -> (dependent) in=o5@37:44 exp=37:49
+37:63-37:64  designator  'b' -> (dependent) in=o5@37:44 exp=37:49
+38:15-38:17  expr  'o3' -> o3@31:42 found=o3@31:42 in=(tu)
+38:23-38:25  expr  'o1' -> o1@29:25 in=(tu)
+38:32-38:34  type  'In' -> In@13:8 in=(tu)
+38:29-38:31  expr  'o4' -> o4@36:44 found=o4@36:44 in=(tu)
+38:47-38:48  type  'S' -> S@21:8 in=(tu)
+38:44-38:46  expr  'o5' -> o5@37:44 found=o5@37:44 in=(tu)
+38:62-38:63  type  'S' -> S@21:8 in=(tu) exp=38:53
+38:65-38:66  designator  'a' -> S::a@23:5 in=(tu) exp=38:53
+38:67-38:68  designator  'b' -> M::b@19:6 in=(tu) exp=38:53

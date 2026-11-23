@@ -41,6 +41,9 @@ struct OffsetofOut<'a> {
     indices: &'a mut Vec<ExprId>,
     steps: &'a mut Vec<OffsetofStep>,
     nodes: &'a mut Vec<OffsetofNode>,
+    /// The member names recorded in the written-reference table so far
+    /// (the rest are recorded unresolved after an error; WP-2471).
+    noted: usize,
 }
 
 impl Sema<'_, '_> {
@@ -208,7 +211,7 @@ impl Sema<'_, '_> {
         cond: ExprId,
         lhs: ExprId,
         rhs: ExprId,
-        _rparen: Loc,
+        rparen: Loc,
     ) -> ExprId {
         if [cond, lhs, rhs].iter().any(|&x| self.is_err_expr(x)) {
             return self.recover_err(&[cond, lhs, rhs], loc);
@@ -220,7 +223,10 @@ impl Sema<'_, '_> {
         }
         let deps = self.ast.exprs.get(cond).deps();
         if deps.intersects(kiln_ast::expr::ExprDeps::TYPE.with(kiln_ast::expr::ExprDeps::VALUE)) {
-            return self.builder().choose_expr(cond, lhs, rhs, None, loc);
+            let e = self.builder().choose_expr(cond, lhs, rhs, None, loc);
+            // The `)` (clang's `getEndLoc`), for the written extent.
+            self.builder().record_end_loc(e, rparen);
+            return e;
         }
         let at = self.begin_loc(cond);
         let c = conv::lvalue_to_rvalue(self, cond);
@@ -237,7 +243,9 @@ impl Sema<'_, '_> {
                 let ty = self.ast.exprs.get(c).ty();
                 let cv = self.int_const(ty, v);
                 let wrapped = self.builder().constant_expr(c, Some(cv));
-                self.builder().choose_expr(wrapped, lhs, rhs, Some(v != 0), loc)
+                let e = self.builder().choose_expr(wrapped, lhs, rhs, Some(v != 0), loc);
+                self.builder().record_end_loc(e, rparen);
+                e
             }
             Err(mut f) => {
                 let at = Self::fold_lone_invalid(&mut f, at);
@@ -291,11 +299,7 @@ impl Sema<'_, '_> {
                 OffsetofComponent::Field { .. } => false,
             });
         if dependent {
-            for c in comps {
-                if let OffsetofComponent::Field { end, .. } = *c {
-                    self.note_written_offsetof_member(end, None, true);
-                }
-            }
+            self.note_written_dependent_offsetof(ty, comps);
             let st = self.size_type();
             return self.builder().dependent_offsetof(st, ty, comps, loc, rparen);
         }
@@ -303,8 +307,19 @@ impl Sema<'_, '_> {
         let mut steps = Vec::new();
         let mut nodes = Vec::new();
         let mut invalid = false;
-        let mut out = OffsetofOut { indices: &mut indices, steps: &mut steps, nodes: &mut nodes };
+        let mut out =
+            OffsetofOut { indices: &mut indices, steps: &mut steps, nodes: &mut nodes, noted: 0 };
         if !self.offsetof_steps(loc, ty, comps, &mut out, &mut invalid) {
+            // Every member name after the error names nothing
+            // (spec/ast.md §18.2, §18.4; WP-2471).
+            let noted = out.noted;
+            let rest = comps.iter().filter_map(|c| match *c {
+                OffsetofComponent::Field { end, .. } => Some(end),
+                OffsetofComponent::Index { .. } => None,
+            });
+            for end in rest.skip(noted).collect::<Vec<_>>() {
+                self.note_written_offsetof_member(end, None, false);
+            }
             return self.recover_err(&indices, loc);
         }
         let designator = (ty, &nodes[..]);
@@ -458,19 +473,9 @@ impl Sema<'_, '_> {
         if self.diagnose_member_ambiguity(&found, DeclName::ident(name), start) {
             return None;
         }
-        let member = found.decls.iter().copied().find(|&m| {
-            matches!(self.ast.decls.get(m).kind(), DeclKind::Field | DeclKind::IndirectField)
-        });
-        let chain: Vec<DeclId> = match member {
-            Some(m) if self.ast.decls.get(m).kind() == DeclKind::IndirectField => {
-                ListId::from_raw(self.ast.decls.get(m).data())
-                    .map(|l| self.ast.lists.iter::<DeclId>(l).collect())
-                    .unwrap_or_default()
-            }
-            Some(m) => vec![m],
-            None => Vec::new(),
-        };
+        let chain = self.offsetof_member_chain(&found.decls);
         self.note_written_offsetof_member(end, chain.last().copied(), false);
+        out.noted += 1;
         let Some(&field) = chain.last() else {
             let d = self
                 .diag(DiagId::sema_no_member, loc)
@@ -504,6 +509,104 @@ impl Sema<'_, '_> {
             fty
         };
         Some(fty)
+    }
+
+    /// The data member among the declarations `found` that member lookup
+    /// found for an offsetof member name: a member of an anonymous struct
+    /// or union as its chain, outermost first (the member written last);
+    /// empty when there is none.
+    fn offsetof_member_chain(&self, found: &[DeclId]) -> Vec<DeclId> {
+        let member = found.iter().copied().find(|&m| {
+            matches!(self.ast.decls.get(m).kind(), DeclKind::Field | DeclKind::IndirectField)
+        });
+        match member {
+            Some(m) if self.ast.decls.get(m).kind() == DeclKind::IndirectField => {
+                ListId::from_raw(self.ast.decls.get(m).data())
+                    .map(|l| self.ast.lists.iter::<DeclId>(l).collect())
+                    .unwrap_or_default()
+            }
+            Some(m) => vec![m],
+            None => Vec::new(),
+        }
+    }
+
+    /// The written references of the member names of a dependent
+    /// `__builtin_offsetof(ty, comps...)` (spec/ast.md §18.4; WP-2471),
+    /// resolved as clang's `BuildBuiltinOffsetOf` resolves them at the
+    /// definition: a name into a type that is not dependent is looked up
+    /// there (`offsetof(S, a.b[N].c)` names `S::a`, `M::b` and `In::c`
+    /// though its index is value-dependent), and each name from the first
+    /// dependent type on waits for instantiation (`DEPENDENT`), as does
+    /// one into a class not complete at the definition. A name lookup
+    /// does not find, and every name after it, is `UNRESOLVED`. Nothing
+    /// is diagnosed or instantiated here: the instantiation checks the
+    /// designator.
+    fn note_written_dependent_offsetof(&mut self, ty: QualType, comps: &[OffsetofComponent]) {
+        /// Where the walk is: in a type, waiting for instantiation, or
+        /// past a name that names nothing.
+        #[derive(Clone, Copy)]
+        enum At {
+            Type(QualType),
+            Waits,
+            Failed,
+        }
+        if !self.records_written_refs() || !self.inst.stack.is_empty() {
+            return;
+        }
+        let step = |s: &Self, t: QualType| {
+            if s.ast.types.is_dependent(t) { At::Waits } else { At::Type(t) }
+        };
+        let mut at = step(self, ty);
+        for c in comps {
+            match *c {
+                OffsetofComponent::Index { .. } => {
+                    if let At::Type(t) = at {
+                        let elem =
+                            self.ast.types.is_array(t).then(|| self.ast.types.element(t)).flatten();
+                        at = elem.map_or(At::Failed, |e| step(self, e));
+                    }
+                }
+                OffsetofComponent::Field { name, end, .. } => {
+                    let t = match at {
+                        At::Type(t) => t,
+                        At::Waits | At::Failed => {
+                            self.note_written_offsetof_member(end, None, matches!(at, At::Waits));
+                            continue;
+                        }
+                    };
+                    let Some(rec) = self.ast.types.as_record(t) else {
+                        self.note_written_offsetof_member(end, None, false);
+                        at = At::Failed;
+                        continue;
+                    };
+                    let Some(def) = self.ast.definition(rec) else {
+                        self.note_written_offsetof_member(end, None, true);
+                        at = At::Waits;
+                        continue;
+                    };
+                    let found = self.lookup_qualified(def, name, LookupKind::Ordinary);
+                    let chain = if found.ambiguity.is_some() {
+                        Vec::new()
+                    } else {
+                        self.offsetof_member_chain(&found.decls)
+                    };
+                    let field = chain.last().copied();
+                    self.note_written_offsetof_member(end, field, false);
+                    at = match field {
+                        Some(f) => {
+                            let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
+                            let fty = if self.ast.types.is_reference(fty) {
+                                self.ast.types.pointee(fty).unwrap_or(fty)
+                            } else {
+                                fty
+                            };
+                            step(self, fty)
+                        }
+                        None => At::Failed,
+                    };
+                }
+            }
+        }
     }
 
     /// The offsets in class `def` of the base class subobjects down to

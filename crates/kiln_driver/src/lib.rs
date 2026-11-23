@@ -818,7 +818,14 @@ pub(crate) fn large_data_threshold_warnings(inputs: &[&args::Input], e: &DiagEng
 }
 
 /// The inputs that exist (`-` is standard input); the others are errors.
-pub(crate) fn existing_inputs<'a>(args: &'a Args, drv: &DiagEngine<'_>) -> Vec<&'a args::Input> {
+/// Under an `overlay` (the library entry's, spec/source.md "Overlay") an
+/// input exists in the tree it describes: a created file does, a removed
+/// one does not.
+pub(crate) fn existing_inputs<'a>(
+    args: &'a Args,
+    overlay: Option<&kiln_source::Overlay>,
+    drv: &DiagEngine<'_>,
+) -> Vec<&'a args::Input> {
     args.inputs
         .iter()
         .filter(|i| {
@@ -828,7 +835,14 @@ pub(crate) fn existing_inputs<'a>(args: &'a Args, drv: &DiagEngine<'_>) -> Vec<&
                 args.header_unit_of(i),
                 Some(args::HeaderUnitLookup::User | args::HeaderUnitLookup::System)
             );
-            let ok = i.path == "-" || looked_up || args.fs_path(&i.path).exists();
+            let exists = |p: &std::path::Path| match overlay {
+                None => p.exists(),
+                Some(o) => {
+                    let mut cache = kiln_source::DirCache::default();
+                    !matches!(o.resolve(p, &mut cache), kiln_source::Resolved::Missing)
+                }
+            };
+            let ok = i.path == "-" || looked_up || exists(&args.fs_path(&i.path));
             if !ok {
                 Diag::new(DiagId::drv_no_such_file, Span::INVALID).arg(&i.path).emit(drv);
             }
@@ -1057,7 +1071,7 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
     if args.verbose {
         print_version(&mut io.stderr, &tc, true);
     }
-    let inputs = existing_inputs(&args, &drv);
+    let inputs = existing_inputs(&args, None, &drv);
     if no_inputs(&args, &inputs)
         && (args.version || args.verbose)
         && args.inputs.is_empty()
@@ -1403,7 +1417,7 @@ fn run_jobs(
     let mut errors = 0u32;
     let mut side_deps: Vec<(String, String)> = Vec::new();
     let stats_log = matches!(args.action, Action::SyntaxOnly | Action::Precompile)
-        .then(stats::log_path)
+        .then(|| stats::log_path(&args.env))
         .flatten();
     if args.deps.cdb_fragment.is_some() {
         // `-E`/`-M` write to `-o` or standard output; `-fsyntax-only`

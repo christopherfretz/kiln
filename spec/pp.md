@@ -240,12 +240,25 @@ A result is a function of the key, the search list (and the
 header search last found it (`HeaderFileInfo::DirInfo`) is not part of
 it, because it follows from earlier results. Lookups of absolute names
 are not recorded. `LookupLog::check(list, embed_dirs, fs, known,
-same_cwd)` repeats every lookup in order over another list and file
-system and returns the first whose result differs, named for `-v`. A
-directory of the recorded list that the lookup searched before its
-result (and the includer's directory of a `"..."` lookup found
-elsewhere) is taken to miss again without a query; a relative one only
-when `same_cwd`. It asks
+trust)` repeats every lookup in order over another list and file
+system and returns the first whose result differs, named for `-v`.
+With `Trust::ProducerMisses { same_cwd }` a directory of the recorded
+list that the lookup searched before its result (and the includer's
+directory of a `"..."` lookup found elsewhere) is taken to miss again
+without a query; a relative one only when `same_cwd`. With
+`Trust::Nothing` every such directory is asked again (the listings
+keep it cheap). A log is a statement about one view of the file system
+(the disk plus the run's overlay, spec/source.md "Overlay"), and a run
+under an overlay records exactly what a run over the edited tree
+records: a log is replayed with `ProducerMisses` only against the view
+it was recorded under (the PCH consumer: the same files but for the
+`known` names); under another overlay, or none after one, with
+`Nothing` and an `OverlayFs` of the consumer's view. Not in the log,
+so not answerable by replay: lookups of absolute names, module lookups
+(prebuilt module files, the module cache), the main input, and a `-I`
+directory the producer dropped as nonexistent that an overlay creates
+(the consumer's own search list, built over its view, covers that
+one). It asks
 `HeaderFs::is_file` (a `stat`, no read) and, after four misses in one
 directory, reads that directory's listing once (`HeaderFs::list_dir`);
 `known` names files that are known to exist (the record's file list),
@@ -1591,6 +1604,32 @@ dump goldens under `tests/conformance/cpp.replace/record`,
   `MacroDef::is_builtin` set, so `#ifdef __has_include` is true.
   `__DATE__`, `__TIME__` and `__TIMESTAMP__` can be fixed through
   `reproducible_time` and `timestamp`.
+
+  **`__TIMESTAMP__` (WP-2331).** Without a fixed `timestamp` it is the
+  modification time of the file being lexed (the innermost file frame,
+  so a macro defined in a header that expands `__TIMESTAMP__` gives the
+  file it is expanded in; clang's `getCurrentFileLexer`), in local
+  time, spelled as clang's `std::put_time(localtime(t), "%a %b %e %T
+  %Y")`: `"Sun Nov 22 21:05:00 2026"`, 24 characters, the day padded
+  with a space. The time is read when the macro expands (a `stat` of
+  the file's path under the source manager's working directory). A
+  buffer that is no file on disk (standard input, a client's in-memory
+  buffer) has time 0, as clang's standard input (`"Thu Jan  1 00:00:00
+  1970"` in UTC); a file whose time cannot be read gives clang's
+  `"??? ??? ?? ??:??:?? ????"`. Local time is the C library's
+  (`localtime`), read once per preprocessor at the first expansion
+  (`localtime.rs`): `PpOptions::tz` is the `TZ` variable's value (the
+  driver passes its environment's); `None` (unset) reads
+  `/etc/localtime`, an empty value is UTC, `:name` and `name` are a
+  zone file (`/usr/share/zoneinfo/name`, or an absolute path), and a
+  name that is no zone file a POSIX `TZ` rule (`EST5EDT,M3.2.0,M11.1.0`); a zone
+  file is TZif (RFC 8536, versions 1 to 4, its footer rule after the
+  last transition); what cannot be read is UTC, as glibc treats an
+  unknown zone. `__DATE__` and `__TIME__` stay UTC (the clock's; a
+  deviation from clang's local time). Tests: `localtime.rs` (POSIX
+  rules north and south, quoted names, Julian and zero-based days, TZif
+  versions 1 and 2), `crates/kiln_driver/tests/driver.rs`
+  `file_timestamps`, `tests/conformance/cpp.predefined/timestamp-file-time.cpp`.
 
   **P1467 macros (WP-361, [cpp.predefined]/2).** The base files come
   from clang, which lacks P1467, so `apply_flags` adds GCC 14's set in

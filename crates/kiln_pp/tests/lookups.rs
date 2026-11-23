@@ -10,7 +10,7 @@ use kiln_diag::{DiagEngine, DiagOptions, MemorySink};
 use kiln_lex::{Interner, Std};
 use kiln_pp::{
     DirGroup, HeaderFs, HeaderSearch, LookupLog, MemoryFs, PpOptions, Preprocessor, PrintOptions,
-    SearchDirSpec, SearchList, print_preprocessed,
+    SearchDirSpec, SearchList, Trust, print_preprocessed,
 };
 use kiln_source::SourceManager;
 
@@ -48,8 +48,11 @@ fn record(mut fs: MemoryFs, main: &str, dirs: &[(&str, DirGroup)]) -> LookupLog 
 /// Repeats `log` over `dirs` on `fs`.
 fn check(log: &LookupLog, fs: &mut MemoryFs, dirs: &[(&str, DirGroup)]) -> Result<(), String> {
     let l = list(fs, dirs);
-    log.check(&l, &["/res".to_owned()], fs, &|_| false, true)
+    log.check(&l, &["/res".to_owned()], fs, &|_| false, SAME_CWD)
 }
+
+/// The PCH consumer's trust, in the producer's working directory.
+const SAME_CWD: Trust = Trust::ProducerMisses { same_cwd: true };
 
 const A: DirGroup = DirGroup::Angled;
 const S: DirGroup = DirGroup::System;
@@ -186,7 +189,7 @@ fn embed_lookups_are_repeated() {
     let l = list(&mut f, &[]);
     f.add_file("/other/d.bin", b"Y");
     assert_eq!(
-        log.check(&l, &["/other".to_owned(), "/res".to_owned()], &mut f, &|_| false, true),
+        log.check(&l, &["/other".to_owned(), "/res".to_owned()], &mut f, &|_| false, SAME_CWD),
         Err("lookup of #embed <d.bin> now finds '/other/d.bin' (was '/res/d.bin')".to_owned())
     );
 }
@@ -223,7 +226,7 @@ fn queries_are_bounded() {
     // Every hit known: only the 20 empty directories are asked, each
     // read once after its first misses.
     let known = |p: &str| p.starts_with("/a/");
-    assert_eq!(log.check(&l, &[], &mut f, &known, true), Ok(()));
+    assert_eq!(log.check(&l, &[], &mut f, &known, SAME_CWD), Ok(()));
     let (o, s, n) = f.queries();
     let (o, s, n) = (o - before.0, s - before.1, n - before.2);
     assert!(o + s <= 20 * 4 + 1, "({o}, {s}, {n})");
@@ -254,7 +257,7 @@ fn producer_misses_are_not_asked_again() {
     let l = list(&mut fs, &consumer);
     let before = fs.queries();
     let known = |p: &str| p.starts_with("/a/");
-    assert_eq!(log.check(&l, &[], &mut fs, &known, true), Ok(()));
+    assert_eq!(log.check(&l, &[], &mut fs, &known, SAME_CWD), Ok(()));
     let (o, s, n) = fs.queries();
     let (o, s, n) = (o - before.0, s - before.1, n - before.2);
     // `/extra` misses four times and is then listed; the `__has_include`
@@ -264,7 +267,10 @@ fn producer_misses_are_not_asked_again() {
     // From another working directory a relative list is asked again;
     // an absolute one is not.
     let before = fs.queries();
-    assert_eq!(log.check(&l, &[], &mut fs, &known, false), Ok(()));
+    assert_eq!(
+        log.check(&l, &[], &mut fs, &known, Trust::ProducerMisses { same_cwd: false }),
+        Ok(())
+    );
     let (o, s, _) = fs.queries();
     assert!(o + s - before.0 - before.1 <= 4);
 }
@@ -385,4 +391,33 @@ fn hostile_logs_are_validated_and_repeat_without_panic() {
         one(&|l| l.lookups[0].found = Found::Dir { dir: n, characteristic: Characteristic::User })
             .contains("result")
     );
+}
+
+/// `Trust::Nothing` (a log replayed under another view of the file
+/// system): every directory before a result is asked again, so a file
+/// that appeared in a directory the producer missed in is found, where
+/// `Trust::ProducerMisses` (which does not ask) answers "unchanged";
+/// listings keep the cost to a few queries per directory.
+#[test]
+fn trust_nothing_asks_every_directory_again() {
+    let mut fs = MemoryFs::new().with_dir("/a").with_dir("/b");
+    let mut text = String::new();
+    for i in 0..20 {
+        fs.add_file(&format!("/b/f{i}.h"), b"\n");
+        let _ = writeln!(text, "#include <f{i}.h>");
+    }
+    fs.add_file("/p/h.h", text.as_bytes());
+    let dirs = [("/a", A), ("/b", A)];
+    let log = record(fs.clone(), "/p/h.h", &dirs);
+    let l = list(&mut fs, &dirs);
+    assert_eq!(log.check(&l, &[], &mut fs, &|_| false, Trust::Nothing), Ok(()));
+    fs.add_file("/a/f7.h", b"\n");
+    assert_eq!(log.check(&l, &[], &mut fs, &|_| false, SAME_CWD), Ok(()));
+    let before = fs.queries();
+    assert_eq!(
+        log.check(&l, &[], &mut fs, &|_| false, Trust::Nothing),
+        Err("lookup of <f7.h> now finds '/a/f7.h' (was '/b/f7.h')".to_owned())
+    );
+    let (o, s, n) = fs.queries();
+    assert!(o + s - before.0 - before.1 <= 4 + 8 + 2, "({o}, {s}, {n})");
 }

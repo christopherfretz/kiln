@@ -364,3 +364,31 @@ fn the_step_budget_counts_the_elements() {
     r.diag("constexpr evaluation hit maximum step limit");
     assert!(r.calls.is_empty(), "{:?}", r.calls);
 }
+
+/// WP-2330 (spec/host-calls.md §4): a read of a `constexpr` variable whose
+/// constant initialization failed at a host call re-folds its initializer
+/// with host calls refused silently: the failure is reported once, as the
+/// variable's own error, not again as "host call during speculative
+/// evaluation" at the read. A `const` variable's speculative refusal still
+/// is the error.
+#[test]
+fn a_failed_constexpr_variable_is_reported_once() {
+    for src in [
+        "constexpr u64 v = hc(99);\nstatic_assert(v == 0);\n",
+        "template <class T> struct H { static constexpr u64 v = hc(99); };\n\
+         static_assert(H<int>::v == 0);\n",
+    ] {
+        let r = run(src);
+        r.diag("constexpr variable 'v' must be initialized by a constant expression");
+        r.diag("host call failed: unknown op 99");
+        r.diag("initializer of 'v' is not a constant expression");
+        assert!(
+            !r.diags.iter().any(|d| d.contains("speculative")),
+            "{src}:\n{}",
+            r.diags.join("\n")
+        );
+    }
+    let r = run("const u64 g = hc(1);\nconstexpr u64 h = g;\n");
+    r.diag("host call during speculative evaluation");
+    assert!(r.calls.is_empty(), "{:?}", r.calls);
+}

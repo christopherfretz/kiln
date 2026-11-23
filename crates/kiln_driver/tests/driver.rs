@@ -701,6 +701,68 @@ fn reproducible_timestamp() {
     std::fs::remove_dir_all(&d).unwrap();
 }
 
+/// WP-2331 (spec/pp.md "Builtin macros"; `__TIMESTAMP__` is the GNU
+/// extension beside [cpp.predefined]'s `__DATE__` and `__TIME__`): without
+/// a fixed epoch `__TIMESTAMP__` is the modification time of the file it
+/// is expanded in, in the local time of `TZ` (a POSIX rule here, so the
+/// test needs no zone database), spelled as clang's `asctime` form;
+/// standard input has time 0.
+#[test]
+fn file_timestamps() {
+    let d = scratch("file-timestamp");
+    let h = d.join("h.h");
+    let t = d.join("t.cpp");
+    std::fs::write(&h, "#define STAMP __TIMESTAMP__\nconst char *in_header = __TIMESTAMP__;\n")
+        .unwrap();
+    std::fs::write(&t, "#include \"h.h\"\nconst char *in_main = STAMP;\n").unwrap();
+    let touch = |p: &Path, secs: u64| {
+        let at = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs);
+        std::fs::File::options().write(true).open(p).unwrap().set_modified(at).unwrap();
+    };
+    // 2026-11-23 02:05:00 UTC and 2026-07-04 16:00:00 UTC.
+    touch(&h, 1_795_399_500);
+    touch(&t, 1_783_180_800);
+    let kilnpp = Path::new(env!("CARGO_BIN_EXE_kiln")).with_file_name("kiln++");
+    let pp = |tz: &str, input: &str, stdin: &str| {
+        use std::io::Write as _;
+        let mut child = std::process::Command::new(&kilnpp)
+            .args(["-E", "-P", input])
+            .env_remove("KILN_REPRODUCIBLE_TIME")
+            .env_remove("SOURCE_DATE_EPOCH")
+            .env("TZ", tz)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(stdin.as_bytes()).unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        // The lines, not the blank ones `-P` keeps for the `#define`.
+        String::from_utf8(out.stdout).unwrap().trim().to_owned()
+    };
+    let t = t.to_str().unwrap();
+    // The header's own time, in standard time; the macro defined in the
+    // header expands in the main file, so it is the main file's, in
+    // daylight saving time.
+    assert_eq!(
+        pp("EST5EDT,M3.2.0,M11.1.0", t, ""),
+        "const char *in_header = \"Sun Nov 22 21:05:00 2026\";\n\
+         const char *in_main = \"Sat Jul  4 12:00:00 2026\";"
+    );
+    assert_eq!(
+        pp("UTC0", t, ""),
+        "const char *in_header = \"Mon Nov 23 02:05:00 2026\";\n\
+         const char *in_main = \"Sat Jul  4 16:00:00 2026\";"
+    );
+    // Standard input: time 0.
+    assert_eq!(
+        pp("EST5EDT,M3.2.0,M11.1.0", "-", "__TIMESTAMP__\n"),
+        "\"Wed Dec 31 19:00:00 1969\""
+    );
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
 #[test]
 fn dependencies() {
     let d = scratch("deps");

@@ -30,6 +30,20 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   compile output keeps clang's shape). `FrontEndOptions::response_files`
   (default on) turns off `@file` expansion in `run_front_end` (WP-2411).
 
+- The source overlay creates and removes files (WP-2391, spec/source.md
+  "Overlay", stage 2): `Overlay::create`, `remove` and `write`, keyed for
+  created files by their deepest existing directory and the path below
+  it; one resolver answers loads, header search (`kiln_pp::OverlayFs`:
+  every `HeaderFs` query, listings with the created names, the search
+  list) and the driver's input check, so a run sees what the same
+  command sees over a copy of the tree with the edit applied;
+  `Overlay::replace_with` / `create_with` take a loader called at most
+  once per overlay, its failures in `FrontEndReport::overlay_failures`;
+  `LookupLog::check` takes a `Trust` (replaying a log under another view
+  asks every directory again). An overlay that creates any file refuses
+  module files (`drv_front_end_overlay_creates`,
+  `pp_module_file_overlay_creates`); a run without an overlay is
+  unchanged.
 - The written-reference table joins the AST and keeps the tokens
   outside a name (WP-2326, spec/ast.md §18.11): the location a
   `DeclRefExpr` or `MemberExpr` stores is its name's entry's `name_lo`
@@ -65,6 +79,14 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   `-fkiln-dump-pp-record=source-order` prints a condition's reads in
   source order. Off, a snapshot has no byte of the record (PCH
   `FORMAT_VERSION` 150).
+- Written extents of expressions for tooling clients (WP-2327, WP-2328;
+  spec/ast.md §21, spec/lex.md "Token ranges"):
+  `kiln_ast::expr_extent::WrittenExtents` gives the first and last token
+  of an expression exactly or `None`, and
+  `kiln_parse::ExprExtents` maps it to bytes of one file by the rule the
+  macro fix-its use (`kiln_lex::token_range`); `-fkiln-dump-expr-extents`
+  prints them, and `cargo xtask extents` compares them with clang's source
+  ranges, its stage 1 (the conformance corpus) a run of `ci`.
 - The written-reference table's stage-4 gaps are closed (WP-2220..WP-2224,
   WP-2170; spec/ast.md §18.8, §18.9): per-specialization entries name the
   using-directive their lookup went through (`SpecRef::udir`), re-find
@@ -772,6 +794,13 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   response-file expansion; an `@x` word is an ordinary word (an input
   named `@x`).
 
+- The front-end library entry's environment (WP-2122, spec/driver.md
+  "Front-end library entry"): `KILN_WREF_RAW` (the written-reference
+  dump's raw locations), `KILN_STATS_LOG`, `KILN_HOD_STRICT`,
+  `KILN_PCH_SNAPSHOT_PASSES` and the crash reproducer's `TMPDIR` are read
+  from the driver's environment (`FrontEndOptions::environment` for a
+  library run) instead of the process's; the remaining process-wide
+  developer switches are listed in one table.
 - Breaking, for tooling clients (WP-2321, WP-2322, WP-2324, WP-2325):
   `HostCalls` no longer requires `Send`; only a registered handler is
   `Box<dyn HostCalls + Send>`, and `EvalSession::run` takes any handler
@@ -887,12 +916,56 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- `EvalSession::variable_value` instantiates on demand a static data
+  member's initializer that nothing instantiated (an in-class `constexpr`
+  member of a class template specialization, an out-of-line `const` one),
+  as spec/eval-session.md §4.1 says, instead of answering `NotAConstant`;
+  it checks the calling thread's stack guard, and a later run that
+  reaches an initializer it failed reports that failure as in any session
+  (WP-2420).
+- A `SessionRefused` for a unit with errors or a stopped one carries its
+  diagnostics rendered as the driver printed them (`rendered`, and
+  `SessionRefused::rendered()` for every case), text a client can use
+  after `with_eval_session` returns, when the records' source manager is
+  gone; the two variants are `#[non_exhaustive]` (WP-2332).
+- A read of a `constexpr` variable whose initializer failed at a host
+  call no longer reports a second error, "host call during speculative
+  evaluation", from re-folding the initializer: in a translation unit and
+  in a refused nested host call of an evaluation-session run (WP-2330,
+  spec/host-calls.md §5).
+- `__TIMESTAMP__` without a fixed epoch is the current file's
+  modification time in local time (the C library's zone: `TZ`, else
+  `/etc/localtime`), as clang spells it (`"Sun Nov 22 21:05:00 2026"`),
+  instead of `??? ??? ?? ??:??:?? ????`; standard input has time 0, as in
+  clang (WP-2331, spec/pp.md "Builtin macros").
+- The declaration-extent table (`-fkiln-decl-extents`) gives every
+  written declaration its own row (WP-2470, spec/ast.md §19.1): an
+  explicit instantiation of a function template, a variable template, a
+  member function or a static data member (`template void S<long>::m();`,
+  `template void t(short);`) has one, and an `extern template`
+  declaration and the later explicit instantiation definition, a
+  repeated explicit or partial specialization declaration and a repeated
+  opaque enumeration declaration no longer overwrite the earlier
+  declaration's row: rows are keyed by declaration and ordinal
+  (`DeclExtents::rows_of`). The written-reference table records every
+  member name of an `offsetof` designator (WP-2471, §18.4): the names
+  after a component that failed are `UNRESOLVED`, and a template's
+  designator deferred to instantiation resolves the names into a type
+  that is not dependent. PCH format 152, module image 81.
 - An evaluation-session run on a thread other than the one that
   compiled the session checks that thread's stack guard (WP-2410,
   spec/eval-session.md §9): it failed "stack exhausted" at its first
   instantiation or nested evaluation, and every later run of the session
   with it. A stack exhausted by one run no longer stops the next.
 
+- The written-reference table records a failed lookup as `UNRESOLVED`,
+  not `DEPENDENT` (WP-2291, spec/ast.md §18.2): an undeclared identifier
+  (also in a thread-safety attribute's argument), a member name after an
+  invalid object expression, and in a template pattern a non-dependent
+  name or a non-dependent call's callee whose lookup or resolution fails
+  at the definition; the identifier-accounting test counts the arguments
+  of attributes clang does not know as non-names, leaving nothing over
+  in `tests/conformance` (WP-2290).
 - A class template's friend function template definition with a default
   template argument, instantiated after the template was declared at
   namespace scope, is "default template argument not permitted on a

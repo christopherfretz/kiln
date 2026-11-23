@@ -568,6 +568,7 @@ impl CodegenJob<'_> {
         // object.
         out.dumps.push_str(&tu.cfg_dump);
         if a.dump_written_refs {
+            tu.ast.written_refs.set_raw_dump(crate::env::wref_raw(&a.env));
             out.dumps.push_str(&tu.ast.written_refs.dump(&tu.ast, sm, main_id));
         }
         if a.dump_decl_extents {
@@ -2118,7 +2119,7 @@ fn execute(
     let mut trace: Option<InputTrace> = None;
     // spec/driver.md "Compile statistics log": one record per source
     // input and one for the link, each ended where its trace ends.
-    let stats_log = crate::stats::log_path();
+    let stats_log = crate::stats::log_path(&args.env);
     let mut stats: Option<crate::stats::Job> = None;
     let end_stats = |stats: &mut Option<crate::stats::Job>| {
         if let (Some(j), Some(log)) = (stats.take(), &stats_log) {
@@ -2561,7 +2562,7 @@ fn not_done(
         }
         Outcome::Failed { status, message } => {
             let message = if message.is_empty() { "no message".to_owned() } else { message };
-            if crate::hod::strict() {
+            if crate::hod::strict(&args.env) {
                 Diag::new(DiagId::drv_hod_failed_strict, Span::INVALID)
                     .arg(status)
                     .arg(message)

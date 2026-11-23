@@ -12,7 +12,8 @@ use std::time::{Duration, Instant};
 use kiln_diag::{DiagEngine, DiagOptions, Diagnostic, MemorySink};
 use kiln_parse::{
     CancelToken, ConstexprLimits, EntryError, EvalSession, HostCalls, HostError, HostOut,
-    OpenError, ParseOptions, RunBudget, RunError, RunReport, RunValue, parse_preprocessed_retained,
+    OpenError, ParseOptions, RunBudget, RunError, RunReport, RunValue, ValueError,
+    parse_preprocessed_retained,
 };
 use kiln_pp::{ClangFeatures, ModuleOptions, PpOptions, Preprocessor};
 use kiln_sema::target::{Arch, Target};
@@ -629,6 +630,68 @@ fn a_run_checks_the_stack_of_its_own_thread() {
             session(STACK_SRC, |s, sm| {
                 let r = run(s, "X::deep");
                 assert_eq!(ok(&r), RunValue::Signed(1000), "{:?}", render(sm, &r.diagnostics));
+            });
+        });
+    });
+}
+
+/// WP-2420: static data members only a read instantiates (each level's
+/// initializer instantiates the next), shallow and deep, and an entry that
+/// reaches the deep one.
+const VALUE_STACK_SRC: &str = "template <class T, int N> struct R { static constexpr int v = R<T, N - 1>::v + 1; };\n\
+template <class T> struct R<T, 0> { static constexpr int v = 0; };\n\
+template <class T> struct E { static consteval int deep() { return R<T, 1000>::v; } };\n\
+static_assert(sizeof(R<int, 8>) + sizeof(R<int, 16>) + sizeof(R<char, 8>) + sizeof(R<char, 16>) > 0);\n\
+static_assert(sizeof(R<int, 1000>) + sizeof(E<int>) > 0);\n\
+using I8 = R<int, 8>; using I16 = R<int, 16>; using C8 = R<char, 8>; using C16 = R<char, 16>;\n\
+using D = R<int, 1000>; using X = E<int>;\n";
+
+/// WP-2420 (spec/eval-session.md §9): `variable_value` checks the stack of
+/// the thread it is called on, as a run does. Compiled on thread A, a read
+/// on thread B that instantiates succeeds, then one on A; a read on a
+/// small-stack thread that exhausts it is refused (the exhaustion is
+/// diagnosed: a run reaching the same initializer reports it), and later
+/// reads on either thread are not stopped by it.
+#[test]
+fn a_variable_value_checks_the_stack_of_its_own_thread() {
+    const BIG: usize = 256 << 20;
+    const SMALL: usize = 4 << 20;
+    const CAP: u64 = RunBudget::PROGRAM.result_bytes;
+    let read =
+        |s: &mut EvalSession<'_, '_>, name: &str| s.variable_value_named(name, CAP).map(|t| t.root);
+    std::thread::scope(|outer| {
+        on_guarded_thread(outer, BIG, || {
+            session(VALUE_STACK_SRC, |s, sm| {
+                let on = |size: usize, s: &mut EvalSession<'_, '_>, name: &str| {
+                    std::thread::scope(|sc| on_guarded_thread(sc, size, || read(s, name)))
+                };
+                // Compiled on A, read on B: instantiates `R<int, 1..8>`.
+                assert_eq!(on(BIG, s, "I8::v"), Ok(RunValue::Signed(8)));
+                // Then on A, more instantiation.
+                assert_eq!(read(s, "I16::v"), Ok(RunValue::Signed(16)));
+                // A read that exhausts the small thread's stack is refused.
+                assert_eq!(on(SMALL, s, "D::v"), Err(ValueError::NotAConstant));
+                // The exhaustion was the read's: later reads on either
+                // thread are not stopped by it.
+                assert_eq!(read(s, "C8::v"), Ok(RunValue::Signed(8)));
+                assert_eq!(on(SMALL, s, "C16::v"), Ok(RunValue::Signed(16)));
+                // The instantiation it stopped stays failed (§9), and a run
+                // reaching it reports the exhaustion.
+                assert_eq!(read(s, "D::v"), Err(ValueError::NotAConstant));
+                let r = run(s, "X::deep");
+                assert_eq!(r.result, Err(RunError::Failed));
+                let text = render(sm, &r.diagnostics).join("\n");
+                assert!(
+                    text.contains(
+                        "fatal error: kiln: stack exhausted during template instantiation"
+                    ),
+                    "{text}"
+                );
+            });
+            // A fresh session on A's stack reads the deep one.
+            session(VALUE_STACK_SRC, |s, _| {
+                assert_eq!(read(s, "D::v"), Ok(RunValue::Signed(1000)));
+                assert_eq!(ok(&run(s, "X::deep")), RunValue::Signed(1000));
             });
         });
     });

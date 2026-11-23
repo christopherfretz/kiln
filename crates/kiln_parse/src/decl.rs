@@ -2949,10 +2949,17 @@ impl Parser<'_, '_> {
         let reused = d.index() as usize <= decls_before
             && use_ != TagUse::Definition
             && self.s.ast.decl_extents.get(d).is_some();
+        // A redeclaration the AST merged into the declaration it redeclares
+        // (`enum class E : int;` twice) is a written declaration of its own:
+        // a new row of `d` (spec/ast.md §19.1; WP-2470).
+        let redeclared = reused && use_ == TagUse::Declaration;
         let ext = self.ext_on()
-            && !reused
+            && (!reused || redeclared)
             && (use_ != TagUse::Reference || d.index() as usize >= decls_before);
         if ext {
+            if redeclared {
+                self.ext_redecl(d);
+            }
             let name = name.map_or(Span::INVALID, |(_, l)| Span::new(l, name_end));
             self.ext_tag_head(d, kw_loc, ext_qual, name);
         }
@@ -3198,7 +3205,17 @@ impl Parser<'_, '_> {
             if use_ != TagUse::Reference
                 && let Some(d) = rec
             {
-                self.ext_tag_head(d, kw_loc, ext_qual, Span::new(name_loc, name_end));
+                // A friend naming a specialization written before it
+                // declares nothing new: the earlier row stays (spec/ast.md
+                // §19.5). Any other declaration of a specialization with a
+                // row (a repeated explicit or partial specialization, an
+                // explicit instantiation after a declaration of it) writes
+                // a row of its own (§19.1; WP-2470).
+                if !(use_ == TagUse::Friend && self.s.ast.decl_extents.get(d).is_some()) {
+                    self.ext_redecl(d);
+                    self.ext_tag_head(d, kw_loc, ext_qual, Span::new(name_loc, name_end));
+                    ds.tag_extent = self.ext_on();
+                }
                 self.s.act_on_tag_attrs(d, &attrs, use_);
             }
             if use_ == TagUse::Definition {
@@ -3221,7 +3238,6 @@ impl Parser<'_, '_> {
             {
                 ds.tag = Some(d);
                 ds.tag_declares = true;
-                ds.tag_extent = self.ext_on();
             }
             ty
         } else {
@@ -5533,6 +5549,10 @@ impl Parser<'_, '_> {
         let _ = self.s.take_declarator_type_invalid();
         let mut type_invalid = false;
         let mut semi_at = None;
+        // The specializations and members the declarators of an explicit
+        // instantiation of functions or variables named: each a written
+        // declaration with its row (spec/ast.md §19.1; WP-2470).
+        let mut named: Vec<DeclId> = Vec::new();
         loop {
             let mut d = self.group_declarator(ctx, &ds);
             // clang's `ParseDeclGroup`: a later init-declarator may begin
@@ -5615,6 +5635,15 @@ impl Parser<'_, '_> {
             let v = self.s.act_on_declarator(&ds, base, &d);
             self.note_declarator_ref(v, &d);
             self.s.claim_written_refs(wmark, v);
+            let inst_named =
+                if v.is_none() && tmpl_kind == Some(TemplateDeclKind::ExplicitInstantiation) {
+                    self.s.take_explicit_inst_named()
+                } else {
+                    None
+                };
+            if let Some(x) = inst_named {
+                self.ext_redecl(x);
+            }
             if v.is_none()
                 && tmpl_kind == Some(TemplateDeclKind::ExplicitInstantiation)
                 && let Some(m) = wmark
@@ -5647,10 +5676,17 @@ impl Parser<'_, '_> {
             if let Some(v) = v {
                 self.ext_bindings(v);
             }
+            if let Some(x) = inst_named
+                && self.ext_on()
+            {
+                self.ext_declarator(Some(x), &d, specs_end);
+                named.push(x);
+            }
             if init.is_err() {
                 decls.extend(v);
                 self.skip_to_semi();
-                let group = Self::ext_group(&ds, &decls);
+                let mut group = Self::ext_group(&ds, &decls);
+                group.append(&mut named);
                 self.ext_finish(&group, begin);
                 return decls;
             }
@@ -5665,7 +5701,8 @@ impl Parser<'_, '_> {
         }
         self.expect_declaration_semi(ctx, semi_at);
         let group = Self::ext_group(&ds, &decls);
-        let group = self.ext_with_bindings(group);
+        let mut group = self.ext_with_bindings(group);
+        group.append(&mut named);
         self.ext_finish(&group, begin);
         decls
     }

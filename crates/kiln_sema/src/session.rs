@@ -1025,14 +1025,41 @@ impl<'a, 'sm> EvalSession<'a, 'sm> {
         let diags = s.diags;
         let mark = diags.capture_begin();
         let errors = diags.error_count();
+        // The on-demand work may instantiate: on this thread's stack (§9),
+        // and a fatal error it reports (a stack exhaustion) ends with the
+        // read, as one in a run ends with the run.
+        let fatal = s.inst.fatal;
+        let guard = s.guard_enter_thread();
+        // On demand (WP-2420): the read is a reference to the variable in
+        // a constant expression, as an odr-use in one would be
+        // ([temp.inst]/4 and /8): an initializer nothing instantiated (an
+        // in-class member of a specialization, deferred; an out-of-line
+        // one) is instantiated now, at the variable, as the translation
+        // unit's work (§5.1 "Unchanged"; no run is open, so no unit
+        // records it and a later run that reaches it is not charged).
+        let first = s.ast.first(var);
+        if s.might_be_constant_var(first) {
+            let at = s.ast.decls.get(var).loc();
+            // Its units are recorded as a run's are (§7), so a later run
+            // that reaches a failed one reports its diagnostics as the run
+            // that did it would have; no unit is charged (no run is open
+            // to measure it).
+            self.replay.done.clear();
+            self.replay.charged.clear();
+            self.replay.windows.clear();
+            self.replay.loose = NestedCost::ZERO;
+            s.eval_replay = Some(std::mem::take(&mut self.replay));
+            s.note_var_referenced(first, at);
+            if let Some(rp) = s.eval_replay.take() {
+                self.replay = rp;
+            }
+        }
         let mut oven = s
             .oven
             .take()
             .unwrap_or_else(|| unreachable!("an evaluation session's Oven is out between runs"));
-        // The on-demand evaluation may instantiate: on this thread's stack
-        // (§9).
-        let guard = s.guard_enter_thread();
         let cv = s.var_constant_value(var, ty, &mut oven);
+        s.inst.fatal = fatal;
         s.guard_leave_thread(guard);
         s.oven = Some(oven);
         let _ = diags.capture_end(mark);

@@ -810,7 +810,8 @@ impl Preprocessor<'_, '_> {
         for dir in &o.prebuilt_paths {
             for ext in ["pcm", "cppm", "ixx", "cpp"] {
                 let p = dir.join(format!("{stem}.{ext}"));
-                if self.sm.work_dir().join(&p).is_file() {
+                // Through the overlay, if any (spec/source.md "Overlay").
+                if self.sm.is_regular_file(&p) {
                     return Some((p, Found::Prebuilt));
                 }
             }
@@ -826,7 +827,7 @@ impl Preprocessor<'_, '_> {
             && let Some(d) = &o.std_dir
         {
             let p = d.join(format!("{name}.cppm"));
-            if self.sm.work_dir().join(&p).is_file() {
+            if self.sm.is_regular_file(&p) {
                 return Some((p, Found::StdDir));
             }
         }
@@ -977,15 +978,25 @@ impl Preprocessor<'_, '_> {
             return None;
         }
         // The module file holds its inputs' text as it was built, which an
-        // overlay of the run replaces (spec/source.md "Overlay", stage 1:
-        // refused, not validated against the overlay).
-        if let Some(o) = self.sm.overlay()
-            && let Some(f) =
+        // overlay of the run replaces or removes; it records its inputs but
+        // not its lookups, which a file the overlay creates may change
+        // (spec/source.md "Overlay": refused, not validated against the
+        // overlay).
+        if let Some(o) = self.sm.overlay() {
+            if let Some(created) = o.created_paths().first() {
+                let created = created.to_string_lossy();
+                let d =
+                    Diag::new(DiagId::pp_module_file_overlay_creates, span).arg(path).arg(created);
+                self.emit(d);
+                return None;
+            }
+            if let Some(f) =
                 c.files.iter().find(|f| o.contains(&self.sm.work_dir().join_str(&f.path)))
-        {
-            let d = Diag::new(DiagId::pp_module_file_overlaid, span).arg(path).arg(&f.path);
-            self.emit(d);
-            return None;
+            {
+                let d = Diag::new(DiagId::pp_module_file_overlaid, span).arg(path).arg(&f.path);
+                self.emit(d);
+                return None;
+            }
         }
         Some(c)
     }

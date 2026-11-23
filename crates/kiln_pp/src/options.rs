@@ -129,9 +129,16 @@ pub struct PpOptions {
     /// Fixed `__DATE__` and `__TIME__` spellings (without quotes), for
     /// reproducible output. `None` uses the current time.
     pub reproducible_time: Option<(String, String)>,
-    /// Fixed `__TIMESTAMP__` spelling (without quotes). `None` uses the
-    /// modification time of the file if known, else `??? ??? ?? ??:??:?? ????`.
+    /// Fixed `__TIMESTAMP__` spelling (without quotes). `None` spells the
+    /// current file's modification time in local time (`tz`), clang's
+    /// `asctime`-style `Sun Nov 22 21:05:00 2026`; a buffer that is no
+    /// file on disk has time 0 (as clang's standard input); a file whose
+    /// time cannot be read gives `??? ??? ?? ??:??:?? ????` (WP-2331).
     pub timestamp: Option<String>,
+    /// The `TZ` environment variable's value, the zone of `__TIMESTAMP__`'s
+    /// local time as the C library's `localtime` reads it (`None`: unset,
+    /// `/etc/localtime`; spec/pp.md "Builtin macros").
+    pub tz: Option<String>,
     /// `-freflection`: lex the P2996 tokens `^^`, `[:`, `:]` (C++26).
     pub reflection: bool,
     /// Modules enabled (C++20 and later, not with `-E`): module and import
@@ -202,6 +209,7 @@ impl PpOptions {
             max_include_depth: 200,
             reproducible_time: None,
             timestamp: None,
+            tz: None,
             reflection: false,
             modules: None,
             parser_pragmas: false,

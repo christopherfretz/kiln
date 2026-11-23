@@ -296,6 +296,13 @@ pub struct TemplState {
     /// and `template` locations): the next class template-id declared
     /// is explicitly instantiated ([temp.explicit]).
     pub(crate) explicit_inst: Option<(Option<Loc>, Loc)>,
+    /// The function or variable specialization, or the member of a class
+    /// template specialization, that the explicit instantiation being
+    /// parsed named ([temp.explicit]/3): the declaration its row in the
+    /// declaration-extent table is keyed by (spec/ast.md §19.1; WP-2470),
+    /// taken by the parser after the declarator
+    /// ([`Sema::take_explicit_inst_named`]).
+    pub(crate) explicit_inst_named: Option<DeclId>,
     /// The `template<>` of `template<> template<class U> struct
     /// A<int>::B ...` ([temp.expl.spec]/16): the declaration under the
     /// inner head specializes member template `B` of the implicitly

@@ -373,6 +373,8 @@ pub struct Preprocessor<'a, 'd> {
     /// `__VA_ARGS__` / `__VA_OPT__` are allowed (variadic `#define` body).
     pub(crate) va_scope: bool,
     pub(crate) date_time: Option<(String, String)>,
+    /// The zone of `__TIMESTAMP__`, read at its first use.
+    pub(crate) time_zone: Option<crate::localtime::TimeZone>,
     /// Reused buffer for token pasting.
     pub(crate) paste_buf: String,
     /// A directive line is being read (the lexer yields `Eod`).
@@ -504,6 +506,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             parsing_if: false,
             va_scope: false,
             date_time: None,
+            time_zone: None,
             paste_buf: String::new(),
             in_directive: false,
             dir_eod: None,

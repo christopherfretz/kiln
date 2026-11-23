@@ -14,6 +14,7 @@ mod consteval_block;
 mod contracts;
 mod decl;
 mod expr;
+mod expr_extents;
 mod extents;
 mod fp_pragma;
 pub mod keywords;
@@ -45,6 +46,7 @@ use kiln_source::activity::{self, Phase};
 use kiln_source::symbol::Interner;
 use kiln_source::{FileId, Loc, SourceManager};
 
+pub use expr_extents::ExprExtents;
 pub use kiln_sema::session::{
     CancelToken, CharUnit, Entity, Entry, EntryError, EnumValue, EvalSession, Field, FieldKind,
     FloatKind, InfoKind, InfoValue, IntValue, KeptMemory, MemberPointerValue, OpenError, PathStep,

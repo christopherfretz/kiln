@@ -674,6 +674,49 @@ fn written_refs_equal_the_dump() {
     assert_eq!(table, dump);
 }
 
+/// WP-2122: a developer switch that changes a run's result is read from
+/// `FrontEndOptions::environment` (spec/driver.md "Front-end library
+/// entry", the environment table). `KILN_WREF_RAW` prefixes each line of
+/// the written-reference dump with the name's raw location: two runs in
+/// one process with different environments dump differently, and the
+/// process's own `KILN_WREF_RAW` reaches only a run under
+/// `Environment::process()`. The process variable is set by running this
+/// test again in a child (no `set_var`: it is `unsafe`).
+#[test]
+fn developer_switches_follow_the_environment() {
+    if std::env::var_os("KILN_WREF_RAW").is_none() {
+        let out = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "developer_switches_follow_the_environment", "--nocapture"])
+            .args(["--test-threads=1"])
+            .env("KILN_WREF_RAW", "1")
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+        assert!(text.contains("1 passed"), "the child ran the test: {text}");
+        return;
+    }
+    let s = Scratch::new("dev-switches");
+    let main = s.write("main.cpp", b"int v;\nint w = v;\n");
+    let cl = argv(&["-std=c++26", "-fsyntax-only", &main]);
+    let dump = |environment: Environment| {
+        let mut o = quiet();
+        o.written_refs = true;
+        o.environment = environment;
+        let r = run_front_end("kiln++", &cl, o, |fe| {
+            fe.ast.written_refs.dump(fe.ast, fe.sm, fe.main_file)
+        })
+        .unwrap();
+        assert_eq!(r.errors, 0, "{:?}", r.first_error);
+        r.value.unwrap()
+    };
+    let raw = dump(Environment::fixed([("KILN_WREF_RAW", "1")]));
+    let plain = dump(Environment::fixed::<&str, &str>([]));
+    assert!(raw.starts_with('#') && raw.contains(" 2:9-2:10  expr  'v' -> v@1:5"), "{raw}");
+    assert_eq!(plain, "2:9-2:10  expr  'v' -> v@1:5 in=w@2:5\n", "the process's variable");
+    assert!(dump(Environment::process()).starts_with('#'), "the process environment");
+}
+
 /// The process's current directory, which no test of this file changes.
 fn process_cwd() -> PathBuf {
     std::env::current_dir().unwrap()

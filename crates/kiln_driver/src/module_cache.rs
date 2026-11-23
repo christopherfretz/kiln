@@ -425,6 +425,7 @@ impl StdCache {
         // `decl_extents` stays: the module file carries the extents its
         // build records (spec/ast.md §19.6), keyed apart below.
         a.dump_decl_extents = false;
+        a.dump_expr_extents = false;
         a.pp_record = false;
         a.dump_pp_record = false;
         a.cfg_stats = false;

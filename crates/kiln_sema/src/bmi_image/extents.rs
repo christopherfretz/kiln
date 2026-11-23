@@ -42,6 +42,11 @@ const REQ: u32 = NONE - 1;
 /// One row: (record, parameter position or [`OWN`], locations, end).
 type Entry = (u32, u32, [u32; LOCS], u8);
 
+/// The bit of an entry's end byte that makes it a later row of the
+/// declaration the entry before it is a row of (a declaration written more
+/// than once under one id, spec/ast.md §19.1; WP-2470).
+const LATER: u8 = 0x80;
+
 /// The locations of a module declaration's row, in
 /// [`ModuleDeclExtent`] field order (seven spans).
 const MLOCS: usize = 14;
@@ -123,10 +128,14 @@ impl Writer<'_, '_, '_> {
             };
             let rows = params.into_iter().zip(0u32..).chain(std::iter::once((d, OWN)));
             for (x, k) in rows {
-                let Some(e) = self.s.ast.decl_extents.get(x).copied() else { continue };
-                match self.extent_locs(&e) {
-                    Some(locs) => out.push((i, k, locs, end_code(e.end))),
-                    None => self.miss(i, "a declaration extent the image does not carry")?,
+                let table = &self.s.ast.decl_extents;
+                let es: Vec<DeclExtent> = table.rows_of(x).copied().collect();
+                for (n, e) in es.iter().enumerate() {
+                    let later = if n == 0 { 0 } else { LATER };
+                    match self.extent_locs(e) {
+                        Some(locs) => out.push((i, k, locs, end_code(e.end) | later)),
+                        None => self.miss(i, "a declaration extent the image does not carry")?,
+                    }
                 }
             }
         }
@@ -215,8 +224,13 @@ pub(super) fn validate_extents(img: &Image) -> Res<()> {
         Some(d) => matches!(&d.payload, super::Payload::Function { params, .. }
             if (k as usize) < params.len()),
     };
-    let ok = e.iter().all(|&(i, k, _, end)| in_range(i, k) && end <= 2)
-        && e.windows(2).all(|w| (w[0].0, w[0].1) < (w[1].0, w[1].1))
+    // A later row follows a row of the same declaration.
+    let ascends = |a: &Entry, b: &Entry| {
+        (a.0, a.1) < (b.0, b.1) && b.3 & LATER == 0 || (a.0, a.1) == (b.0, b.1) && b.3 & LATER != 0
+    };
+    let ok = e.iter().all(|&(i, k, _, end)| in_range(i, k) && end & !LATER <= 2)
+        && e.first().is_none_or(|f| f.3 & LATER == 0)
+        && e.windows(2).all(|w| ascends(&w[0], &w[1]))
         && (img.extents.module.is_none() || img.preamble == NONE);
     if ok { Ok(()) } else { bad("bad declaration extents") }
 }
@@ -293,18 +307,25 @@ impl Sema<'_, '_> {
                 qual: l(6),
                 body: Span::new(l(7), l(8)),
                 specs_end: l(9),
-                end: match end {
+                end: match end & !LATER {
                     1 => DeclEnd::Semi,
                     2 => DeclEnd::Brace,
                     _ => DeclEnd::Other,
                 },
             };
+            let later = end & LATER != 0;
             let pattern = self.ast.template_info(d).and_then(|t| t.pattern);
+            let table = &mut self.ast.decl_extents;
             match pattern {
-                Some(p) if self.ast.decl_extents.get(p) == Some(&e) => {
-                    self.ast.decl_extents.share(d, p);
+                // A template shares its pattern's rows, the later ones too.
+                Some(p) if !later && table.rows_of(p).next() == Some(&e) => table.share(d, p),
+                Some(p) if later && table.shares(d, p) => {}
+                _ => {
+                    if later {
+                        table.redeclare(d);
+                    }
+                    table.set(d, e);
                 }
-                _ => self.ast.decl_extents.set(d, e),
             }
         }
     }

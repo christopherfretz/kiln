@@ -356,9 +356,30 @@ pub(crate) fn date_time(secs: i64) -> (String, String) {
     (date, time)
 }
 
+/// `__TIMESTAMP__`'s spelling (without quotes) of local time `secs`
+/// (seconds since the epoch, the zone's offset added): `asctime`'s
+/// `%a %b %e %T %Y`, `Sun Nov 22 21:05:00 2026` (WP-2331).
+pub(crate) fn timestamp(secs: i64) -> String {
+    const DAYS: [&str; 7] = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"];
+    let days = secs.div_euclid(86_400);
+    let (date, time) = date_time(secs);
+    let wd = DAYS[usize::try_from(days.rem_euclid(7)).unwrap_or(0)];
+    // `date` is `Mmm dd yyyy`: the time goes before the year.
+    let (md, y) = date.rsplit_once(' ').unwrap_or((&date, ""));
+    format!("{wd} {md} {time} {y}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn timestamps() {
+        assert_eq!(timestamp(0), "Thu Jan  1 00:00:00 1970");
+        // 2026-11-22 21:05:00 (a Sunday), and a day before the epoch.
+        assert_eq!(timestamp(1_795_381_500), "Sun Nov 22 21:05:00 2026");
+        assert_eq!(timestamp(-86_400), "Wed Dec 31 00:00:00 1969");
+    }
 
     #[test]
     fn keywords_sorted() {

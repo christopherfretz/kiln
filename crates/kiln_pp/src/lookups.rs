@@ -222,15 +222,11 @@ impl LookupLog {
 
     /// Repeats every lookup, in order, over `list` (and `embed_dirs`) and
     /// `fs`, and names the first whose result differs from the recorded
-    /// one (spec/pch.md "Lookup-tolerant search path"). `known(path)`
-    /// says that a file is known to exist (the PCH record's file list,
-    /// just checked), so it is not asked about. A directory the
-    /// producer's lookup already searched without finding the name (one
-    /// of its list before the result, or the includer's directory) is
-    /// not asked again, as the fast path does not ask: the file system
-    /// is taken to be the producer's but for the files the record lists.
-    /// That holds for a relative directory only in the producer's
-    /// working directory (`same_cwd`).
+    /// one (spec/pch.md "Lookup-tolerant search path", spec/pp.md
+    /// "Lookup log"). `known(path)` says that a file is known to exist
+    /// (the PCH record's file list, just checked), so it is not asked
+    /// about. `trust` says which of the producer's misses are taken as
+    /// they were ([`Trust`]).
     ///
     /// # Errors
     /// The first lookup that finds something else, as `-v` names it.
@@ -240,7 +236,7 @@ impl LookupLog {
         embed_dirs: &[String],
         fs: &mut dyn HeaderFs,
         known: &dyn Fn(&str) -> bool,
-        same_cwd: bool,
+        trust: Trust,
     ) -> Result<(), String> {
         let mut p = Prober {
             fs,
@@ -252,7 +248,10 @@ impl LookupLog {
         // The position of each directory of `list`, by name.
         let index: HashMap<&str, usize> =
             list.dirs().iter().enumerate().map(|(i, d)| (d.path.as_str(), i)).collect();
-        let trusted = |d: &str| same_cwd || d.starts_with('/');
+        let trusted = |d: &str| match trust {
+            Trust::ProducerMisses { same_cwd } => same_cwd || d.starts_with('/'),
+            Trust::Nothing => false,
+        };
         // The position of each directory of the producer's list, and its
         // position in `list` when a miss there can be trusted.
         let producer: HashMap<u32, usize> =
@@ -410,6 +409,32 @@ impl LookupLog {
             (None, None) => format!("lookup of {what} differs"),
         }
     }
+}
+
+/// Which of a log's misses [`LookupLog::check`] takes as recorded.
+///
+/// A log is a statement about one view of the file system: the disk, or
+/// the disk as a run's overlay changes it (spec/source.md "Overlay"). It
+/// is replayed with [`Trust::ProducerMisses`] only against the view it
+/// was recorded under; under another overlay, or under none after one,
+/// with [`Trust::Nothing`] and a file system of the consumer's view
+/// (`OverlayFs`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Trust {
+    /// A directory the producer's lookup searched without finding the
+    /// name (one of its list before the result, or the includer's
+    /// directory) is not asked again, as the fast path does not ask: the
+    /// file system is taken to be the producer's but for the files
+    /// `known` lists. That holds for a relative directory only in the
+    /// producer's working directory (`same_cwd`). The PCH consumer's
+    /// replay.
+    ProducerMisses {
+        /// The consumer's working directory is the producer's.
+        same_cwd: bool,
+    },
+    /// Every directory before a result is asked again (listings keep it
+    /// cheap): for a view other than the producer's.
+    Nothing,
 }
 
 /// A result with its directory named (the recorded one, or the

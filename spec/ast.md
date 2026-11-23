@@ -1800,6 +1800,40 @@ field `Ast::written_refs`. Built in five stages:
 | `flags` | `u8` (1) | `DEPENDENT` (a dependent name in a template pattern: no entity until instantiation), `UNRESOLVED` (lookup or overload resolution failed), `MEMBER` (a member or member template name written after `.` or `->`, §18.7) |
 | `how` | `RefLookup` (1) | how lookup found the name (§18.7, WP-2130) |
 
+**Failed lookup and dependence (WP-2291).** `UNRESOLVED` and
+`DEPENDENT` never both hold, and an entry with an entity is never
+`UNRESOLVED` (one that is also `DEPENDENT` prints `dep`, §18.6). Which
+of the two an entry without an entity has:
+
+- **Outside a template**, a name that names nothing is `UNRESOLVED`
+  (`(unresolved)`): an undeclared identifier, a member name after `.` or
+  `->` whose object expression is invalid or not of class type, a call
+  no candidate fits, a name in an expression sema could not form (a
+  template-id whose template argument is invalid). kiln builds a
+  recovery expression for such a name, type-dependent like clang's
+  `RecoveryExpr` (its type is unknown); that dependence is error
+  recovery, not a dependent name, and the table reads the recovery
+  expression as a failure, never as `DEPENDENT`.
+- **In a template pattern**, a dependent name ([temp.dep.general]: a
+  type- or value-dependent id-expression, a member of a dependent
+  object expression or of an unknown specialization, a component of a
+  dependent nested-name-specifier and the name after it, a dependent
+  type name) is `DEPENDENT`, and so is the callee of an unqualified call
+  with a dependent argument even when ordinary lookup found nothing
+  (argument-dependent lookup at instantiation may find it,
+  [temp.dep.candidate]). A non-dependent name is looked up and bound at
+  the definition ([temp.res.general]); when that fails it is
+  `UNRESOLVED`, exactly as outside a template, and clang diagnoses it at
+  the definition too: an undeclared identifier, a member name after an
+  invalid object expression, a name in an expression sema could not form
+  (also when the name itself is dependent, `T::template f<undeclared>`:
+  the expression is ill-formed in every specialization), and the callee
+  of a call with no dependent argument whose overload resolution fails
+  at the definition. Such a callee is recorded before its call's
+  arguments are parsed, as `DEPENDENT` until they tell, and becomes
+  `UNRESOLVED` when the call is resolved at the definition and fails
+  (`written_call_failed`).
+
 One padding byte remains. Deviation from a 4-byte `entity`-only design:
 `found` and `qualifier` are stored, not derived, because deriving `found`
 needs the expression (not kept for nested-name-specifier components) and
@@ -2092,11 +2126,24 @@ Stage-3 recording sites (WP-1932; all in `kiln_parse`, entries made by
   one naming no member stays `UNRESOLVED`;
 - offsetof member-designators (`Sema::act_on_builtin_offsetof`, a
   sema site: only member lookup knows the member), role `designator`:
-  each member name of `__builtin_offsetof(T, a.b[i].c)`
-  ([support.types.layout]/1), with `MEMBER` and the member lookup found
-  (the member written, past the anonymous members on its way), `DEPENDENT`
-  for each name of a designator deferred to instantiation, `UNRESOLVED`
-  for a name lookup did not find;
+  each member name of `__builtin_offsetof(T, a.b[i].c)` and of the
+  `offsetof` macro that spells it ([support.types.layout]/1; `a`, `b` and
+  `c` are three entries), with `MEMBER` and the member lookup found (the
+  member written, past the anonymous members on its way: the `Field`
+  node of `ExprArena::offsetof_designator` for the name, §6), or
+  `UNRESOLVED` when it names nothing: a name lookup did not find, and
+  every name after a component that failed (a member not found, a
+  bit-field, a subscript of a non-array, an operand that is not a
+  complete class; WP-2471). In a template pattern whose designator is
+  deferred to instantiation (a dependent operand type or a
+  value-dependent index), the names are resolved as clang's
+  `BuildBuiltinOffsetOf` resolves them at the definition: a name into a
+  type that is not dependent is looked up there and has its member
+  (`offsetof(S, a.b[N].c)` names `S::a`, `M::b` and `In::c`), each name
+  from the first dependent type on is `DEPENDENT`, as is one into a class
+  not complete at the definition (the table instantiates nothing), and a
+  name not found there, with every name after it, is `UNRESOLVED`
+  (WP-2471);
 - deduction guides (WP-2100; `note_declarator_ref` on a
   `SpecialName::DeductionGuide` declarator), role `template`: the
   guide's own name names the class template ([temp.deduct.guide]/1),
@@ -2168,7 +2215,10 @@ position; `q=::` is followed by the position of the leading `::` when
 it was recorded (always, since WP-2326; §18.11.2), and `tilde=` gives
 the `~` of a destructor name. `exp=` is the outermost expansion point of a name written in
 a macro. The harness directive `written-refs: <golden>`
-(spec/harness.md) compares this dump with a golden file.
+(spec/harness.md) compares this dump with a golden file. The developer
+switch `KILN_WREF_RAW`, read from the run's environment (spec/driver.md
+"Front-end library entry"; `WrittenRefs::set_raw_dump`), prefixes each
+line with `#<raw> `, the raw location of the name's start.
 
 Tests: `crates/kiln_ast/src/written_refs.rs` (entry size, off records
 nothing, claims, truncation), `crates/kiln_parse/tests/written_refs.rs`
@@ -2472,7 +2522,14 @@ one of:
   `enum_extensibility(open)`, `visibility`, `pcs`,
   `zero_call_used_regs`, `function_return`, GCC's
   `access(read_only, 1)`; and the builtin a builtin
-  alias names, `__clang_arm_builtin_alias(__builtin_x)`),
+  alias names, `__clang_arm_builtin_alias(__builtin_x)`), an argument of
+  an attribute clang does not know (one kiln warns `unknown attribute
+  '...' ignored` about, WP-2290): every identifier of an unknown
+  `[[...]]` attribute's argument list, whose tokens clang skips, and a
+  lone identifier first argument of an unknown GNU attribute
+  (`__attribute__((x(mu)))`), which clang takes as an identifier
+  argument (`ParseAttributeArgsCommon`), looking nothing up (a later
+  argument of an unknown GNU attribute is an expression and counts),
   a label (`l:`, `goto l`, `&&l`, the names of a `__label__`
   declaration, an `asm goto` label),
   an `asm` symbolic operand name, or a module name (after `module` /
@@ -2527,7 +2584,9 @@ attributes clang does not know (`frobnicate_lock(mu)`,
 not names: clang takes a lone identifier argument of an unknown GNU
 attribute as an identifier argument and skips an unknown `[[...]]`
 attribute's tokens, looking nothing up, so the table rightly has no
-entry; the test does not yet list them as non-names (WP-2290). The
+entry; since WP-2290 the test counts them as non-names (the documented
+set above). Run again (WP-2290: 3481 files, 318645 identifiers),
+nothing is left (the two panics are gone since WP-2173). The
 pinned set is unchanged (733 files, 58989 identifiers, nothing left).
 
 Over the host's libstdc++ (WP-1934: GCC 14's headers on aarch64 Linux
@@ -2557,8 +2616,18 @@ elsewhere with its parameters in scope; any other where it is
 written. The `[[clang::x(...)]]` spellings are parsed where they are
 written already (clang does the same) and are unchanged. A name the
 arguments' lookup does not find is the entry an undeclared name gets
-anywhere else: no entity (the recovery's flags, printed `(dependent)`),
-and no diagnostic. No pattern node is remembered for them (§18.9.4):
+anywhere else (§18.2, WP-2291): `UNRESOLVED`, printed `(unresolved)`,
+and so is a member name after it (`guarded_by(m.x)` with `m`
+undeclared); kiln gives no diagnostic, where clang 19 and 22 reject the
+undeclared identifier (the arguments are not analysed, WP-606). A
+dependent argument of a class template's member (`guarded_by(T::mu)`)
+is `DEPENDENT`. The forms clang accepts with a
+`-Wthread-safety-attributes` warning record what lookup finds, as any
+name does: an argument naming a variable whose type is not a
+capability (`guarded_by(i)` with `int i`), a `pt_guarded_by` of a
+member that is not a pointer; a string literal argument
+(`guarded_by("mu")`, which clang ignores as invalid) contains no name
+and has no entry. No pattern node is remembered for them (§18.9.4):
 no instantiation rebuilds an attribute's arguments, so a dependent one
 has no rows, and a module image carries the entries without one.
 Off, the arguments are skipped as before: the test is one branch at
@@ -3302,6 +3371,29 @@ body, without re-lexing. `kiln_ast::decl_extents`; the field
   (`FunctionTemplate`/`Function`, `ClassTemplate`/`CXXRecord`,
   `VarTemplate`/`Var`, `TypeAliasTemplate`/`TypeAlias`) are one shared
   row.
+- **Keys** (WP-2470). Most redeclarations have a `DeclId` of their own.
+  Some written declarations have none: the AST keeps them under the
+  `DeclId` of the entity they redeclare or name, namely a repeated
+  explicit specialization declaration of a class template
+  (`template <> struct Q<int>;` twice, then its definition), a repeated
+  partial specialization declaration, an opaque enumeration declaration
+  repeated (`enum class E : int;` twice), an explicit instantiation of a
+  class, function or variable specialization or of a member
+  (`template struct S<int>;`, `template void t<int>(int);`,
+  `template void t(short);`, `template int v<int>;`,
+  `template void S<long>::m();`, `template int S<long>::sm;`, an
+  explicit instantiation of a constructor) and an `extern template`
+  declaration of any of these. A row is keyed by (`DeclId`, ordinal):
+  the *n*th declaration of the entity written under that `DeclId` is its
+  *n*th row, in source order, and no later declaration overwrites an
+  earlier one's row. `get(d)` (and `Ast::decl_extent(d)`) is `d`'s last
+  row, `rows_of(d)` every row of `d` in source order; a template sharing
+  its pattern's row shares all of them. An explicit instantiation's row
+  is keyed by the first declaration of the specialization it names (a
+  function template specialization's, a static data member's of the
+  class template specialization): the explicitly instantiated
+  specialization when nothing declared it before, else the explicit
+  specialization it names (which then has a row before it).
 - **No row**: implicit declarations (special members, implicit
   deduction guides, builtins, injected class names, a lambda's closure
   type and its members), instantiations and their members (a client
@@ -3309,17 +3401,30 @@ body, without re-lexing. `kiln_ast::decl_extents`; the field
   the pattern's row), the parameter a `(void)` clause makes and drops,
   and the declarations an error recovery skipped.
   An explicit specialization and an explicit instantiation are written
-  declarations: the row is the specialization's, its range that of the
-  declaration that names it.
-- **Read access** (all on `DeclExtents`): `is_on()`, `get(d)`,
-  `iter()` (every declaration with a row in `DeclId` order, a shared row
-  once per declaration), `len()` (rows, a shared row once),
+  declarations: the row is the specialization's (or the member's, for
+  `template void S<long>::m();`), its range that of the declaration that
+  names it, with its own range, name and qualifier those of its
+  declarator, as for any declarator (a class template's, in the
+  class-specifier's place, those of its elaborated-type-specifier). An
+  explicit instantiation of a function template without template
+  arguments (`template void t(short);`, the specialization deduced,
+  [temp.explicit]/8) has the name `t`. A friend declaration naming a
+  specialization that has a row (`friend struct Q<int>;`) declares
+  nothing new and adds none (§19.5).
+- **Read access** (all on `DeclExtents`): `is_on()`, `get(d)` (the last
+  row), `rows_of(d)` (every row, in source order), `iter()` (every row,
+  by declaration in `DeclId` order and a declaration's rows in source
+  order, a shared row once per declaration), `len()` (rows, a shared
+  row once),
   `module_decls()` (the module and import declarations' rows, §19.9),
   `dump(ast, sm, main)` (§19.7). Helpers on the row: `semi()` (the `;`
   as a span), `qualified_name()` (`[qual, name.hi)`), `prefix()` (the
   decl-specifier part shared by a declarator group).
 - **Writes** go through `set(d, e)`, `entry(d)`, `share(alias, d)`,
-  `push_module_decl(m)` and `get_mut(d)` (no-ops when off), `forget(d)`
+  `push_module_decl(m)` and `get_mut(d)` (no-ops when off; each writes
+  `d`'s last row), `redeclare(d)` (a later declaration of `d` under the
+  same `DeclId` begins: a new, empty last row; the parser's
+  `ext_redecl`), `forget(d)`
   (a declaration the parse made and dropped), `mark()`/`truncate(mark)`
   (§19.6) and `shrink_to_fit()`, which the parser calls once the
   translation unit is parsed (after the end-of-unit instantiations,
@@ -3343,7 +3448,8 @@ kiln token locations (§19.6). An absent part is `Span::INVALID` /
 | `end` | `DeclEnd` (1) | the last token: `Semi` (`;`, `semi()` gives its span), `Brace` (the `}` that ends the body, `full.hi == body.hi`) or `Other` (§19.3) |
 
 Three padding bytes remain. 44 bytes for the row plus 4 bytes of index
-per declaration up to the last one with a row.
+per declaration up to the last one with a row, and 8 more per later row
+of a declaration written more than once under one `DeclId` (§19.1).
 
 ### 19.3 First and last tokens
 
@@ -3407,7 +3513,9 @@ declares. A friend declaration that names a class declared before it
 (`friend struct P;`) or a member of another class (`friend void
 H::h(G&);`, `friend B::~B();`) declares nothing new: the earlier
 declaration keeps its row (WP-1932; the identifier-accounting test of
-§18.8 found the overwrite).
+§18.8 found the overwrite); so does one naming a class template
+specialization with a row (`friend struct Q<int>;` after `template <>
+struct Q<int> {};`, WP-2470). The `Friend` has its own row either way.
 
 ### 19.6 Locations, speculation, PCH, modules
 
@@ -3426,12 +3534,15 @@ declaration keeps its row (WP-1932; the identifier-accounting test of
   and unit-tested.
 - **PCH.** The table is written into snapshots (§17; FORMAT_VERSION
   129; 146 since WP-2091, which adds the module and import declarations'
-  rows), with its on bit; the consumer then sets that bit from its own
+  rows; 152 since WP-2470, which adds the later rows of §19.1), with its
+  on bit; the consumer then sets that bit from its own
   options. `-fkiln-decl-extents` is part of the PCH identity (a producer
   and a consumer must agree); `-fkiln-dump-decl-extents` is not, and
   makes the producer take two passes.
 - **Module images** (spec/modules.md §11.11; IMAGE_VERSION 62, 79
-  since WP-2091). A module unit parsed with the table on carries a row
+  since WP-2091, 81 since WP-2470, which carries every row of a
+  declaration written more than once). A module unit parsed with the
+  table on carries a row
   per record that has one and per parameter of a function record,
   located in the image's location space; an importer whose table is on
   gives the declarations it builds the same rows (a template sharing its
@@ -3462,7 +3573,8 @@ declaration keeps its row (WP-1932; the identifier-accounting test of
 ### 19.7 The dump
 
 `-fkiln-dump-decl-extents` prints, at the end of the TU, one line per
-declaration with a row in `DeclId` order:
+row (`iter()`): by declaration in `DeclId` order, a declaration written
+more than once under one `DeclId` (§19.1) once per row in source order:
 
 ```
 <Kind> '<name>'  full=<L:C>-<L:C> <;|}|-> [own=..] [name=<L:C>-<L:C> '<text>'] [qual=<L:C>] [body=..] [specs-end=<L:C>] [exp=<L:C>]
@@ -3651,3 +3763,171 @@ Every value in these tables (a row's roles, an enum maximum, a field's
 bits, a named constant, a descriptor) is stable within a snapshot
 `FORMAT_VERSION`: a change to any of them is a format bump, and the
 tests above fail on one that is not.
+
+## 21. Written extents of expressions (WP-2327)
+
+A tooling client that moves, wraps or replaces an expression as text
+needs its first and last token exactly; a range one token short (clang's
+`getEndLoc` falling back to the node's own location) breaks the edit.
+This section is the promise kiln makes, and where it makes none.
+
+### 21.1 The guarantee
+
+- `kiln_ast::expr_extent::WrittenExtents::new(ast)` is the tree's view
+  and its `get(e) -> Option<(Loc, Loc)>` the location of the first and
+  of the last token of `e` as written, on the finished tree, or `None`.
+  A `Some` is exact for every kind: there is no fallback to the node's
+  own location. The two locations are token starts and may be macro
+  locations. `new` makes one pass over the lambdas and one over the
+  expressions (to find the nodes of 21.2 with nothing written: capture
+  initializers, the names unwritten calls call by, synthesized array
+  bounds), keeping them in a hash set: per node of the tree a one-word
+  kind test at view time, and a set entry only for a node found; `get`
+  reads only the tree and the set.
+- `kiln_parse::ExprExtents::new(ast, sm, interner, lex_options)` is the
+  client's view: its `written_extent(e)` is `WrittenExtents::get` when
+  the pair is one file range by the rule of spec/lex.md "Token ranges"
+  (and not a scratch buffer), else `None`, so a `Some` is always
+  expressible; `written_range(e) -> Option<(FileId, u32, u32)>` is that
+  range in bytes, end exclusive.
+- Nothing is computed while parsing: the walk reads what the tree already
+  holds (operands, `ExprArena::end_loc` and its cold side table of
+  closing tokens, the qualified-name begins of `templates.expr_begin`).
+  No node grew and no stored location was added; one per-kind flag bit
+  (`ExprFlags::DESIGNATED` on `InitListExpr`, 21.2) is new, carried in
+  the node's bits as every flag is, so the module image and the PCH
+  snapshot keep their layout (no format bump). Sema records a few more
+  closing tokens and qualifier begins in the tables it already has (the
+  `>` of a member template-id and of a resolved function template-id,
+  the `::` of a qualified builtin, the `)` of `__builtin_bit_cast` and
+  `__builtin_choose_expr`), which clang's `getBeginLoc` / `getEndLoc`
+  give too, and a member call whose object it converts
+  keeps the `__extension__`, `__builtin_choose_expr` or `_Generic`
+  around its callee, as clang converts the object in place (before,
+  only parentheses were kept, and the call began at the member).
+
+### 21.2 Decisions
+
+- **Implicit wrappers** (`ImplicitCastExpr`, `MaterializeTemporaryExpr`,
+  `CXXBindTemporaryExpr`, `ExprWithCleanups`, `ConstantExpr`,
+  `CXXStdInitializerListExpr`) have the extent of the written node
+  inside them.
+- **Nothing written**: `CXXDefaultArgExpr`, `CXXDefaultInitExpr`,
+  `ImplicitValueInitExpr`, `NoInitExpr`, `ArrayInitLoopExpr`,
+  `ArrayInitIndexExpr`, `OpaqueValueExpr`, an implicit `CoawaitExpr`
+  (an initial or final suspend point), an implicit `CXXThisExpr`
+  (also the object of `X::~X()` in a member function), the initializer
+  of an implicit lambda capture and of a variable length array bound's
+  capture, a reference to an implicitly declared variable (a coroutine's
+  promise), a member access whose object the compiler made (an awaiter)
+  a call with no written parentheses that is not a user-defined
+  literal, the name such a call calls by (a coroutine's
+  `from_address`), and an array bound `new` takes from an array typedef
+  or completes from the initializer (`new int[]{1, 2}`) are `None`.
+- **Calls without parentheses**: a user-defined literal (`12_k`,
+  `"ab" "cd"_sv`) is its literal, through the last piece of a
+  concatenation; an implicit conversion function call (`int i = s;`)
+  is its object.
+- **Brace elision**: a list whose braces were elided begins at its first
+  written initializer and ends at its last; one a designator opens
+  (`.a.y = 3`'s list of `a`) begins inside the designator, whose parts
+  the tree does not keep, and is `None` (`ExprFlags::DESIGNATED`).
+- **Rewritten operators** (`a != b` as `!(a == b)`, a comparison
+  through `<=>`): the `CXXRewrittenBinaryOperator` has the written
+  extent, from its first written operand to its last; the nodes built
+  inside it are ordinary nodes, whose implicit parts are `None`.
+- **Implicit-this member access** (`x` in a member function) begins at
+  the member's name; with a qualifier (`B::x`), whose begin the tree
+  does not keep, it is `None`, as is a qualified `DeclRefExpr` whose
+  begin was not recorded.
+- First token: the first operand for binary, conditional, subscript,
+  call, member-call, postfix and overloaded non-prefix operators, and
+  the pattern of a pack expansion or a pack index; the
+  node's own location for the kinds that begin with a keyword or a
+  punctuator (casts, `sizeof`, `new`, `delete`, `throw`, lambdas, braced
+  lists, parentheses, prefix operators); a name's qualifier begin when
+  it has one.
+- Last token: the stored closing token (`)`, `]`, `}`, `>` of a named
+  cast is followed by its `)`) when the kind keeps one; the last operand
+  for binary, conditional, C-style cast, prefix, `delete`, `co_await`,
+  `co_yield` and `sizeof`/`alignof` of an expression (`sizeof(e)`'s
+  parentheses are a `ParenExpr`); the list of a compound literal; the
+  node itself for one-token literals, `this`, postfix operators, the
+  `...` of a pack expansion and an ext-vector accessor; the last
+  piece of a concatenated string literal; a plain identifier name. A
+  name that is an operator, conversion or destructor name, or that has
+  template arguments (a variable template specialization always has),
+  with no stored end: `None`.
+
+### 21.3 Kinds that may be `None`
+
+The kinds for which stage 1 of `cargo xtask extents` (spec/harness.md
+"Expression extents") finds a `None`, each with the reason; the
+per-unit `None` counts are gated by `tests/extents/baseline.txt`, so
+none of them grows unnoticed.
+
+Two reasons recur, named here once:
+
+- **(M) a part of a macro body**: the node's tokens are spelled in a
+  `#define`; the rule of spec/lex.md "Token ranges" maps a whole
+  expansion or one argument use, never a part of a body (nor a pasted
+  or stringized token, spelled in a scratch buffer).
+- **(W) a wrapper of a `None`**: an implicit wrapper (21.2) whose written
+  node has none.
+
+The counts are stage 1's at WP-2327 (`None` / all nodes of the kind);
+the baseline, not this table, is the gate.
+
+| Kind | `None` | Reasons |
+|---|---|---|
+| `ArrayInitIndexExpr`, `ArrayInitLoopExpr` | 15/15 each | nothing written: an array member's copy in an implicit or defaulted copy |
+| `ArraySubscriptExpr` | 138/1522 | M; the element accesses of a defaulted comparison |
+| `BinaryOperator` | 11053/27430 | M (most: test macros over comparisons); a range-`for`'s `__begin != __end`; a defaulted comparison's operations |
+| `CStyleCastExpr` | 623/2112 | M |
+| `CXXBindTemporaryExpr`, `MaterializeTemporaryExpr`, `ExprWithCleanups`, `ConstantExpr`, `ImplicitCastExpr` | 2294/2928, 2430/4617, 1436/3263, 9/1180, 8940/56488 | W; M |
+| `CXXBoolLiteralExpr`, `CXXNullPtrLiteralExpr`, `GNUNullExpr`, `FloatingLiteral`, `IntegerLiteral`, `StringLiteral` | 417/1912, 1/561, 1/54, 152/1029, 9938/39099, 344/2919 | M |
+| `CXXConstructExpr` | 3860/6304 | M; a default construction (`S s;`, an element or member with no initializer): nothing written |
+| `CXXDefaultArgExpr`, `CXXDefaultInitExpr` | 352/352, 522/522 | nothing written: the parameter's or member's default |
+| `CXXDependentScopeMemberExpr` | 136/511 | M; a member template-id (`this->f<T>`, whose `>` the tree does not keep); a qualified member (`this->B::f`) through an implicit `this`; an operator name (`x.operator()<1>`) |
+| `CXXFoldExpr` | 5/151 | the fold of a constrained pack (`C... Ts`, 21.2): no parentheses written |
+| `CXXFunctionalCastExpr`, `CXXUnresolvedConstructExpr`, `CXXStaticCastExpr`, `CXXNoexceptExpr`, `CXXThrowExpr`, `LambdaExpr`, `OffsetOfExpr`, `TypeTraitExpr`, `UnaryExprOrTypeTraitExpr`, `CompoundAssignOperator` | 2492/5382, 94/495, 105/624, 29/171, 16/229, 45/970, 12/85, 68/1760, 141/1852, 256/1148 | M (`CXXStaticCastExpr`: one in an implicit member's body) |
+| `CXXMemberCallExpr`, `CallExpr`, `MemberExpr`, `DeclRefExpr` | 2728/4801, 1483/12748, 4510/12276, 6316/45673 | M; the calls and names a coroutine, a range-`for`, a structured binding or a defaulted function makes (promise, awaiter, `begin`/`end`, `get`); the `operator()` a lambda call names; a qualified name through an implicit `this` (`B::x`) or with an unrecorded qualifier begin; a name with template arguments whose `>` is not kept |
+| `CXXOperatorCallExpr` | 73/1197 | M; a range-`for`'s `++__begin`/`*__begin` and a defaulted comparison's operations on class iterators and members |
+| `CXXParenListInitExpr` | 71/71 | the parenthesized aggregate initialization of a variable (`S s(1, 2)`) or a cast (`static_cast<int[3]>(42)`): the parentheses belong to the declarator or the cast, which the node does not keep |
+| `CXXPseudoDestructorExpr` | 85/85 | the end of the destroyed type (`p->~T`, `x.~decltype(x)`) is not kept |
+| `CXXStdInitializerListExpr` | 2/71 | W (a list sema builds) |
+| `CXXThisExpr` | 2515/2918 | an implicit `this`; M |
+| `CoawaitExpr` | 48/58 | an implicit `co_await` (an initial or final suspend point) |
+| `ConceptSpecializationExpr` | 142/761 | a type-constraint's immediately-declared constraint (`C<X> T` is `C<T, X>`): not written as an expression; a qualified concept-id whose qualifier begin is not recorded; M |
+| `ConditionalOperator` | 239/1025 | M; a defaulted comparison's operations |
+| `DependentScopeDeclRefExpr`, `UnresolvedLookupExpr` | 58/304, 261/651 | M; a template-id whose `>` the tree does not keep (`T::template v<int>`); an operator name (`operator==(a, b)`) |
+| `DesignatedInitExpr`, `DesignatedInitUpdateExpr` | 48/48, 19/19 | the designator's parts are not kept (21.2) |
+| `ImplicitValueInitExpr`, `NoInitExpr`, `OpaqueValueExpr` | 861/861, 26/26, 117/117 | nothing written |
+| `InitListExpr` | 398/4357 | a list sema builds for an element or member with no initializer (at the enclosing `}`); a list a designator opens; M |
+| `PackExpansionExpr` | 5/93 | its pattern has none (an expansion of a braced construction) |
+| `ParenExpr` | 9412/11054 | M (the parentheses of a macro body, `#define F(x) (x)`) |
+| `PseudoObjectExpr` | 5/5 | the operations a defaulted comparison makes |
+| `SubstNonTypeTemplateParmExpr` | 10/10 | the value of a template argument in an instantiated member's initializer: written as the parameter's name, not mapped |
+| `UnaryOperator` | 1894/7587 | M; a range-`for`'s `++__begin` and `*__begin` |
+
+### 21.4 The dump (`-fkiln-dump-expr-extents`)
+
+With `-fsyntax-only`, one line per expression node of every written body
+and initializer (function bodies; variable, field, enumerator, parameter
+and template-parameter initializers; constraint and `noexcept`
+expressions; template patterns, not instantiations; no implicit
+members), in the order of the AST dump walk (`kiln_ast::dump::
+written_exprs`): `<kind> TAB <file> TAB <begin> TAB <end>`, byte offsets
+of `ExprExtents::written_range`, `end` exclusive. A `None` has `-` for
+`end`, and for `begin` the offset of the node's own location when that
+is file text (else `-`, with `-` for the file). A `Some` that were no
+file range would print `<kind> TAB ! TAB unmapped TAB -`; the harness
+fails on one.
+
+### 21.5 Tests
+
+`crates/kiln_parse/tests/expr_extents.rs` (every kind of 21.2 and the
+macro cases: an argument, a whole invocation, a part of a body, a
+pasted token) and `cargo xtask extents` (stage 1 in `ci`); the xtask
+test `the_none_table_is_the_baselines_kinds` holds the table of 21.3 to
+exactly the kinds of the baseline.

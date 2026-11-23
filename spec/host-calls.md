@@ -214,6 +214,20 @@ Each call stack that reaches a refused speculative call (§4) is reported
 once: the same evaluation tried twice is one error, two places that
 reach the call are two.
 
+A `constexpr` variable whose constant initialization failed is reported
+once (WP-2330). A read of it re-folds its initializer non-manifestly
+(`refold_var_init`, clang's `VarDecl::evaluateValue` after a failed
+check), and a host call in that re-fold is refused silently: the
+failure is the variable's own error (`constexpr variable 'v' must be
+initialized by a constant expression`, with the call's failure,
+speculative refusal or nested-work refusal as its note, spec/eval-session.md
+§6), so the read adds only its own `initializer of 'v' is not a constant
+expression`, never a second `host call during speculative evaluation`.
+A `const` variable that is not `constexpr` keeps the speculative error
+in that re-fold (its constant-initialization check may have been a
+silent classification, §4). Test: `crates/kiln_parse/tests/host_calls.rs`
+`a_failed_constexpr_variable_is_reported_once`.
+
 ## 6. Precompiled headers and modules
 
 A handler belongs to the process, not to a translation unit, so nothing

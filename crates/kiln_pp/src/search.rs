@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 
-use kiln_source::{FileId, Overlay, SourceManager, WorkDir};
+use kiln_source::{DirCache, FileId, LoadFailures, Overlay, Resolved, SourceManager, WorkDir};
 
 /// The group a search directory was given in (clang
 /// `frontend::IncludeDirGroup`).
@@ -372,16 +372,11 @@ fn read_names(path: &Path) -> Option<Vec<String>> {
 /// `FileManager`): a directory is one `stat`; a header is one `open`
 /// (a miss stops there), one `fstat` of the descriptor (identity by
 /// device and inode) and its reads; a directory listing is one `open`,
-/// its `getdents` and a `close`. Nothing is canonicalized.
-///
-/// With an [`Overlay`] ([`RealFs::with_overlay`]) a read of an overlaid
-/// file (`#embed`) returns the overlay's bytes; a header is loaded through
-/// the source manager, which consults its own overlay
-/// (spec/source.md "Overlay"). Directory queries never consult it.
+/// its `getdents` and a `close`. Nothing is canonicalized. A run with an
+/// [`Overlay`] uses [`OverlayFs`] instead.
 #[derive(Clone, Debug, Default)]
 pub struct RealFs {
     work_dir: WorkDir,
-    overlay: Option<Arc<Overlay>>,
 }
 
 impl RealFs {
@@ -393,16 +388,7 @@ impl RealFs {
 
     /// The disk, relative paths resolved against `work_dir`.
     pub fn in_dir(work_dir: WorkDir) -> RealFs {
-        RealFs { work_dir, overlay: None }
-    }
-
-    /// This file system with `overlay`'s replacement contents for
-    /// [`HeaderFs::read`] (the source manager's,
-    /// [`SourceManager::overlay`]); `None` reads the disk only.
-    #[must_use]
-    pub fn with_overlay(mut self, overlay: Option<Arc<Overlay>>) -> RealFs {
-        self.overlay = overlay.filter(|o| !o.is_empty());
-        self
+        RealFs { work_dir }
     }
 
     /// The path to open for `path`.
@@ -464,15 +450,168 @@ impl HeaderFs for RealFs {
     }
 
     fn read(&mut self, path: &str) -> Option<Vec<u8>> {
-        let disk = self.disk(path);
-        let mut f = std::fs::File::open(&disk).ok()?;
-        let m = f.metadata().ok().filter(std::fs::Metadata::is_file)?;
-        if let Some(o) = &self.overlay
-            && let Some(b) = o.bytes_of(&disk, &m)
-        {
-            return Some(b.to_vec());
+        read_file(&self.disk(path))
+    }
+}
+
+/// The bytes of the regular file at `path`: one `open`, one `fstat`, its
+/// reads.
+fn read_file(path: &Path) -> Option<Vec<u8>> {
+    let mut f = std::fs::File::open(path).ok()?;
+    let m = f.metadata().ok().filter(std::fs::Metadata::is_file)?;
+    kiln_source::read_open_file(&mut f, &m).ok()
+}
+
+/// The disk as an [`Overlay`] changes it (spec/source.md "Overlay"):
+/// every query answers for the tree in which the overlay's replaced files
+/// hold its bytes, its created files exist (their directories too) and
+/// its removed files do not, through [`Overlay::resolve`], the one
+/// resolver the source manager's loads use as well, so header search's
+/// caches (listings included) see one view. Relative paths as for
+/// [`RealFs`].
+///
+/// Costs over [`RealFs`]: a query the disk answers costs what it costs
+/// there (plus, for a file, a map lookup when the overlay replaces or
+/// removes files); a miss costs nothing more unless the overlay creates a
+/// file whose path has the missed path's last component; a listing costs
+/// one more `stat` (once per directory) when the overlay creates files.
+#[derive(Debug)]
+pub struct OverlayFs {
+    real: RealFs,
+    overlay: Arc<Overlay>,
+    cache: DirCache,
+    failures: LoadFailures,
+}
+
+impl OverlayFs {
+    /// The disk as `overlay` changes it, relative paths resolved against
+    /// `work_dir`. Headers load through the source manager, which must
+    /// have the same overlay ([`SourceManager::set_overlay`]).
+    pub fn new(work_dir: WorkDir, overlay: Arc<Overlay>) -> OverlayFs {
+        let failures = LoadFailures::default();
+        OverlayFs { real: RealFs::in_dir(work_dir), overlay, cache: DirCache::default(), failures }
+    }
+
+    /// Notes the entries whose loader fails when [`HeaderFs::read`] reads
+    /// them (`#embed`, `__has_embed`) in `failures`: the run's, its source
+    /// manager's ([`SourceManager::overlay_failures`]).
+    #[must_use]
+    pub fn noting(mut self, failures: LoadFailures) -> OverlayFs {
+        self.failures = failures;
+        self
+    }
+
+    /// The overlay.
+    pub fn overlay(&self) -> &Arc<Overlay> {
+        &self.overlay
+    }
+
+    /// What `path` names under the overlay.
+    fn resolve<'p>(&mut self, path: &'p str) -> (std::borrow::Cow<'p, Path>, Resolved<'_>) {
+        let disk = self.real.disk(path);
+        let r = self.overlay.resolve(&disk, &mut self.cache);
+        (disk, r)
+    }
+
+    /// Adds the names the overlay creates in the directory `path` to its
+    /// listing `names` (`None` when the disk has no such directory: then
+    /// a directory the overlay creates lists its created entries).
+    fn patch_listing(&mut self, path: &str, names: &mut Option<Vec<String>>) {
+        if !self.overlay.creates_files() {
+            return;
         }
-        kiln_source::read_open_file(&mut f, &m).ok()
+        let disk = self.real.disk(path);
+        match names {
+            Some(names) => {
+                let created = self.overlay.created_in(&disk, &mut self.cache);
+                names.extend(created.into_iter().map(|n| n.to_string_lossy().into_owned()));
+            }
+            None => {
+                if let Resolved::CreatedDir(d) = self.overlay.absent_path(&disk, &mut self.cache) {
+                    *names = Some(d.names().map(|n| n.to_string_lossy().into_owned()).collect());
+                }
+            }
+        }
+    }
+}
+
+impl HeaderFs for OverlayFs {
+    fn dir_identity(&mut self, path: &str) -> Option<String> {
+        match self.resolve(path) {
+            (disk, Resolved::Disk { meta, redirected, .. }) if meta.is_dir() => {
+                dir_key(redirected.as_deref().unwrap_or(&disk), &meta)
+            }
+            (_, Resolved::CreatedDir(d)) => Some(d.identity()),
+            _ => None,
+        }
+    }
+
+    fn is_dir(&mut self, path: &str) -> bool {
+        match self.resolve(path).1 {
+            Resolved::Disk { meta, .. } => meta.is_dir(),
+            Resolved::CreatedDir(_) => true,
+            Resolved::Created { .. } | Resolved::Missing => false,
+        }
+    }
+
+    fn is_file(&mut self, path: &str) -> bool {
+        match self.resolve(path).1 {
+            Resolved::Disk { meta, .. } => meta.is_file(),
+            Resolved::Created { .. } => true,
+            Resolved::CreatedDir(_) | Resolved::Missing => false,
+        }
+    }
+
+    fn list_dir(&mut self, path: &str) -> Option<Vec<String>> {
+        let mut names = self.real.list_dir(path);
+        self.patch_listing(path, &mut names);
+        names
+    }
+
+    fn list_dirs(&mut self, paths: &[&str]) -> Vec<Option<Vec<String>>> {
+        let mut all = self.real.list_dirs(paths);
+        for (p, names) in paths.iter().zip(all.iter_mut()) {
+            self.patch_listing(p, names);
+        }
+        all
+    }
+
+    fn open(&mut self, sm: &SourceManager, path: &str) -> Option<FileId> {
+        debug_assert!(
+            sm.overlay().is_some_and(|o| Arc::ptr_eq(o, &self.overlay)),
+            "header search and its source manager have different overlays"
+        );
+        self.real.open(sm, path)
+    }
+
+    fn read(&mut self, path: &str) -> Option<Vec<u8>> {
+        let disk = self.real.disk(path);
+        match std::fs::File::open(&disk) {
+            Ok(mut f) => {
+                let m = f.metadata().ok().filter(std::fs::Metadata::is_file)?;
+                match self.overlay.on_disk(&disk, m.clone()) {
+                    Resolved::Disk { replaced: Some(c), .. } => {
+                        c.bytes_noting(&self.failures).map(|b| b.to_vec())
+                    }
+                    Resolved::Disk { replaced: None, .. } => {
+                        kiln_source::read_open_file(&mut f, &m).ok()
+                    }
+                    _ => None,
+                }
+            }
+            Err(_) => match self.overlay.absent_path(&disk, &mut self.cache) {
+                Resolved::Created { content, .. } => {
+                    content.bytes_noting(&self.failures).map(|b| b.to_vec())
+                }
+                Resolved::Disk { meta, replaced, redirected: Some(at) } if meta.is_file() => {
+                    match replaced {
+                        Some(c) => c.bytes_noting(&self.failures).map(|b| b.to_vec()),
+                        None => read_file(&at),
+                    }
+                }
+                _ => None,
+            },
+        }
     }
 }
 

@@ -123,6 +123,7 @@ impl WrittenRefs {
         Ok(WrittenRefs {
             on,
             no_nodes: false,
+            raw_dump: false,
             entries: s.entries,
             pending: s.pending.into_iter().collect(),
             extra: s.extra.into_iter().collect(),

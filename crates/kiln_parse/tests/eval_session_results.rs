@@ -974,3 +974,108 @@ fn variable_values() {
         },
     );
 }
+
+/// WP-2420 (spec/eval-session.md §4.1 "On demand"): a static data member
+/// whose initializer nothing instantiated (an in-class `constexpr` member
+/// of a class template specialization, an out-of-line `const` one, one of
+/// class type) has it instantiated and evaluated by `variable_value`, as
+/// an odr-use in a constant expression would; a run reaching it later
+/// gives the same value, and so does `variable_value` after the run. An
+/// initializer that is not a constant expression is `NotAConstant`, its
+/// diagnostics captured (none reaches the sink).
+#[test]
+fn variable_values_instantiate_on_demand() {
+    // `sizeof(T)` keeps `UseE`'s uses dependent, so only a run
+    // instantiates them (the target is x86-64: `sizeof(int)` is 4).
+    session(
+        "struct P { int a, b; };\n\
+         template <int N> constexpr int tw() { return N * 2; }\n\
+         template <int N> struct Lz { static constexpr int v = N * 3; static constexpr P p{N, N + 1};\n\
+           static constexpr int w = tw<N>(); static const int k; };\n\
+         template <int N> const int Lz<N>::k = tw<N>() + 1;\n\
+         template <int N> struct Ol { static const int k; };\n\
+         template <int N> const int Ol<N>::k = N + 1;\n\
+         template <int N> struct Bad { static constexpr int v = 1 / (N - N); };\n\
+         template <class T> struct UseE {\n\
+           static consteval int f() { return Lz<sizeof(T) + 3>::v + Ol<sizeof(T) + 3>::k; }\n\
+           static consteval int g() { return Lz<sizeof(T) + 5>::v + Ol<sizeof(T) + 5>::k; }\n\
+         };\n\
+         static_assert(sizeof(Lz<5>) + sizeof(Lz<7>) + sizeof(Lz<9>) > 0);\n\
+         static_assert(sizeof(Ol<3>) + sizeof(Ol<7>) + sizeof(Ol<9>) > 0);\n\
+         static_assert(sizeof(Bad<1>) + sizeof(UseE<int>) > 0);\n\
+         using L5 = Lz<5>; using L7 = Lz<7>; using L9 = Lz<9>;\n\
+         using O3 = Ol<3>; using O7 = Ol<7>; using O9 = Ol<9>;\n\
+         using B1 = Bad<1>; using UE = UseE<int>;\n",
+        |s| {
+            let cap = RunBudget::PROGRAM.result_bytes;
+            let int = |s: &mut EvalSession<'_, '_>, n: &str| {
+                s.variable_value_named(n, cap).map(|t| t.root)
+            };
+            assert_eq!(int(s, "L5::v"), Ok(RunValue::Signed(15)));
+            assert_eq!(int(s, "O3::k"), Ok(RunValue::Signed(4)));
+            let p = s.variable_value_named("L5::p", cap).expect("L5::p");
+            assert_eq!(p.root.field("a"), Some(&RunValue::Signed(5)));
+            assert_eq!(p.root.field("b"), Some(&RunValue::Signed(6)));
+            // An initializer calling a function template nothing
+            // instantiated: the instantiation's evaluation instantiates it.
+            assert_eq!(int(s, "L5::w"), Ok(RunValue::Signed(10)));
+            assert_eq!(int(s, "L5::k"), Ok(RunValue::Signed(11)));
+            assert_eq!(int(s, "B1::v"), Err(ValueError::NotAConstant));
+            // Read first, then reached by a run, then read again.
+            assert_eq!(int(s, "L7::v"), Ok(RunValue::Signed(21)));
+            assert_eq!(int(s, "O7::k"), Ok(RunValue::Signed(8)));
+            assert_eq!(val(s, "UE::f"), RunValue::Signed(29));
+            assert_eq!(int(s, "L7::v"), Ok(RunValue::Signed(21)));
+            assert_eq!(int(s, "O7::k"), Ok(RunValue::Signed(8)));
+            // Reached by a run first, then read.
+            assert_eq!(val(s, "UE::g"), RunValue::Signed(37));
+            assert_eq!(int(s, "L9::v"), Ok(RunValue::Signed(27)));
+            assert_eq!(int(s, "O9::k"), Ok(RunValue::Signed(10)));
+            assert_eq!(val(s, "UE::g"), RunValue::Signed(37));
+            // The answers do not change.
+            assert_eq!(int(s, "L5::v"), Ok(RunValue::Signed(15)));
+            assert_eq!(int(s, "O3::k"), Ok(RunValue::Signed(4)));
+            assert_eq!(int(s, "B1::v"), Err(ValueError::NotAConstant));
+        },
+    );
+}
+
+/// WP-2420: a read whose on-demand instantiation fails leaves the
+/// failure as a run's would: a later run that reaches the initializer
+/// fails with the same diagnostics as in a fresh session.
+#[test]
+fn a_failed_on_demand_read_fails_later_runs_alike() {
+    const SRC: &str = "template <int N> struct Bad { static constexpr int v = 1 / (N - N); };\n\
+         template <class T> struct UseB { static consteval int f() { return Bad<sizeof(T)>::v; } };\n\
+         static_assert(sizeof(Bad<4>) + sizeof(UseB<int>) > 0);\n\
+         using B2 = Bad<4>; using UB = UseB<int>;\n";
+    let msgs = |r: &RunReport| -> Vec<String> {
+        fn one(d: &Diagnostic, out: &mut Vec<String>) {
+            out.push(format!("{:?} {:?}: {}", d.level, d.span, d.message));
+            for n in &d.notes {
+                one(n, out);
+            }
+        }
+        let mut out = Vec::new();
+        for d in &r.diagnostics {
+            one(d, &mut out);
+        }
+        out
+    };
+    let fresh = session(SRC, |s| {
+        let r = run_budget(s, "UB::f", RunBudget::PROGRAM);
+        assert_eq!(r.result, Err(RunError::Failed));
+        msgs(&r)
+    });
+    assert!(fresh.iter().any(|m| m.contains("division by zero")), "{fresh:#?}");
+    session(SRC, |s| {
+        let cap = RunBudget::PROGRAM.result_bytes;
+        assert_eq!(s.variable_value_named("B2::v", cap), Err(ValueError::NotAConstant));
+        for _ in 0..2 {
+            let r = run_budget(s, "UB::f", RunBudget::PROGRAM);
+            assert_eq!(r.result, Err(RunError::Failed));
+            assert_eq!(msgs(&r), fresh);
+        }
+        assert_eq!(s.variable_value_named("B2::v", cap), Err(ValueError::NotAConstant));
+    });
+}
