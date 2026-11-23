@@ -4259,18 +4259,27 @@ impl Parser<'_, '_> {
             }
             _ => return,
         };
-        let Some((args, _, r)) = self.parse_template_arg_list() else {
+        let Some((args, l, r)) = self.parse_template_arg_list() else {
             d.invalid = true;
             return;
         };
         if self.s.records_written_refs() {
             // The template an explicit specialization or instantiation
             // names, after its arguments' names; a friend's befriends one
-            // of its specializations (spec/ast.md §18.4).
+            // of its specializations (spec/ast.md §18.4). Lookup's first
+            // template until the declaration says which one it matched
+            // (`note_declarator_ref`, `Sema::note_written_friend_spec`).
             let role = if d.friend { RefRole::Elaborated } else { RefRole::SpecTarget };
             let range = self.token_span_at(loc);
-            self.s.note_written_decl_name(range, Some(t), role, d.id_link, false);
+            d.id_ref = self.s.note_written_decl_name(range, Some(t), role, d.id_link, false);
             d.id_recorded = true;
+            // A friend's template arguments are kept nowhere else when
+            // its match waits for the instantiation (§18.11.2).
+            if d.friend
+                && let Some(id) = d.id_ref
+            {
+                self.s.ast.written_refs.set_args(id, l, r);
+            }
         }
         // A template-id declarator-id takes no direct-initializer (clang
         // `Declarator::mayBeFollowedByCXXDirectInit` is false for a

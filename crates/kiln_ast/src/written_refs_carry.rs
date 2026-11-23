@@ -12,7 +12,7 @@
 //! | `entries`, `pending`, `extra`, `adl_sets`, `udir_cache`, `designators` | state: the main table, its pending patches and provenance |
 //! | `specs` (dropped rows included, so `SpecRefId`s stay), `spec_nodes`, `spec_udirs` | state: the per-specialization table, its pattern nodes and their using-directives |
 //! | `unrecorded` | state |
-//! | `leads` | state: the leading `::` and `~` tokens (WP-2326) and the closing `]`/`)` of an `operator` entry (WP-2820) |
+//! | `leads` | state: the leading `::` and `~` tokens (WP-2326), the closing `]`/`)` of an `operator` entry (WP-2820) and a friend specialization's `<` and `>` (WP-3008) |
 //! | `found_rows`, `found_sets`, `found_decls` | state: the found sets of the dependent entries (§18.12, WP-2472) |
 //! | `adl_index`, `spec_seen`, `found_index` | rebuilt from `adl_sets`, the live rows of `specs` and `found_sets` |
 //! | `inst_target`, `spec_pending`, `spec_last`, `spec_key`, `colons` | transient: scratch of one declaration or one instantiation, empty at rest |
@@ -98,7 +98,8 @@ impl WrittenRefs {
         }
         // Leads: by entry, once each, a `::` only on a global qualifier,
         // a specifier's first token only on a specifier qualifier, a
-        // closing token only on an `operator` entry.
+        // closing token only on an `operator` entry, a template argument
+        // list's `<` with its `>`.
         let leads_ok = s.leads.windows(2).all(|w| w[0].entry < w[1].entry)
             && s.leads.iter().all(|l| {
                 entry_ok(l.entry) && {
@@ -107,6 +108,7 @@ impl WrittenRefs {
                     (!l.colon.is_valid() || link == QualLink::Global)
                         && (!l.spec.is_valid() || link == QualLink::Specifier)
                         && (!l.close.is_valid() || e.role == RefRole::Operator)
+                        && l.langle.is_valid() == l.rangle.is_valid()
                 }
             });
         if !leads_ok {
@@ -412,6 +414,26 @@ mod tests {
         let bytes = put(&bad);
         let mut rd = Reader::new(&bytes);
         assert!(new_ast().get_written_refs(&mut rd, true, 0).is_err());
+    }
+
+    /// WP-3008: a friend specialization's written `<` and `>` round trip
+    /// beside the entry.
+    #[test]
+    fn template_args_leads_round_trip() {
+        let mut ast = new_ast();
+        ast.written_refs.set_on(true);
+        let ef = ast.written_refs.push(entry(RefQualifier::NONE)).unwrap();
+        let eg = ast.written_refs.push(entry(RefQualifier::NONE)).unwrap();
+        ast.written_refs.set_args(ef, Loc::from_raw(5), Loc::from_raw(6));
+        assert_eq!(ast.written_refs.template_args(eg), None);
+        let bytes = put(&ast);
+        let mut back = new_ast();
+        let mut rd = Reader::new(&bytes);
+        back.get_written_refs(&mut rd, true, 0).expect("read");
+        assert_eq!(back.written_refs.leads(), ast.written_refs.leads());
+        let args = Some((Loc::from_raw(5), Loc::from_raw(6)));
+        assert_eq!(back.written_refs.template_args(ef), args);
+        assert_eq!(back.written_refs.template_args(eg), None);
     }
 
     /// WP-2828: `decltype(s)::m`, the specifier's first token round

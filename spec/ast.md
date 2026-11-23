@@ -2414,9 +2414,45 @@ Stage-3 recording sites (WP-1932; all in `kiln_parse`, entries made by
   first declaration. A first declaration's name (`struct Fresh;`, an
   unqualified `friend class Unseen;` that declares the class) is the
   entity's own and has no entry. A friend through a dependent
-  qualifier (`friend class T::X;`) has no entity and `DEPENDENT`. A
-  friend function template specialization (`friend void f<>(int);`)
-  is `elaborated` too, its entity the template;
+  qualifier (`friend class T::X;`, `friend void T::f();`) has no
+  entity and `DEPENDENT`. A friend function template specialization
+  (`friend void f<>(int);`, [temp.friend]/1.3) is `elaborated` too,
+  its entity the template whose specialization it befriends: the one
+  its declaration matched, not the first that lookup of the name found
+  (`f(T)` and `f(T, int)` are two templates; WP-3008), outside a
+  template and in one when it depends on nothing of the template
+  (`friend void f<int>(int);`, matched at the definition as clang's
+  `CheckFunctionTemplateSpecialization` matches it). In a template
+  pattern with dependent template arguments or type (`friend void
+  f<>(T);`) the match waits for each specialization of the class
+  (`templ/subst/decls.rs` `friend_decl`): the entry has no entity and
+  `DEPENDENT`, its found set (§18.12) the function templates lookup of
+  the name found, which are what each instantiation selects from
+  (closed: no argument-dependent lookup; clang's
+  `DependentFunctionTemplateSpecializationInfo`), and each
+  instantiation adds a row naming the specialization befriended, found
+  as its template (§18.9.4). The entry keeps the template argument
+  list's `<` and `>` (§18.11.2: the arguments are kept nowhere else
+  until the match). Sema patches the parser's entry once it has
+  matched (`Sema::note_written_spec_template`,
+  `note_written_friend_spec`, a sema exception to §18.1). A friend that
+  is a member of every specialization of a class template
+  ([temp.friend]/5: `template <class T> friend void S<T>::f();`, which
+  clang does not model, `-Wunsupported-friend`) names the member of the
+  class pattern its qualifier names, as an out-of-line member
+  definition's qualifier names one ([temp.spec.partial.member]/1): the
+  primary template's when the template-id's arguments are the friend's
+  own parameters, each once, renamed or not; a partial
+  specialization's own member when they are that partial
+  specialization's arguments with its parameters renamed (`S<T *>::f`,
+  a different entity from `S<T>::f`); then the member classes after it
+  (`S<T>::In::g`); then the member named, of the friend's kind (a member
+  function template when the friend has a template head of its own) and,
+  among overloads, of the friend's type with its parameters renamed to
+  the pattern's (`Sema::member_friend_pattern_member`, WP-3008). A
+  qualifier that names no single pattern (`S2<T, int>::f`, matched per
+  specialization only), a member the pattern does not declare and
+  overloads the type does not tell apart leave the entry `DEPENDENT`;
 - specialization targets, role `spec-target`: the template name of an
   explicit specialization ([temp.expl.spec]/1), a partial
   specialization ([temp.spec.partial.general]/1) and an explicit
@@ -2424,7 +2460,11 @@ Stage-3 recording sites (WP-1932; all in `kiln_parse`, entries made by
   template` included), after the names in its template argument list:
   a class template's in `parse_class_template_id_tag`, a function or
   variable template's in `parse_specialization_declarator_id`. Its
-  entity is the primary template. An explicit instantiation or
+  entity is the primary template; for a function template, the one the
+  declaration matched by deduction, which `note_declarator_ref` takes
+  from the declaration (the specialization's template, or sema's
+  explicit instantiation target): lookup may find several overloads
+  and the parser records the first (WP-3008). An explicit instantiation or
   specialization of a function template written without a template
   argument list (`template int f(int *);`) is matched by deduction, so
   sema says what it named: the function template, or, for an explicit
@@ -2527,6 +2567,29 @@ stage 1.
   variable template's specialization (`d.twice<7>`) has the template as
   its found set and keeps its template arguments (the member access's
   `member_extra`) outside a template as inside one (WP-2724).
+  **A template-id with dependent arguments** whose template name is not
+  dependent (WP-3009): lookup at the definition resolved the template
+  name ([temp.names]/2, [temp.res.general]/1), and when that decides
+  what the name denotes, the entry names the template, with no
+  `DEPENDENT` and no per-specialization rows: a class or alias
+  template (`n::K<T> x;`, a `template` entry, stage 2), a concept
+  (`C<T>`, `concept`) and a variable template (`n::v<T>`, an `expr`
+  entry; `n::S::w<T>` and `n::D<int>::w<T>` in a class that is not
+  dependent; `v<T>` after `using n::v;`, the template, as the
+  non-dependent `v<int>` and a function template-id's found set keep
+  no using-shadow).
+  None of them is overloaded, so each specialization is that
+  template's whatever the arguments ([temp.dep.expr]/3 makes the
+  expression dependent, not the name). A function template-id
+  (`n::g<T>(t)`) is an overload set: which template, and which
+  specialization of it, is decided per specialization by overload
+  resolution, and an unqualified one may gain candidates by
+  argument-dependent lookup; it stays `DEPENDENT`, its found set
+  (§18.12) the templates lookup found. So is a friend function template
+  specialization with dependent arguments (§18.4), whose candidates are
+  matched per specialization. A member template of a dependent class
+  (`n::D<T>::template w<U>`, `T::template f<U>`) stays `DEPENDENT` with
+  no definition-context lookup.
 - **PCH and modules.** Stage 5 (§18.10) carries both tables in PCH
   snapshots and module images: a TU restored from a snapshot continues
   the prefix's table, and an importer built from an image merges the
@@ -2541,7 +2604,7 @@ stage 1.
 prints, after diagnostics' end of the TU, one line per entry:
 
 ```
-<line>:<col>-<line>:<col>  <role>  '<spelling>' -> <entity> [found=<decl>] [q=<line>:<col>|q=::[<line>:<col>]|q=specifier[:<line>:<col>]] [tilde=<line>:<col>] [close=<line>:<col>] [in=<enclosing>] [dep] [rewritten] [reversed] [exp=<line>:<col>] [how=<how>] [udir=<ns>@<line>:<col>] [adl-ns=<ns>,...] [adl-cls=<class>,...] [adl-enum=<enum>,...]
+<line>:<col>-<line>:<col>  <role>  '<spelling>' -> <entity> [found=<decl>] [q=<line>:<col>|q=::[<line>:<col>]|q=specifier[:<line>:<col>]] [tilde=<line>:<col>] [close=<line>:<col>] [args=<line>:<col>-<line>:<col>] [in=<enclosing>] [dep] [rewritten] [reversed] [exp=<line>:<col>] [how=<how>] [udir=<ns>@<line>:<col>] [adl-ns=<ns>,...] [adl-cls=<class>,...] [adl-enum=<enum>,...]
 ```
 
 Positions are the spelling locations of `lo` and `hi` (the end column
@@ -2557,7 +2620,9 @@ it was recorded (always, since WP-2326; §18.11.2), `q=specifier:` by
 the first token of a `decltype(...)::` or splice specifier (WP-2828),
 and `tilde=` gives the `~` of a destructor name; `close=` the `]` or `)`
 of a subscript or call operator entry, and `rewritten` and `reversed`
-its flags (§18.13). A ud-suffix's position is a column inside its
+its flags (§18.13); `args=` the `<` and `>` of a friend function
+template specialization's template argument list (§18.11.2). A
+ud-suffix's position is a column inside its
 literal token. `exp=` is the outermost expansion point of a name written in
 a macro. The harness directive `written-refs: <golden>`
 (spec/harness.md) compares this dump with a golden file. The developer
@@ -2575,8 +2640,13 @@ dependent names, error recovery; stage 3: `using-decls`,
 `using-directives`, `redecls`, `elaborated`, `spec-targets`,
 `concepts-decl`, `designators`, `guides`, `decl-macros`,
 `decl-dependent`, `decl-tentative`, `decl-errors`; stage 4: the
-`inst-*` tests, §18.9.7; stage 6: the `operators-*` tests and `udl`,
-§18.13.9).
+`inst-*` tests, §18.9.7; WP-3008: `friend-spec` (friend function
+template specializations matched, dependent and never instantiated),
+`friend-member` ([temp.friend]/5 friends of a primary's and a partial
+specialization's members), `spec-target-overloads` (an explicit
+specialization and instantiation of the second of two overloaded
+templates), `var-template-id` (variable template-ids with dependent
+arguments); stage 6: the `operators-*` tests and `udl`, §18.13.9).
 
 ### 18.7 Lookup provenance (WP-2130)
 
@@ -3176,7 +3246,9 @@ building deduction guides, `std::meta::substitute`.
   its name), and `PatternNode::Decl(d)` for a using-declarator with a
   dependent qualifier in a class template (`using T::size;`, `using
   typename T::type;`: `d` is its `UnresolvedUsingValue` or
-  `UnresolvedUsingTypename` member).
+  `UnresolvedUsingTypename` member), and for a friend function
+  template specialization with dependent arguments or type (`friend
+  void f<>(T);`: `d` is its `FriendDecl`, WP-3008).
 - **Expressions.** `Substituter::expr` and `Substituter::callee` look
   the pattern node up after each rebuild. The rebuilt node's target
   (`written_target`, §18.4) gives the row: a declaration, a concept or a
@@ -3241,6 +3313,15 @@ building deduction guides, `std::meta::substitute`.
   needs one), so the recording site notes the location of each
   occurrence while recording is on, and the substituter finds the
   occurrence by it as for a dependent name.
+- **Friends.** The class template specialization's instantiation
+  matches each dependent friend function template specialization
+  (`friend_decl`, `instantiate_friend_spec`) and records its row keyed
+  by the class template specialization (§18.9.2: a member's
+  declaration): the entity is the specialization befriended, `found`
+  its template (`Sema::note_written_spec_friend`, WP-3008). One that
+  matches no template, with an error, gets a row with no entity
+  (§18.9.3). The qualifier's dependent components (`friend void
+  Q<T>::f<int>(int);`) get no rows.
 - **Using-directives.** The parse-time site of an unresolved
   unqualified name (`UnresolvedLookupExpr`) that remembers its pattern
   node also remembers its candidates' directives (§18.9.1, the map
@@ -3617,15 +3698,17 @@ tool that reports on a call) finds the entry of its name by location.
 
 #### 18.11.2 The leading `::`, the `~` and the specifier
 
-`RefLead { entry, colon, tilde, spec, close }` (20 bytes) gives the
-tokens of an entry's name outside its `range`: the leading `::` of a
-name whose `qualifier` is `GLOBAL`, the `~` of a destructor name (an
-expression, a pseudo-destructor's type name, or a destructor's
-declarator-id), the first token of the specifier before a name whose
-`qualifier` is `SPECIFIER` (WP-2828), and the closing `]` or `)` of a
-subscript or call `operator` entry (§18.13.2, WP-2820), each
-`Loc::INVALID` when absent. A cold side table, sorted by entry, holds a
-row only for the entries that have one:
+`RefLead { entry, colon, tilde, spec, close, langle, rangle }` (28
+bytes) gives the tokens of an entry's name outside its `range`: the
+leading `::` of a name whose `qualifier` is `GLOBAL`, the `~` of a
+destructor name (an expression, a pseudo-destructor's type name, or a
+destructor's declarator-id), the first token of the specifier before a
+name whose `qualifier` is `SPECIFIER` (WP-2828), the closing `]` or `)`
+of a subscript or call `operator` entry (§18.13.2, WP-2820), and the
+`<` and `>` of the template argument list after a friend function
+template specialization's name (WP-3008), each `Loc::INVALID` when
+absent. A cold side table, sorted by entry, holds a row only for the
+entries that have one:
 
 - `global_colon(id)`: the `::` of entry `id`, whose qualifier is
   `GLOBAL` (the first component of `::a::b`, or `f` of `::f`);
@@ -3635,6 +3718,15 @@ row only for the entries that have one:
   `id`, whose qualifier is `SPECIFIER`: the `decltype` keyword of
   `decltype(s)::m`, the `[:` of `[: r :]::m` and of
   `typename [: r :]<A>::m`, the `template` of `template [: r :]<A>::m`;
+- `template_args(id)`: the `<` and `>` after entry `id`, a friend
+  function template specialization's name (`friend void f<>(T);`), both
+  or neither; a dependent friend's match waits for each specialization,
+  and its declaration keeps no other record of where its arguments were
+  written (clang's `DependentFunctionTemplateSpecializationInfo` keeps
+  `TemplateArgumentsAsWritten`); the arguments' names are their own
+  entries. Other template-ids keep theirs in the expression or type
+  they built. Carried in snapshots and images with the other lead
+  tokens (PCH `FORMAT_VERSION` 167, `IMAGE_VERSION` 90);
 - `name_lo(id)`: the `~` or `range.lo`, the join location (§18.11.1);
 - `qualified_lo(id)`: where the qualified name ending in `id` begins,
   following `qualifier` to the first component: its `::`, its
@@ -3823,6 +3915,7 @@ instantiated. The found set is that result.
 | unqualified dependent call `f(t)`, a template-id `f<T>(t)`, an operator-function-id `operator+(t, t)` (`UnresolvedLookupExpr` with ADL) | ordinary unqualified lookup at the name | `ADL`: argument-dependent lookup at each instantiation adds to it |
 | the same, nothing visible (`g(t)`, an assumed template name `get<0>(t)`, [temp.names]/3) | empty: lookup ran and found nothing | `ADL`: only argument-dependent lookup can resolve it |
 | `(f)(t)`, `::f(t)`, `N::f(t)` with several overloads | unqualified (parenthesized) or qualified lookup | none: closed, every instantiation selects from it |
+| a friend function template specialization with dependent arguments or type (`friend void f<>(T);`, `friend void n::f<T>(T);`, §18.4) | the function templates ordinary or qualified lookup of the name found at the definition | none: closed, each instantiation matches one of them ([temp.friend]/1.3) |
 | one visible `f` with argument-dependent lookup suppressed (a block-scope declaration, a class member), one member found by `this->a(t)` | no set: resolved at the definition, the entry has its entity | |
 | `this->a(t)`, `C::a(t)`, `a(t)` (implicit `this`), `this->mt(t)`, `this->template mt<T>(t)`: members of the current instantiation (`CXXDependentScopeMemberExpr`, or an overloaded member access) | class member lookup in the current instantiation: members of the pattern class and its non-dependent bases | none when the class searched has no dependent base; else `DEPENDENT_BASE`: the instantiation looks the name up again, and a different result is ill-formed ([temp.dep.type]/6; not diagnosed, §18.12.6) |
 | a name a dependent using-declarator introduces (`using B<T>::bm; ... bm(t)`) | the class's lookup result, the `UnresolvedUsingValue` an element | `UNRESOLVED_USING`: what it names exists per specialization only |

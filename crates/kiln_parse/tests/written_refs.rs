@@ -773,6 +773,102 @@ fn pack_index_and_member_variable_template_names() {
     });
 }
 
+/// `line:col` of the last `needle` on 1-based `line` of `src`.
+fn pos_in(src: &str, line: u32, needle: &str) -> (u32, u32) {
+    let text = src.lines().nth(line as usize - 1).expect("the line");
+    let col = text.rfind(needle).expect("the needle") + 1;
+    (line, u32::try_from(col).expect("a short line"))
+}
+
+const FRIEND_SPEC: &str = "namespace n {\n\
+                           template <class T> void f(T) {}\n\
+                           template <class T> void f(T, int) {}\n\
+                           template <class T> class A { friend void f<>(T, int); };\n\
+                           template <class T> class N { friend void f<int>(int); };\n\
+                           }\n\
+                           void run() { n::A<int> a; n::A<char> c; }\n";
+
+/// A friend function template specialization in a template (spec/ast.md
+/// §18.4, WP-3008): dependent, the entry's found set is the candidate
+/// templates, its written `<>` is the lead's argument list, and each
+/// instantiation's row names the specialization of the template the
+/// declarator matches (the second overload, not lookup's first). A non-dependent one
+/// in a template never instantiated names its matched template.
+#[test]
+fn friend_specializations_name_their_template() {
+    use kiln_ast::written_refs::REF_DEPENDENT;
+    with_ast(FRIEND_SPEC, |ast, sm| {
+        let t = &ast.written_refs;
+        let pos = |d: kiln_ast::DeclId| line_col(sm, ast.decls.get(d).loc());
+        let first = pos_in(FRIEND_SPEC, 2, "f(");
+        let second = pos_in(FRIEND_SPEC, 3, "f(");
+        let entry = entry_at(t, sm, pos_in(FRIEND_SPEC, 4, "f<"));
+        let pat = t.get(entry);
+        assert!(pat.entity.is_none() && pat.flags & REF_DEPENDENT != 0, "dependent");
+        let set = t.found_at_definition(entry).expect("a found set");
+        let mut at: Vec<_> = set.decls.iter().map(|e| pos(e.decl)).collect();
+        at.sort_unstable();
+        assert_eq!(at, [first, second], "the candidate templates");
+        let (langle, rangle) = t.template_args(entry).expect("the written arguments");
+        assert_eq!(line_col(sm, langle), pos_in(FRIEND_SPEC, 4, "<>"));
+        assert_eq!(line_col(sm, rangle), pos_in(FRIEND_SPEC, 4, ">("));
+        let rows: Vec<_> = t.specs_of(entry).map(|(_, s)| *s).collect();
+        assert_eq!(rows.len(), 2, "A<int> and A<char>");
+        for row in &rows {
+            assert_eq!(row.found.map(pos), Some(second));
+            assert_eq!(row.entity.map(pos), Some(second), "a specialization of it");
+            assert_ne!(row.entity, row.found);
+        }
+        assert_ne!(rows[0].entity, rows[1].entity);
+        let plain = t.get(entry_at(t, sm, pos_in(FRIEND_SPEC, 5, "f<")));
+        assert_eq!(plain.flags & REF_DEPENDENT, 0);
+        assert_eq!(plain.entity.map(pos), Some(first));
+    });
+}
+
+const FRIEND_MEMBER: &str = "namespace n {\n\
+                             template <class T> struct S { void f(); };\n\
+                             template <class T> struct S<T *> { void f(); };\n\
+                             }\n\
+                             class X {\n\
+                             \x20 template <class T> friend void n::S<T>::f();\n\
+                             \x20 template <class T> friend void n::S<T *>::f();\n\
+                             };\n";
+
+/// A friend member of a dependent specialization ([temp.friend]/5,
+/// spec/ast.md §18.4, WP-3008): `n::S<T>::f` names the primary's
+/// member, `n::S<T *>::f` the partial specialization's.
+#[test]
+fn friend_members_name_the_pattern_member() {
+    with_ast(FRIEND_MEMBER, |ast, sm| {
+        let t = &ast.written_refs;
+        let pos = |d: kiln_ast::DeclId| line_col(sm, ast.decls.get(d).loc());
+        for (line, member) in [(6, 2), (7, 3)] {
+            let r = t.get(entry_at(t, sm, pos_in(FRIEND_MEMBER, line, "f(")));
+            assert_eq!(r.role, RefRole::Elaborated);
+            assert_eq!(r.entity.map(pos), Some(pos_in(FRIEND_MEMBER, member, "f(")));
+        }
+    });
+}
+
+const VAR_TEMPLATE_ID: &str = "namespace n { template <class T> constexpr bool v = true; }\n\
+                               template <class T> bool k() { return n::v<T>; }\n\
+                               bool z = k<int>();\n";
+
+/// A variable template-id (spec/ast.md §18.5, WP-3009): `n::v<T>` names
+/// the variable template, as a class template-id names its template.
+#[test]
+fn variable_template_ids_name_the_template() {
+    use kiln_ast::written_refs::REF_DEPENDENT;
+    with_ast(VAR_TEMPLATE_ID, |ast, sm| {
+        let t = &ast.written_refs;
+        let r = t.get(entry_at(t, sm, pos_in(VAR_TEMPLATE_ID, 2, "v<")));
+        assert_eq!(r.flags & REF_DEPENDENT, 0);
+        let v = r.entity.expect("the variable template");
+        assert_eq!(ast.decls.get(v).kind(), kiln_ast::decl::DeclKind::VarTemplate);
+    });
+}
+
 const UDL: &str = "using Z = decltype(sizeof 0);\n\
                    int operator\"\"_n(unsigned long long v) { return int(v); }\n\
                    Z operator\"\"_s(const char *, Z n) { return n; }\n\

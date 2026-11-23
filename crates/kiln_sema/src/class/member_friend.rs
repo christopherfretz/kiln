@@ -643,6 +643,128 @@ impl Sema<'_, '_> {
             _ => Grant::No,
         }
     }
+    /// The member of a class template pattern that the [temp.friend]/5
+    /// friend function `fd` names as written, for the written-reference
+    /// table (spec/ast.md §18.4): the class pattern its `A<args>` names,
+    /// as an out-of-line member's qualifier names one
+    /// ([temp.spec.partial.member]/1): the primary template's when `args`
+    /// are the friend's own parameters, each once, else the partial
+    /// specialization's whose own arguments `args` are with its
+    /// parameters renamed ([`Self::member_friend_renames`]); then the
+    /// member classes of the path; then the member named, of the friend's
+    /// kind (a member function template when the friend has a template
+    /// head of its own) and, among several, of its type. `None` when no
+    /// single pattern or member is named: `A<T, int>`, a member not
+    /// declared in the pattern, overloads the type does not tell apart.
+    pub(crate) fn member_friend_pattern_member(&mut self, fd: DeclId) -> Option<DeclId> {
+        let mf = self.member_friends.by_friend.get(&fd).cloned()?;
+        let fty = mf.fn_ty?;
+        let loc = self.ast.decls.get(fd).loc();
+        let t = mf.template;
+        let mut cands: Vec<(DeclId, Vec<DeclId>, Vec<TemplateArg>)> = Vec::new();
+        if let Some(p) = self.pattern_of(t) {
+            let params = self.template_params(self.head_template(t));
+            let args = params.iter().map(|&q| self.template_param_arg(q)).collect();
+            cands.push((p, params, args));
+        }
+        for r in self.ast.templates.partials_of(self.ast.first(t)).to_vec() {
+            let Some(pi) = self.ast.templates.partial(r).copied() else { continue };
+            let list = *self.ast.templates.param_list(pi.params);
+            let params: Vec<DeclId> = self.ast.lists.iter::<DeclId>(list.params).collect();
+            cands.push((pi.partial, params, self.ast.types.args(pi.args).to_vec()));
+        }
+        let mut hit = None;
+        for (pat, params, args) in cands {
+            if let Some(renamed) = self.member_friend_renames(&mf, &params, &args, loc) {
+                if hit.is_some() {
+                    return None;
+                }
+                hit = Some((pat, renamed));
+            }
+        }
+        let (pat, renamed) = hit?;
+        let mut class = self.ast.definition(pat)?;
+        for &sym in &mf.path {
+            let found = self.lookup_in(class, sym, crate::lookup::LookupKind::All).decls;
+            let inner = found.into_iter().find(|&d| self.kind_of(d) == DeclKind::CXXRecord)?;
+            class = self.ast.definition(inner)?;
+        }
+        let members: Vec<DeclId> = self
+            .lookup_in_dn(class, mf.name, crate::lookup::LookupKind::All)
+            .decls
+            .into_iter()
+            .filter(|&m| {
+                let k = self.kind_of(m);
+                if mf.inner_head { k == DeclKind::FunctionTemplate } else { k.is_function() }
+            })
+            .collect();
+        let m = match members.as_slice() {
+            [] => return None,
+            [one] => *one,
+            _ if mf.inner_head => return None,
+            _ => {
+                // The friend's type with its parameters renamed to the
+                // pattern's: the member of that type.
+                let list = self.ast.types.arg_list(&renamed);
+                let r = self.in_sfinae(FrameKind::DeducedArgSubstitution, t, None, loc, |s| {
+                    let mut levels = Self::outer_levels(t, mf.depth);
+                    levels.push(list, t, LevelMode::Substitute);
+                    let ty = Substituter::new(s, &levels).ty(fty, loc).ok()?;
+                    let c = s.ast.types.canonical(ty);
+                    let mut same = members.iter().copied().filter(|&m| {
+                        s.ast.decls.get(m).ty().is_some_and(|mt| s.ast.types.canonical(mt) == c)
+                    });
+                    match (same.next(), same.next()) {
+                        (Some(m), None) => Some(m),
+                        _ => None,
+                    }
+                });
+                match r {
+                    Some((Some(m), Ok(()))) => m,
+                    _ => return None,
+                }
+            }
+        };
+        Some(self.ast.first(m))
+    }
+
+    /// The friend's own parameters as arguments for a class pattern with
+    /// parameters `params` and own arguments `args` (the primary's
+    /// parameters, a partial specialization's arguments), when the
+    /// friend's `A<args>` is that pattern's with the parameters renamed:
+    /// deduced from `args`, each one of `params`, each parameter once.
+    fn member_friend_renames(
+        &mut self,
+        mf: &MemberFriend,
+        params: &[DeclId],
+        args: &[TemplateArg],
+        loc: Loc,
+    ) -> Option<Vec<TemplateArg>> {
+        if params.len() != usize::from(mf.params) || args.len() != mf.args.len() {
+            return None;
+        }
+        let r = self.in_sfinae(FrameKind::DeducedArgSubstitution, mf.template, None, loc, |s| {
+            let mut d = DeducedArgs::new(mf.depth, usize::from(mf.params));
+            if s.deduce_args(&mf.args, args, false, &mut d, loc) != Tdk::Success
+                || d.first_undeduced().is_some()
+            {
+                return None;
+            }
+            let mut seen = vec![false; params.len()];
+            for &a in &d.args {
+                let i = params.iter().position(|&p| s.arg_names_param(p, a))?;
+                if std::mem::replace(&mut seen[i], true) {
+                    return None;
+                }
+            }
+            Some(d.args.clone())
+        });
+        match r {
+            Some((Some(v), Ok(()))) => Some(v),
+            _ => None,
+        }
+    }
+
     /// The member function template `e` (its pattern, the template or a
     /// specialization of it) belongs to.
     fn member_friend_template_of(&self, e: DeclId) -> Option<DeclId> {

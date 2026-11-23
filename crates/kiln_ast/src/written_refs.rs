@@ -48,10 +48,11 @@ impl WrittenRefId {
 /// (spec/ast.md §18.11.2, WP-2326): the leading `::` of a name whose
 /// qualifier is [`RefQualifier::GLOBAL`], the `~` of a destructor name,
 /// the first token of the specifier before a name whose qualifier is
-/// [`RefQualifier::SPECIFIER`] (WP-2828) and the closing `]` or `)` of a
-/// subscript or call operator entry (§18.13, WP-2820), each
-/// `Loc::INVALID` when absent. Kept only for the entries that have one,
-/// sorted by entry.
+/// [`RefQualifier::SPECIFIER`] (WP-2828), the closing `]` or `)` of a
+/// subscript or call operator entry (§18.13, WP-2820) and the `<` and `>`
+/// of a friend function template specialization's template argument list
+/// (WP-3008), each `Loc::INVALID` when absent. Kept only for the entries
+/// that have one, sorted by entry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, kiln_snap::Snap)]
 pub struct RefLead {
     /// The entry.
@@ -66,6 +67,10 @@ pub struct RefLead {
     pub spec: Loc,
     /// The `]` or `)` closing the `[` or `(` of an `operator` entry.
     pub close: Loc,
+    /// The `<` and `>` of the template argument list after a friend
+    /// function template specialization's name (`friend void f<>(T);`).
+    pub langle: Loc,
+    pub rangle: Loc,
 }
 
 /// The syntactic role of a written name (spec/ast.md §18.4). The full
@@ -782,8 +787,17 @@ impl WrittenRefs {
         let id = WrittenRefId::from_index(self.entries.len() - 1);
         if let Some(c) = tok {
             let (colon, spec) = if spec { (Loc::INVALID, c) } else { (c, Loc::INVALID) };
-            let close = Loc::INVALID;
-            self.leads.push(RefLead { entry: id, colon, tilde: Loc::INVALID, spec, close });
+            let none = Loc::INVALID;
+            let l = RefLead {
+                entry: id,
+                colon,
+                tilde: none,
+                spec,
+                close: none,
+                langle: none,
+                rangle: none,
+            };
+            self.leads.push(l);
         }
         Some(id)
     }
@@ -855,6 +869,14 @@ impl WrittenRefs {
         self.lead_mut(id).spec = first;
     }
 
+    /// Sets the `<` and `>` of the template argument list after entry
+    /// `id`, a friend function template specialization's name.
+    pub fn set_args(&mut self, id: WrittenRefId, langle: Loc, rangle: Loc) {
+        let l = self.lead_mut(id);
+        l.langle = langle;
+        l.rangle = rangle;
+    }
+
     /// The row of entry `id`, inserted in order when it has none.
     fn lead_mut(&mut self, id: WrittenRefId) -> &mut RefLead {
         let at = match self.leads.last() {
@@ -862,12 +884,15 @@ impl WrittenRefs {
             _ => self.leads.partition_point(|l| l.entry < id),
         };
         if self.leads.get(at).is_none_or(|l| l.entry != id) {
+            let none = Loc::INVALID;
             let l = RefLead {
                 entry: id,
-                colon: Loc::INVALID,
-                tilde: Loc::INVALID,
-                spec: Loc::INVALID,
-                close: Loc::INVALID,
+                colon: none,
+                tilde: none,
+                spec: none,
+                close: none,
+                langle: none,
+                rangle: none,
             };
             self.leads.insert(at, l);
         }
@@ -913,6 +938,14 @@ impl WrittenRefs {
     /// one whose token was not recorded).
     pub fn specifier_lo(&self, id: WrittenRefId) -> Option<Loc> {
         self.lead(id).map(|l| l.spec).filter(|l| l.is_valid())
+    }
+
+    /// The `<` and `>` of the template argument list written after entry
+    /// `id`, a friend function template specialization's name (`None` for
+    /// any other entry, §18.11.2).
+    pub fn template_args(&self, id: WrittenRefId) -> Option<(Loc, Loc)> {
+        let l = self.lead(id)?;
+        (l.langle.is_valid() && l.rangle.is_valid()).then_some((l.langle, l.rangle))
     }
 
     /// Where the name of entry `id` begins as an expression stores it:
@@ -1685,6 +1718,12 @@ impl WrittenRefs {
             out.push_str(" close=");
             out.push_str(&pos(c));
         }
+        if let Some((l, r)) = self.template_args(id) {
+            out.push_str(" args=");
+            out.push_str(&pos(l));
+            out.push('-');
+            out.push_str(&pos(r));
+        }
     }
 
     /// The dump (spec/ast.md §18.6): one line per entry.
@@ -2160,7 +2199,7 @@ mod tests {
         let mut out = String::new();
         dump_rewrite_flags(REF_REWRITTEN | REF_REVERSED, &mut out);
         assert_eq!(out, " rewritten reversed");
-        assert_eq!(size_of::<RefLead>(), 20);
+        assert_eq!(size_of::<RefLead>(), 28);
         assert_eq!(size_of::<WrittenRef>(), 28);
     }
 

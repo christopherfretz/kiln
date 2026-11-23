@@ -66,6 +66,13 @@ impl Sema<'_, '_> {
             return None;
         }
         let target = e.map_or(Target::Unresolved, |e| self.written_target(e));
+        // A variable template-id with dependent arguments (`n::v<T>`):
+        // lookup resolved the template name, and a variable template is
+        // never overloaded, so the name names it (spec/ast.md §18.5).
+        let target = match target {
+            Target::Overloaded(x) => self.written_var_template(x).unwrap_or(target),
+            t => t,
+        };
         let role = match target {
             Target::Concept(_) => RefRole::Concept,
             Target::Type(_) => RefRole::Type,
@@ -114,6 +121,27 @@ impl Sema<'_, '_> {
             self.note_pattern_found(id, x);
         }
         Some(id)
+    }
+
+    /// The variable template the unresolved name `x` names: an
+    /// `UnresolvedLookupExpr` whose lookup found one variable template
+    /// (with the using-shadow it was found through), which only its
+    /// dependent template arguments keep unresolved ([temp.names]/2,
+    /// [temp.dep.expr]/3). A function template-id stays an overload set.
+    fn written_var_template(&self, x: ExprId) -> Option<Target> {
+        if self.ast.exprs.get(x).kind() != ExprKind::UnresolvedLookupExpr {
+            return None;
+        }
+        let decls = self.ast.unresolved_decls(x);
+        let [d] = decls.as_slice() else { return None };
+        let t = self.ast.strip_shadow(*d);
+        if self.kind_of(t) != DeclKind::VarTemplate {
+            return None;
+        }
+        let found = self.ovl.ule_found.get(&x).and_then(|f| f.found.first().copied());
+        let found = found.filter(|&f| f != t && self.kind_of(f) == DeclKind::UsingShadow);
+        let found = found.or_else(|| (*d != t).then_some(*d));
+        Some(Target::Decl(self.ast.first(t), found))
     }
 
     /// The found set of the dependent entry `id` made from the pattern
@@ -514,6 +542,89 @@ impl Sema<'_, '_> {
             None => REF_UNRESOLVED,
         };
         self.push_written_ref(range, entity, None, role, q, flags)
+    }
+
+    /// The template-id declarator-id entry `id` (an explicit
+    /// specialization's, an explicit instantiation's or a friend
+    /// function template specialization's) names `t`, the template its
+    /// declaration matched: lookup of the name may have found several,
+    /// and the parser recorded the first (spec/ast.md §18.4).
+    pub fn note_written_spec_template(&mut self, id: WrittenRefId, t: DeclId) {
+        if !self.records_written_refs() {
+            return;
+        }
+        let t = self.ast.first(t);
+        let r = *self.ast.written_refs.get(id);
+        if r.entity == Some(t) {
+            return;
+        }
+        let flags = r.flags & !(REF_DEPENDENT | REF_UNRESOLVED);
+        self.ast.written_refs.set_target(id, Some(t), None, flags);
+        self.fill_written_provenance(id);
+    }
+
+    /// What the qualified friend `fd` written with declarator `d` names
+    /// when sema kept it with its type only (`FriendTarget::Type`): for a
+    /// [temp.friend]/5 friend (`template<class T> friend void
+    /// A<T>::f();`) the member of the class template pattern its
+    /// qualifier names ([`Sema::member_friend_pattern_member`]), else
+    /// nothing; and whether the name is dependent (no entity, a dependent
+    /// qualifier: spec/ast.md §18.4).
+    pub fn written_friend_type_target(
+        &mut self,
+        fd: DeclId,
+        d: &crate::declspec::Declarator,
+    ) -> (Option<DeclId>, bool) {
+        if !self.records_written_refs() {
+            return (None, false);
+        }
+        let e = self.member_friend_pattern_member(fd);
+        let dep = e.is_none()
+            && (d.qualifier_nns.is_some_and(|n| {
+                self.ast.types.nns_flags(n).intersects(kiln_ast::types::TypeFlags::DEPENDENT)
+            }) || d.qualifier.is_some_and(|q| self.is_dependent_ctx(q)));
+        (e, dep)
+    }
+
+    /// The friend function template specialization `fd` of a template
+    /// pattern (`friend void f<>(T);`, [temp.friend]/1.3) depends on the
+    /// pattern's parameters: which of the function `templates` lookup of
+    /// its name found (in `qualifier` when qualified) it befriends a
+    /// specialization of is decided per specialization of the class
+    /// (`templ/subst/decls.rs` `friend_decl`). Its entry `id` becomes
+    /// `DEPENDENT` with those templates as its found set (closed: no
+    /// argument-dependent lookup, [temp.friend]/1; clang's
+    /// `DependentFunctionTemplateSpecializationInfo`), and `fd` its
+    /// pattern node, for the instantiations' rows (spec/ast.md §18.4,
+    /// §18.9.4, §18.12).
+    pub(crate) fn note_written_friend_spec(
+        &mut self,
+        id: WrittenRefId,
+        fd: DeclId,
+        templates: &[DeclId],
+        qualifier: Option<DeclId>,
+    ) {
+        if !self.records_written_refs() || !self.inst.stack.is_empty() {
+            return;
+        }
+        let refs = &mut self.ast.written_refs;
+        refs.set_target(id, None, None, REF_DEPENDENT);
+        refs.set_how(id, RefLookup::None);
+        if refs.using_directive(id).is_some() {
+            refs.set_using_directive(id, None);
+        }
+        let how = if qualifier.is_some() { RefLookup::Qualified } else { RefLookup::Unqualified };
+        let elems: Vec<FoundDecl> = templates
+            .iter()
+            .map(|&t| {
+                let decl = self.ast.first(t);
+                FoundDecl { decl, found: decl }
+            })
+            .collect();
+        let refs = &mut self.ast.written_refs;
+        let set = refs.intern_found(&elems, how, 0);
+        refs.set_found(id, set);
+        refs.note_pattern_node(PatternNode::Decl(fd), id);
     }
 
     /// Records the name of the using-declarator at `range` that declared

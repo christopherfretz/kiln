@@ -6,7 +6,7 @@
 //! remember only while recording is on, so with the switch off every site
 //! is one branch on an empty map.
 
-use kiln_ast::decl::{DeclFlags, DeclKind};
+use kiln_ast::decl::{DeclFlags, DeclKind, FriendTarget};
 use kiln_ast::expr::ExprKind;
 use kiln_ast::types::Nns;
 use kiln_ast::written_refs::{
@@ -227,6 +227,35 @@ impl Sema<'_, '_> {
         let Some(spec) = self.written_spec_key() else { return };
         self.push_written_spec(w, spec, entity, None);
         self.note_written_spec_qualifiers(w, spec, scope.map(|s| s.0));
+    }
+
+    /// The friend function template specialization `pattern` of a class
+    /// template pattern (a `FriendDecl` whose entry is `DEPENDENT`,
+    /// §18.4) was instantiated as `inst`, `errors` having been reported
+    /// before: its entry's row for the class template specialization
+    /// names the specialization befriended, found as its template
+    /// (§18.9.4). `None` matched no template: unresolved when an error
+    /// was reported since (§18.9.3).
+    pub(crate) fn note_written_spec_friend(
+        &mut self,
+        pattern: DeclId,
+        inst: Option<DeclId>,
+        errors: u32,
+    ) {
+        let Some(w) = self.ast.written_refs.pattern_entry(PatternNode::Decl(pattern)) else {
+            return;
+        };
+        let (entity, found) = match inst.map(|f| self.ast.decls.friend_target(f)) {
+            Some(FriendTarget::Decl(s)) => {
+                let t = self.ast.spec_info(s).map(|(_, i)| self.ast.first(i.template));
+                (Some(s), t)
+            }
+            Some(FriendTarget::Type { .. }) => return,
+            None if self.inst.stack.is_sfinae() || self.diags.error_count() <= errors => return,
+            None => (None, None),
+        };
+        let Some(spec) = self.written_spec_key() else { return };
+        self.push_written_spec(w, spec, entity, found);
     }
 
     /// Overload resolution chose `d` (found as `found`; `None`: it failed)

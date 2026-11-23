@@ -60,6 +60,21 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   (`FORMAT_VERSION` 164) and module images (`IMAGE_VERSION` 88) carry
   them. Dependent operators, folds, `new`, `delete` and `co_await` are
   staged (WP-2910, WP-2911).
+- Written references for friends kept as a function type and for
+  variable template-ids (WP-3008, WP-3009, spec/ast.md §18.4, §18.5,
+  §18.11.2): a friend function template specialization with dependent
+  arguments (`friend void f<>(T);` in a class template) has a dependent
+  `elaborated` entry whose found set is the templates lookup found, a
+  row per instantiation naming the specialization befriended, and the
+  `<` and `>` of its template argument list (`WrittenRefs::template_args`,
+  dump `args=`); a [temp.friend]/5 friend (`template <class T> friend
+  void n::S<T>::f();`) names the member of the class pattern its
+  qualifier names (the primary's, or a partial specialization's own);
+  `n::v<T>` names the variable template instead of being dependent.
+  The `spec-target` and `elaborated` entries of a template-id
+  declarator-id name the template the declaration matched, not the
+  first of several overloads lookup found. PCH `FORMAT_VERSION` 167,
+  `IMAGE_VERSION` 90.
 - A refused evaluation session's diagnostics as data (WP-2827,
   spec/eval-session.md §2, spec/diag.md §10.4):
   `SessionRefused::TuHasErrors` and `Stopped` carry `records`

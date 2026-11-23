@@ -841,6 +841,9 @@ pub struct Declarator {
     /// The parser recorded the declarator-id's written-reference entry
     /// already (a template-id's template name).
     pub id_recorded: bool,
+    /// That entry (spec/ast.md §18.4): patched once the declaration says
+    /// which template it names.
+    pub id_ref: Option<kiln_ast::written_refs::WrittenRefId>,
     /// The start of its last token, counting a trailing requires-clause,
     /// an asm label, GNU attributes and the last virt-specifier but not
     /// trailing C++11 attributes (clang's `getEndLoc`); invalid unless
@@ -1118,6 +1121,7 @@ impl Declarator {
             id_link: kiln_ast::written_refs::RefQualifier::NONE,
             dtor_name: Loc::INVALID,
             id_recorded: false,
+            id_ref: None,
             end: Loc::INVALID,
             invalid: false,
             missing_typename: false,
