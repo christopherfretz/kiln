@@ -1762,10 +1762,28 @@ every variable it consults from it and never from the process:
 `SOURCE_DATE_EPOCH` (`__DATE__` / `__TIME__`), `HOME` /
 `XDG_CACHE_HOME` and `KILN_MODULE_CACHE_*` (the module cache); the GCC
 driver run to locate libstdc++ gets exactly that environment.
-Developer switches that change no result (`KILN_BACKTRACE` /
-`RUST_BACKTRACE` of the panic hook, `KILN_PP_PROFILE` of the
-`pp-profile` build, `KILN_WREF_RAW` of the written-references dump)
-still read the process. `working_directory` (WP-2121, an
+The other variables kiln's crates read (WP-2122; `grep -rn 'env::var'
+crates/` is the inventory, each hit below), routed through the
+driver's environment (`Args::env`: the process's for the executable,
+`options.environment` for the entry) or process-wide:
+
+| variable | read by | verdict |
+|---|---|---|
+| `KILN_WREF_RAW` | the written-reference dump (`WrittenRefs::set_raw_dump`, set by the job before the closure runs) | routed: changes the dump a closure renders (`#<raw location> ` before each line); `front_end.rs` test `developer_switches_follow_the_environment` |
+| `KILN_STATS_LOG` | the statistics log (`stats::log_path`) | routed; the entry writes no log either way |
+| `KILN_HOD_STRICT` | hod's failure handling (`hod::strict`) | routed; code generation only |
+| `KILN_PCH_SNAPSHOT_PASSES` | the PCH snapshot producer (`single_pass_blocker`) | routed; the producer never runs in the entry |
+| `TMPDIR` | the crash reproducer's directory (`crash::reproducer_dir`) | routed; the entry writes no reproducer |
+| `KILN_BACKTRACE`, `RUST_BACKTRACE` | the panic hook (`crash.rs`) | process-wide: the hook is the process's, installed by the executable's `main`; the entry never touches it |
+| `KILN_PP_PROFILE` | the `pp-profile` build's counters (`kiln_pp` `profile.rs`) | process-wide: process-global counters printed to the process's standard error; no result changes |
+| `KILN_SNAP_TIMING` | the PCH snapshot producer's and consumer's timing lines (`pch_snapshot::timing`) | process-wide: lines on the process's standard error; neither runs in the entry |
+| `KILN_CHECK_OPT_PREDICATE` | the checked mode of the in-process back end's `opt` predicate (`codegen_cmd.rs`) | process-wide: a check that changes no output; code generation only |
+| `TMPDIR` (through `std::env::temp_dir`) | code generation's temporary directory (`codegen_cmd.rs` `TempDir`) | process-wide; code generation only |
+| `PATH` | `kiln-scan-deps` (`scan_deps.rs`) | process-wide: a process of its own |
+| `KILN_SNAP_REPORT`, `KILN_SNAP_OUT`, `KILN_SNAP_DECODE`, `KILN_GCC16_ROOT`, `KILN_UCD_NORMALIZATION_TEST` | unit tests (`snap_tests.rs`, `kiln_oven` `meta`, `kiln_lex` `unicode.rs`) | test-only |
+| `OUT_DIR`, `CARGO_MANIFEST_DIR`, `KILN_GIT_SHA` | build scripts (`kiln_diag`, `kiln_driver` `build.rs`) | build time |
+
+`working_directory` (WP-2121, an
 `Option<PathBuf>`, default `None`) is the run's working directory
 ("Working directory" below): `None` is the process's current directory,
 read once when the run starts; a relative one is relative to the

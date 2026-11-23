@@ -1403,7 +1403,7 @@ fn run_jobs(
     let mut errors = 0u32;
     let mut side_deps: Vec<(String, String)> = Vec::new();
     let stats_log = matches!(args.action, Action::SyntaxOnly | Action::Precompile)
-        .then(stats::log_path)
+        .then(|| stats::log_path(&args.env))
         .flatten();
     if args.deps.cdb_fragment.is_some() {
         // `-E`/`-M` write to `-o` or standard output; `-fsyntax-only`

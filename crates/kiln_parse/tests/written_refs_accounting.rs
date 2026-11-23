@@ -4,8 +4,8 @@
 //! identifier of its §19 `name` span), or in the documented set of
 //! identifiers that name nothing a rename edits: keywords and builtin
 //! trait keywords, the contextual keywords and alternative tokens,
-//! attribute names (`__builtin_has_attribute` operands included) and keyword
-//! arguments, labels (`asm goto` labels included), `asm` symbolic
+//! attribute names (`__builtin_has_attribute` operands included), keyword
+//! arguments and the arguments of attributes clang does not know, labels (`asm goto` labels included), `asm` symbolic
 //! operand names and module names. Macro names, directive text and `#pragma` text never
 //! reach the parser (the preprocessor consumes them), so they are not
 //! counted. A name the table misses is a name a tooling client's rename
@@ -54,10 +54,13 @@ enum Place {
     /// `__declspec(...)`, the attribute operand of
     /// `__builtin_has_attribute`), at parenthesis depth `depth` within
     /// its attribute list, in the argument list of attribute `owner` (the
-    /// last name at the list's own level).
+    /// last name at the list's own level), whose first token is spelled
+    /// at `owner_at`; `cxx11` in a `[[...]]` list.
     Attr {
         depth: u32,
         owner: Option<Symbol>,
+        owner_at: Option<At>,
+        cxx11: bool,
     },
     /// Inside the parentheses of an `asm` statement or declaration.
     Asm,
@@ -271,6 +274,9 @@ struct Scan {
     /// What the next `(` opens.
     opening: Option<Opening>,
     owner: Option<Symbol>,
+    /// Where the current attribute's first token (its scope or name) is
+    /// spelled.
+    owner_at: Option<At>,
     /// `__builtin_has_attribute(e, attr...)`: the parenthesis depth inside
     /// it until the `,` after which its attribute list starts (base 1).
     has_attr: Option<u32>,
@@ -330,14 +336,18 @@ impl Scan {
         }
     }
 
-    /// Where an identifier `s` at the current point is.
-    fn place(&mut self, s: Symbol) -> Place {
+    /// Where an identifier `s` spelled at `at`, after `prev`, at the
+    /// current point is.
+    fn place(&mut self, s: Symbol, at: At, prev: Option<TokKind>) -> Place {
         if let Some((b, d)) = self.attr {
             let depth = d.saturating_sub(b);
             if depth == 0 {
                 self.owner = Some(s);
+                if prev != Some(TokKind::Punct(Punct::ColonColon)) {
+                    self.owner_at = Some(at);
+                }
             }
-            Place::Attr { depth, owner: self.owner }
+            Place::Attr { depth, owner: self.owner, owner_at: self.owner_at, cxx11: b == 0 }
         } else if self.asm.is_some() {
             Place::Asm
         } else if self.module {
@@ -414,7 +424,7 @@ fn idents(
                     || matches!(p, TokKind::Identifier(_))
             });
         let Some(at) = spelled(sm, scope, t.span.lo) else { continue };
-        let place = scan.place(s);
+        let place = scan.place(s, at, prev);
         out.push(Ident { at, sym: s, prev, next, place });
         scan.module |= starts_directive;
     }
@@ -488,6 +498,7 @@ fn account_tu(name: &str, src: &str, host: Option<&Host>) -> Report {
         return Report { seen: 0, left: Vec::new(), skipped: true };
     }
     let ids = idents(&sm, &interner, main, scope, host);
+    let unknown = unknown_attributes(&sink, &sm, scope);
     let cov = covered(&sm, scope, &tu, &ids);
     let kw = Keywords::with_std(&interner, opts.gnu, true, true, opts.clang_compat);
     // The contextual keywords, and the alternative tokens ([lex.digraph]),
@@ -530,7 +541,7 @@ fn account_tu(name: &str, src: &str, host: Option<&Host>) -> Report {
         // An attribute name: at the attribute list's own level, or a
         // scoped name's namespace.
         let attr = match i.place {
-            Place::Attr { depth, owner } => Some((depth, owner)),
+            Place::Attr { depth, owner, .. } => Some((depth, owner)),
             _ => None,
         };
         if attr.is_some_and(|(d, _)| d == 0 || i.next == Some(TokKind::Punct(Punct::ColonColon))) {
@@ -546,6 +557,9 @@ fn account_tu(name: &str, src: &str, host: Option<&Host>) -> Report {
             && lone
             && keyword_args.contains(&normalized(&interner, o).as_str())
         {
+            continue;
+        }
+        if unknown_attribute_argument(i, &unknown, lone) {
             continue;
         }
         // A label: `l:` (not `::`), `goto l`, `&&l`, `__label__ a, b`; an
@@ -569,6 +583,27 @@ fn account_tu(name: &str, src: &str, host: Option<&Host>) -> Report {
         left.push((line_col(&sm, scope, i.at), spelling, before));
     }
     Report { seen: seen_offs.len(), left, skipped: false }
+}
+
+/// The attributes clang does not know, by their first token: the
+/// `unknown attribute ignored` warnings of the parse.
+fn unknown_attributes(sink: &MemorySink, sm: &SourceManager, scope: Scope) -> HashSet<At> {
+    sink.diagnostics()
+        .iter()
+        .filter(|d| d.id == Some(kiln_diag::DiagId::parse_unknown_attribute))
+        .filter_map(|d| spelled(sm, scope, d.span.lo))
+        .collect()
+}
+
+/// Whether `i` is an argument of an attribute clang does not know (WP-2290):
+/// clang skips an unknown `[[...]]` attribute's tokens, and takes a lone
+/// identifier first argument of an unknown GNU attribute as an identifier
+/// argument (`ParseAttributeArgsCommon`), looking nothing up.
+fn unknown_attribute_argument(i: &Ident, unknown: &HashSet<At>, lone: bool) -> bool {
+    matches!(i.place, Place::Attr { depth, owner_at: Some(o), cxx11, .. }
+        if depth >= 1
+            && unknown.contains(&o)
+            && (cxx11 || (depth == 1 && i.prev == Some(TokKind::Punct(Punct::LParen)) && lone)))
 }
 
 fn cpp_files(dir: &Path) -> Vec<PathBuf> {

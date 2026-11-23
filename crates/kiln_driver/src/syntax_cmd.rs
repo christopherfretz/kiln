@@ -640,7 +640,7 @@ impl SyntaxJob<'_> {
         &self,
         sm: &'sm SourceManager,
         engine: &DiagEngine<'sm>,
-        tu: kiln_parse::ParsedTu,
+        mut tu: kiln_parse::ParsedTu,
         mut pp: kiln_pp::Preprocessor<'sm, '_>,
         deps: Option<crate::pp_cmd::SharedDeps>,
         main_id: Option<FileId>,
@@ -650,6 +650,9 @@ impl SyntaxJob<'_> {
     ) {
         let job = &self.0;
         let a = job.args;
+        // From the run's environment, not the process's (spec/driver.md
+        // "Front-end library entry").
+        tu.ast.written_refs.set_raw_dump(crate::env::wref_raw(&a.env));
         let Finish { interner, popts, verify, dump_opts, hooks } = fin;
         let entry = hooks.is_some() || a.no_side_outputs;
         job.note_image_imports(&pp);

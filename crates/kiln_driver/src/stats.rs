@@ -30,9 +30,10 @@ pub const ENV: &str = "KILN_STATS_LOG";
 /// to an `O_APPEND` file is not torn by concurrent writers).
 pub const MAX_LINE: usize = 4096;
 
-/// The log file, when `KILN_STATS_LOG` is set and not empty.
-pub fn log_path() -> Option<OsString> {
-    std::env::var_os(ENV).filter(|v| !v.is_empty())
+/// The log file, when `KILN_STATS_LOG` is set and not empty in `env`
+/// (the driver's environment, spec/driver.md "Front-end library entry").
+pub fn log_path(env: &crate::env::Environment) -> Option<OsString> {
+    env.var_os(ENV).filter(|v| !v.is_empty())
 }
 
 /// The counts of the frontend's IR text.

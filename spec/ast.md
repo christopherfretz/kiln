@@ -1800,6 +1800,40 @@ field `Ast::written_refs`. Built in five stages:
 | `flags` | `u8` (1) | `DEPENDENT` (a dependent name in a template pattern: no entity until instantiation), `UNRESOLVED` (lookup or overload resolution failed), `MEMBER` (a member or member template name written after `.` or `->`, §18.7) |
 | `how` | `RefLookup` (1) | how lookup found the name (§18.7, WP-2130) |
 
+**Failed lookup and dependence (WP-2291).** `UNRESOLVED` and
+`DEPENDENT` never both hold, and an entry with an entity is never
+`UNRESOLVED` (one that is also `DEPENDENT` prints `dep`, §18.6). Which
+of the two an entry without an entity has:
+
+- **Outside a template**, a name that names nothing is `UNRESOLVED`
+  (`(unresolved)`): an undeclared identifier, a member name after `.` or
+  `->` whose object expression is invalid or not of class type, a call
+  no candidate fits, a name in an expression sema could not form (a
+  template-id whose template argument is invalid). kiln builds a
+  recovery expression for such a name, type-dependent like clang's
+  `RecoveryExpr` (its type is unknown); that dependence is error
+  recovery, not a dependent name, and the table reads the recovery
+  expression as a failure, never as `DEPENDENT`.
+- **In a template pattern**, a dependent name ([temp.dep.general]: a
+  type- or value-dependent id-expression, a member of a dependent
+  object expression or of an unknown specialization, a component of a
+  dependent nested-name-specifier and the name after it, a dependent
+  type name) is `DEPENDENT`, and so is the callee of an unqualified call
+  with a dependent argument even when ordinary lookup found nothing
+  (argument-dependent lookup at instantiation may find it,
+  [temp.dep.candidate]). A non-dependent name is looked up and bound at
+  the definition ([temp.res.general]); when that fails it is
+  `UNRESOLVED`, exactly as outside a template, and clang diagnoses it at
+  the definition too: an undeclared identifier, a member name after an
+  invalid object expression, a name in an expression sema could not form
+  (also when the name itself is dependent, `T::template f<undeclared>`:
+  the expression is ill-formed in every specialization), and the callee
+  of a call with no dependent argument whose overload resolution fails
+  at the definition. Such a callee is recorded before its call's
+  arguments are parsed, as `DEPENDENT` until they tell, and becomes
+  `UNRESOLVED` when the call is resolved at the definition and fails
+  (`written_call_failed`).
+
 One padding byte remains. Deviation from a 4-byte `entity`-only design:
 `found` and `qualifier` are stored, not derived, because deriving `found`
 needs the expression (not kept for nested-name-specifier components) and
@@ -2168,7 +2202,10 @@ position; `q=::` is followed by the position of the leading `::` when
 it was recorded (always, since WP-2326; §18.11.2), and `tilde=` gives
 the `~` of a destructor name. `exp=` is the outermost expansion point of a name written in
 a macro. The harness directive `written-refs: <golden>`
-(spec/harness.md) compares this dump with a golden file.
+(spec/harness.md) compares this dump with a golden file. The developer
+switch `KILN_WREF_RAW`, read from the run's environment (spec/driver.md
+"Front-end library entry"; `WrittenRefs::set_raw_dump`), prefixes each
+line with `#<raw> `, the raw location of the name's start.
 
 Tests: `crates/kiln_ast/src/written_refs.rs` (entry size, off records
 nothing, claims, truncation), `crates/kiln_parse/tests/written_refs.rs`
@@ -2472,7 +2509,14 @@ one of:
   `enum_extensibility(open)`, `visibility`, `pcs`,
   `zero_call_used_regs`, `function_return`, GCC's
   `access(read_only, 1)`; and the builtin a builtin
-  alias names, `__clang_arm_builtin_alias(__builtin_x)`),
+  alias names, `__clang_arm_builtin_alias(__builtin_x)`), an argument of
+  an attribute clang does not know (one kiln warns `unknown attribute
+  '...' ignored` about, WP-2290): every identifier of an unknown
+  `[[...]]` attribute's argument list, whose tokens clang skips, and a
+  lone identifier first argument of an unknown GNU attribute
+  (`__attribute__((x(mu)))`), which clang takes as an identifier
+  argument (`ParseAttributeArgsCommon`), looking nothing up (a later
+  argument of an unknown GNU attribute is an expression and counts),
   a label (`l:`, `goto l`, `&&l`, the names of a `__label__`
   declaration, an `asm goto` label),
   an `asm` symbolic operand name, or a module name (after `module` /
@@ -2527,7 +2571,9 @@ attributes clang does not know (`frobnicate_lock(mu)`,
 not names: clang takes a lone identifier argument of an unknown GNU
 attribute as an identifier argument and skips an unknown `[[...]]`
 attribute's tokens, looking nothing up, so the table rightly has no
-entry; the test does not yet list them as non-names (WP-2290). The
+entry; since WP-2290 the test counts them as non-names (the documented
+set above). Run again (WP-2290: 3481 files, 318645 identifiers),
+nothing is left (the two panics are gone since WP-2173). The
 pinned set is unchanged (733 files, 58989 identifiers, nothing left).
 
 Over the host's libstdc++ (WP-1934: GCC 14's headers on aarch64 Linux
@@ -2557,8 +2603,18 @@ elsewhere with its parameters in scope; any other where it is
 written. The `[[clang::x(...)]]` spellings are parsed where they are
 written already (clang does the same) and are unchanged. A name the
 arguments' lookup does not find is the entry an undeclared name gets
-anywhere else: no entity (the recovery's flags, printed `(dependent)`),
-and no diagnostic. No pattern node is remembered for them (§18.9.4):
+anywhere else (§18.2, WP-2291): `UNRESOLVED`, printed `(unresolved)`,
+and so is a member name after it (`guarded_by(m.x)` with `m`
+undeclared); kiln gives no diagnostic, where clang 19 and 22 reject the
+undeclared identifier (the arguments are not analysed, WP-606). A
+dependent argument of a class template's member (`guarded_by(T::mu)`)
+is `DEPENDENT`. The forms clang accepts with a
+`-Wthread-safety-attributes` warning record what lookup finds, as any
+name does: an argument naming a variable whose type is not a
+capability (`guarded_by(i)` with `int i`), a `pt_guarded_by` of a
+member that is not a pointer; a string literal argument
+(`guarded_by("mu")`, which clang ignores as invalid) contains no name
+and has no entry. No pattern node is remembered for them (§18.9.4):
 no instantiation rebuilds an attribute's arguments, so a dependent one
 has no rows, and a module image carries the entries without one.
 Off, the arguments are skipped as before: the test is one branch at

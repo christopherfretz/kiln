@@ -572,6 +572,18 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The non-dependent call whose callee's entry is `w` failed: a name
+    /// recorded `DEPENDENT` in a template pattern (where a callee is
+    /// recorded before its call's arguments tell whether the call is
+    /// dependent) is `UNRESOLVED`, as outside one (spec/ast.md §18.2).
+    pub(crate) fn written_call_failed(&mut self, w: WrittenRefId) {
+        let r = *self.ast.written_refs.get(w);
+        if r.entity.is_none() && r.flags & REF_DEPENDENT != 0 {
+            let flags = (r.flags & !REF_DEPENDENT) | REF_UNRESOLVED;
+            self.ast.written_refs.set_target(w, None, None, flags);
+        }
+    }
+
     /// The call whose callee's entry is `w` was resolved, after
     /// argument-dependent lookup saw `facts` (`None`: it was not
     /// performed): `how` becomes `Adl` or `Both` when it found the winner,
@@ -1018,6 +1030,12 @@ impl Sema<'_, '_> {
                 ExprKind::DependentScopeDeclRefExpr | ExprKind::CXXDependentScopeMemberExpr => {
                     return Target::Dependent(e);
                 }
+                // A name whose lookup failed (or a member name after an
+                // invalid object expression) built a recovery expression,
+                // type-dependent like clang's but not a dependent name:
+                // `UNRESOLVED`, in a template pattern too (spec/ast.md
+                // §18.2).
+                ExprKind::RecoveryExpr => return Target::Unresolved,
                 _ if n.is_type_dependent() || n.is_value_dependent() => {
                     return Target::Dependent(e);
                 }

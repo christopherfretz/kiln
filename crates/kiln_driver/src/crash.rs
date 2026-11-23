@@ -403,13 +403,14 @@ pub fn report(argv0: &str, command_line: &[String]) -> i32 {
     EXIT_CRASH
 }
 
-/// `-fcrash-diagnostics-dir=`, else `$TMPDIR`, else `/tmp`.
+/// `-fcrash-diagnostics-dir=`, else `$TMPDIR` (of the driver's
+/// environment), else `/tmp`.
 fn reproducer_dir(args: &Args) -> PathBuf {
     if let Some(d) = &args.crash_diagnostics_dir {
         // In the working directory (spec/driver.md "Working directory").
         return args.fs_path(d).into_owned();
     }
-    match std::env::var_os("TMPDIR") {
+    match args.env.var_os("TMPDIR") {
         Some(d) if !d.is_empty() => PathBuf::from(d),
         _ => PathBuf::from("/tmp"),
     }

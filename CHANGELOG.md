@@ -780,6 +780,13 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   response-file expansion; an `@x` word is an ordinary word (an input
   named `@x`).
 
+- The front-end library entry's environment (WP-2122, spec/driver.md
+  "Front-end library entry"): `KILN_WREF_RAW` (the written-reference
+  dump's raw locations), `KILN_STATS_LOG`, `KILN_HOD_STRICT`,
+  `KILN_PCH_SNAPSHOT_PASSES` and the crash reproducer's `TMPDIR` are read
+  from the driver's environment (`FrontEndOptions::environment` for a
+  library run) instead of the process's; the remaining process-wide
+  developer switches are listed in one table.
 - Breaking, for tooling clients (WP-2321, WP-2322, WP-2324, WP-2325):
   `HostCalls` no longer requires `Send`; only a registered handler is
   `Box<dyn HostCalls + Send>`, and `EvalSession::run` takes any handler
@@ -901,6 +908,14 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   instantiation or nested evaluation, and every later run of the session
   with it. A stack exhausted by one run no longer stops the next.
 
+- The written-reference table records a failed lookup as `UNRESOLVED`,
+  not `DEPENDENT` (WP-2291, spec/ast.md §18.2): an undeclared identifier
+  (also in a thread-safety attribute's argument), a member name after an
+  invalid object expression, and in a template pattern a non-dependent
+  name or a non-dependent call's callee whose lookup or resolution fails
+  at the definition; the identifier-accounting test counts the arguments
+  of attributes clang does not know as non-names, leaving nothing over
+  in `tests/conformance` (WP-2290).
 - A class template's friend function template definition with a default
   template argument, instantiated after the template was declared at
   namespace scope, is "default template argument not permitted on a

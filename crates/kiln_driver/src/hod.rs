@@ -67,9 +67,9 @@ pub fn selected(args: &Args) -> Result<Backend, (String, String)> {
     Backend::parse(&v).ok_or_else(|| (format!("{ENV_BACKEND}={v}"), v))
 }
 
-/// Whether `KILN_HOD_STRICT=1`.
-pub fn strict() -> bool {
-    std::env::var_os(ENV_STRICT).is_some_and(|v| v == "1")
+/// Whether `KILN_HOD_STRICT=1` in `env` (the driver's environment).
+pub fn strict(env: &crate::env::Environment) -> bool {
+    env.var_os(ENV_STRICT).is_some_and(|v| v == "1")
 }
 
 /// The hod executable: `--hod=<path>`, else `KILN_HOD`, else `hod` next

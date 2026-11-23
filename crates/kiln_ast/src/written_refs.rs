@@ -380,6 +380,11 @@ pub struct WrittenRefs {
     /// alone, in no body and never instantiated (thread-safety attribute
     /// arguments, spec/ast.md §18.8).
     no_nodes: bool,
+    /// The dump prefixes each line with the raw location of the name's
+    /// start (`#<raw> `): the developer switch `KILN_WREF_RAW`, which the
+    /// driver reads from the run's environment (spec/driver.md
+    /// "Front-end library entry"). Never carried.
+    raw_dump: bool,
     entries: Vec<WrittenRef>,
     /// Entries of overloaded names awaiting overload resolution, by the
     /// overload set's expression.
@@ -542,6 +547,12 @@ impl WrittenRefs {
     /// Turns recording on or off (entries already made stay).
     pub fn set_on(&mut self, on: bool) {
         self.on = on;
+    }
+
+    /// Makes [`dump`](Self::dump) prefix each line with the raw location
+    /// of the name's start (`KILN_WREF_RAW`, a developer switch).
+    pub fn set_raw_dump(&mut self, raw: bool) {
+        self.raw_dump = raw;
     }
 
     /// The sources this table has no entries for although it is on
@@ -1350,7 +1361,7 @@ impl WrittenRefs {
             let hi = if hf == lf { hi } else { hf + &hi };
             let lo = lf + &lo;
             let text = sm.span_text(r.range).unwrap_or("?");
-            if std::env::var_os("KILN_WREF_RAW").is_some() {
+            if self.raw_dump {
                 let _ = write!(out, "#{} ", r.range.lo.to_raw());
             }
             let _ = write!(out, "{lo}-{hi}  {}  '{text}' -> ", r.role.spelling());

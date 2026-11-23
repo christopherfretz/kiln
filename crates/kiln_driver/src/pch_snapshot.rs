@@ -1206,7 +1206,7 @@ pub(crate) fn single_pass_blocker(
     let blockers = [
         (std.c.is_some(), "a C header"),
         (
-            std::env::var_os("KILN_PCH_SNAPSHOT_PASSES").is_some_and(|v| v == "2"),
+            args.env.var_os("KILN_PCH_SNAPSHOT_PASSES").is_some_and(|v| v == "2"),
             "KILN_PCH_SNAPSHOT_PASSES=2",
         ),
         (args.verbose, "-v"),

@@ -258,6 +258,9 @@ impl Sema<'_, '_> {
         let explain = wref.is_some() || wspec;
         let r = self.resolve_unresolved_call_inner(callee, args, braced, &mut facts, explain);
         if let Some(w) = wref {
+            if r.is_none() {
+                self.written_call_failed(w);
+            }
             self.note_written_call_lookup(w, facts);
         } else if wspec {
             self.note_written_spec_call(named, facts);

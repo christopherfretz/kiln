@@ -60,6 +60,12 @@ impl Environment {
     }
 }
 
+/// Whether `KILN_WREF_RAW` is set in `env`: the written-reference dump
+/// prefixes each line with the name's raw location (a developer switch).
+pub(crate) fn wref_raw(env: &Environment) -> bool {
+    env.var_os("KILN_WREF_RAW").is_some()
+}
+
 /// The names only: values may be secrets.
 impl std::fmt::Debug for Environment {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
