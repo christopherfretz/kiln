@@ -1,0 +1,26 @@
+10:1-10:2  type  'X' -> lib::X@9:8 in=lib::operator+@10:3
+10:13-10:14  type  'X' -> lib::X@9:8 in=(anonymous)@10:14
+10:16-10:17  type  'X' -> lib::X@9:8 in=(anonymous)@10:17
+12:1-12:4  nns  'lib' -> lib@8:11 in=operator-@12:8
+12:6-12:7  type  'X' -> lib::X@9:8 q=12:1 in=operator-@12:8
+12:18-12:21  nns  'lib' -> lib@8:11 in=(anonymous)@12:24
+12:23-12:24  type  'X' -> lib::X@9:8 q=12:18 in=(anonymous)@12:24
+12:26-12:29  nns  'lib' -> lib@8:11 in=(anonymous)@12:32
+12:31-12:32  type  'X' -> lib::X@9:8 q=12:26 in=(anonymous)@12:32
+13:20-13:21  type  'T' -> T@13:17 in=call_form@13:22
+13:32-13:33  type  'T' -> T@13:17 in=t@13:34
+13:46-13:55  expr  'operator-' -> (dependent) in=call_form@13:22 def=1+adl
+13:46-13:55  expr  'operator-' def=operator-@12:8
+13:46-13:55  expr  'operator-' -> operator-@12:8 spec=call_form<lib::X>@13:22 adl-ns=lib@8:11 adl-cls=lib::X@9:8
+13:56-13:57  expr  't' -> t@13:34 in=call_form@13:22
+13:59-13:60  expr  't' -> t@13:34 in=call_form@13:22
+14:20-14:21  type  'T' -> T@14:17 in=expr_form@14:22
+14:32-14:33  type  'T' -> T@14:17 in=t@14:34
+14:46-14:47  expr  't' -> t@14:34 in=expr_form@14:22
+14:50-14:51  expr  't' -> t@14:34 in=expr_form@14:22
+16:3-16:12  expr  'call_form' -> call_form<lib::X>@13:22 found=call_form@13:22 in=run@15:6 adl-ns=lib@8:11 adl-cls=lib::X@9:8
+16:13-16:16  nns  'lib' -> lib@8:11 in=run@15:6
+16:18-16:19  type  'X' -> lib::X@9:8 q=16:13 in=run@15:6
+17:3-17:12  expr  'expr_form' -> expr_form<lib::X>@14:22 found=expr_form@14:22 in=run@15:6 adl-ns=lib@8:11 adl-cls=lib::X@9:8
+17:13-17:16  nns  'lib' -> lib@8:11 in=run@15:6
+17:18-17:19  type  'X' -> lib::X@9:8 q=17:13 in=run@15:6

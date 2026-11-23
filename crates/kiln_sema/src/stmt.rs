@@ -36,6 +36,53 @@ pub(crate) struct LabelInfo {
     pub local: Option<Loc>,
 }
 
+/// The labels of the current function, in order of first mention, indexed
+/// by declaration and (for the function's own labels, not the GNU local
+/// ones) by name: a function with N labels costs O(N) to analyse, where a
+/// search of the list per label or `goto` cost O(N^2) (WP-2478).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct LabelTable {
+    list: Vec<LabelInfo>,
+    by_decl: kiln_source::fx::FxHashMap<DeclId, u32>,
+    /// The function's label of each name (`local` is `None`).
+    by_name: kiln_source::fx::FxHashMap<Symbol, u32>,
+}
+
+impl LabelTable {
+    fn push(&mut self, l: LabelInfo) {
+        let i = u32::try_from(self.list.len()).unwrap_or(u32::MAX);
+        let _ = self.by_decl.insert(l.decl, i);
+        if l.local.is_none() {
+            let _ = self.by_name.entry(l.name).or_insert(i);
+        }
+        self.list.push(l);
+    }
+
+    fn get(&self, d: DeclId) -> Option<&LabelInfo> {
+        kiln_ast::expr::note_search_steps(1);
+        self.by_decl.get(&d).and_then(|&i| self.list.get(i as usize))
+    }
+
+    fn get_mut(&mut self, d: DeclId) -> Option<&mut LabelInfo> {
+        kiln_ast::expr::note_search_steps(1);
+        self.by_decl.get(&d).and_then(|&i| self.list.get_mut(i as usize))
+    }
+
+    /// The function's own label `name` (not a GNU local label).
+    fn named(&self, name: Symbol) -> Option<&LabelInfo> {
+        kiln_ast::expr::note_search_steps(1);
+        self.by_name.get(&name).and_then(|&i| self.list.get(i as usize))
+    }
+
+    fn is_empty(&self) -> bool {
+        self.list.is_empty()
+    }
+
+    fn iter(&self) -> std::slice::Iter<'_, LabelInfo> {
+        self.list.iter()
+    }
+}
+
 /// One enclosing `switch`.
 #[derive(Clone, Debug)]
 pub(crate) struct SwitchState {
@@ -43,6 +90,9 @@ pub(crate) struct SwitchState {
     pub cond_ty: QualType,
     /// Case values seen, with their locations.
     pub values: Vec<(i128, Loc)>,
+    /// The location of each value of `values`: the duplicate check of a
+    /// case costs O(1), not a search of the earlier cases (WP-2478).
+    pub value_locs: kiln_source::fx::FxHashMap<i128, Loc>,
     /// GNU case ranges `lo ... hi` seen, with their `lo` and `hi`
     /// expressions (checked when the switch ends).
     pub ranges: Vec<(i128, i128, ExprId, ExprId)>,
@@ -50,6 +100,8 @@ pub(crate) struct SwitchState {
     /// `i128::MAX`, a wide `_BitInt`): their normalized words, decimal
     /// spelling and location, for the duplicate check only.
     pub wide_values: Vec<(Vec<u64>, String, Loc)>,
+    /// The index in `wide_values` of each normalized value.
+    pub wide_index: kiln_source::fx::FxHashMap<Vec<u64>, u32>,
     /// The `CaseStmt`/`DefaultStmt`s, in source order.
     pub cases: Vec<StmtId>,
     /// The first `default:`.
@@ -77,7 +129,7 @@ pub struct FnState {
     pub(crate) auto_ret: Option<QualType>,
     /// The placeholder was deduced from a return statement.
     pub(crate) deduced: bool,
-    pub(crate) labels: Vec<LabelInfo>,
+    pub(crate) labels: LabelTable,
     pub(crate) switches: Vec<SwitchState>,
     /// Enclosing loops and switches (innermost last; `true` = loop). A
     /// loop is open from the start of its condition (`while`, `for`) or
@@ -180,7 +232,7 @@ impl FnState {
             ret,
             auto_ret: None,
             deduced: false,
-            labels: Vec::new(),
+            labels: LabelTable::default(),
             switches: Vec::new(),
             breakables: Vec::new(),
             for_cond_var: None,
@@ -240,7 +292,7 @@ impl Sema<'_, '_> {
             let undefined = self
                 .func
                 .as_ref()
-                .and_then(|f| f.labels.iter().find(|l| l.decl == d))
+                .and_then(|f| f.labels.get(d))
                 .and_then(|l| if l.defined.is_none() { l.local } else { None });
             if let Some(at) = undefined {
                 let msg = self
@@ -275,14 +327,21 @@ impl Sema<'_, '_> {
     /// scope that declared it, every other variable loses it.
     pub(crate) fn update_nrvo_candidate(&mut self, v: Option<DeclId>) {
         let mut can_be_put = false;
-        for s in self.scopes.iter_mut().rev() {
-            let found = v.is_some_and(|v| s.nrvo.slots.contains(&v));
-            s.nrvo.slots.clear();
+        // The scope stack's walk skips only the block and control scopes
+        // that hold no locals, so no return slots (an `else if` chain N
+        // deep made each `return` O(N); WP-2478).
+        let mut next = self.scopes.len().checked_sub(1);
+        while let Some(i) = next {
+            next = self.scopes.walk_below(i);
+            let block = matches!(self.scopes[i].kind, ScopeKind::Block | ScopeKind::Control);
+            let s = self.scopes.nrvo_mut(i);
+            let found = v.is_some_and(|v| s.slots.contains(&v));
+            s.slots.clear();
             if found {
-                s.nrvo.slots.extend(v);
+                s.slots.extend(v);
             }
             can_be_put |= found;
-            if !matches!(s.kind, ScopeKind::Block | ScopeKind::Control) {
+            if !block {
                 break;
             }
         }
@@ -1175,8 +1234,10 @@ impl Sema<'_, '_> {
             f.switches.push(SwitchState {
                 cond_ty,
                 values: Vec::new(),
+                value_locs: kiln_source::fx::FxHashMap::default(),
                 ranges: Vec::new(),
                 wide_values: Vec::new(),
+                wide_index: kiln_source::fx::FxHashMap::default(),
                 cases: Vec::new(),
                 default: None,
                 invalid,
@@ -1234,8 +1295,9 @@ impl Sema<'_, '_> {
             .func
             .as_ref()
             .and_then(|f| f.switches.last())
-            .and_then(|s| s.values.iter().find(|(x, _)| *x == iv).copied());
-        if let Some((_, prev)) = dup {
+            .and_then(|s| s.value_locs.get(&iv).copied());
+        kiln_ast::expr::note_search_steps(1);
+        if let Some(prev) = dup {
             let d = self
                 .diag(DiagId::sema_duplicate_case, loc)
                 .arg(iv.to_string())
@@ -1243,6 +1305,7 @@ impl Sema<'_, '_> {
             self.emit(d);
         } else if let Some(s) = self.func.as_mut().and_then(|f| f.switches.last_mut()) {
             s.values.push((iv, loc));
+            let _ = s.value_locs.insert(iv, loc);
         }
         ce
     }
@@ -1261,7 +1324,10 @@ impl Sema<'_, '_> {
         if sw.invalid {
             return;
         }
-        if let Some((_, text, prev)) = sw.wide_values.iter().find(|w| w.0 == words).cloned() {
+        kiln_ast::expr::note_search_steps(1);
+        if let Some((_, text, prev)) =
+            sw.wide_index.get(&words).and_then(|&i| sw.wide_values.get(i as usize)).cloned()
+        {
             let d = self
                 .diag(DiagId::sema_duplicate_case, loc)
                 .arg(text)
@@ -1272,6 +1338,8 @@ impl Sema<'_, '_> {
         let mut text = String::new();
         bits.write_decimal(signed, &mut text);
         if let Some(s) = self.func.as_mut().and_then(|f| f.switches.last_mut()) {
+            let i = u32::try_from(s.wide_values.len()).unwrap_or(u32::MAX);
+            let _ = s.wide_index.insert(words.clone(), i);
             s.wide_values.push((words, text, loc));
         }
     }
@@ -1309,13 +1377,21 @@ impl Sema<'_, '_> {
                 kept.push((lo, hi, le));
             }
         }
+        if kept.is_empty() {
+            return;
+        }
         let mut values = sw.values.clone();
         values.sort_by_key(|v| v.0);
         for (i, &(lo, hi, le)) in kept.iter().enumerate() {
-            // The largest case value in the range, else an overlap with
-            // the previous range.
-            let mut overlap =
-                values.iter().rev().find(|v| v.0 >= lo && v.0 <= hi).map(|&(v, l)| (v, l));
+            // The largest case value in the range (the values are
+            // distinct and sorted: a binary search, not a scan per
+            // range), else an overlap with the previous range.
+            let below = values.partition_point(|v| v.0 <= hi);
+            let mut overlap = below
+                .checked_sub(1)
+                .and_then(|k| values.get(k))
+                .filter(|v| v.0 >= lo)
+                .map(|&(v, l)| (v, l));
             if i > 0 && lo <= kept[i - 1].1 {
                 overlap = Some((kept[i - 1].1, self.begin_loc(kept[i - 1].2)));
             }
@@ -1638,6 +1714,7 @@ impl Sema<'_, '_> {
     /// mention.
     fn label_decl(&mut self, name: Symbol, loc: Loc) -> DeclId {
         for s in self.scopes.iter().rev() {
+            kiln_ast::expr::note_search_steps(1);
             if let Some(&(_, d)) = s.labels.iter().rev().find(|l| l.0 == name) {
                 return d;
             }
@@ -1645,11 +1722,7 @@ impl Sema<'_, '_> {
                 break;
             }
         }
-        if let Some(l) = self
-            .func
-            .as_ref()
-            .and_then(|f| f.labels.iter().find(|l| l.name == name && l.local.is_none()))
-        {
+        if let Some(l) = self.func.as_ref().and_then(|f| f.labels.named(name)) {
             return l.decl;
         }
         self.new_label(name, loc, None)
@@ -1693,7 +1766,7 @@ impl Sema<'_, '_> {
         let prev = self
             .func
             .as_ref()
-            .and_then(|f| f.labels.iter().find(|l| l.decl == d))
+            .and_then(|f| f.labels.get(d))
             .and_then(|l| l.defined.map(|at| l.local.unwrap_or(at)));
         if let Some(prev) = prev {
             let msg = self
@@ -1701,9 +1774,7 @@ impl Sema<'_, '_> {
                 .arg(self.ast.symbols().as_str(name))
                 .with_note(self.diag(DiagId::note_previous_definition, prev));
             self.emit(msg);
-        } else if let Some(l) =
-            self.func.as_mut().and_then(|f| f.labels.iter_mut().find(|l| l.decl == d))
-        {
+        } else if let Some(l) = self.func.as_mut().and_then(|f| f.labels.get_mut(d)) {
             l.defined = Some(loc);
         }
         d
@@ -1718,8 +1789,7 @@ impl Sema<'_, '_> {
     pub fn act_on_goto(&mut self, name: Symbol, name_loc: Loc, loc: Loc) -> StmtId {
         let d = self.label_decl(name, name_loc);
         self.ast.decls.set_flags(d, DeclFlags::USED);
-        if let Some(l) = self.func.as_mut().and_then(|f| f.labels.iter_mut().find(|l| l.decl == d))
-        {
+        if let Some(l) = self.func.as_mut().and_then(|f| f.labels.get_mut(d)) {
             l.first_use.get_or_insert(name_loc);
         }
         self.builder().goto_stmt(d, loc)
@@ -1793,8 +1863,7 @@ impl Sema<'_, '_> {
     pub fn act_on_asm_goto_label(&mut self, name: Symbol, name_loc: Loc) -> DeclId {
         let d = self.label_decl(name, name_loc);
         self.ast.decls.set_flags(d, DeclFlags::USED);
-        if let Some(l) = self.func.as_mut().and_then(|f| f.labels.iter_mut().find(|l| l.decl == d))
-        {
+        if let Some(l) = self.func.as_mut().and_then(|f| f.labels.get_mut(d)) {
             l.first_use.get_or_insert(name_loc);
         }
         d
@@ -2116,7 +2185,7 @@ impl Sema<'_, '_> {
                 self.builder().clear_return_nrvo(r);
             }
         }
-        for l in &state.labels {
+        for l in state.labels.iter() {
             if l.defined.is_none() && l.local.is_none() {
                 let msg = self
                     .diag(DiagId::sema_undeclared_label, l.first_use.unwrap_or(rbrace))

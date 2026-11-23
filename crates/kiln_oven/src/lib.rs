@@ -87,7 +87,7 @@ pub use meta::{
 };
 pub use notes::FrameMark;
 pub use session::{
-    CANCEL_INTERVAL, CancelToken, NestedCost, RELEASE_FLOOR, ResultReadError, RunBudget, RunError,
+    CANCEL_INTERVAL, CancelToken, NestedCost, RELEASE_FLOOR, ResultReadError, RunBudget, RunFault,
     RunOutcome, RunRaw, SessUnit, UNCAUGHT_SCALARS,
 };
 pub use stats::{EvalRecord, EvalStats, EvalTotals, JobTotals};
@@ -561,6 +561,19 @@ pub trait SemaBridge {
         self.consts().truncate(mark);
         let _ = v;
         Ok(())
+    }
+
+    /// An exception left a session's run's entry (spec/eval-session.md
+    /// §8, WP-2502): `v` is its object's value frozen above `mark` of the
+    /// constant store, or why it has none. The session reads it now and
+    /// truncates the store back to `mark`, whatever the outcome.
+    fn session_thrown(
+        &mut self,
+        v: Result<ConstValueId, String>,
+        mark: kiln_ast::consts::ConstMark,
+    ) {
+        let _ = v;
+        self.consts().truncate(mark);
     }
 
     /// Whether a session's run of entry `f` destroys its class result

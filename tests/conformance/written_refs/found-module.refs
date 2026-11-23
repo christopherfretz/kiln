@@ -1,0 +1,19 @@
+found_mod.cppm:5:30-5:31  type  'T' -> T@found_mod.cppm:5:17 in=t@found_mod.cppm:5:32
+found_mod.cppm:5:37-5:38  expr  'f' -> (dependent) in=fm::call@found_mod.cppm:5:25 def=2+adl
+found_mod.cppm:5:37-5:38  expr  'f' def=fm::f@found_mod.cppm:3:6
+found_mod.cppm:5:37-5:38  expr  'f' def=fm::f@found_mod.cppm:4:6
+found_mod.cppm:5:37-5:38  expr  'f' -> fm::f@found_mod.cppm:3:6 spec=fm::call<int>@found_mod.cppm:5:25 adl-ns=
+found_mod.cppm:5:39-5:40  expr  't' -> t@found_mod.cppm:5:32 in=fm::call@found_mod.cppm:5:25
+found_mod.cppm:7:10-7:11  type  'T' -> T@found_mod.cppm:6:17 in=(anonymous)@found_mod.cppm:7:11
+found_mod.cppm:8:10-8:11  type  'T' -> T@found_mod.cppm:6:17 in=(anonymous)@found_mod.cppm:8:11
+found_mod.cppm:9:12-9:13  type  'T' -> T@found_mod.cppm:6:17 in=t@found_mod.cppm:9:14
+found_mod.cppm:9:25-9:26  member  'm' -> (dependent) in=fm::S::use@found_mod.cppm:9:8 def=2
+found_mod.cppm:9:25-9:26  member  'm' def=fm::S::m@found_mod.cppm:7:8
+found_mod.cppm:9:25-9:26  member  'm' def=fm::S::m@found_mod.cppm:8:8
+found_mod.cppm:9:25-9:26  member  'm' -> fm::S<int>::m@found_mod.cppm:7:8 spec=fm::S<int>::use@found_mod.cppm:9:8
+found_mod.cppm:9:27-9:28  expr  't' -> t@found_mod.cppm:9:14 in=fm::S::use@found_mod.cppm:9:8
+12:3-12:5  nns  'fm' -> fm@found_mod.cppm:2:18 in=run@11:6
+12:7-12:11  expr  'call' -> fm::call<int>@found_mod.cppm:5:25 found=fm::call@found_mod.cppm:5:25 q=12:3 in=run@11:6
+13:3-13:5  nns  'fm' -> fm@found_mod.cppm:2:18 in=run@11:6
+13:7-13:8  template  'S' -> fm::S@found_mod.cppm:6:27 q=13:3 in=run@11:6
+13:16-13:19  member  'use' -> fm::S<int>::use@found_mod.cppm:9:8 in=run@11:6

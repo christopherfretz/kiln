@@ -255,9 +255,12 @@ impl<'a> WrittenExtents<'a> {
                         // structured binding's object): nothing written.
                         return None;
                     } else {
-                        // An implicit `this`: the member's name, unless a
-                        // qualifier (whose begin the tree does not keep)
-                        // comes first.
+                        // An implicit `this`: the qualifier's recorded
+                        // begin (`B::f`), else the member's name, unless a
+                        // qualifier whose begin is not recorded comes first.
+                        if let Some(&b) = self.templates.expr_begin.get(e) {
+                            return Some(b);
+                        }
                         let qualified =
                             self.member_access_name(e).is_some_and(|m| m.qualifier.is_some());
                         return (!qualified).then(|| n.loc());
@@ -293,6 +296,13 @@ impl<'a> WrittenExtents<'a> {
                         self.templates.expr_nns.get(e).is_some()
                     };
                     return (!qualified).then(|| n.loc());
+                }
+                // The `.` or `[` of the first designator, or a GNU
+                // `name:`'s name; the `(` of a parenthesized aggregate
+                // initialization, or the cast that makes one: recorded by
+                // sema, as clang's `getBeginLoc`.
+                ExprKind::DesignatedInitExpr | ExprKind::CXXParenListInitExpr => {
+                    return self.templates.expr_begin.get(e).copied();
                 }
                 k if leaf_begins_at_loc(k) => return Some(n.loc()),
                 _ => return None,
@@ -349,6 +359,8 @@ impl<'a> WrittenExtents<'a> {
                 }
                 // `(T){...}`: its list.
                 ExprKind::CompoundLiteralExpr => self.exprs.compound_literal_init(e),
+                // `.a = x`: its initializer.
+                ExprKind::DesignatedInitExpr => self.exprs.designated_init(e),
                 ExprKind::CoawaitExpr | ExprKind::CoyieldExpr | ExprKind::DependentCoawaitExpr => {
                     self.exprs.coawait_operand(e, &self.lists)
                 }
@@ -586,6 +598,7 @@ fn keeps_closing_token(k: ExprKind) -> bool {
             | K::PackIndexingExpr
             | K::ConceptSpecializationExpr
             | K::CompoundLiteralExpr
+            | K::CXXPseudoDestructorExpr
     )
 }
 
@@ -656,5 +669,8 @@ fn leaf_is_one_token(k: ExprKind) -> bool {
             | K::CXXThisExpr
             | K::ImaginaryLiteral
             | K::PredefinedExpr
+            // The value of a non-type template argument, at the name of
+            // the parameter it replaces (always one identifier).
+            | K::SubstNonTypeTemplateParmExpr
     )
 }

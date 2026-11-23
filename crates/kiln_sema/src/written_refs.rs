@@ -8,8 +8,9 @@ use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::ExprKind;
 use kiln_ast::types::{ArgView, Nns, TemplateName, TypeView};
 use kiln_ast::written_refs::{
-    AdlSet, PatternNode, QualLink, REF_DEPENDENT, REF_MEMBER, REF_UNRESOLVED, RefLookup, RefMark,
-    RefQualifier, RefRole, WrittenRef, WrittenRefId,
+    AdlSet, FOUND_ADL, FOUND_DEPENDENT_BASE, FOUND_UNRESOLVED_USING, FoundDecl, PatternNode,
+    QualLink, REF_DEPENDENT, REF_MEMBER, REF_UNRESOLVED, RefLookup, RefMark, RefQualifier, RefRole,
+    WrittenRef, WrittenRefId,
 };
 use kiln_ast::{DeclId, ExprId, NnsId, QualType};
 use kiln_source::Span;
@@ -110,8 +111,110 @@ impl Sema<'_, '_> {
             if pending.is_some() {
                 self.note_pattern_udirs(id, x);
             }
+            self.note_pattern_found(id, x);
         }
         Some(id)
+    }
+
+    /// The found set of the dependent entry `id` made from the pattern
+    /// node `x` (spec/ast.md §18.12): what the name's lookup at the
+    /// definition found. An overload set's list is the node's own (an
+    /// `UnresolvedLookupExpr`'s declarations, which instantiation itself
+    /// selects from, and their using-shadows and naming class), or the
+    /// overloaded member access's set; a dependent member access of the
+    /// current instantiation re-runs the class member lookup that
+    /// decided it was dependent (the same pure function over the same
+    /// scopes, as §18.7.1 re-runs the scope walk). Nothing for a node no
+    /// lookup ran for (a dependent qualifier, a member of an unknown
+    /// specialization).
+    fn note_pattern_found(&mut self, id: WrittenRefId, x: ExprId) {
+        let r = *self.ast.written_refs.get(id);
+        if r.flags & REF_DEPENDENT == 0 {
+            return;
+        }
+        // The definition lookup's kind: the entry's syntax.
+        let how = WrittenRef { entity: Some(self.ast.tu), ..r }.default_how();
+        let n = *self.ast.exprs.get(x);
+        let (decls, found, naming, mut flags) = match n.kind() {
+            ExprKind::UnresolvedLookupExpr => {
+                let decls = self.ast.unresolved_decls(x);
+                let extra = self.ovl.ule_found.get(&x);
+                let found = extra.map_or_else(|| decls.clone(), |f| f.found.clone());
+                let adl = if n.aux() != 0 { FOUND_ADL } else { 0 };
+                (decls, found, extra.and_then(|f| f.naming), adl)
+            }
+            ExprKind::MemberExpr => {
+                let Some(m) = self.ovl.members.get(&x) else { return };
+                (m.decls.clone(), m.found.clone(), Some(m.naming), 0)
+            }
+            ExprKind::CXXDependentScopeMemberExpr => {
+                let Some((f, class)) = self.written_member_found(&r, x) else { return };
+                (f.decls, f.found, f.naming.or(Some(class)), 0)
+            }
+            _ => return,
+        };
+        if naming.is_some_and(|c| self.has_dependent_bases_in(c, 0)) {
+            flags |= FOUND_DEPENDENT_BASE;
+        }
+        let mut elems = Vec::with_capacity(decls.len());
+        for (i, &d) in decls.iter().enumerate() {
+            let target = self.ast.strip_shadow(d);
+            if self.kind_of(target) == DeclKind::UnresolvedUsingValue {
+                flags |= FOUND_UNRESOLVED_USING;
+            }
+            let decl = self.ast.first(target);
+            let f = found.get(i).copied().unwrap_or(d);
+            let f = if f != d && f != target { f } else { decl };
+            elems.push(FoundDecl { decl, found: f });
+        }
+        let s = self.ast.written_refs.intern_found(&elems, how, flags);
+        self.ast.written_refs.set_found(id, s);
+    }
+
+    /// What the class member lookup at the definition found for the
+    /// dependent member access `x` of entry `r` (spec/ast.md §18.12):
+    /// written `this->m`, `o.m` (in the object's class), `C::m` (in the
+    /// qualifier's class, a member of `*this`), or `m` with an implicit
+    /// `this` (the scope walk, which stopped in the class). `None` when
+    /// no lookup ran at the definition: a dependent qualifier or object
+    /// type, a dependent conversion-function-id, or a name the current
+    /// instantiation does not declare in a class with a dependent base
+    /// (a member of an unknown specialization, [temp.dep.type]/6).
+    fn written_member_found(
+        &self,
+        r: &WrittenRef,
+        x: ExprId,
+    ) -> Option<(crate::lookup::Found, DeclId)> {
+        let name = self.ast.dependent_member_name(x);
+        if name == kiln_ast::names::DeclName::EMPTY || self.is_dependent_conversion_name(name) {
+            return None;
+        }
+        let n = self.ast.exprs.get(x);
+        let qual = match r.qualifier.link() {
+            QualLink::None => None,
+            QualLink::Global => return None,
+            QualLink::Entry(q) => {
+                let ctx = self.written_qualifier_scope(self.ast.written_refs.get(q).entity?)?;
+                (self.kind_of(ctx) == DeclKind::CXXRecord).then_some(ctx)?;
+                Some(ctx)
+            }
+        };
+        let (bt, arrow) = match <ExprId as kiln_ast::ids::RawId>::from_raw(n.a()) {
+            Some(b) => (self.ety(b), n.aux() & 1 != 0),
+            None => (self.this_class()?.0, true),
+        };
+        let obj = if arrow { self.pointee_sugared(bt)? } else { bt };
+        let class = qual.or_else(|| self.ast.types.as_record(obj))?;
+        let found = if r.flags & REF_MEMBER == 0 && qual.is_none() {
+            // `m` with an implicit `this`: the unqualified scope walk.
+            self.lookup_name_dn(name, crate::lookup::LookupKind::Ordinary)
+        } else {
+            self.current_member_lookup(bt, arrow, qual, name)?
+        };
+        if found.decls.is_empty() && self.has_dependent_bases_in(class, 0) {
+            return None;
+        }
+        Some((found, class))
     }
 
     /// The dependent overloaded name `x` of entry `id` (a dependent call's

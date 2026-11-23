@@ -994,7 +994,16 @@ pub static ATTR_ROLES: &[AttrRoles] = {
         at(K::CONVERGENT, Z, Z),
         at(K::NOUWTABLE, Z, Z),
         at(K::ASSUME_ALIGNED, v("alignment"), v("offset")),
-        at(K::ALIGN_VALUE, v("alignment"), Z),
+        atf(
+            K::ALIGN_VALUE,
+            Role::Cond {
+                when: When::Flag(AttrNode::ALIGN_VALUE_DEPENDENT),
+                then: &E,
+                otherwise: &v("alignment"),
+            },
+            Z,
+            &[bit("ALIGN_VALUE_DEPENDENT", 2)],
+        ),
         at(
             K::CALLBACK,
             Role::Cond {

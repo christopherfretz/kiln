@@ -2865,7 +2865,7 @@ impl Substituter<'_, '_, '_> {
         let mut out = Vec::with_capacity(ds.len());
         for d in ds {
             out.push(match *d {
-                A::Field { name, loc } => D::Field(name, loc),
+                A::Field { name, loc } => D::Field(name, loc, loc),
                 A::Index { index, loc } => D::Index(self.expr(index)?, loc),
                 A::Range { first, last, loc, ellipsis } => {
                     D::Range(self.expr(first)?, self.expr(last)?, loc, ellipsis)

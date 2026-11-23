@@ -380,6 +380,22 @@ pub(crate) fn decode(sema: &Sema<'_, '_>, v: ConstValueId, open: usize, cap: u64
     Ok(ValueTree { root, constants })
 }
 
+/// Type `t` named as a tree names it (spec/eval-session.md §4.1): spelled
+/// as `display_string_of` spells it, with the first declaration of its
+/// class or enumeration when that existed at open (`open`, the
+/// declaration count then).
+pub(crate) fn type_entity(sema: &Sema<'_, '_>, t: QualType, open: usize) -> Entity {
+    let ast = &sema.ast;
+    let t = ast.types.canonical(t).without_quals();
+    let decl = ast
+        .types
+        .as_record(t)
+        .or_else(|| ast.types.as_enum(t))
+        .map(|d| ast.first(d))
+        .filter(|f| f.index() as usize <= open);
+    Entity { display: Arc::from(sema.gcc_type_string(t)), decl }
+}
+
 /// Whether `q` is a result type (spec/eval-session.md §3), `top` for an
 /// entry's return type (which may also be `void`; never a reference).
 pub(crate) fn result_type_ok(sema: &Sema<'_, '_>, q: QualType, top: bool) -> bool {

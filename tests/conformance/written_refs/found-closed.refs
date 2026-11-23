@@ -1,0 +1,22 @@
+15:32-15:33  type  'T' -> T@15:17 in=t@15:34
+16:4-16:5  expr  'f' -> (dependent) in=closed@15:25 def=2
+16:4-16:5  expr  'f' def=f@13:6
+16:4-16:5  expr  'f' def=f@14:6
+16:4-16:5  expr  'f' -> f@13:6 spec=closed<int>@15:25
+16:7-16:8  expr  't' -> t@15:34 in=closed@15:25
+17:5-17:6  expr  'f' -> (dependent) q=::17:3 in=closed@15:25 def=2
+17:5-17:6  expr  'f' def=f@13:6
+17:5-17:6  expr  'f' def=f@14:6
+17:5-17:6  expr  'f' -> f@13:6 spec=closed<int>@15:25
+17:7-17:8  expr  't' -> t@15:34 in=closed@15:25
+18:3-18:4  nns  'N' -> N@9:11 in=closed@15:25
+18:6-18:7  expr  'h' -> (dependent) q=18:3 in=closed@15:25 def=2
+18:6-18:7  expr  'h' def=N::h@10:6
+18:6-18:7  expr  'h' def=N::h@11:6
+18:6-18:7  expr  'h' -> N::h@10:6 spec=closed<int>@15:25
+18:8-18:9  expr  't' -> t@15:34 in=closed@15:25
+20:31-20:32  type  'T' -> T@20:17 in=t@20:33
+22:3-22:4  expr  'f' -> block(type-parameter-0-0)::f@21:8 in=block@20:25
+22:5-22:6  expr  't' -> t@20:33 in=block@20:25
+25:3-25:9  expr  'closed' -> closed<int>@15:25 found=closed@15:25 in=use@24:6 adl-ns=
+26:3-26:8  expr  'block' -> block<int>@20:25 found=block@20:25 in=use@24:6 adl-ns=

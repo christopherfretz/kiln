@@ -342,10 +342,13 @@ pub(crate) enum Fault {
     /// error lands at the declaration (clang 22's `__builtin_abs` of the
     /// most negative value).
     Quiet,
-    /// A host call that failed: a range check, a handler's `Err` or a
-    /// handler bug (spec/host-calls.md §2), with the note's text. It
-    /// cannot be caught.
+    /// A host call whose handler failed: its `Err`, or a handler bug
+    /// (results past a capacity; spec/host-calls.md §2.4), with the
+    /// note's text. It cannot be caught.
     Host(Box<str>),
+    /// A host call refused before its handler ran: a range check of its
+    /// arguments failed (spec/host-calls.md §2.2), with the note's text.
+    HostArg(Box<str>),
     PtrCmp {
         p: u64,
         q: u64,
@@ -693,7 +696,7 @@ impl Oven {
             Ok(()) => Ok(()),
             Err((fault, pc)) => {
                 if self.sess.is_some() {
-                    self.session_note_fault(&*b, &fault);
+                    self.session_note_fault(b, &fault);
                 }
                 let kind = fault.kind();
                 let f = if self.run.silent || self.frame_unknown_read(&*b, &fault) {

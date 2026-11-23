@@ -68,8 +68,10 @@ pub struct InitItem {
 /// A designator.
 #[derive(Copy, Clone, Debug, kiln_snap::Snap)]
 pub enum Designator {
-    /// `.name`.
-    Field(Symbol, Loc),
+    /// `.name`: the name and its location, and where the designator
+    /// begins (the `.`; the name of a GNU `name:`, or of a designator
+    /// rebuilt from the tree).
+    Field(Symbol, Loc, Loc),
     /// `[index]` (a GNU extension in C++).
     Index(ExprId, Loc),
     /// `[first ... last]` (a GNU extension): the bounds, the `[` and
@@ -81,14 +83,16 @@ impl Designator {
     /// The location of the designator (the name of `.name`, the `[`).
     pub fn loc(&self) -> Loc {
         match *self {
-            Designator::Field(_, l) | Designator::Index(_, l) | Designator::Range(_, _, l, _) => l,
+            Designator::Field(_, l, _)
+            | Designator::Index(_, l)
+            | Designator::Range(_, _, l, _) => l,
         }
     }
 
     /// The AST form (a `DesignatedInitExpr` designator).
     pub fn to_ast(&self) -> kiln_ast::expr::Designator {
         match *self {
-            Designator::Field(name, loc) => kiln_ast::expr::Designator::Field { name, loc },
+            Designator::Field(name, loc, _) => kiln_ast::expr::Designator::Field { name, loc },
             Designator::Index(index, loc) => kiln_ast::expr::Designator::Index { index, loc },
             Designator::Range(first, last, loc, ellipsis) => {
                 kiln_ast::expr::Designator::Range { first, last, loc, ellipsis }
@@ -590,7 +594,8 @@ impl Sema<'_, '_> {
     /// Where a designator begins: the `.` of `.name`, the `[` of `[i]`.
     fn designator_begin(&self, d: &Designator) -> Loc {
         match *d {
-            Designator::Field(_, at) => self.period_before(at),
+            Designator::Field(_, at, dot) if dot == at => self.period_before(at),
+            Designator::Field(_, _, dot) => dot,
             Designator::Index(_, at) | Designator::Range(_, _, at, _) => at,
         }
     }
@@ -598,7 +603,7 @@ impl Sema<'_, '_> {
     /// The end of designator `d`: past its name, or its `]`.
     fn designator_end(&self, d: &Designator) -> Loc {
         let last = match *d {
-            Designator::Field(_, at) => return self.token_end(at).unwrap_or(at),
+            Designator::Field(_, at, _) => return self.token_end(at).unwrap_or(at),
             Designator::Index(e, _) | Designator::Range(_, e, _, _) => self.expr_range(e).hi,
         };
         let sm = self.diags.sm();
@@ -971,77 +976,10 @@ impl Sema<'_, '_> {
                 self.init_from_expr(ty, e, ConvCtx::Initialization, loc)
             }
             Initializer::Paren(v, l, r) => {
-                let settled = !v
-                    .iter()
-                    .any(|&a| self.expr_is_type_dependent(a) || self.is_error_type(self.ety(a)));
-                if self.paren_init_rejected(ty, &v, settled, loc) {
-                    return self.recover(ty, &v, l);
-                }
-                if settled
-                    && self.ast.types.is_array(ty)
-                    && !(v.len() == 1 && self.string_lit_of(v[0]).is_some())
-                {
-                    // [dcl.init.general]/16.5: `T a[N](x, y)`, from C++20
-                    // (P0960; clang `FK_ArrayNeedsInitList` before).
-                    return self.paren_aggregate_init(ty, &v, loc, r);
-                }
-                if settled
-                    && let [a] = v.as_slice()
-                    && self.is_braced_arg(*a)
-                    && (self.ast.types.is_reference(ty) || self.ast.types.as_record(ty).is_none())
-                {
-                    // clang's FK_ParenthesizedListInitFor{Scalar,Reference}:
-                    // `int x({1})` is neither list- nor aggregate
-                    // initialization ([dcl.init.general]/16.1 applies only
-                    // to a non-parenthesized braced-init-list).
-                    let _ = self.take_braced_arg(*a);
-                    let msg = self.diag(DiagId::sema_list_init_in_parens, loc);
-                    let msg = msg.arg(u8::from(self.ast.types.is_reference(ty)));
-                    self.emit(msg.arg(self.ty_arg(ty)));
-                    return self.recover(ty, &v, l);
-                }
-                if settled && self.ast.types.as_record(ty).is_some() {
-                    if v.len() == 1
-                        && let Some(x) = self.construct_from_class_in(
-                            v[0],
-                            ty,
-                            ConvCtx::DirectInitialization,
-                            loc,
-                            DeletedAs::Call,
-                            Some(r),
-                        )
-                    {
-                        return x;
-                    }
-                    let mut site = ConstructSite::at(loc);
-                    site.rparen = Some(r);
-                    if let Some(x) = self.construct_class(ty, &v, InitStyle::Direct, site) {
-                        return x;
-                    }
-                }
-                if settled && v.is_empty() && !self.ast.types.is_reference(ty) {
-                    // [dcl.init.general]/16.4: `()` value-initializes; only
-                    // an empty pack expansion writes it (`T x(a...)`,
-                    // [temp.variadic]/7; clang `ImplicitValueInitExpr`).
-                    return self.paren_value_init(ty, l);
-                }
-                if v.len() == 1 {
-                    self.init_from_expr(ty, v[0], ConvCtx::DirectInitialization, loc)
-                } else if !self.is_aggregate(ty) && !self.ast.types.is_reference(ty) {
-                    // [dcl.init.general]/16.9: a scalar takes one expression.
-                    let d = self.diag(DiagId::sema_excess_initializers, loc).arg("2");
-                    self.emit(d);
-                    self.recover(ty, &v, l)
-                } else if self.ast.types.is_reference(ty) && settled {
-                    self.reference_multiple_inits(&v, loc);
-                    self.recover(ty, &v, l)
-                } else {
-                    // An aggregate or reference initialized from an
-                    // erroneous or type-dependent expression: nothing to
-                    // check now (a dependent one is checked when
-                    // instantiated, the erroneous one was diagnosed).
-                    self.recover(ty, &v, l)
-                }
+                let e = self.perform_paren_init(ty, &v, (l, r), loc);
+                // A parenthesized aggregate initialization begins at
+                // its `(` (spec/ast.md §21).
+                self.keep_paren_list_begin(e, l)
             }
             Initializer::List(l) => {
                 if direct_list && let Some(e) = self.fixed_enum_list_init(ty, &l) {
@@ -1065,6 +1003,87 @@ impl Sema<'_, '_> {
                 }
                 self.init_from_list_at(ty, &l, Some(loc))
             }
+        }
+    }
+
+    /// [`Sema::perform_init`] of `ty` from the parenthesized `v` between
+    /// `l` and `r` ([dcl.init.general]/16).
+    fn perform_paren_init(
+        &mut self,
+        ty: QualType,
+        v: &[ExprId],
+        (l, r): (Loc, Loc),
+        loc: Loc,
+    ) -> ExprId {
+        let settled =
+            !v.iter().any(|&a| self.expr_is_type_dependent(a) || self.is_error_type(self.ety(a)));
+        if self.paren_init_rejected(ty, v, settled, loc) {
+            return self.recover(ty, v, l);
+        }
+        if settled
+            && self.ast.types.is_array(ty)
+            && !(v.len() == 1 && self.string_lit_of(v[0]).is_some())
+        {
+            // [dcl.init.general]/16.5: `T a[N](x, y)`, from C++20
+            // (P0960; clang `FK_ArrayNeedsInitList` before).
+            return self.paren_aggregate_init(ty, v, loc, r);
+        }
+        if settled
+            && let [a] = v
+            && self.is_braced_arg(*a)
+            && (self.ast.types.is_reference(ty) || self.ast.types.as_record(ty).is_none())
+        {
+            // clang's FK_ParenthesizedListInitFor{Scalar,Reference}:
+            // `int x({1})` is neither list- nor aggregate
+            // initialization ([dcl.init.general]/16.1 applies only
+            // to a non-parenthesized braced-init-list).
+            let _ = self.take_braced_arg(*a);
+            let msg = self.diag(DiagId::sema_list_init_in_parens, loc);
+            let msg = msg.arg(u8::from(self.ast.types.is_reference(ty)));
+            self.emit(msg.arg(self.ty_arg(ty)));
+            return self.recover(ty, v, l);
+        }
+        if settled && self.ast.types.as_record(ty).is_some() {
+            if v.len() == 1
+                && let Some(x) = self.construct_from_class_in(
+                    v[0],
+                    ty,
+                    ConvCtx::DirectInitialization,
+                    loc,
+                    DeletedAs::Call,
+                    Some(r),
+                )
+            {
+                return x;
+            }
+            let mut site = ConstructSite::at(loc);
+            site.rparen = Some(r);
+            if let Some(x) = self.construct_class(ty, v, InitStyle::Direct, site) {
+                return x;
+            }
+        }
+        if settled && v.is_empty() && !self.ast.types.is_reference(ty) {
+            // [dcl.init.general]/16.4: `()` value-initializes; only
+            // an empty pack expansion writes it (`T x(a...)`,
+            // [temp.variadic]/7; clang `ImplicitValueInitExpr`).
+            return self.paren_value_init(ty, l);
+        }
+        if v.len() == 1 {
+            self.init_from_expr(ty, v[0], ConvCtx::DirectInitialization, loc)
+        } else if !self.is_aggregate(ty) && !self.ast.types.is_reference(ty) {
+            // [dcl.init.general]/16.9: a scalar takes one expression.
+            let d = self.diag(DiagId::sema_excess_initializers, loc).arg("2");
+            self.emit(d);
+            self.recover(ty, v, l)
+        } else if self.ast.types.is_reference(ty) && settled {
+            self.reference_multiple_inits(v, loc);
+            self.recover(ty, v, l)
+        } else {
+            // An aggregate or reference initialized from an
+            // erroneous or type-dependent expression: nothing to
+            // check now (a dependent one is checked when
+            // instantiated, the erroneous one was diagnosed).
+            self.recover(ty, v, l)
         }
     }
 
@@ -1653,6 +1672,52 @@ impl Sema<'_, '_> {
         self.builder().paren_list_init(ty, &inits, None, at, rparen)
     }
 
+    /// `e` with the first token of the parenthesized aggregate
+    /// initialization it is or holds (under implicit wrappers and the
+    /// cast that writes it) recorded as `begin`: the `(` of `T x(a, b)`,
+    /// `T(a, b)` and `new T(a, b)`, the cast of `static_cast<T>(a)`
+    /// (clang's `CXXParenListInitExpr::getBeginLoc`; spec/ast.md §21).
+    pub fn keep_paren_list_begin(&mut self, e: ExprId, begin: Loc) -> ExprId {
+        let mut x = e;
+        let mut cast = false;
+        for _ in 0..8 {
+            let k = self.ast.exprs.get(x).kind();
+            match k {
+                ExprKind::ImplicitCastExpr
+                | ExprKind::MaterializeTemporaryExpr
+                | ExprKind::CXXBindTemporaryExpr
+                | ExprKind::ExprWithCleanups
+                | ExprKind::ConstantExpr
+                | ExprKind::CXXFunctionalCastExpr
+                | ExprKind::CXXStaticCastExpr
+                | ExprKind::CStyleCastExpr => {
+                    // One written cast: an operand cast in its own right
+                    // (`static_cast<A>(A(1))`) is not this list's.
+                    let written = k != ExprKind::ImplicitCastExpr
+                        && k != ExprKind::MaterializeTemporaryExpr
+                        && k != ExprKind::CXXBindTemporaryExpr
+                        && k != ExprKind::ExprWithCleanups
+                        && k != ExprKind::ConstantExpr;
+                    if written && std::mem::replace(&mut cast, true) {
+                        break;
+                    }
+                    match self.ast.exprs.first_child(x, &self.ast.lists) {
+                        Some(c) => x = c,
+                        None => break,
+                    }
+                }
+                ExprKind::CXXParenListInitExpr => {
+                    if begin.is_valid() && self.ast.templates.expr_begin.get(x).is_none() {
+                        let _ = self.ast.templates.expr_begin.insert(x, begin);
+                    }
+                    break;
+                }
+                _ => break,
+            }
+        }
+        e
+    }
+
     /// Verify-only parenthesized aggregate initialization (spec/sema.md
     /// "Verify-only initialization"; clang `TryOrBuildParenListInitialization`
     /// with `VerifyOnly`): whether [`Sema::paren_aggregate_init`] of `ty`
@@ -2098,6 +2163,7 @@ impl Sema<'_, '_> {
         let designated = self.in_template() && l.items.iter().any(|i| !i.designator.is_empty());
         let outer = if designated { self.designator_pending.replace(Vec::new()) } else { None };
         let outer_end = self.agg_list_end.replace(l.rbrace);
+        self.designated_depth += u32::from(designated);
         let e = self.check_aggregate(ty, &l.items, &mut pos, true, l.lbrace, l.rbrace);
         self.agg_list_end = outer_end;
         if designated {
@@ -2112,6 +2178,10 @@ impl Sema<'_, '_> {
         if designated {
             // Instantiation rebuilds a designated list as written.
             self.note_syntactic_list(e, l);
+            self.designated_depth -= 1;
+            if self.designated_depth == 0 {
+                self.written_lists.clear();
+            }
         }
         e
     }
@@ -2526,7 +2596,7 @@ impl Sema<'_, '_> {
                 // `.m{...}` (no `=`) is located at the designator, as
                 // clang; `.m = {...}` and `{...}` at the brace.
                 let entity = match items[*pos].designator.first() {
-                    Some(Designator::Field(_, d)) if !self.preceded_by_equal(sub.lbrace) => {
+                    Some(Designator::Field(_, d, _)) if !self.preceded_by_equal(sub.lbrace) => {
                         Some(self.period_before(*d))
                     }
                     _ => None,
@@ -2688,7 +2758,7 @@ impl Sema<'_, '_> {
                 // the class's fields without a constructor
                 // (docs/status/deviations.md); GCC has no nested
                 // designators.
-                (Some(_), Designator::Field(_, l)) => {
+                (Some(_), Designator::Field(_, l, _)) => {
                     let at = self.period_before(l);
                     let end = self.token_end(l).unwrap_or(l);
                     let msg = self
@@ -2771,7 +2841,7 @@ impl Sema<'_, '_> {
             let mut descend = None;
             if let Some(k) = k {
                 let (name, dloc) = match item.designator[k] {
-                    Designator::Field(n, l) => (n, l),
+                    Designator::Field(n, l, _) => (n, l),
                     ref d @ (Designator::Index(..) | Designator::Range(..)) => {
                         self.designator_mismatch(ty, d);
                         *pos += 1;
@@ -3190,7 +3260,7 @@ impl Sema<'_, '_> {
             return;
         }
         let (id, at) = match *d {
-            Designator::Field(_, l) => {
+            Designator::Field(_, l, _) => {
                 (DiagId::sema_field_designator_non_record, self.period_before(l))
             }
             Designator::Index(_, l) | Designator::Range(_, _, l, _) => {
@@ -3241,7 +3311,7 @@ impl Sema<'_, '_> {
             for d in &item.designator {
                 let t = cur.take();
                 match *d {
-                    Designator::Field(name, _) => {
+                    Designator::Field(name, ..) => {
                         let mut r = t.and_then(|t| self.ast.types.as_record(t));
                         while let Some(rec) = r.take() {
                             let def = self.ast.definition(rec).unwrap_or(rec);

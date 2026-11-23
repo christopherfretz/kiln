@@ -1660,12 +1660,18 @@ impl Parser<'_, '_> {
     /// already consumed): `[template] id-expression` or a
     /// pseudo-destructor-name ([expr.ref]/1, [expr.prim.id.dtor]).
     fn parse_member_access_suffix(&mut self, e: ExprId, loc: Loc, arrow: bool) -> PExpr {
-        if !self.s.records_written_refs() {
-            return self.parse_member_access_suffix_inner(e, loc, arrow);
-        }
-        self.with_written_name(RefRole::Member, |p| {
-            p.parse_member_access_suffix_inner(e, loc, arrow)
-        })
+        let r = if self.s.records_written_refs() {
+            self.with_written_name(RefRole::Member, |p| {
+                p.parse_member_access_suffix_inner(e, loc, arrow)
+            })?
+        } else {
+            self.parse_member_access_suffix_inner(e, loc, arrow)?
+        };
+        // The access ends at the designator's last token: a template-id's
+        // `>`, an operator name's last token, a destroyed type's
+        // (spec/ast.md §21).
+        self.s.keep_name_extent(r, None, self.prev_lo());
+        Some(r)
     }
 
     #[allow(clippy::too_many_lines, reason = "one path per member designator form")]
@@ -2075,10 +2081,15 @@ impl Parser<'_, '_> {
     /// expression ([expr.prim.id.unqual]/1): `operator()(x)` in a member
     /// function is `this->operator()(x)`.
     fn parse_operator_id_expression(&mut self, loc: Loc) -> PExpr {
-        if !self.s.records_written_refs() {
-            return self.parse_operator_id_expression_inner(loc);
-        }
-        self.with_written_name(RefRole::Expr, |p| p.parse_operator_id_expression_inner(loc))
+        let e = if self.s.records_written_refs() {
+            self.with_written_name(RefRole::Expr, |p| p.parse_operator_id_expression_inner(loc))?
+        } else {
+            self.parse_operator_id_expression_inner(loc)?
+        };
+        // `operator==`, `operator()<1>`: the name ends at its last token
+        // (spec/ast.md §21).
+        self.s.keep_name_extent(e, None, self.prev_lo());
+        Some(e)
     }
 
     fn parse_operator_id_expression_inner(&mut self, loc: Loc) -> PExpr {
@@ -2530,10 +2541,15 @@ impl Parser<'_, '_> {
     /// ([temp.dep.general]/2).
     #[allow(clippy::too_many_lines, reason = "the id-expression forms in one place")]
     fn parse_id_expression_rest(&mut self) -> PExpr {
-        if !self.s.records_written_refs() {
-            return self.parse_id_expression_rest_inner();
-        }
-        self.with_written_name(RefRole::Expr, Self::parse_id_expression_rest_inner)
+        let begin = self.name_begin();
+        let e = if self.s.records_written_refs() {
+            self.with_written_name(RefRole::Expr, Self::parse_id_expression_rest_inner)?
+        } else {
+            self.parse_id_expression_rest_inner()?
+        };
+        // The written extent of the name (spec/ast.md §21).
+        self.s.keep_name_extent(e, Some(begin), self.prev_lo());
+        Some(e)
     }
 
     #[allow(clippy::too_many_lines, reason = "one path per id-expression form")]
@@ -3064,7 +3080,11 @@ impl Parser<'_, '_> {
         {
             return Some(self.s.act_on_cast(CastStyle::Functional, ty, e, loc, rparen));
         }
-        Some(self.s.act_on_paren_list_cast(ty, &args, loc, rparen))
+        let e = self.s.act_on_paren_list_cast(ty, &args, loc, rparen);
+        // A parenthesized aggregate initialization from an expression-list
+        // begins at its `(`; a cast of one operand at the type (sema
+        // records it; spec/ast.md §21).
+        Some(self.s.keep_paren_list_begin(e, open))
     }
 
     // -- literals ------------------------------------------------------------------------------

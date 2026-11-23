@@ -1,0 +1,41 @@
+TranslationUnitDecl
+|-FunctionDecl f 'void (int *, int *, int *, int *, int *, int, int)'
+| |-ParmVarDecl a 'int *'
+| | `-NonNullAttr
+| |-ParmVarDecl b 'int *'
+| | `-AnnotateAttr
+| |-ParmVarDecl c 'int *'
+| | `-CarriesDependencyAttr
+| |-ParmVarDecl d 'int *'
+| | `-AlignValueAttr
+| |-ParmVarDecl e 'int *'
+| | `-NoEscapeAttr
+| |-ParmVarDecl g 'int'
+| | `-MaybeUndefAttr
+| `-ParmVarDecl h 'int'
+|   `-UnusedAttr
+|-FunctionDecl f 'void (int *, int *, int *, int *, int *, int, int)'
+| |-ParmVarDecl a 'int *'
+| | `-NonNullAttr
+| |-ParmVarDecl b 'int *'
+| | `-AnnotateAttr Inherited
+| |-ParmVarDecl c 'int *'
+| | `-CarriesDependencyAttr Inherited
+| |-ParmVarDecl d 'int *'
+| |-ParmVarDecl e 'int *'
+| | `-NoEscapeAttr
+| |-ParmVarDecl g 'int'
+| `-ParmVarDecl h 'int'
+`-FunctionDecl f 'void (int *, int *, int *, int *, int *, int, int)'
+  |-ParmVarDecl a 'int *'
+  | `-NonNullAttr Inherited
+  |-ParmVarDecl b 'int *'
+  | `-AnnotateAttr Inherited
+  |-ParmVarDecl c 'int *'
+  | `-CarriesDependencyAttr Inherited
+  |-ParmVarDecl d 'int *'
+  |-ParmVarDecl e 'int *'
+  | `-NoEscapeAttr
+  |-ParmVarDecl g 'int'
+  |-ParmVarDecl h 'int'
+  `-CompoundStmt

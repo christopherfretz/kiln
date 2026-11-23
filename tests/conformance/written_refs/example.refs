@@ -13,7 +13,7 @@
 26:5-26:6  expr  'p' -> p@24:20 in=app::Cache::flush@24:8
 26:7-26:11  member  'used' -> store::disk::Page::used@12:7 in=app::Cache::flush@24:8
 29:31-29:32  type  'T' -> T@29:17 in=t@29:34
-29:39-29:43  expr  'sync' -> (dependent) in=app::every@29:25
+29:39-29:43  expr  'sync' -> (dependent) in=app::every@29:25 def=0+adl
 29:39-29:43  expr  'sync' -> store::disk::sync@33:19 spec=app::every<store::disk::Page>@29:25 how=adl adl-ns=store::disk@10:11 adl-cls=store::disk::Page@11:8
 29:44-29:45  expr  't' -> t@29:34 in=app::every@29:25
 30:12-30:17  nns  'store' -> store@9:11 in=p@30:31

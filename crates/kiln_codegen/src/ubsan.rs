@@ -2147,14 +2147,12 @@ impl Cg<'_> {
         if !arg_ty.is_some_and(|t| ast.types.is_pointer(t)) {
             return Ok(());
         }
-        let param_attr = if i < own.len() {
-            self.redecl_params(callee)
-                .iter()
-                .filter_map(|ps| ps.get(i))
-                .find_map(|&p| self.fn_attr(p, kiln_ast::attr::AttrKind::NONNULL))
-        } else {
-            None
-        };
+        // The called declaration's own parameter (with what it inherited,
+        // spec/sema.md §4.5 "Parameter attributes"), not another
+        // redeclaration's: a block-scope one's applies to calls through
+        // it only.
+        let param_attr =
+            own.get(i).and_then(|&p| self.fn_attr(p, kiln_ast::attr::AttrKind::NONNULL));
         let attr = param_attr.or_else(|| {
             let first = ast.first(callee);
             let this = u32::from(

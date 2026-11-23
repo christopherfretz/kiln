@@ -31,7 +31,8 @@
 32:3-32:4  type  'u' -> (dependent) in=D::small@32:5
 32:3-32:4  type  'u' -> V::inner::u@16:24 found=D<V>::u@29:28 spec=D<V>@25:27
 32:3-32:4  type  'u' -> W::inner::u@23:24 found=D<W>::u@29:28 spec=D<W>@25:27
-30:26-30:30  expr  'size' -> (dependent) in=D::get@30:5
+30:26-30:30  expr  'size' -> (dependent) in=D::get@30:5 def=1+base+using
+30:26-30:30  expr  'size' def=D::size@27:12
 30:26-30:30  expr  'size' -> V::size@14:7 found=D<V>::size@27:12 spec=D<V>::get@30:5
 30:26-30:30  expr  'size' -> W::size@21:7 found=D<W>::size@27:12 spec=D<W>::get@30:5
 34:33-34:34  type  'T' -> T@34:17 in=E@34:27
@@ -40,7 +41,8 @@
 35:9-35:10  nns  'D' -> D@25:27 in=E::size@35:15
 35:15-35:19  using-decl  'size' -> (dependent) q=35:9 in=E::size@35:15
 35:15-35:19  using-decl  'size' -> V::size@14:7 spec=E<V>@34:27
-36:29-36:33  expr  'size' -> (dependent) in=E::more@36:7
+36:29-36:33  expr  'size' -> (dependent) in=E::more@36:7 def=1+base+using
+36:29-36:33  expr  'size' def=E::size@35:15
 36:29-36:33  expr  'size' -> V::size@14:7 found=E<V>::size@35:15 spec=E<V>::more@36:7
 40:38-40:40  base  'Ts' -> Ts@40:20 in=Over@40:31
 41:9-41:11  nns  'Ts' -> Ts@40:20 in=Over::operator()@41:13

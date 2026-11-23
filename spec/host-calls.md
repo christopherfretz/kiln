@@ -69,6 +69,9 @@ before any later step runs:
    note `'<arg>' of __builtin_kiln_host_call <reason>` naming the
    argument (`in`, `bin`, `out`, `bout`) and the call stack. The handler
    is **not** called: a handler has effects, so a call never half-runs.
+   In an evaluation-session run this is kiln's refusal, not the
+   handler's error: the run fails `RunError::HostArgument` (WP-2480,
+   spec/eval-session.md §8).
 3. **Call the handler** with `op`, the integers read, the bytes read and
    a `HostOut` holding the two capacities (§3). The inputs were read
    before any output is written, so an output range that overlaps an
@@ -81,7 +84,9 @@ before any later step runs:
    they were (reading one that was never initialized is the usual
    uninitialized-read failure). The call's value is `v`.
    `Err(e)`: the evaluation ends, uncatchably, with the note
-   `host call failed: <message>` at the call, and the call stack. No
+   `host call failed: <message>` at the call, and the call stack (in a
+   session's run, `RunError::Host`, as for a handler that wrote past a
+   capacity: the handler's own error). No
    `catch` sees it and no destructor of the evaluation's objects runs,
    so nothing the evaluation would still do reaches the handler. A
    client that wants a failure a program may handle encodes it in the

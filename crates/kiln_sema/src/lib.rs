@@ -113,6 +113,7 @@ mod nullability;
 mod oven_bridge;
 pub mod overload;
 mod packed;
+mod param_attrs;
 pub mod pragma_attr;
 mod pragma_names;
 pub mod pragma_pack;
@@ -586,7 +587,7 @@ pub struct Sema<'a, 'sm> {
     /// `FpPragmaStack`): the override in effect, relative to the command
     /// line, and the `float_control(push)` entries.
     pub(crate) fp_pragma: (kiln_ast::fp::FpOverride, Vec<kiln_ast::fp::FpOverride>),
-    pub(crate) scopes: Vec<scope::Scope>,
+    pub(crate) scopes: scope::ScopeStack,
     /// The current semantic declaration context.
     pub(crate) ctx: DeclId,
     pub(crate) func: Option<stmt::FnState>,
@@ -1040,6 +1041,15 @@ pub struct Sema<'a, 'sm> {
     /// The warnings of the list being checked in a template definition,
     /// collected for `designator_rewarn`.
     pub(crate) designator_pending: Option<Vec<Diag>>,
+    /// The designated lists open in a template definition (the outermost
+    /// clears [`Sema::written_lists`] when it ends).
+    pub(crate) designated_depth: u32,
+    /// The written form recorded for each designated list of the
+    /// outermost one being checked, by its braces: an enclosing list's
+    /// written form reuses its nested lists' instead of building them
+    /// again, so a nest of N lists records O(N) nodes, not O(N^2)
+    /// (WP-2478; spec/ast.md §5.6).
+    pub(crate) written_lists: kiln_source::fx::FxHashMap<(Loc, Loc), ExprId>,
     /// Callees whose function is not marked referenced yet (see
     /// `deferring_call_ref`), resolved by [`Sema::act_on_call`].
     pub(crate) deferred_call_refs: Vec<(ExprId, DeclId)>,
@@ -1673,10 +1683,10 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             pack: pragma_pack::PackStack::default(),
             ms_struct_pragma: false,
             fp_pragma: (kiln_ast::fp::FpOverride::NONE, Vec::new()),
-            scopes: vec![scope::Scope {
+            scopes: scope::ScopeStack::from(vec![scope::Scope {
                 first_decl: 0,
                 ..scope::Scope::new(ScopeKind::TranslationUnit, Some(tu))
-            }],
+            }]),
             ctx: tu,
             func: None,
             unevaluated: 0,
@@ -1781,6 +1791,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             diagnose_if_recheck: kiln_source::fx::FxHashMap::default(),
             null_deref_seen: kiln_source::fx::FxHashSet::default(),
             designator_pending: None,
+            designated_depth: 0,
+            written_lists: kiln_source::fx::FxHashMap::default(),
             deferred_call_refs: Vec::new(),
             classes: Vec::new(),
             suspended_classes: Vec::new(),

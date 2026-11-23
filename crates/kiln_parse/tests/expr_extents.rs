@@ -78,8 +78,12 @@ struct Parsed {
 }
 
 fn parse() -> Parsed {
+    parse_src(SRC)
+}
+
+fn parse_src(src: &str) -> Parsed {
     let sm = SourceManager::new();
-    let file = sm.add_virtual("t.cpp", SRC.to_owned()).expect("location space");
+    let file = sm.add_virtual("t.cpp", src.to_owned()).expect("location space");
     let interner = Arc::new(Interner::new());
     let engine = DiagEngine::new(&sm, &DiagOptions::default(), MemorySink::new());
     let opts = ParseOptions::default();
@@ -241,4 +245,112 @@ fn the_dump_has_a_line_per_expression() {
         }
     }
     assert!(dump.contains("CXXDefaultArgExpr\t-\t-\t-\n"));
+}
+
+/// Names, destroyed types, designators and parenthesized aggregate
+/// initializations whose ends or begins sema records (spec/ast.md
+/// §21.3): dependent template-ids end at their `>`, operator names at
+/// their last token, a qualifier through an implicit `this` and of a
+/// concept-id begins the name, a pseudo-destructor ends at its destroyed
+/// type, a designated clause begins at its `.` or `[`, a parenthesized
+/// aggregate initialization at its `(` or its cast, and the value of a
+/// non-type template argument is the parameter's name.
+const NAMES: &str = r"
+namespace ns { template <class T> concept C = sizeof(T) > 0; }
+struct B { int f; int g() { return 0; } };
+struct D : B { int h() { return B::f + B::g(); } };
+template <class T> struct X : T {
+  template <class U> int f() { return 0; }
+  int k() { return this->template f<T>() + T::template v<int>; }
+};
+struct G { template <int N> int get() { return N; } };
+template <class T> struct E : G {
+  int g() { return G::get<0>() + get<1>() + this->get<2>(); }
+};
+struct R {};
+bool operator==(R, R) { return true; }
+struct Q {
+  bool operator==(const Q &) const { return true; }
+  template <int N> int operator()() const { return N; }
+};
+bool eq(Q a, Q b, R c) { return operator==(c, c) || a.operator==(b); }
+int call(Q q) { return q.operator()<1>(); }
+template <class T> bool teq(T a, T b) { return operator==(a, b); }
+template <class T> int tcall(T q) { return q.template operator()<1>(); }
+template <class T> requires ns::C<T> void cc(T) {}
+template <class T> void pd(T *p, T x) { p->~T(); x.~decltype(x)(); }
+void pd2(int *p) { typedef int I; p->~I(); }
+struct A { int a, b; };
+template <class T> T des() { return T{.a = 1, [0] = 2}; }
+template <class T> T old() { return T{a: 1}; }
+struct M { A m; M() : m(1, 2) {} };
+A *pn() { return new A(1, 2); }
+int pl() {
+  A s(1, 2);
+  int arr[2](1, 2);
+  auto r = static_cast<int[3]>(42);
+  A x = static_cast<A>(1);
+  A y = A(1, 2);
+  A z = (A)3;
+  A w = A(5);
+  return s.a + arr[0] + r[0] + x.a + y.b + z.a + w.a;
+}
+template <int N> struct V { int x{N}; };
+V<3> v3{};
+";
+
+#[test]
+fn recorded_ends_and_begins_have_their_text() {
+    let p = parse_src(NAMES);
+    let (some, none) = extents(&p);
+    let has = |kind: &str, text: &str| {
+        assert!(
+            some.iter().any(|(k, t)| k == kind && t == text),
+            "no {kind} `{text}` among {:?}",
+            some.iter().filter(|(k, _)| k == kind).collect::<Vec<_>>()
+        );
+    };
+    // WP-2350: a dependent template-id's `>`, an operator name's end.
+    has("CXXDependentScopeMemberExpr", "this->template f<T>");
+    has("DependentScopeDeclRefExpr", "T::template v<int>");
+    has("DeclRefExpr", "operator==");
+    has("MemberExpr", "a.operator==");
+    has("MemberExpr", "q.operator()<1>");
+    has("UnresolvedLookupExpr", "operator==");
+    has("CXXDependentScopeMemberExpr", "q.template operator()<1>");
+    // A template-id through an implicit (dependent) `this`.
+    has("CXXDependentScopeMemberExpr", "G::get<0>");
+    has("CXXDependentScopeMemberExpr", "get<1>");
+    has("CXXDependentScopeMemberExpr", "this->get<2>");
+    // WP-2351: a qualifier through an implicit `this`, of a concept-id.
+    has("MemberExpr", "B::f");
+    has("MemberExpr", "B::g");
+    has("ConceptSpecializationExpr", "ns::C<T>");
+    // WP-2352: a destroyed type's end, a designator, the parentheses.
+    has("CXXPseudoDestructorExpr", "p->~T");
+    has("CXXPseudoDestructorExpr", "x.~decltype(x)");
+    has("CXXPseudoDestructorExpr", "p->~I");
+    has("DesignatedInitExpr", ".a = 1");
+    has("DesignatedInitExpr", "[0] = 2");
+    has("DesignatedInitExpr", "a: 1");
+    has("CXXParenListInitExpr", "(1, 2)");
+    has("CXXParenListInitExpr", "static_cast<int[3]>(42)");
+    has("CXXParenListInitExpr", "static_cast<A>(1)");
+    has("CXXParenListInitExpr", "(A)3");
+    // A functional cast of one operand begins it at the type, as clang.
+    has("CXXParenListInitExpr", "A(5)");
+    // WP-2353: the argument's value at the parameter's name.
+    has("SubstNonTypeTemplateParmExpr", "N");
+    for k in [
+        "CXXPseudoDestructorExpr",
+        "DesignatedInitExpr",
+        "CXXParenListInitExpr",
+        "SubstNonTypeTemplateParmExpr",
+    ] {
+        assert!(!none.iter().any(|n| n == k), "a {k} without an extent");
+    }
+    let parens = some.iter().filter(|(k, _)| k == "CXXParenListInitExpr").count();
+    // `m(1, 2)`, `new A(1, 2)`, `s(1, 2)`, `arr[2](1, 2)`, `A(1, 2)` and
+    // the four casts.
+    assert_eq!(parens, 9, "{some:?}");
 }

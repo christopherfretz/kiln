@@ -13,7 +13,8 @@
 //! | `specs` (dropped rows included, so `SpecRefId`s stay), `spec_nodes`, `spec_udirs` | state: the per-specialization table, its pattern nodes and their using-directives |
 //! | `unrecorded` | state |
 //! | `leads` | state: the leading `::` and `~` tokens (WP-2326) |
-//! | `adl_index`, `spec_seen` | rebuilt from `adl_sets` and the live rows of `specs` |
+//! | `found_rows`, `found_sets`, `found_decls` | state: the found sets of the dependent entries (§18.12, WP-2472) |
+//! | `adl_index`, `spec_seen`, `found_index` | rebuilt from `adl_sets`, the live rows of `specs` and `found_sets` |
 //! | `inst_target`, `spec_pending`, `spec_last`, `spec_key`, `colons` | transient: scratch of one declaration or one instantiation, empty at rest |
 //! | `on` | the restoring compilation's own option |
 
@@ -23,8 +24,8 @@ use kiln_snap::{Reader, SnapError, Writer};
 use kiln_source::Loc;
 
 use super::{
-    AdlSet, AdlSetId, PatternNode, QualLink, RefExtra, RefLead, SPEC_DEAD, SpecRef, Unrecorded,
-    WrittenRef, WrittenRefId, WrittenRefs,
+    AdlSet, AdlSetId, FoundDecl, FoundKey, FoundSetId, FoundSetRec, PatternNode, QualLink,
+    RefExtra, RefLead, SPEC_DEAD, SpecRef, Unrecorded, WrittenRef, WrittenRefId, WrittenRefs,
 };
 use crate::Ast;
 use crate::ids::{DeclId, ExprId};
@@ -44,6 +45,9 @@ pub struct WrittenRefsSection {
     spec_udirs: Vec<((WrittenRefId, DeclId), DeclId)>,
     unrecorded: Vec<Unrecorded>,
     leads: Vec<RefLead>,
+    found_rows: Vec<(WrittenRefId, FoundSetId)>,
+    found_sets: Vec<FoundSetRec>,
+    found_decls: Vec<FoundDecl>,
 }
 
 /// The schema hash of the section's payload, which `Sema`'s snapshot root
@@ -70,6 +74,9 @@ impl WrittenRefs {
             spec_udirs: sorted(&self.spec_udirs),
             unrecorded: self.unrecorded.clone(),
             leads: self.leads.clone(),
+            found_rows: self.found_rows.clone(),
+            found_sets: self.found_sets.clone(),
+            found_decls: self.found_decls.clone(),
         }
     }
 
@@ -114,6 +121,27 @@ impl WrittenRefs {
                 return Err("an argument-dependent set interned twice");
             }
         }
+        // Found sets: rows by entry, once each, of known sets; each set a
+        // run of the elements, interned once.
+        let rows_ok = s.found_rows.windows(2).all(|w| w[0].0 < w[1].0)
+            && s.found_rows.iter().all(|&(id, f)| entry_ok(id) && f.index() < s.found_sets.len());
+        if !rows_ok {
+            return Err("a found-set row out of order or out of range");
+        }
+        let mut found_index: HashMap<FoundKey, FoundSetId> =
+            HashMap::with_capacity(s.found_sets.len());
+        for (i, f) in s.found_sets.iter().enumerate() {
+            let (lo, len) = (f.start as usize, f.len as usize);
+            let Some(list) = s.found_decls.get(lo..lo.saturating_add(len)) else {
+                return Err("a found set past its elements");
+            };
+            if found_index
+                .insert((f.how, f.flags, list.into()), FoundSetId::from_index(i))
+                .is_some()
+            {
+                return Err("a found set interned twice");
+            }
+        }
         let mut spec_seen = HashMap::new();
         for (i, r) in s.specs.iter().enumerate() {
             if r.flags & SPEC_DEAD == 0 && spec_seen.insert(*r, i as u32).is_some() {
@@ -135,6 +163,10 @@ impl WrittenRefs {
             specs: s.specs,
             spec_nodes: s.spec_nodes.into_iter().collect(),
             spec_udirs: s.spec_udirs.into_iter().collect(),
+            found_rows: s.found_rows,
+            found_sets: s.found_sets,
+            found_decls: s.found_decls,
+            found_index,
             spec_pending: HashMap::new(),
             spec_seen,
             spec_last: None,
@@ -230,6 +262,11 @@ mod tests {
         )
     }
 
+    /// The index of a new AST's translation unit, a declaration in range.
+    fn ast_tu_index() -> u32 {
+        new_ast().tu.index()
+    }
+
     fn put(ast: &Ast) -> Vec<u8> {
         let mut w = Writer::new();
         ast.put_written_refs(&mut w);
@@ -260,6 +297,48 @@ mod tests {
         let mut r = Reader::new(&[0]);
         back.get_written_refs(&mut r, true, 3).expect("read");
         assert_eq!(back.written_refs.unrecorded(), &[Unrecorded::Prefix { files: 3 }]);
+    }
+
+    /// spec/ast.md §18.12: the found sets round trip (the content index
+    /// rebuilt); a row out of order and a set interned twice are rejected.
+    #[test]
+    fn found_sets_round_trip_and_are_validated() {
+        use crate::written_refs::{FOUND_ADL, REF_DEPENDENT};
+        let el = |d: u32| FoundDecl { decl: DeclId::new(d), found: DeclId::new(d) };
+        let tu = ast_tu_index();
+        let mut ast = new_ast();
+        ast.written_refs.set_on(true);
+        let dep = WrittenRef { flags: REF_DEPENDENT, ..entry(RefQualifier::NONE) };
+        let a = ast.written_refs.push(dep).unwrap();
+        let b = ast.written_refs.push(dep).unwrap();
+        let s = ast.written_refs.intern_found(&[el(tu)], RefLookup::Unqualified, FOUND_ADL);
+        ast.written_refs.set_found(a, s);
+        ast.written_refs.set_found(b, s);
+        let bytes = put(&ast);
+        let mut back = new_ast();
+        let mut rd = Reader::new(&bytes);
+        back.get_written_refs(&mut rd, true, 0).expect("read");
+        assert_eq!(
+            back.written_refs.found_at_definition(a),
+            ast.written_refs.found_at_definition(a)
+        );
+        let mut section = ast.written_refs.section();
+        let ok = WrittenRefs::from_section(section.clone(), true).expect("valid");
+        assert_eq!(ok.found_at_definition(b), ast.written_refs.found_at_definition(b));
+        let mut t = ok;
+        assert_eq!(
+            t.intern_found(&[el(tu)], RefLookup::Unqualified, FOUND_ADL),
+            s,
+            "the index is rebuilt"
+        );
+        section.found_rows.swap(0, 1);
+        assert!(WrittenRefs::from_section(section.clone(), true).is_err(), "rows out of order");
+        section.found_rows.swap(0, 1);
+        section.found_sets.push(section.found_sets[0]);
+        assert!(WrittenRefs::from_section(section.clone(), true).is_err(), "a set twice");
+        section.found_sets.pop();
+        section.found_sets[0].len = 2;
+        assert!(WrittenRefs::from_section(section, true).is_err(), "a set past its elements");
     }
 
     #[test]

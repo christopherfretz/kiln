@@ -32,7 +32,7 @@ pub const CANCEL_INTERVAL: u64 = 65_536;
 /// this many bytes each (spec/eval-session.md §10).
 pub const RELEASE_FLOOR: usize = 1 << 20;
 
-/// At most this many [`RunError::Uncaught`] scalars.
+/// At most this many [`RunFault::Uncaught`] scalars.
 pub const UNCAUGHT_SCALARS: usize = 4;
 
 /// The note of a host call refused in semantic work a run triggered
@@ -150,11 +150,11 @@ pub enum ResultReadError {
     Unreadable(String),
 }
 
-/// How a run failed (spec/eval-session.md §8). Every kind comes with its
+/// How a run failed, as the Oven sees it: the session's `RunFault`
+/// (spec/eval-session.md §8) is made from it. Every kind comes with its
 /// diagnostic.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum RunError {
+pub enum RunFault {
     /// Not a constant expression.
     Failed,
     /// The budget's steps were exceeded.
@@ -165,16 +165,23 @@ pub enum RunError {
     DepthLimit,
     /// The run's [`CancelToken`] was cancelled.
     Cancelled,
-    /// A host call failed: its handler returned an error, or its
-    /// arguments failed a check (the note's text).
+    /// A host call's handler failed: it returned an error, or wrote past
+    /// a capacity (the note's text, without `host call failed: `).
     Host {
         /// The failure's note.
         message: String,
     },
-    /// An exception left the entry.
+    /// A host call refused before its handler ran: a range check of its
+    /// arguments failed (the note's text).
+    HostArgument {
+        /// The failure's note.
+        message: String,
+    },
+    /// An exception left the entry. Its value went to the session
+    /// ([`SemaBridge::session_thrown`]) before the failure was rendered.
     Uncaught {
-        /// The exception's type.
-        type_name: String,
+        /// The exception object's type.
+        ty: kiln_ast::QualType,
         /// Its `what()`, when it derives from `std::exception`.
         what: Option<String>,
         /// The values of the thrown object's first [`UNCAUGHT_SCALARS`]
@@ -240,7 +247,7 @@ pub enum SessUnit {
 #[derive(Debug)]
 pub struct RunOutcome {
     /// The value, or the kind of failure with its notes.
-    pub result: Result<RunRaw, (RunError, EvalFailure)>,
+    pub result: Result<RunRaw, (RunFault, EvalFailure)>,
     /// Steps the run executed itself.
     pub steps: u64,
     /// Steps of the nested work the run was charged (§5.1).
@@ -304,7 +311,7 @@ pub(crate) struct Arm {
     /// classification inside them.
     nested: u32,
     /// The kind of the run's last fault.
-    fault: Option<RunError>,
+    fault: Option<RunFault>,
     /// The nested work charged so far (§5.1).
     nested_steps: u64,
     nested_calls: u64,
@@ -388,7 +395,7 @@ impl Oven {
         budget: RunBudget,
         cancel: &CancelToken,
     ) -> RunOutcome {
-        let fail = |k: RunError| RunOutcome {
+        let fail = |k: RunFault| RunOutcome {
             result: Err((k, EvalFailure::silent(FailKind::NotConstant))),
             steps: 0,
             nested_steps: 0,
@@ -398,7 +405,7 @@ impl Oven {
             calls: 0,
         };
         if self.ctx_depth != 0 || self.sess.is_none() {
-            return fail(RunError::Failed);
+            return fail(RunFault::Failed);
         }
         let _phase = kiln_source::activity::enter(kiln_source::activity::Phase::Oven, at);
         self.types.refresh(b);
@@ -407,7 +414,7 @@ impl Oven {
             Some(&s) => s,
             None => {
                 let Some(s) = self.compile_call(b, f, at, true) else {
-                    return fail(RunError::Failed);
+                    return fail(RunFault::Failed);
                 };
                 if let Some(st) = self.sess.as_mut() {
                     st.stubs.insert(f, s);
@@ -467,7 +474,7 @@ impl Oven {
         let (nested_steps, nested_calls, peak) =
             arm.as_ref().map_or((0, 0, 0), |a| (a.nested_steps, a.nested_calls, a.peak));
         let result = r.map_err(|e| {
-            let k = arm.and_then(|a| a.fault).unwrap_or(RunError::Failed);
+            let k = arm.and_then(|a| a.fault).unwrap_or(RunFault::Failed);
             (k, e)
         });
         RunOutcome {
@@ -565,7 +572,7 @@ impl Oven {
                 let msg = match e {
                     ResultReadError::TooLarge(cap) => {
                         if let Some(a) = self.sess.as_mut().and_then(|s| s.arm.as_mut()) {
-                            a.fault = Some(RunError::ResultTooLarge);
+                            a.fault = Some(RunFault::ResultTooLarge);
                         }
                         format!(
                             "the result needs more than {cap} bytes on the host (the run's result budget)"
@@ -608,26 +615,33 @@ impl Oven {
     /// Records the kind of fault `fault` of the run's outermost context
     /// (from `exec`, before it is rendered).
     #[cold]
-    pub(crate) fn session_note_fault(&mut self, b: &dyn SemaBridge, fault: &Fault) {
+    pub(crate) fn session_note_fault(&mut self, b: &mut dyn SemaBridge, fault: &Fault) {
         if !self.session_run_outermost() {
             return;
         }
         let k = match fault {
-            Fault::Cancelled => RunError::Cancelled,
-            // The handler's own message, or what the call's check found.
-            Fault::Host(m) if !m.is_empty() => RunError::Host {
+            Fault::Cancelled => RunFault::Cancelled,
+            // The handler's own message (an empty one is a refusal in a
+            // speculative evaluation, never a run's own).
+            Fault::Host(m) if !m.is_empty() => RunFault::Host {
                 message: m.strip_prefix("host call failed: ").unwrap_or(m).to_owned(),
             },
-            Fault::Uncaught { obj, ty, what } => RunError::Uncaught {
-                type_name: self.tname(b.ast(), *ty),
-                what: what.as_deref().map(str::to_owned),
-                scalars: self.uncaught_scalars(b.ast(), *obj, *ty),
-            },
+            // What the check of the call's arguments found.
+            Fault::HostArg(m) => RunFault::HostArgument { message: m.to_string() },
+            Fault::Uncaught { obj, ty, what } => {
+                let scalars = self.uncaught_scalars(b.ast(), *obj, *ty);
+                self.session_thrown_value(b, *obj, *ty);
+                RunFault::Uncaught {
+                    ty: self.types.info(*ty).q,
+                    what: what.as_deref().map(str::to_owned),
+                    scalars,
+                }
+            }
             f => match f.kind() {
-                FailKind::StepLimit => RunError::StepBudget,
-                FailKind::DepthLimit => RunError::DepthLimit,
-                FailKind::MemoryLimit => RunError::MemoryBudget,
-                _ => RunError::Failed,
+                FailKind::StepLimit => RunFault::StepBudget,
+                FailKind::DepthLimit => RunFault::DepthLimit,
+                FailKind::MemoryLimit => RunFault::MemoryBudget,
+                _ => RunFault::Failed,
             },
         };
         if let Some(a) = self.sess.as_mut().and_then(|s| s.arm.as_mut()) {
@@ -635,7 +649,44 @@ impl Oven {
         }
     }
 
-    /// [`RunError::Uncaught`]'s scalars of the exception object `obj` of
+    /// Hands the value of the exception object `obj` of type `ty` to the
+    /// session (spec/eval-session.md §8, WP-2502), read before the
+    /// failure is rendered, while the object lives: frozen by the code
+    /// that freezes a result (every subobject initialized, no pointer to
+    /// an object of the run, no immediate function), or why it does not
+    /// freeze (the first note of the refusal).
+    #[cold]
+    fn session_thrown_value(&mut self, b: &mut dyn SemaBridge, obj: u64, ty: OTy) {
+        let mark = b.consts().mark();
+        let at = Loc::INVALID;
+        let frozen = if self.types.wide(ty).is_some() {
+            self.freeze_wide(b, obj, ty, at)
+        } else if self.types.is_aggregate(ty) {
+            self.freeze_aggregate(b, ty, obj, at)
+        } else {
+            match self.load(obj, ty, crate::kbc::ak::READ) {
+                Ok(v) => self.freeze_scalar(b, ty, v, at),
+                Err(_) => Err(Freeze::Fault(FailKind::NotConstant)),
+            }
+        };
+        let v = frozen.map_err(|f| match f {
+            Freeze::Notes(notes) if !notes.is_empty() => {
+                let msg = &notes[0].msg;
+                if msg.contains(crate::notes::LOC_MARK) {
+                    crate::notes::resolve_locs(b.sources(), msg)
+                } else {
+                    msg.clone()
+                }
+            }
+            Freeze::Fault(FailKind::MemoryLimit) => {
+                "the value does not fit in the constant store".to_owned()
+            }
+            _ => "the value is not a constant".to_owned(),
+        });
+        b.session_thrown(v, mark);
+    }
+
+    /// [`RunFault::Uncaught`]'s scalars of the exception object `obj` of
     /// type `ty` (read before the failure is rendered, while the object
     /// lives): none unless `ty` is a class that is not a union.
     fn uncaught_scalars(&self, ast: &kiln_ast::Ast, obj: u64, ty: OTy) -> Vec<u64> {
@@ -774,7 +825,7 @@ impl Oven {
     /// The failure of a run that ended charged past its budget (`stop`),
     /// reported at `at`.
     #[cold]
-    fn session_over_failure(&mut self, b: &dyn SemaBridge, stop: Stop, at: Loc) -> EvalFailure {
+    fn session_over_failure(&mut self, b: &mut dyn SemaBridge, stop: Stop, at: Loc) -> EvalFailure {
         let f = match stop {
             Stop::Memory => Fault::Memory,
             Stop::Depth => Fault::Depth,
@@ -799,7 +850,7 @@ impl Oven {
     }
 
     /// [`Oven::session_note_fault`] at the run's own level.
-    fn session_note_fault_at_top(&mut self, b: &dyn SemaBridge, f: &Fault) {
+    fn session_note_fault_at_top(&mut self, b: &mut dyn SemaBridge, f: &Fault) {
         let depth = std::mem::replace(&mut self.ctx_depth, 1);
         self.session_note_fault(b, f);
         self.ctx_depth = depth;

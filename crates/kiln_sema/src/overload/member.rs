@@ -86,7 +86,7 @@ impl Sema<'_, '_> {
         let m = self.ovl.members.remove(&x)?;
         let loc = self.ast.exprs.get(x).loc();
         let base = if m.arrow { self.arrow_chain_object(m.base) } else { m.base };
-        Some(self.builder().dependent_member(
+        let r = self.builder().dependent_member(
             Some(base),
             m.arrow,
             m.name,
@@ -94,7 +94,9 @@ impl Sema<'_, '_> {
             m.nns,
             m.targs,
             loc,
-        ))
+        );
+        self.keep_template_id_end(x, r);
+        Some(r)
     }
 
     /// The overloaded member access `e` names (through parentheses).

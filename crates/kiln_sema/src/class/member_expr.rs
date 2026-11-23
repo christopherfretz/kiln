@@ -3078,6 +3078,8 @@ impl Sema<'_, '_> {
         if n.has(ExprFlags::SPLICED) {
             self.ast.exprs.set_member_spliced(r);
         }
+        // The name's written extent (`a.operator==`, `B::f`).
+        self.keep_template_id_end(x, r);
         Some(r)
     }
 

@@ -1009,3 +1009,82 @@ fn measure_content_keys() {
         );
     });
 }
+
+/// WP-2500 (spec/eval-session.md §9 "Limits that bound the native
+/// depth"): the deepest level of a linearly recursive class template
+/// driven through reflection (each level's static member's initializer
+/// substitutes the next level, completes it with `static_data_members_of`
+/// and `extract`s its member) that a run reaches on a guarded worker
+/// thread of each size, each probe in a fresh session (a level a run
+/// instantiated is kept, and one an exhaustion stopped stays stopped).
+/// `cargo test [--profile harness] -p kiln_driver --test eval_session --
+/// --ignored --nocapture measure_native_stack`.
+#[test]
+#[ignore = "measurement: run with --ignored --nocapture"]
+fn measure_native_stack_per_level() {
+    const CHAIN: &str = "#include \"kiln_meta.h\"\n\
+namespace m = std::meta;\n\
+consteval int value_of(int n);\n\
+template <int N> struct L { static constexpr int v = value_of(N - 1) + 1; };\n\
+template <> struct L<0> { static constexpr int v = 0; };\n\
+consteval int value_of(int n) {\n\
+  m::info t = m::substitute(^^L, {m::reflect_constant(n)});\n\
+  return m::extract<int>(m::static_data_members_of(t, m::access_context::unchecked())[0]);\n\
+}\n";
+    let support = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/support");
+    // Whether a run of `value_of(n)` on a guarded `size`-byte thread
+    // succeeds (else it must end `StackExhausted`).
+    let reaches = |size: usize, n: u32| -> bool {
+        let body = format!("{CHAIN}consteval int entry() {{ return value_of({n}); }}\n");
+        let d = scratch(&format!("stack-{size}-{n}"), &[("t.cpp", &body)]);
+        let cl = [
+            "-std=c++26".to_owned(),
+            "-freflection".to_owned(),
+            "-ftemplate-depth=100000".to_owned(),
+            format!("-I{}", support.display()),
+            d.join("t.cpp").to_string_lossy().into_owned(),
+        ];
+        let ok = std::thread::scope(|sc| {
+            std::thread::Builder::new()
+                .stack_size(size)
+                .spawn_scoped(sc, || {
+                    kiln_sema::stack_guard::StackGuard::install(size);
+                    let err = Captured::default();
+                    with_eval_session(&kilnpp(), &cl, io(&err), |fe| {
+                        let mut fe = fe.unwrap_or_else(|e| panic!("{e:?}: {}", err.text()));
+                        let e = fe.session.entry_named("entry").unwrap();
+                        let r =
+                            fe.session.run(e, &mut Seven, RunBudget::PROGRAM, &CancelToken::new());
+                        match r.result {
+                            Ok(v) => {
+                                assert_eq!(v, RunValue::Signed(i128::from(n)));
+                                true
+                            }
+                            Err(kiln_parse::RunError::StackExhausted) => false,
+                            Err(e) => panic!("{n}: {e:?} {:?}", r.diagnostics),
+                        }
+                    })
+                })
+                .expect("spawn")
+                .join()
+                .expect("join")
+        });
+        std::fs::remove_dir_all(&d).unwrap();
+        ok
+    };
+    let mut prev: Option<(usize, u32)> = None;
+    for size in [4usize << 20, 16 << 20, 64 << 20] {
+        let (mut lo, mut hi) = (1u32, 20_000u32);
+        while hi - lo > 1 {
+            let mid = lo + (hi - lo) / 2;
+            if reaches(size, mid) { lo = mid } else { hi = mid }
+        }
+        print!("stack {} MiB: deepest level {lo}", size >> 20);
+        if let Some((s0, l0)) = prev {
+            println!(", {} bytes per level", (size - s0) / (lo - l0).max(1) as usize);
+        } else {
+            println!();
+        }
+        prev = Some((size, lo));
+    }
+}

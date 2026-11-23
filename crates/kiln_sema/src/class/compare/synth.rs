@@ -150,8 +150,10 @@ impl Sema<'_, '_> {
     fn build_cmp_body(&mut self, d: DeclId, k: CmpKind, loc: Loc) -> Option<StmtId> {
         let first = self.ast.first(d);
         let saved_ex = self.special.cmp.exclude.replace((first, self.ctx));
-        let saved_scopes =
-            std::mem::replace(&mut self.scopes, vec![Scope::new(ScopeKind::Function, Some(d))]);
+        let saved_scopes = std::mem::replace(
+            &mut self.scopes,
+            crate::scope::ScopeStack::from(vec![Scope::new(ScopeKind::Function, Some(d))]),
+        );
         let mut sx = Synth { f: d, k, loc, depth: 0 };
         let r = self.cmp_build(&mut sx);
         self.scopes = saved_scopes;

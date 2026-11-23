@@ -315,6 +315,104 @@ impl AdlSet {
     }
 }
 
+/// One element of a dependent entry's found set (spec/ast.md §18.12;
+/// 8 bytes).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, kiln_snap::Snap)]
+pub struct FoundDecl {
+    /// The entity's first declaration: what a using-declaration names,
+    /// or a dependent using-declarator's `UnresolvedUsingValue` member.
+    pub decl: DeclId,
+    /// The using-shadow lookup found, else `decl`.
+    pub found: DeclId,
+}
+
+/// The id of an interned found set (index + 1): equal ids are equal sets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, kiln_snap::Snap)]
+pub struct FoundSetId(NonZeroU32);
+
+impl FoundSetId {
+    /// The set's index in interning order.
+    #[inline]
+    pub const fn index(self) -> usize {
+        (self.0.get() - 1) as usize
+    }
+
+    fn from_index(i: usize) -> Self {
+        let n = u32::try_from(i + 1).expect("found sets exhausted");
+        FoundSetId(NonZeroU32::new(n).expect("index + 1 is never 0"))
+    }
+}
+
+/// [`FoundSet::flags`]: argument-dependent lookup at each instantiation
+/// adds to the set ([temp.dep.candidate]/1).
+pub const FOUND_ADL: u8 = 1;
+/// [`FoundSet::flags`]: the class searched has a dependent base, so the
+/// instantiation's lookup can find more ([temp.dep.type]).
+pub const FOUND_DEPENDENT_BASE: u8 = 2;
+/// [`FoundSet::flags`]: an element is a dependent using-declarator,
+/// whose target exists per specialization only.
+pub const FOUND_UNRESOLVED_USING: u8 = 4;
+
+/// The found set of a dependent entry (spec/ast.md §18.12): what the
+/// lookup at the template definition found, and how an instantiation can
+/// leave it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FoundSet<'a> {
+    /// The elements, in the order overload resolution enumerates them
+    /// (innermost scope first, newest first); clients treat them as a set.
+    pub decls: &'a [FoundDecl],
+    /// The definition lookup's kind: `Unqualified`, `Qualified` or
+    /// `Member` (§18.7.2).
+    pub how: RefLookup,
+    /// [`FOUND_ADL`], [`FOUND_DEPENDENT_BASE`], [`FOUND_UNRESOLVED_USING`].
+    pub flags: u8,
+}
+
+impl FoundSet<'_> {
+    /// True when every instantiation selects from the set (no flag).
+    pub fn is_closed(&self) -> bool {
+        self.flags == 0
+    }
+
+    /// True when argument-dependent lookup adds to the set at
+    /// instantiation.
+    pub fn adl(&self) -> bool {
+        self.flags & FOUND_ADL != 0
+    }
+
+    /// True when the class searched has a dependent base.
+    pub fn dependent_base(&self) -> bool {
+        self.flags & FOUND_DEPENDENT_BASE != 0
+    }
+
+    /// True when an element is a dependent using-declarator.
+    pub fn unresolved_using(&self) -> bool {
+        self.flags & FOUND_UNRESOLVED_USING != 0
+    }
+
+    /// True when lookup found nothing.
+    pub fn is_empty(&self) -> bool {
+        self.decls.is_empty()
+    }
+
+    /// True when `d` is an element's `decl` or `found`.
+    pub fn contains(&self, d: DeclId) -> bool {
+        self.decls.iter().any(|e| e.decl == d || e.found == d)
+    }
+}
+
+/// An interned found set: its run of `found_decls`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kiln_snap::Snap)]
+struct FoundSetRec {
+    start: u32,
+    len: u32,
+    how: RefLookup,
+    flags: u8,
+}
+
+/// The interning key of a found set.
+type FoundKey = (RefLookup, u8, Box<[FoundDecl]>);
+
 /// The side row of an entry with more provenance than its `how`
 /// (spec/ast.md §18.7.1).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, kiln_snap::Snap)]
@@ -417,6 +515,16 @@ pub struct WrittenRefs {
     /// declaration's first declaration), for the rows of the
     /// specializations that select it (§18.9.1).
     spec_udirs: HashMap<(WrittenRefId, DeclId), DeclId>,
+    /// The found set of each dependent entry whose definition lookup ran
+    /// (§18.12), by entry: sorted by construction (the row is made with
+    /// its entry).
+    found_rows: Vec<(WrittenRefId, FoundSetId)>,
+    /// The interned found sets, by `FoundSetId` index: runs of
+    /// `found_decls`.
+    found_sets: Vec<FoundSetRec>,
+    found_decls: Vec<FoundDecl>,
+    /// The found sets by content (rebuilt after a restore).
+    found_index: HashMap<FoundKey, FoundSetId>,
     /// Rebuilt overload sets awaiting overload resolution in an
     /// instantiation: their pattern entry and specialization.
     spec_pending: HashMap<ExprId, (WrittenRefId, DeclId)>,
@@ -753,6 +861,9 @@ impl WrittenRefs {
         r.entity = entity;
         r.found = found;
         r.flags = flags;
+        if flags & REF_DEPENDENT == 0 {
+            self.drop_found(id);
+        }
     }
 
     /// Overload resolution selected `entity` (found as `found`) for the
@@ -769,6 +880,9 @@ impl WrittenRefs {
         r.entity = Some(entity);
         r.found = found.filter(|&f| f != entity);
         r.flags &= !(REF_DEPENDENT | REF_UNRESOLVED);
+        // A callee recorded before its arguments, resolved at the
+        // definition: no longer dependent, so no found set (§18.12).
+        self.drop_found(id);
         Some(id)
     }
 
@@ -927,6 +1041,142 @@ impl WrittenRefs {
     #[inline]
     pub fn pattern_entry(&self, n: PatternNode) -> Option<WrittenRefId> {
         if self.spec_nodes.is_empty() { None } else { self.spec_nodes.get(&n).copied() }
+    }
+
+    // The found set of a dependent entry (spec/ast.md §18.12).
+
+    /// The interned id of the found set `decls` with `how` and `flags`
+    /// (one copy per distinct set).
+    pub fn intern_found(&mut self, decls: &[FoundDecl], how: RefLookup, flags: u8) -> FoundSetId {
+        let key: FoundKey = (how, flags, decls.into());
+        if let Some(&s) = self.found_index.get(&key) {
+            return s;
+        }
+        let s = FoundSetId::from_index(self.found_sets.len());
+        let start = u32::try_from(self.found_decls.len()).expect("found-set elements exhausted");
+        self.found_decls.extend_from_slice(decls);
+        let len = decls.len() as u32;
+        self.found_sets.push(FoundSetRec { start, len, how, flags });
+        self.found_index.insert(key, s);
+        s
+    }
+
+    /// Gives the dependent entry `id` the found set `s` (replacing one it
+    /// has); nothing when off, or while pattern nodes are not remembered
+    /// (§18.8).
+    pub fn set_found(&mut self, id: WrittenRefId, s: FoundSetId) {
+        if !self.on || self.no_nodes {
+            return;
+        }
+        let at = match self.found_rows.last() {
+            Some(&(last, _)) if last < id => self.found_rows.len(),
+            None => 0,
+            _ => self.found_rows.partition_point(|&(e, _)| e < id),
+        };
+        match self.found_rows.get_mut(at) {
+            Some(r) if r.0 == id => r.1 = s,
+            _ => self.found_rows.insert(at, (id, s)),
+        }
+    }
+
+    /// Removes the found set of entry `id`, which is no longer dependent
+    /// (one branch when no entry has one; the newest row is the usual
+    /// one: calls nest).
+    #[inline]
+    pub fn drop_found(&mut self, id: WrittenRefId) {
+        if self.found_rows.is_empty() {
+            return;
+        }
+        if self.found_rows.last().is_some_and(|&(e, _)| e == id) {
+            self.found_rows.pop();
+        } else if let Ok(i) = self.found_rows.binary_search_by_key(&id, |&(e, _)| e) {
+            self.found_rows.remove(i);
+        }
+    }
+
+    /// The interned id of the found set of entry `id` (equal ids are
+    /// equal sets); `None` when it is not `DEPENDENT` or no lookup ran at
+    /// its definition.
+    pub fn found_set_id(&self, id: WrittenRefId) -> Option<FoundSetId> {
+        if self.found_rows.is_empty() {
+            return None;
+        }
+        let i = self.found_rows.binary_search_by_key(&id, |&(e, _)| e).ok()?;
+        (self.entries.get(id.index())?.flags & REF_DEPENDENT != 0).then_some(self.found_rows[i].1)
+    }
+
+    /// The found set of entry `id` (§18.12): what the name's lookup at
+    /// the template definition found. `None` when the entry is not
+    /// `DEPENDENT`, or no lookup ran at its definition (a member of an
+    /// unknown specialization, a dependent qualifier, a dependent type);
+    /// `Some` with no element when lookup ran and found nothing.
+    pub fn found_at_definition(&self, id: WrittenRefId) -> Option<FoundSet<'_>> {
+        self.found_set_id(id).map(|s| self.found_set(s))
+    }
+
+    /// The interned found set `s`.
+    pub fn found_set(&self, s: FoundSetId) -> FoundSet<'_> {
+        let r = self.found_sets[s.index()];
+        let lo = r.start as usize;
+        FoundSet { decls: &self.found_decls[lo..lo + r.len as usize], how: r.how, flags: r.flags }
+    }
+
+    /// The number of distinct found sets.
+    pub fn found_set_count(&self) -> usize {
+        self.found_sets.len()
+    }
+
+    /// Every entry with a found set and its set's id, by entry (rows of
+    /// entries no longer `DEPENDENT` included; [`found_set_id`](Self::found_set_id)
+    /// leaves those out).
+    pub fn found_rows(&self) -> &[(WrittenRefId, FoundSetId)] {
+        &self.found_rows
+    }
+
+    /// The using-directive through which the definition lookup of
+    /// dependent entry `id` found `decl` (an element's `decl`, §18.9.1).
+    #[inline]
+    pub fn found_udir(&self, id: WrittenRefId, decl: DeclId) -> Option<DeclId> {
+        self.pattern_udir(id, decl)
+    }
+
+    /// The dependent entries whose found set has `d` as an element's
+    /// `decl` (a first declaration) or `found` (a using-shadow), in entry
+    /// order: with the entries naming `d` and the pattern entries of
+    /// [`specs_naming`](Self::specs_naming)`(d)`, what a rename of `d`
+    /// edits (§18.12).
+    pub fn entries_finding(&self, d: DeclId) -> impl Iterator<Item = WrittenRefId> + '_ {
+        let hit: Vec<bool> = (0..self.found_sets.len())
+            .map(|i| self.found_set(FoundSetId::from_index(i)).contains(d))
+            .collect();
+        self.found_rows
+            .iter()
+            .filter(move |&&(id, s)| {
+                hit[s.index()] && self.entries[id.index()].flags & REF_DEPENDENT != 0
+            })
+            .map(|&(id, _)| id)
+    }
+
+    /// The bytes (live, reserved) of the found sets (§18.12): the rows,
+    /// the sets, their elements and the content index (a hash map slot
+    /// counted twice its pair, each key's list once more).
+    pub fn found_mem(&self) -> (u64, u64) {
+        let row = size_of::<(WrittenRefId, FoundSetId)>() as u64;
+        let set = size_of::<FoundSetRec>() as u64;
+        let el = size_of::<FoundDecl>() as u64;
+        let key = (size_of::<(FoundKey, FoundSetId)>() as u64) * 2;
+        let lists = self.found_decls.len() as u64 * el;
+        let live = self.found_rows.len() as u64 * row
+            + self.found_sets.len() as u64 * set
+            + lists
+            + self.found_index.len() as u64 * key
+            + lists;
+        let reserved = self.found_rows.capacity() as u64 * row
+            + self.found_sets.capacity() as u64 * set
+            + self.found_decls.capacity() as u64 * el
+            + self.found_index.capacity() as u64 * key
+            + lists;
+        (live, reserved)
     }
 
     /// Records `r`, or returns the live entry with the same content
@@ -1158,6 +1408,8 @@ impl WrittenRefs {
         self.designators.retain(|_, id| id.index() < n);
         self.spec_nodes.retain(|_, id| id.index() < n);
         self.spec_udirs.retain(|(id, _), _| id.index() < n);
+        let k = self.found_rows.partition_point(|&(id, _)| id.index() < n);
+        self.found_rows.truncate(k);
         self.spec_pending.retain(|_, (id, _)| id.index() < n);
         for r in &mut self.specs {
             if r.entry.index() >= n {
@@ -1192,6 +1444,7 @@ impl WrittenRefs {
         let colon = size_of::<Loc>() as u64;
         let (prov_live, prov_reserved) = self.provenance_mem();
         let (spec_live, spec_reserved) = self.spec_mem();
+        let (found_live, found_reserved) = self.found_mem();
         Some(MemRow::new(
             "written_refs",
             self.entries.len() as u64,
@@ -1201,14 +1454,16 @@ impl WrittenRefs {
                 + self.leads.len() as u64 * lead
                 + self.colons.len() as u64 * colon
                 + prov_live
-                + spec_live,
+                + spec_live
+                + found_live,
             self.entries.capacity() as u64 * sz
                 + self.pending.capacity() as u64 * pend
                 + self.designators.capacity() as u64 * desig
                 + self.leads.capacity() as u64 * lead
                 + self.colons.capacity() as u64 * colon
                 + prov_reserved
-                + spec_reserved,
+                + spec_reserved
+                + found_reserved,
         ))
     }
 
@@ -1392,7 +1647,17 @@ impl WrittenRefs {
             }
             // The lookup provenance (§18.7.5).
             self.dump_provenance(id, ast, &names, &pos, &decl, &mut out);
+            // The found set (§18.12): its size and flags, then one line
+            // per element.
+            let found = self.found_at_definition(id);
+            if let Some(set) = found {
+                dump_found_suffix(&set, &mut out);
+            }
             out.push('\n');
+            if let Some(set) = found {
+                let head = format!("{lo}-{hi}  {}  '{text}'", r.role.spelling());
+                self.dump_found(id, &set, &head, ast, sm, main, &names, &pos, &decl, &mut out);
+            }
             // Its per-specialization lines, sorted: the order of
             // instantiation does not show (§18.9.5).
             if let Some(v) = by_entry.get(&id) {
@@ -1401,6 +1666,56 @@ impl WrittenRefs {
             }
         }
         out
+    }
+
+    /// The element lines of entry `id`'s found set, each starting with
+    /// `head` (the entry's positions, role and spelling), sorted by the
+    /// position of the element's `decl` (§18.12).
+    #[allow(clippy::too_many_arguments, reason = "the dump's shared printers")]
+    fn dump_found(
+        &self,
+        id: WrittenRefId,
+        set: &FoundSet<'_>,
+        head: &str,
+        ast: &crate::Ast,
+        sm: &SourceManager,
+        main: Option<FileId>,
+        names: &crate::diag_names::DiagNames<'_>,
+        pos: &dyn Fn(Loc) -> String,
+        decl: &dyn Fn(DeclId, &mut String),
+        out: &mut String,
+    ) {
+        // (another file's name, line, column): the main file first.
+        let key = |d: DeclId| match sm.line_col(sm.spelling_loc(ast.decls.get(d).loc())) {
+            Some(lc) if Some(lc.file) == main => (String::new(), lc.line, lc.col),
+            Some(lc) => {
+                let n = sm.file_name(lc.file);
+                (n.rsplit(['/', '\\']).next().unwrap_or(n).to_owned(), lc.line, lc.col)
+            }
+            None => ("?".to_owned(), 0, 0),
+        };
+        let mut lines: Vec<((String, u32, u32), String)> = set
+            .decls
+            .iter()
+            .map(|e| {
+                let mut l = head.to_owned();
+                l.push_str(" def=");
+                decl(e.decl, &mut l);
+                if e.found != e.decl {
+                    l.push_str(" found=");
+                    decl(e.found, &mut l);
+                }
+                if let Some(u) = self.found_udir(id, e.decl) {
+                    dump_udir(u, ast, names, pos, &mut l);
+                }
+                l.push('\n');
+                (key(e.decl), l)
+            })
+            .collect();
+        lines.sort();
+        for (_, l) in lines {
+            out.push_str(&l);
+        }
     }
 
     /// The per-specialization lines of entry `r` (`rows`), each starting
@@ -1490,6 +1805,50 @@ impl WrittenRefs {
         }
         if let Some(set) = self.adl_set(id) {
             dump_adl(set, ast, pos, decl, out);
+        }
+    }
+}
+
+impl crate::Ast {
+    /// The declaration of a dependent entry's found set that the
+    /// per-specialization row `r` selected (spec/ast.md §18.12, the join
+    /// of the two): the first declaration of what lookup found (`found`,
+    /// else `entity`, a using-shadow looked through), a member of a class
+    /// template specialization mapped to the pattern's member it was
+    /// instantiated from, a variable template's specialization to its
+    /// template. `None` for a row without an entity.
+    pub fn spec_origin(&self, r: &SpecRef) -> Option<DeclId> {
+        let mut d = self.first(self.strip_shadow(r.found.or(r.entity)?));
+        // A member of a member class is instantiated from the member of
+        // the pattern's member class: one step per enclosing
+        // instantiation. A variable template's specialization (a row
+        // with no `found`) and a template's pattern step to the
+        // template, which lookup found.
+        for _ in 0..8 {
+            let up = self.instantiated_from(d).or_else(|| {
+                self.spec_info(d)
+                    .map(|(_, i)| i.from)
+                    .filter(|&f| self.decls.get(f).kind() == crate::decl::DeclKind::VarTemplate)
+                    .or_else(|| self.described_template(d))
+            });
+            match up.map(|p| self.first(p)) {
+                Some(p) if p != d => d = p,
+                _ => break,
+            }
+        }
+        Some(d)
+    }
+}
+
+/// The ` def=<n>[+adl][+base][+using]` suffix of a dependent entry's
+/// dump line (spec/ast.md §18.12.5).
+fn dump_found_suffix(set: &FoundSet<'_>, out: &mut String) {
+    let _ = write!(out, " def={}", set.decls.len());
+    let flags =
+        [(FOUND_ADL, "+adl"), (FOUND_DEPENDENT_BASE, "+base"), (FOUND_UNRESOLVED_USING, "+using")];
+    for (f, s) in flags {
+        if set.flags & f != 0 {
+            out.push_str(s);
         }
     }
 }
@@ -1795,6 +2154,103 @@ mod tests {
         assert_eq!(t.specs().count(), 1);
         assert_eq!(t.specs_naming(DeclId::new(20)).count(), 1);
         assert_eq!(t.specs_of(w).count(), 1);
+    }
+
+    fn el(decl: u32, found: u32) -> FoundDecl {
+        FoundDecl { decl: DeclId::new(decl), found: DeclId::new(found) }
+    }
+
+    fn dependent() -> WrittenRef {
+        WrittenRef { flags: REF_DEPENDENT, ..entry(None) }
+    }
+
+    /// spec/ast.md §18.12: sets are interned by content (elements, how,
+    /// flags); an entry's set is read back; the entry stays 28 bytes.
+    #[test]
+    fn found_sets_are_interned() {
+        let mut t = WrittenRefs::default();
+        t.set_on(true);
+        let a = t.push(dependent()).unwrap();
+        let b = t.push(dependent()).unwrap();
+        let third = t.push(dependent()).unwrap();
+        let s1 = t.intern_found(&[el(2, 2), el(3, 9)], RefLookup::Unqualified, FOUND_ADL);
+        let s2 = t.intern_found(&[el(2, 2), el(3, 9)], RefLookup::Unqualified, FOUND_ADL);
+        assert_eq!(s1, s2);
+        let closed = t.intern_found(&[el(2, 2), el(3, 9)], RefLookup::Unqualified, 0);
+        assert_ne!(s1, closed, "flags are part of the set");
+        let empty = t.intern_found(&[], RefLookup::Unqualified, FOUND_ADL);
+        assert_eq!(t.found_set_count(), 3);
+        t.set_found(a, s1);
+        t.set_found(b, empty);
+        t.set_found(third, closed);
+        assert_eq!(t.found_set_id(a), t.found_set_id(a));
+        let set = t.found_at_definition(a).unwrap();
+        assert_eq!(set.decls, &[el(2, 2), el(3, 9)]);
+        assert!(set.adl() && !set.is_closed() && set.contains(DeclId::new(9)));
+        // Lookup ran and found nothing: `Some(empty)`, not `None`.
+        let none = t.found_at_definition(b).unwrap();
+        assert!(none.is_empty() && none.adl());
+        assert!(t.found_at_definition(third).unwrap().is_closed());
+        let finding: Vec<_> = t.entries_finding(DeclId::new(3)).collect();
+        assert_eq!(finding, [a, third]);
+        assert_eq!(t.entries_finding(DeclId::new(9)).count(), 2, "the using-shadow finds too");
+        assert_eq!(t.entries_finding(DeclId::new(4)).count(), 0);
+        assert!(t.found_mem().0 > 0);
+        assert_eq!(size_of::<WrittenRef>(), 28);
+        assert_eq!(size_of::<FoundDecl>(), 8);
+        assert_eq!(size_of::<FoundSetRec>(), 12);
+    }
+
+    /// A callee recorded dependent and resolved at the definition loses
+    /// its set; a row set out of order stays sorted; truncation drops the
+    /// rows of the entries it drops.
+    #[test]
+    fn found_rows_follow_their_entries() {
+        let mut t = WrittenRefs::default();
+        t.set_on(true);
+        let s = t.intern_found(&[el(2, 2)], RefLookup::Unqualified, FOUND_ADL);
+        let outer = t.push(dependent()).unwrap();
+        t.set_found(outer, s);
+        let inner = t.push(dependent()).unwrap();
+        t.set_found(inner, s);
+        let x = ExprId::new(4);
+        t.defer(inner, x);
+        assert_eq!(t.resolve(x, DeclId::new(2), None), Some(inner));
+        assert_eq!(t.found_at_definition(inner), None, "popped by resolve");
+        assert_eq!(t.found_rows().len(), 1);
+        // Not the last row: removed all the same.
+        let later = t.push(dependent()).unwrap();
+        t.set_found(later, s);
+        t.set_target(outer, None, None, REF_UNRESOLVED);
+        assert_eq!(t.found_at_definition(outer), None);
+        assert_eq!(t.found_rows(), &[(later, s)]);
+        // Out of order (a carried table's): kept sorted, replaced once.
+        t.set_found(outer, s);
+        t.set_found(outer, s);
+        t.set_target(outer, None, None, REF_DEPENDENT);
+        let ids: Vec<_> = t.found_rows().iter().map(|r| r.0).collect();
+        assert_eq!(ids, [outer, later]);
+        t.truncate(RefMark { entries: 2, decls: 0 });
+        assert_eq!(t.found_rows(), &[(outer, s)]);
+        assert_eq!(t.found_set_count(), 1, "the sets stay interned");
+    }
+
+    #[test]
+    fn off_records_no_found_set() {
+        let mut t = WrittenRefs::default();
+        let s = t.intern_found(&[el(2, 2)], RefLookup::Unqualified, 0);
+        t.set_found(WrittenRefId::from_index(0), s);
+        assert!(t.found_rows().is_empty());
+        let mut t = WrittenRefs::default();
+        assert_eq!(t.found_mem(), (0, 0));
+        // Names parsed for the table alone (§18.8) get none either.
+        t.set_on(true);
+        let id = t.push(dependent()).unwrap();
+        let was = t.set_pattern_nodes(false);
+        let s = t.intern_found(&[el(2, 2)], RefLookup::Unqualified, 0);
+        t.set_found(id, s);
+        t.set_pattern_nodes(was);
+        assert_eq!(t.found_at_definition(id), None);
     }
 
     #[test]

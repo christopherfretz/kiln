@@ -10,6 +10,29 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- Native stack sizing for evaluation-session workers (WP-2500,
+  spec/eval-session.md §9 "Limits that bound the native depth"): every
+  kiln limit that bounds how deep a run's semantic work recurses on the
+  native stack (`-ftemplate-depth`, the Oven's call depth, its nested
+  on-demand initializations, the parser's nesting), with its default,
+  its option and the measured stack per level in debug and release
+  builds (a reflection-driven class template chain: about 55 KiB and
+  24 KiB per level, so a 4 MiB worker stops at level 46 or 118, long
+  before `-ftemplate-depth=1024`), and how a client sizes a worker
+  against them; the ignored test `measure_native_stack_per_level`
+  re-measures it.
+
+- The found set of a dependent written reference (WP-2472, spec/ast.md
+  §18.12): for an unqualified dependent call `f(t)`, a parenthesized or
+  qualified one, and a member of the current instantiation (`this->a(t)`,
+  `C::a(t)`, `a(t)` with an implicit `this`), the declarations lookup
+  found at the template definition, with flags for an open set
+  (argument-dependent lookup adds to it), a dependent base and a
+  dependent using-declarator. `WrittenRefs::found_at_definition`,
+  `entries_finding` (rename in templates no specialization of which is
+  instantiated) and `Ast::spec_origin` (the element a per-specialization
+  row selected); `-fkiln-dump-written-refs` prints `def=` lines; carried
+  by PCH snapshots and module images. Off, nothing changes.
 - A per-run source overlay for tooling clients (WP-2390, spec/source.md
   "Overlay", stage 1): `kiln_source::Overlay` holds replacement bytes for
   files that exist, keyed by the identity of the file each path names
@@ -789,6 +812,35 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Changed
 
+- Breaking, for tooling clients (WP-2480, WP-2502, WP-2500, WP-2503;
+  spec/eval-session.md §8, §9): what a failed evaluation-session run
+  hands over. `RunError` moved from `kiln_oven` to `kiln_sema::session`
+  (still re-exported by `kiln_parse`; the Oven's own outcome is now
+  `kiln_oven::RunFault`). `RunError::Uncaught`'s `type_name: String`
+  is replaced by `ty: Entity`, the exception type spelled fully
+  qualified (`ns::v0::error`, as `display_string_of` spells it) with
+  its class's first declaration when it existed at open, and it gains
+  `value: Result<Box<ValueTree>, String>`, the thrown object's value as a
+  result would be read (or why it has none). A host call refused by
+  kiln's check of its arguments is the new `RunError::HostArgument {
+  message }` (the handler is not called); `RunError::Host` is now only
+  the handler's own error. A run that exhausts the calling thread's
+  stack is the new `RunError::StackExhausted` (was `Failed`), also when
+  it reaches work an earlier exhaustion stopped. New
+  `RunError::is_host()`: an unknown kind is kiln's failure of the run,
+  never the host's.
+- More expressions have a written extent for tooling clients (WP-2350..
+  WP-2353, spec/ast.md §21): a dependent template-id keeps its `>` and an
+  operator-function name its end (`this->f<T>`, `T::template v<int>`,
+  `operator==(a, b)`, `x.operator()<1>`); a qualified name through an
+  implicit `this` (`B::f`) and a qualified concept-id (`ns::C<T>`) keep
+  their qualifier's begin; a pseudo-destructor keeps the end of its type
+  (`p->~T`), a designated initializer its designator (`.x = 1`), a
+  parenthesized aggregate initialization its parentheses (`S s(1, 2)`);
+  and a substituted template argument maps to the parameter's name. The
+  locations live in the cold maps only; a designator keeps its `.`, so
+  PCH snapshots change format (`FORMAT_VERSION` 153).
+
 - Breaking, for tooling clients (WP-2411, spec/eval-session.md §2):
   `with_eval_session` takes its command line as words with no `@file`
   response-file expansion; an `@x` word is an ordinary word (an input
@@ -916,6 +968,36 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- Parameter attributes follow clang across declarations and templates
+  (WP-2476): a redeclaration's parameter inherits the previous
+  declaration's `nonnull`, `annotate`, `carries_dependency` and Swift ABI
+  attributes (`lifetimebound` too from clang 22), shown `Inherited` by
+  `-fdump-ast`, so a definition gets a prior declaration's `nonnull` and
+  `llvm.var.annotation`; a call's `-fsanitize=nonnull-attribute` check,
+  `maybe_undef` freeze and `noescape` read the declaration the call
+  names, not every redeclaration; in C++ declarations that differ in a
+  parameter's `noescape` are `conflicting types` (C forms the composite
+  type); a template's parameter attributes are all instantiated (only the
+  Swift ABI ones were), with a dependent `align_value(N)` checked at
+  instantiation (a substitution failure when not a power of two); the
+  parameters of a function type inside a declarator have their attributes
+  checked; `aligned(N)` on a parameter aligns its storage; `align_value`
+  on a non-static data member is ignored with a warning, as clang, instead
+  of accepted.
+- Parse cost that grew faster than the input in shapes tooling clients
+  meet (WP-2478): a run of labels and of case labels (the label and
+  case-value searches are hashed, the case-range overlap checks
+  binary-search), an `else if` chain (the lookahead memo stamp hashed
+  every open scope and every lookup and every `return` walked all of
+  them: the scope stack now keeps a revision and a walk index that skips
+  empty block scopes), nested classes (a class-head name that cannot be
+  qualified is no longer looked up through every enclosing class, and the
+  [temp.local]/7 search no longer rescans the scopes below each class
+  scope). All now scale linearly; 100 000 labels parse in 0.08 s instead
+  of 5.9 s.
+- A designated initializer list nested N deep in a template keeps N + 1
+  written lists, not (N + 1)(N + 2)/2: the written forms of the inner
+  lists are shared (WP-2478).
 - `EvalSession::variable_value` instantiates on demand a static data
   member's initializer that nothing instantiated (an in-class `constexpr`
   member of a class template specialization, an out-of-line `const` one),

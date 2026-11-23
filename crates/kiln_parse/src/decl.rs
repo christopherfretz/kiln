@@ -6216,7 +6216,7 @@ impl Parser<'_, '_> {
     fn parse_designators(&mut self, designator: &mut Vec<Designator>) -> Result<(), ()> {
         loop {
             if self.at(Punct::Period) {
-                self.bump();
+                let dot = self.bump().span.lo;
                 let Some(n) = self.ident() else {
                     self.error_here(DiagId::parse_expected_unqualified_id);
                     self.skip_until(&[Punct::RBrace], false, true);
@@ -6226,7 +6226,7 @@ impl Parser<'_, '_> {
                 // Found in the aggregate when the initialization is
                 // checked (spec/ast.md §18.4).
                 self.s.note_written_designator(sp);
-                designator.push(Designator::Field(n, sp.lo));
+                designator.push(Designator::Field(n, sp.lo, dot));
             } else if self.at(Punct::LSquare)
                 && (!designator.is_empty() || self.array_designator_start())
             {
@@ -6295,7 +6295,7 @@ impl Parser<'_, '_> {
                     .fixit(FixIt::replace(Span::new(name.lo, colon.hi), fix));
                 self.emit(d);
                 self.s.note_written_designator(name);
-                designator.push(Designator::Field(n, name.lo));
+                designator.push(Designator::Field(n, name.lo, name.lo));
             }
             if !old_style {
                 self.parse_designators(&mut designator)?;

@@ -5,35 +5,43 @@
 33:15-33:16  type  'R' -> q::R@32:8 in=(anonymous)@33:16
 36:17-36:18  using-directive  'a' -> a@10:11 in=(tu)
 38:29-38:30  type  'T' -> T@38:17 in=t@38:31
-39:3-39:4  expr  'f' -> (dependent) in=run@38:25
+39:3-39:4  expr  'f' -> (dependent) in=run@38:25 def=1+adl
+39:3-39:4  expr  'f' def=a::f@12:6 udir=a@36:1
 39:3-39:4  expr  'f' -> a::f@12:6 spec=run<int>@38:25 udir=a@36:1 adl-ns=
 39:3-39:4  expr  'f' -> a::f@12:6 spec=run<long>@38:25 udir=a@36:1 adl-ns=
 39:5-39:6  expr  't' -> t@38:31 in=run@38:25
-40:3-40:4  expr  'h' -> (dependent) in=run@38:25
+40:3-40:4  expr  'h' -> (dependent) in=run@38:25 def=1+adl
+40:3-40:4  expr  'h' def=a::h@13:25 udir=a@36:1
 40:3-40:4  expr  'h' -> a::h<int>@13:25 found=a::h@13:25 spec=run<int>@38:25 udir=a@36:1 adl-ns=
 40:3-40:4  expr  'h' -> a::h<long>@13:25 found=a::h@13:25 spec=run<long>@38:25 udir=a@36:1 adl-ns=
 40:5-40:6  expr  't' -> t@38:31 in=run@38:25
 41:3-41:4  nns  'c' -> c@20:11 in=run@38:25
-41:6-41:7  expr  'g' -> (dependent) q=41:3 in=run@38:25
+41:6-41:7  expr  'g' -> (dependent) q=41:3 in=run@38:25 def=2
+41:6-41:7  expr  'g' def=b::g@17:6 udir=b@21:1
+41:6-41:7  expr  'g' def=b::g@18:6 udir=b@21:1
 41:6-41:7  expr  'g' -> b::g@17:6 spec=run<int>@38:25 udir=b@21:1
 41:6-41:7  expr  'g' -> b::g@18:6 spec=run<long>@38:25 udir=b@21:1
 41:8-41:9  expr  't' -> t@38:31 in=run@38:25
 42:3-42:4  nns  'c' -> c@20:11 in=run@38:25
-42:6-42:7  expr  'k' -> (dependent) q=42:3 in=run@38:25
+42:6-42:7  expr  'k' -> (dependent) q=42:3 in=run@38:25 def=2
+42:6-42:7  expr  'k' def=c::k@22:6
+42:6-42:7  expr  'k' def=c::k@23:6
 42:6-42:7  expr  'k' -> c::k@22:6 spec=run<int>@38:25
 42:6-42:7  expr  'k' -> c::k@23:6 spec=run<long>@38:25
 42:8-42:9  expr  't' -> t@38:31 in=run@38:25
 46:35-46:36  type  'T' -> T@46:17 in=t@46:37
-46:42-46:46  expr  'both' -> (dependent) in=both_ways@46:25
+46:42-46:46  expr  'both' -> (dependent) in=both_ways@46:25 def=1+adl
+46:42-46:46  expr  'both' def=a::both@14:6 udir=a@36:1
 46:42-46:46  expr  'both' -> a::both@14:6 spec=both_ways<a::S>@46:25 how=both udir=a@36:1 adl-ns=a@10:11 adl-cls=a::S@11:8
 46:47-46:48  expr  't' -> t@46:37 in=both_ways@46:25
 49:29-49:30  type  'T' -> T@49:17 in=t@49:31
-49:36-49:44  expr  'adl_only' -> (dependent) in=adl@49:25
+49:36-49:44  expr  'adl_only' -> (dependent) in=adl@49:25 def=0+adl
 49:36-49:44  expr  'adl_only' -> q::adl_only@33:6 spec=adl<q::R>@49:25 how=adl adl-ns=q@31:11 adl-cls=q::R@32:8
 49:45-49:46  expr  't' -> t@49:31 in=adl@49:25
 51:31-51:32  type  'T' -> T@51:17 in=t@51:33
 52:19-52:20  using-directive  'e' -> e@28:11 in=block@51:25
-53:3-53:4  expr  'm' -> (dependent) in=block@51:25
+53:3-53:4  expr  'm' -> (dependent) in=block@51:25 def=1+adl
+53:3-53:4  expr  'm' def=d::m@26:6 udir=d@29:1
 53:3-53:4  expr  'm' -> d::m@26:6 spec=block<int>@51:25 udir=d@29:1 adl-ns=
 53:5-53:6  expr  't' -> t@51:33 in=block@51:25
 57:3-57:6  expr  'run' -> run<int>@38:25 found=run@38:25 in=use@56:6 adl-ns=

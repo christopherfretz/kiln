@@ -365,7 +365,7 @@ impl Sema<'_, '_> {
     /// Whether class `c` or a (non-dependent) base of it, transitively,
     /// has a dependent base ([temp.dep.type]; clang's
     /// `IsDerivedFromInclusive` answering `AR_dependent`).
-    fn has_dependent_bases_in(&self, c: DeclId, depth: u32) -> bool {
+    pub(crate) fn has_dependent_bases_in(&self, c: DeclId, depth: u32) -> bool {
         if depth > 64 {
             return false;
         }

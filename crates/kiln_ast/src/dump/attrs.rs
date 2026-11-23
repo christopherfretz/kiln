@@ -95,6 +95,10 @@ pub(super) fn class_name(a: &AttrNode) -> Option<&'static str> {
         AttrKind::SWIFT_PARAM_ABI | AttrKind::PRAGMA_CLANG_SECTION => variant_class_name(a),
         AttrKind::RETURNS_NONNULL => "ReturnsNonNull",
         AttrKind::LOOP_HINT => "LoopHint",
+        AttrKind::ALIGN_VALUE => "AlignValue",
+        AttrKind::NOESCAPE => "NoEscape",
+        AttrKind::MAYBE_UNDEF => "MaybeUndef",
+        AttrKind::PASS_OBJECT_SIZE => "PassObjectSize",
         _ => return None,
     })
 }

@@ -1,0 +1,17 @@
+9:29-9:30  type  'T' -> T@9:17 in=(anonymous)@9:30
+10:38-10:39  type  'T' -> T@10:17 in=(anonymous)@10:39
+10:41-10:42  type  'U' -> U@10:26 in=(anonymous)@10:42
+13:27-13:28  type  'A' -> lib::A@12:8 in=(anonymous)@13:28
+15:33-15:34  type  'T' -> T@15:17 in=t@15:35
+16:7-16:8  type  'T' -> T@15:17 in=use_tid@15:25
+16:3-16:6  expr  'tid' -> (dependent) in=use_tid@15:25 def=2+adl
+16:3-16:6  expr  'tid' def=tid@9:25
+16:3-16:6  expr  'tid' def=tid@10:34
+16:3-16:6  expr  'tid' -> tid<lib::A>@9:25 found=tid@9:25 spec=use_tid<lib::A>@15:25 adl-ns=lib@11:11 adl-cls=lib::A@12:8
+16:10-16:11  expr  't' -> t@15:35 in=use_tid@15:25
+17:3-17:6  expr  'get' -> (dependent) in=use_tid@15:25 def=0+adl
+17:3-17:6  expr  'get' -> lib::get<0>@13:23 found=lib::get@13:23 spec=use_tid<lib::A>@15:25 how=adl adl-ns=lib@11:11 adl-cls=lib::A@12:8
+17:10-17:11  expr  't' -> t@15:35 in=use_tid@15:25
+19:14-19:21  expr  'use_tid' -> use_tid<lib::A>@15:25 found=use_tid@15:25 in=run@19:6 adl-ns=lib@11:11 adl-cls=lib::A@12:8
+19:22-19:25  nns  'lib' -> lib@11:11 in=run@19:6
+19:27-19:28  type  'A' -> lib::A@12:8 q=19:22 in=run@19:6

@@ -336,6 +336,32 @@ impl SemaBridge for Bridge<'_, '_, '_> {
         Ok(())
     }
 
+    fn session_thrown(
+        &mut self,
+        v: Result<ConstValueId, String>,
+        mark: kiln_ast::consts::ConstMark,
+    ) {
+        // Decoded before the store is truncated back to the mark, as a
+        // result is (spec/eval-session.md §8, WP-2502).
+        let tree = match (self.run.as_deref(), v) {
+            (Some(run), Ok(v)) => Some(
+                crate::session_value::decode(self.sema, v, run.open_decls, run.result_bytes)
+                    .map_err(|e| match e {
+                        kiln_oven::ResultReadError::TooLarge(cap) => format!(
+                            "the value needs more than {cap} bytes on the host (the run's result budget)"
+                        ),
+                        kiln_oven::ResultReadError::Unreadable(why) => why,
+                    }),
+            ),
+            (Some(_), Err(why)) => Some(Err(why)),
+            (None, _) => None,
+        };
+        self.sema.ast.consts.truncate(mark);
+        if let Some(run) = self.run.as_deref_mut() {
+            *run.thrown = tree;
+        }
+    }
+
     fn session_destroys_result(&mut self, f: DeclId) -> bool {
         // A `constexpr` entry's result is destroyed as `constexpr R v =
         // f();`'s would be; an immediate invocation's is not (§4).

@@ -668,6 +668,35 @@ translation unit that fails costs about what it costs clang:
     condition of `if`, `switch`, `while` and `for`.
   - **Block:** pushed for a compound statement, and for a
     sub-statement that is not one (parse.md §6.1).
+- **The stack** (`ScopeStack`, WP-2478) reads as the `Vec<Scope>` it
+  holds and keeps two things so that nothing costs the scope depth per
+  lookup:
+  - a **revision**, the scope part of `Sema::lookup_stamp` (parse.md
+    §2.5): every mutable access gives a new one, except a change of NRVO
+    state (`nrvo_mut`, read by no lookup); a pop (or `truncate`) gives
+    back the revision from before the scope's push when nothing reached
+    the scopes below through the `Vec` since, so a lookahead memo
+    survives a scope entered and left. Revisions are drawn from one
+    global counter, so a stack moved aside and reinstated keeps its own.
+  - a **walk index**: per scope, the nearest scope below it that the
+    unqualified-lookup walk must visit. A block or control scope with no
+    locals, local using-declarators or using-directives is skipped; every
+    other scope (function, prototype, requires-expression, template
+    parameter, context scopes) is visited. `push`, `pop`, `truncate`,
+    `last_mut` and `scope_mut` of the innermost scope keep the index;
+    any other access through the `Vec` drops it, rebuilt (O(depth)) at
+    the next walk. The lookup walk follows the index unless a prototype
+    parameter list or a lambda's init-captures is open (they attach to
+    scope positions); the using-directive collection and the NRVO update
+    of a `return` (clang `Scope::updateNRVOCandidate`, which walks every
+    scope out to the function scope) follow it always. The template
+    parameter scopes are listed too, for the [temp.local]/7 search below
+    a re-entered class scope (once per walk, not a scan per class scope).
+- **Labels** of a function (`FnState::labels`, a `LabelTable`) are found
+  by declaration and by name through hash maps, and a switch's case
+  values (`SwitchState::value_locs`, `wide_index`) by value; the case
+  range overlap checks binary-search the sorted values (WP-2478: a run
+  of N labels or case labels cost O(N^2) before).
 
 ## 3. Lookup (`lookup.rs`)
 - **Modules.** With C++20 modules active, every namespace-scope lookup
@@ -3847,6 +3876,92 @@ instantiation unless stated.
   (clang `distributeFunctionTypeAttrFromDeclSpec`). BMI images do not
   carry the ABIs (a type with them makes the image fall back to source
   replay). Tests `tests/conformance/ext.clang.swift-param-abi/`.
+- **Parameter attributes** (`param_attrs.rs`, WP-2476; clang
+  `ProcessDeclAttributes` on each `ParmVarDecl`,
+  `mergeParamDeclAttributes`, `SubstParmVarDecl` → `InstantiateAttrs`).
+  The rules, each checked against clang 19 and 22:
+  1. *Where they are kept.* A parameter-declaration's attributes are
+     checked and kept on its own parameter declaration, also for a
+     parameter of a function type inside a declarator (`void (*f(int
+     x))(int *y [[gnu::nonnull]])`, a function pointer's, a typedef's, a
+     type-id's, a parameter of function type): the same subject and
+     argument checks as a function's own parameter (`'nonnull' attribute
+     only applies to pointer arguments` on `int y`), at the declaration
+     the declarator's type is built for (`Sema::nested_param_attrs`).
+     clang keeps them on the `ParmVarDecl`s of the
+     `FunctionProtoTypeLoc`.
+  2. *Merged over redeclarations.* A function declaration that
+     redeclares the one its redeclaration lookup found (`prev`), with as
+     many parameters, gives each parameter a copy of every attribute of
+     `prev`'s corresponding parameter (its own and the ones it inherited)
+     of an inheritable kind it does not have yet (clang `DeclHasAttr`:
+     the same kind; for `annotate` the same string). The inheritable
+     kinds are clang's `InheritableParamAttr` ones kiln implements:
+     `nonnull`, `annotate`, `carries_dependency`, the Swift parameter
+     ABIs, and from clang 22 (`-fclang-compat>=22`) `lifetimebound` (a
+     plain attribute in clang 19); clang's `pass_object_size` is one too,
+     but a declaration whose parameter differs in it declares another
+     overload there, so it has none to inherit. The copy keeps the
+     original's location and is marked inherited
+     (`AttrNode::INHERITED`; `-fdump-ast` prints `Inherited`, as clang's
+     `-ast-dump`). `align_value`, `noescape`, `maybe_undef`,
+     `unused`/`maybe_unused`, `deprecated`, `aligned` and `mode` are not
+     inherited. `prev` is the declaration lookup found, not the latest
+     of the chain: a block-scope redeclaration is the `prev` of a later
+     namespace-scope declaration only when no namespace-scope
+     declaration precedes it (clang links the later declaration after
+     the block-scope one but merges from the one lookup found).
+  3. *Read by codegen from the declaration used.* The prolog of a
+     definition reads the definition's own parameters, inherited
+     attributes included: `nonnull`, `align N` (`align_value`, never
+     inherited) and `@llvm.var.annotation` (`annotate`). A call reads the
+     declaration it names: `-fsanitize=nonnull-attribute` checks that
+     declaration's parameter's `nonnull` (else the function's), and
+     `maybe_undef` (not inherited) freezes the argument only when that
+     declaration's own parameter has it. So a block-scope
+     redeclaration's parameter attributes apply to the calls through it
+     and, by rule 2, to a later declaration whose `prev` it is; a call
+     through another declaration of the function does not see them
+     (kiln before WP-2476 read every redeclaration's parameters).
+  4. *`noescape` differing across declarations.* In C++ it is part of
+     the function type (clang's `ExtParameterInfo`): a redeclaration
+     whose parameters differ from `prev`'s in `noescape` (one that
+     applies: a pointer, reference or dependent parameter) is
+     `conflicting types for 'f'` with `previous declaration is here` at
+     `prev`, and invalid (out of the chain), also for an out-of-line
+     member definition, a function template, and a block-scope `prev`.
+     C accepts it: the composite type's parameter is `noescape` only
+     where both declarations' are (clang `mergeExtParameterInfo`), so a
+     parameter is `nocapture` (`captures(none)`) for a definition, a
+     declaration or a call only when every declaration up to the one
+     used has `noescape` on it.
+  5. *Instantiated.* An instantiated function's parameter (each element
+     of an expanded pack its own) carries a copy of every attribute of
+     the pattern's parameter, inherited ones included, but `mode`
+     (applied to the substituted type) and the visibility attributes; a
+     dependent argument is substituted (`Substituter::param_attrs`):
+     `annotate`'s other arguments, constant-folded, and `align_value(N)`,
+     which a value-dependent `N` keeps unchecked on the pattern
+     (`AttrNode::ALIGN_VALUE_DEPENDENT`, `a` the expression) and which is
+     checked once substituted ("requested alignment is not a power of
+     2", "'align_value' attribute requires an integer constant"). For a
+     parameter that failure is in the immediate context: a substitution
+     failure in deduction (clang 19 and 22). The copies are not checked
+     again against the substituted type (clang 22 re-checks
+     `align_value`'s subject and `-Wnonnull`s a null argument of an
+     instantiated `nonnull` parameter of non-pointer type; not done).
+  6. *Storage.* `aligned(N)` on a parameter aligns the callee's own
+     storage of it (clang `EmitParmDecl`/`EmitFunctionProlog`,
+     `getDeclAlign`): a scalar's spill slot, and the memory a class
+     passed in registers is stored into (`Cg::param_decl_align`).
+     `align_value` applies to variables (parameters included) and
+     typedefs, not to a non-static data member (clang subjects `Var,
+     TypedefName`: "'align_value' attribute only applies to variables
+     and typedefs", dropped). A `pass_object_size` argument's hidden
+     size is computed after all the call's arguments, where clang
+     computes it right after its own argument (an IR order difference,
+     a known gap with an xfail repro).
+  Tests: `tests/conformance/dcl.attr.param/`.
 - **Attributes after the definition** (clang
   `checkNewAttributesAfterDef`, `after_def.rs`; WP-1807): an attribute
   that a redeclaration of a function (a deleted or defaulted one too), a

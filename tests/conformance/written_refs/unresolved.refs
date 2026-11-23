@@ -9,9 +9,9 @@
 32:21-32:24  expr  'two' -> (unresolved) in=f@28:6 adl-ns=:: adl-cls=M@23:8
 32:25-32:26  type  'M' -> M@23:8 in=f@28:6
 34:27-34:28  type  'T' -> T@34:17 in=t@34:29
-35:10-35:13  expr  'dep' -> (dependent) in=g@34:25
+35:10-35:13  expr  'dep' -> (dependent) in=g@34:25 def=0+adl
 35:14-35:15  expr  't' -> t@34:29 in=g@34:25
-35:19-35:24  expr  'other' -> (dependent) in=g@34:25
+35:19-35:24  expr  'other' -> (dependent) in=g@34:25 def=0+adl
 35:28-35:29  expr  't' -> t@34:29 in=g@34:25
 35:33-35:34  nns  'T' -> T@34:17 in=g@34:25
 35:36-35:41  expr  'value' -> (dependent) q=35:33 in=g@34:25

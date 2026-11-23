@@ -3855,3 +3855,38 @@ pub fn walk_steps() -> Option<u64> {
 pub fn walk_steps() -> Option<u64> {
     None
 }
+
+#[cfg(debug_assertions)]
+thread_local! {
+    /// The search steps this thread took ([`search_steps`]).
+    static SEARCH_STEPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Counts `n` steps of a search sema repeats per construct: a scope the
+/// unqualified-lookup walk or the lookup fingerprint visits, an entry a
+/// label or case-value search compares (WP-2478). Debug builds only;
+/// instrumentation, no semantic state.
+#[inline]
+pub fn note_search_steps(n: u64) {
+    #[cfg(debug_assertions)]
+    SEARCH_STEPS.with(|c| c.set(c.get() + n));
+    #[cfg(not(debug_assertions))]
+    let _ = n;
+}
+
+/// The search steps this thread has taken ([`note_search_steps`]),
+/// `None` in a build without debug assertions. The parse scaling tests
+/// compare it at N and 4N: a search that visits every earlier label,
+/// case or enclosing scope makes it grow as N^2 (WP-2478).
+#[cfg(debug_assertions)]
+#[must_use]
+pub fn search_steps() -> Option<u64> {
+    Some(SEARCH_STEPS.with(std::cell::Cell::get))
+}
+
+/// [`search_steps`] in a build without debug assertions: not counted.
+#[cfg(not(debug_assertions))]
+#[must_use]
+pub fn search_steps() -> Option<u64> {
+    None
+}

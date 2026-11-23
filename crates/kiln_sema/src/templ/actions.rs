@@ -1152,14 +1152,17 @@ impl Sema<'_, '_> {
         self.builder().unresolved_lookup_in(name, &decls, false, None, Some(list), dep, loc)
     }
 
-    /// The qualified function or variable template-id `e` named at `loc`
-    /// begins at its qualifier `begin` (clang's `OverloadExpr::getBeginLoc`,
-    /// `DeclRefExpr::getBeginLoc`).
+    /// The qualified function or variable template-id or concept-id `e`
+    /// named at `loc` begins at its qualifier `begin` (clang's
+    /// `OverloadExpr::getBeginLoc`, `DeclRefExpr::getBeginLoc`,
+    /// `ConceptSpecializationExpr::getBeginLoc`).
     pub fn set_template_id_begin(&mut self, e: ExprId, begin: Loc, loc: Loc) {
         if begin != loc
             && matches!(
                 self.ast.exprs.get(e).kind(),
-                ExprKind::UnresolvedLookupExpr | ExprKind::DeclRefExpr
+                ExprKind::UnresolvedLookupExpr
+                    | ExprKind::DeclRefExpr
+                    | ExprKind::ConceptSpecializationExpr
             )
         {
             let _ = self.ast.templates.expr_begin.insert(e, begin);
@@ -2085,11 +2088,26 @@ impl Sema<'_, '_> {
     /// A braced-init-list kept unanalyzed in a dependent context: an
     /// `InitListExpr` of type `void` ([temp.dep.expr]/3).
     pub(crate) fn dependent_init_list(&mut self, l: &crate::init::InitList) -> ExprId {
+        self.dependent_init_list_in(l, false)
+    }
+
+    /// [`Sema::dependent_init_list`]; with `reuse`, a nested list whose
+    /// written form [`Sema::note_syntactic_list`] already recorded
+    /// (`written_lists`) is that form, not a new copy.
+    fn dependent_init_list_in(&mut self, l: &crate::init::InitList, reuse: bool) -> ExprId {
         let mut inits = Vec::with_capacity(l.items.len());
         for it in &l.items {
             let e = match &it.value {
                 crate::init::InitValue::Expr(e) => *e,
-                crate::init::InitValue::List(n) => self.dependent_init_list(n),
+                crate::init::InitValue::List(n) => {
+                    let known = (reuse && n.lbrace.is_valid())
+                        .then(|| self.written_lists.get(&(n.lbrace, n.rbrace)).copied())
+                        .flatten();
+                    match known {
+                        Some(w) => w,
+                        None => self.dependent_init_list_in(n, reuse),
+                    }
+                }
             };
             let e = if it.designator.is_empty() {
                 e
@@ -2099,17 +2117,25 @@ impl Sema<'_, '_> {
                 let ds: Vec<kiln_ast::expr::Designator> =
                     it.designator.iter().map(|d| self.designator_ast(d)).collect();
                 let loc = it.designator[0].loc();
+                // Its first token (spec/ast.md §21): the first
+                // designator's `.` or `[`, a GNU `name:`'s name.
+                let begin = match it.designator[0] {
+                    crate::init::Designator::Field(_, _, dot) => dot,
+                    _ => loc,
+                };
                 // A designated pack expansion `.x = u...` is the
                 // expansion of the designated clause (clang parses the
                 // `...` after the whole designation).
-                match crate::templ::pack::expr_pattern(self, e) {
-                    Some(pat) => {
-                        let ellipsis = self.ast.exprs.get(e).loc();
-                        let d = self.builder().designated_init(&ds, pat, loc);
-                        let keep = self.clang_compat >= 22;
-                        self.builder().pack_expansion_expr(d, ellipsis, keep)
-                    }
-                    None => self.builder().designated_init(&ds, e, loc),
+                if let Some(pat) = crate::templ::pack::expr_pattern(self, e) {
+                    let ellipsis = self.ast.exprs.get(e).loc();
+                    let d = self.builder().designated_init(&ds, pat, loc);
+                    let _ = self.ast.templates.expr_begin.insert(d, begin);
+                    let keep = self.clang_compat >= 22;
+                    self.builder().pack_expansion_expr(d, ellipsis, keep)
+                } else {
+                    let d = self.builder().designated_init(&ds, e, loc);
+                    let _ = self.ast.templates.expr_begin.insert(d, begin);
+                    d
                 }
             };
             inits.push(e);
@@ -2158,15 +2184,21 @@ impl Sema<'_, '_> {
     /// Records the written form of the semantic list `sem` built from
     /// the designated list `l` in a template pattern, for its
     /// instantiation to rebuild from (§5.6 of spec/ast.md; clang keeps
-    /// the syntactic form of every list).
+    /// the syntactic form of every list). A nested designated list was
+    /// recorded first (it is checked first): the form shares its node,
+    /// as clang's syntactic forms share their nested lists, so a nest of
+    /// N lists records N written lists, not (N+1)(N+2)/2 (WP-2478).
     pub(crate) fn note_syntactic_list(&mut self, sem: ExprId, l: &crate::init::InitList) {
         if self.ast.exprs.get(sem).kind() != ExprKind::InitListExpr
             || self.ast.exprs.syntactic_list(sem).is_some()
         {
             return;
         }
-        let w = self.dependent_init_list(l);
+        let w = self.dependent_init_list_in(l, true);
         self.ast.exprs.set_syntactic_list(sem, w);
+        if l.lbrace.is_valid() {
+            let _ = self.written_lists.insert((l.lbrace, l.rbrace), w);
+        }
     }
 
     /// True if any initializer of `l` (recursively) is type-dependent,
@@ -2382,31 +2414,18 @@ impl Sema<'_, '_> {
         }
         // A member of the current instantiation found by lookup is an
         // ordinary member access ([temp.dep.expr]/5, clang's MemberExpr).
-        if targs.is_none() && !template_kw && !dep_qual && !dep_name {
-            let obj = if arrow {
-                self.pointee_sugared(bt).filter(|_| self.ast.types.is_pointer(bt))
-            } else {
-                Some(bt)
-            };
-            if let Some(rec) = obj.and_then(|o| self.ast.types.as_record(o)) {
-                let found = match qual {
-                    Some(q) => {
-                        let def = self.ast.definition(rec).unwrap_or(rec);
-                        if self.qualifier_names_base(q.ctx, def) {
-                            self.lookup_qualified_dn(q.ctx, name, LookupKind::Ordinary).decls
-                        } else {
-                            Vec::new()
-                        }
-                    }
-                    None => self.lookup_in_class_dn(rec, name, LookupKind::Ordinary).decls,
-                };
-                // A member named by a dependent using-declaration
-                // (`using __base::has_value;`) is found at instantiation.
-                if let [d] = found[..]
-                    && self.kind_of(d) != DeclKind::UnresolvedUsingValue
-                {
-                    return None;
-                }
+        if targs.is_none()
+            && !template_kw
+            && !dep_qual
+            && !dep_name
+            && let Some(found) = self.current_member_lookup(bt, arrow, qual.map(|q| q.ctx), name)
+        {
+            // A member named by a dependent using-declaration
+            // (`using __base::has_value;`) is found at instantiation.
+            if let [d] = found.decls[..]
+                && self.kind_of(d) != DeclKind::UnresolvedUsingValue
+            {
+                return None;
             }
         }
         let b = if arrow && !self.is_dependent_overloadable(bt) {
@@ -2421,6 +2440,39 @@ impl Sema<'_, '_> {
         }
         Some(e)
     }
+    /// The class member lookup of `name` in the class of an object of
+    /// type `bt` (its pointee for `arrow`), or with the qualifier
+    /// `qual` in that class when it names the class or a base of it
+    /// ([class.member.lookup], [temp.dep.type]/6: a member of the current
+    /// instantiation): what [`Sema::try_dependent_member_q`] decides by,
+    /// and the found set of the dependent access it builds (spec/ast.md
+    /// §18.12). `None` when the object's type names no class.
+    pub(crate) fn current_member_lookup(
+        &self,
+        bt: QualType,
+        arrow: bool,
+        qual: Option<DeclId>,
+        name: DeclName,
+    ) -> Option<crate::lookup::Found> {
+        let obj = if arrow {
+            self.pointee_sugared(bt).filter(|_| self.ast.types.is_pointer(bt))
+        } else {
+            Some(bt)
+        };
+        let rec = self.ast.types.as_record(obj?)?;
+        Some(match qual {
+            Some(q) => {
+                let def = self.ast.definition(rec).unwrap_or(rec);
+                if self.qualifier_names_base(q, def) {
+                    self.lookup_qualified_dn(q, name, LookupKind::Ordinary)
+                } else {
+                    crate::lookup::Found::default()
+                }
+            }
+            None => self.lookup_in_class_dn(rec, name, LookupKind::Ordinary),
+        })
+    }
+
     /// Parameter `p` (the `idx`th) of the requires-expression whose body
     /// is `body` ([expr.prim.req.general]/4): a `ParmVarDecl` in the body,
     /// visible to the requirements.

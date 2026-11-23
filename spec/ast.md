@@ -574,7 +574,15 @@ struct ExprNode {        // 20 bytes
   (`kiln_ast::expr::walk_steps`): the chain scaling tests
   (crates/kiln_parse/tests/chain_scaling.rs,
   crates/kiln_codegen/tests/chain_scaling.rs) compare the count at N and
-  4N, which a walk repeated per node makes grow 16-fold.
+  4N, which a walk repeated per node makes grow 16-fold. A second debug
+  counter, `kiln_ast::expr::search_steps` (`note_search_steps`), counts
+  searches sema does per element of a run (label and case-value
+  searches, the scopes an unqualified lookup visits, lookup-stamp
+  fingerprints, rebuilds of the scope stack's walk index; spec/sema.md
+  §2.1): crates/kiln_parse/tests/parse_scaling.rs compares walk plus
+  search steps at N and 4N for runs of labels and case labels, member
+  call chains, `else if` chains, nested classes and closure chains
+  (WP-2478).
 - **No parent links.** `ParentMap::build(&Ast, root: StmtId)` builds one on
   demand (diagnostics needing context, `-Wparentheses`-style checks).
 
@@ -706,6 +714,16 @@ needed later). Values of non-constant-context folding (`try_fold`) are
   `void` list) is kept in the cold map `syntactic_list: ExprId -> ExprId`
   of the semantic list. Instantiation rebuilds from that written form,
   as clang's `TransformInitListExpr` does from the syntactic form.
+  Written forms are shared: the written form of a list nested in a
+  designated list is the very node of the inner list's own written form
+  (sema keeps the written forms of the lists of one outermost designated
+  list by their braces while it is analyzed), so a list nested N deep
+  has N + 1 written lists, not one copy of every inner level per level,
+  (N + 1)(N + 2)/2 (WP-2478, a quadratic AST before; test
+  `crates/kiln_parse/tests/parse_scaling.rs`, `nested_designated_lists`,
+  counts the expression nodes at N and 4N). The written form is a DAG
+  there; every walk of it (dump, instantiation, the PCH body writer's
+  expression memo) handles a shared node.
   Outside templates no `DesignatedInitExpr` is built.
 - `ParenExpr` is kept (it changes `decltype` and [temp.over.link]).
 - No `CXXRewrittenBinaryOperator` syntactic form
@@ -965,7 +983,7 @@ translation unit every attribute in a declaration's list or an
 node no list reaches (one a check replaced or dropped) may not be. An
 argument that depends on a template parameter keeps its deferred form
 under its per-kind flag (`PRIORITY_DEPENDENT`, `MODE_DEFERRED`,
-`SPACE_DEPENDENT`) until instantiation. The bit lives in the existing
+`SPACE_DEPENDENT`, `ALIGN_VALUE_DEPENDENT`) until instantiation. The bit lives in the existing
 flags byte: the node stays 16 B, and the PCH snapshot and the module
 image carry it with the flags unchanged in layout.
 
@@ -1763,6 +1781,7 @@ field `Ast::written_refs`. Built in five stages:
 | 4 | per-specialization entries for dependent names, in a separate table keyed by (pattern entry, specialization) (§18.9) | WP-1933 |
 | 5 | carriage in PCH snapshots and module images | WP-1934 |
 | | the join with expressions; the leading `::` and the `~` (§18.11) | WP-2326 |
+| | the found set of a dependent entry: what lookup found at the template definition (§18.12) | WP-2472 |
 
 ### 18.1 Contract
 
@@ -1833,6 +1852,10 @@ of the two an entry without an entity has:
   arguments are parsed, as `DEPENDENT` until they tell, and becomes
   `UNRESOLVED` when the call is resolved at the definition and fails
   (`written_call_failed`).
+
+A `DEPENDENT` entry with a definition-context lookup also has a found
+set, the declarations that lookup found, in a side table (§18.12); the
+entry itself does not change.
 
 One padding byte remains. Deviation from a 4-byte `entity`-only design:
 `found` and `qualifier` are stored, not derived, because deriving `found`
@@ -2184,8 +2207,9 @@ stage 1.
   dependent name resolves to in each specialization goes to the
   separate per-specialization table (stage 4, §18.9), so the main
   table's entry shape and its one-entry-per-written-name rule do not
-  change. Default arguments and default member initializers are
-  entries once, at the written site.
+  change. What lookup found at the definition, before any
+  specialization, is the entry's found set (§18.12). Default arguments
+  and default member initializers are entries once, at the written site.
 - **PCH and modules.** Stage 5 (§18.10) carries both tables in PCH
   snapshots and module images: a TU restored from a snapshot continues
   the prefix's table, and an importer built from an image merges the
@@ -2704,7 +2728,9 @@ a separate table: the main table keeps one entry per written name.
   whose `entity` or `found` is `d`), `specs_by_entry()` (one pass, for
   clients that query many entries), `spec_adl_set(&row)`. A rename of
   `d` edits the ranges of the main-table entries naming `d` and of the
-  pattern entries of `specs_naming(d)`'s rows.
+  pattern entries of `specs_naming(d)`'s rows, and the entries whose
+  found set has `d` (`entries_finding(d)`, §18.12.1), which also cover
+  templates no specialization of which is instantiated.
 - **Snapshots and images.** Carried with the main table (§18.10).
 
 #### 18.9.2 The specialization
@@ -3019,10 +3045,11 @@ names to be carried.
   side rows (using-directive, argument-dependent set); the interned sets;
   the directive cache; the deferred designators; the per-specialization
   rows, dropped rows included so every `SpecRefId` stays; the pattern
-  nodes and their candidates' using-directives (§18.9.1); the unrecorded rows (§18.10.3); the leads (§18.11.2). Maps are written as their
+  nodes and their candidates' using-directives (§18.9.1); the unrecorded rows (§18.10.3); the leads (§18.11.2); the found sets, their
+  elements and the (entry, set) rows (§18.12.6). Maps are written as their
   entries sorted by key, so the bytes do not depend on hashing.
-  **Rebuilt** on read: the set index and the row de-duplication index,
-  from the sets and the live rows. **Transient**: the scratch of one
+  **Rebuilt** on read: the set index, the found-set index and the row
+  de-duplication index, from the sets and the live rows. **Transient**: the scratch of one
   declaration or one instantiation (`inst_target`, `spec_pending`,
   `spec_last`, `spec_key`), empty at the end of a prefix.
 - **Validated** on read (an `Invalid` error, never a panic): every
@@ -3055,14 +3082,15 @@ names to be carried.
   image's last section, `refs` (spec/modules.md §11.11 "Written
   references"), carries the entries of the names written in the unit's
   own sources after its preamble, their provenance, the
-  per-specialization rows of its carried specializations and the
-  pattern nodes of its dependent entries. The preamble's names (the
+  per-specialization rows of its carried specializations, the
+  pattern nodes of its dependent entries and their found sets
+  (§18.12.6). The preamble's names (the
   module declaration, the imports, and with them the names the imported
   units' replays recorded) are not carried: the importer replays the
   preamble (spec/modules.md §11.11 "Imports and re-exports") and
   records them by parsing, as it does for any source it reads. A name
   whose declaration (entity, found, enclosing, using-directive, a set's
-  member), location, qualifier or pattern node the image cannot carry
+  member, a found set's element), location, qualifier or pattern node the image cannot carry
   fails the image, and the importer replays the unit: correctness
   first. A per-specialization row whose specialization or entity is
   not a record is left out (the importer makes the row again when it
@@ -3342,6 +3370,219 @@ goldens: `Inputs/refs_pch.h` and `Inputs/refs_mod.cppm` end with a
 `p->::N::Pt::~Pt()`, so `pch.refs` (through the snapshot and as text)
 and `module.refs` (through the image and replayed) show the same
 `q=::` and `tilde=` positions.
+
+### 18.12 The found set of a dependent entry (WP-2472)
+
+A `DEPENDENT` entry has no entity (§18.2): what it names is decided per
+specialization (§18.9). But for most dependent names a lookup already
+ran at the template definition, and its result constrains every
+specialization: ordinary lookup of an unqualified dependent call's name
+([temp.dep.candidate]/1), qualified lookup in a non-dependent scope, and
+class member lookup in the current instantiation ([temp.dep.type]/6). A
+tooling client renaming a declaration must know which declarations
+such a name found, also in a template no specialization of which was
+instantiated. The found set is that result.
+
+#### 18.12.1 Contract
+
+- **Definition.** The found set of a `DEPENDENT` entry is the result of
+  the name lookup the standard performs for its name in the template
+  definition: unqualified lookup from the name's position
+  ([basic.lookup.unqual]) for an unqualified name; qualified lookup in a
+  non-dependent scope ([basic.lookup.qual]); class member lookup in the
+  current instantiation ([class.member.lookup], [temp.dep.type]). It is
+  fixed when the entry is made and never changes: a declaration that
+  appears after the name is not in it (in a complete-class context the
+  whole class is visible, [class.mem.general]).
+- **Same switch as the table.** Recorded only when
+  `ParseOptions::written_refs` is on, by the parse-time site that makes
+  the entry (`note_written_name`, beside its pattern node, §18.9.4).
+  Off, nothing changes: no branch is added (every recording site is
+  inside a function that already returns when the table is off, and the
+  rows are removed only where an overloaded name's pending patch, which
+  exists only when on, is resolved). Names parsed for the table alone
+  (§18.8: no pattern node) get no set.
+- **Where the facts come from.** An overload set's list is the pattern
+  node's own: the declarations of the `UnresolvedLookupExpr`, which
+  instantiation itself selects from (spec/sema-templates.md §3.5), with
+  their using-shadows and naming class, or the set of an overloaded
+  member access (a `MemberExpr` of overloaded type). A dependent member
+  access of the current instantiation (`this->a(t)`, `C::a(t)`, `a(t)`
+  with an implicit `this`, `this->template mt<T>(t)`) re-runs, at the
+  recording site, the class member lookup that decided it was dependent
+  (`Sema::current_member_lookup`, which `try_dependent_member_q` uses
+  too) or, for an implicit `this`, the scope walk: the same pure
+  functions over the same scopes, as §18.7.1 re-runs the walk.
+- **Storage.** A sparse side table: one row (entry, set) per entry with
+  a set, sorted by entry by construction, read by binary search; the
+  sets interned by content (elements, `how`, flags), one copy each. The
+  28-byte entry does not change. A callee recorded before its arguments
+  and then resolved at the definition loses its row
+  (`WrittenRefs::resolve`, `written_call_failed`): its entry is no
+  longer `DEPENDENT`. `truncate` drops the rows of the entries it drops.
+- **Read access** (`kiln_ast::written_refs`):
+  `found_at_definition(id) -> Option<FoundSet>`: `None` when the entry
+  is not `DEPENDENT` or no lookup ran at its definition, else the set
+  (`decls: &[FoundDecl]`, `how`, `flags`; `is_closed()`, `adl()`,
+  `dependent_base()`, `unresolved_using()`, `contains(d)`);
+  `found_set_id(id)` (equal ids are equal sets), `found_set(s)`;
+  `found_udir(id, decl)`: the using-directive the definition lookup
+  found an element through (§18.9.1's, by the element's `decl`);
+  `entries_finding(d)`: the dependent entries whose set has `d` as an
+  element's `decl` (a first declaration) or `found` (a using-shadow);
+  `Ast::spec_origin(&row)`: the element a per-specialization row
+  selected (§18.12.4).
+- **Rename.** A rename of `d` edits the main-table entries naming `d`
+  (§18.1), the entries of `entries_finding(d)`, and the pattern entries
+  of `specs_naming(d)` (§18.9.1). For an entry of `entries_finding(d)`,
+  a scan of its set's `decls` tells whether `d` is every element (the
+  name always names `d` or a specialization of it), one of several (the
+  edit renames a name other declarations share), or `d` is reached
+  only through a using-shadow.
+
+#### 18.12.2 Kinds
+
+| entry (§18.9.4 pattern node) | the set is | `flags` |
+|---|---|---|
+| unqualified dependent call `f(t)`, a template-id `f<T>(t)`, an operator-function-id `operator+(t, t)` (`UnresolvedLookupExpr` with ADL) | ordinary unqualified lookup at the name | `ADL`: argument-dependent lookup at each instantiation adds to it |
+| the same, nothing visible (`g(t)`, an assumed template name `get<0>(t)`, [temp.names]/3) | empty: lookup ran and found nothing | `ADL`: only argument-dependent lookup can resolve it |
+| `(f)(t)`, `::f(t)`, `N::f(t)` with several overloads | unqualified (parenthesized) or qualified lookup | none: closed, every instantiation selects from it |
+| one visible `f` with argument-dependent lookup suppressed (a block-scope declaration, a class member), one member found by `this->a(t)` | no set: resolved at the definition, the entry has its entity | |
+| `this->a(t)`, `C::a(t)`, `a(t)` (implicit `this`), `this->mt(t)`, `this->template mt<T>(t)`: members of the current instantiation (`CXXDependentScopeMemberExpr`, or an overloaded member access) | class member lookup in the current instantiation: members of the pattern class and its non-dependent bases | none when the class searched has no dependent base; else `DEPENDENT_BASE`: the instantiation looks the name up again, and a different result is ill-formed ([temp.dep.type]/6; not diagnosed, §18.12.6) |
+| a name a dependent using-declarator introduces (`using B<T>::bm; ... bm(t)`) | the class's lookup result, the `UnresolvedUsingValue` an element | `UNRESOLVED_USING`: what it names exists per specialization only |
+| `T::x`, `B<T>::bm(t)` (a dependent qualifier), `t.m(t)`, `this->bm(t)` naming nothing the class declares in a class with a dependent base (a member of an unknown specialization), `using B<T>::bm;` itself, `typename T::ty`, a dependent nested-name-specifier component | no set (`None`): no lookup runs at the definition; all knowledge is per specialization (§18.9) | |
+| an operator expression `t + t` | no entry (§18.4): its definition-context lookup set is `Ast::dependent_oper_candidates` (§8.5) | |
+
+An unqualified name in a class template with a dependent base: the
+dependent base is not examined, at the definition or at instantiation
+([temp.dep.general]/4); a set found at namespace scope stays closed or
+`ADL` and gets no `DEPENDENT_BASE`. A failed call (`UNRESOLVED`) has no
+set. Argument-dependent lookup in the definition context is not
+precomputed into the set: its declarations appear as rows with
+`how=adl` (§18.9), as do hidden friends, which ordinary lookup never
+finds ([class.friend]/7) and so are never elements.
+
+#### 18.12.3 The element
+
+`FoundDecl { decl, found }` (8 bytes), as `oper_lookup::OperCandidate`
+and §18.2 do it: `decl` is the entity's first declaration (through a
+using-declaration: what it names), so equal sets intern across
+redeclarations; `found` is the using-shadow lookup found, else `decl`.
+A dependent using-declarator is an element by itself (`decl` its
+`UnresolvedUsingValue`). The elements are in the order overload
+resolution enumerates them (innermost scope first, newest first);
+clients treat them as a set. `how` is the definition lookup's kind:
+`Unqualified`, `Qualified` (after a qualifier) or `Member` (after `.`
+or `->`), by the entry's syntax (the entry's own `how` stays `None`,
+§18.7.2). The flags are `FOUND_ADL` (1), `FOUND_DEPENDENT_BASE` (2)
+and `FOUND_UNRESOLVED_USING` (4); no flag is `is_closed()`. `None`
+(no definition lookup) and `Some` with no element (lookup ran, found
+nothing) differ.
+
+#### 18.12.4 The join with the per-specialization rows
+
+The set is the specialization-independent half, a row (§18.9) one
+specialization's selection. For a row `r` of an entry with set `S`, in a
+specialization without errors: `r.how == Adl` implies `S` has `ADL` and
+`r` is not from `S`; otherwise `spec_origin(r)` is an element's `decl`,
+where `spec_origin` is the first declaration of what lookup found
+(`found`, else `entity`, a using-shadow looked through), mapped by
+`Ast::instantiated_from` to the pattern's member when it is a member of
+a class template specialization, and a variable template's
+specialization to its template. A row whose `how` is `Both` is from
+`S` too. Exceptions, each visible to the client: an ill-formed
+specialization (kiln's two-phase recovery selects a declaration found
+after an error, spec/sema-templates.md §3.5), `DEPENDENT_BASE` (a member
+of a dependent base), `UNRESOLVED_USING`, and a member of a closure type
+(`[&]<int I>() {...}.template operator()<1>()` in a function template:
+the lambda-expression of each specialization defines a new closure type
+([expr.prim.lambda.closure]/1), and kiln keeps no link from its members
+to the pattern closure's, so `spec_origin` returns the specialization's
+call operator template). The invariant is tested over
+the written-reference corpus and the §18.8 directories
+(`spec_rows_agree_with_definition_sets`).
+
+#### 18.12.5 The dump
+
+The entry's line ends with `def=<n>`, then `+adl`, `+base` and `+using`
+for the flags; then one line per element, before the entry's `spec=`
+lines (§18.9.5), sorted by the position of the element's `decl` (the
+main file first):
+
+```
+<lo>-<hi>  <role>  '<spelling>' def=<decl> [found=<shadow>] [udir=<ns>@<line>:<col>]
+```
+
+`<decl>` and `<shadow>` print as an entity does (§18.6), `udir=` as
+§18.7.5's. The dump through a PCH or a module image equals the dump
+with the source as text.
+
+#### 18.12.6 Cost and carriage
+
+**Cost.** Off: zero (no branch added; the tracked memory totals on
+`<bits/stdc++.h>` are byte-identical to the base, and the 29
+`bench/oven` counters are identical). On: 8 bytes per row, 12 per
+distinct set and 8 per element, plus the content index. Measured
+(WP-2472, against the base, recording off and on, interleaved, three
+rounds each, `-fsyntax-only -fkiln-dump-written-refs
+-fkiln-memory-report`): `<bits/stdc++.h>` at `-std=c++26` has 11483
+entries with a set of 25302 dependent entries (8829 closed, 1212
+`ADL`, 784 `DEPENDENT_BASE`, 658 `DEPENDENT_BASE` and
+`UNRESOLVED_USING`; 5525 of one element, 3390 of two); the table's
+tracked memory grows from 8366308 to 8687172 bytes (+320864, +3.8%;
++0.6% of the TU's 51.3 MB tracked total). LLVM's `SemaExpr.cpp` at
+`-std=c++17`: 10662 entries with a set of 24652, +265784 bytes
+(23340264 to 23606048, +1.1%; +0.1% of 219 MB). Peak RSS grows by
+5.5 MB and 4 MB (the dump's text, 32468 and 24506 more lines, most of
+it); wall time is within the shared host's run-to-run noise (medians
+1.68 s and 1.45 s, 7.51 s and 7.18 s, base and new). Off: the memory
+report of both TUs is byte-identical to the base's, and the 29
+`bench/oven` `-fconstexpr-report` counters (all but `wall_us`) are
+identical.
+
+**Carriage.** The PCH section (§18.10.1) carries the rows, the sets and
+the elements (`WrittenRefsSection::found_rows`, `found_sets`,
+`found_decls`), validated on read: rows sorted and in range, each set a
+run of the elements, no set interned twice; the content index is
+rebuilt. The image's `refs` section (spec/modules.md §11.11) ends with
+the sets (`how`, flags, `decl, found` word pairs) and the rows (entry,
+set) of the unit's own entries; an element the image cannot carry fails
+the image and the importer replays (§18.10.2). A prefix or unit made
+with recording off has no entries at all, so there is no "entries
+without sets" state (§18.10.3). PCH `FORMAT_VERSION` 154,
+`IMAGE_VERSION` 82.
+
+Not done: the [temp.dep.type]/6 rule that a member of the current
+instantiation whose lookup in the instantiation differs from the
+definition's is ill-formed is not diagnosed (kiln looks the name up
+again in the instantiated class and does not compare); folding the
+per-candidate using-directives of §18.9.1 into the elements.
+
+#### 18.12.7 Tests
+
+`crates/kiln_ast/src/written_refs.rs` (`found_sets_are_interned`,
+`found_rows_follow_their_entries`, `off_records_no_found_set`: the entry
+still 28 bytes, interning, a popped row, truncation, off),
+`written_refs_carry.rs` (`found_sets_round_trip_and_are_validated`),
+`crates/kiln_sema/src/bmi_image/refs.rs` (the sets and rows round trip
+and are validated), `crates/kiln_parse/tests/written_refs.rs`
+(`rename_by_found_set`: all subjects, none, mixed),
+`crates/kiln_parse/tests/written_refs_accounting.rs`
+(`spec_rows_agree_with_definition_sets`: §18.12.4 over the corpus and
+the §18.8 directories), and `tests/conformance/written_refs/found-*.cpp`:
+one visible declaration (`found-one`), three through a declaration, a
+using-declaration and a using-directive (`found-several`), none
+(`found-none`), a hidden friend (`found-hidden-friend`), a later
+overload (`found-later-overload`), closed sets and a block-scope
+declaration (`found-closed`), members of the current instantiation
+(`found-this`) and with a dependent base, an unknown specialization and
+a dependent using-declarator (`found-this-base`), function template-ids
+and an assumed template name (`found-template-id`), an
+operator-function-id call and an operator expression
+(`found-operator`), and the carriage goldens through a PCH and as text
+(`found-pch`, `found-pch-include`) and through a module image and
+replayed (`found-module-image`, `found-module-replay`). The goldens of
+the earlier stages with dependent entries gain their `def=` lines.
 
 ## 19. The declaration-extent table (WP-2090)
 
@@ -3805,6 +4046,19 @@ This section is the promise kiln makes, and where it makes none.
   keeps the `__extension__`, `__builtin_choose_expr` or `_Generic`
   around its callee, as clang converts the object in place (before,
   only parentheses were kept, and the call began at the member).
+- WP-2350..WP-2353 record more in the same two cold maps (the
+  `end_loc` side table and `templates.expr_begin`), only where the
+  location is not the node's own: the last token of an id-expression or
+  member designator that is not one token (an operator- or
+  conversion-function-id, a dependent template-id's `>`, a
+  pseudo-destructor's destroyed type, always), recorded by the parser
+  after the name (`Sema::keep_name_extent`) and kept on the reference or
+  member access the call resolves it to; the qualifier begin of a member
+  access through an implicit `this` and of a qualified concept-id; the
+  `.` or `[` a `DesignatedInitExpr` begins with; and the `(` or the cast
+  a `CXXParenListInitExpr` begins with (`Sema::keep_paren_list_begin`).
+  Sema's `init::Designator::Field` keeps its `.`, which changes the PCH
+  snapshot schema (no node or image change).
 
 ### 21.2 Decisions
 
@@ -3830,16 +4084,30 @@ This section is the promise kiln makes, and where it makes none.
   is its object.
 - **Brace elision**: a list whose braces were elided begins at its first
   written initializer and ends at its last; one a designator opens
-  (`.a.y = 3`'s list of `a`) begins inside the designator, whose parts
+  (`.a.y = 3`'s list of `a`) begins inside the designator, at a part
   the tree does not keep, and is `None` (`ExprFlags::DESIGNATED`).
+- **Designated clauses** (a `DesignatedInitExpr`, kept in a dependent
+  list): from the first designator's `.` or `[` (a GNU `name:`'s name)
+  to the initializer's last token.
+- **Parenthesized aggregate initialization** (`CXXParenListInitExpr`):
+  from its `(` (`S s(1, 2)`, `S(1, 2)`, `new S(1, 2)`, `m(1, 2)` in a
+  mem-initializer) or, made by a cast, from the cast's first token
+  (`static_cast<S>(1)`, `(S)1`), as clang's `getBeginLoc`, to its stored
+  end (the `)`; a C-style cast's operand). One whose begin was not
+  recorded is `None`.
+- **Substituted template arguments**: a `SubstNonTypeTemplateParmExpr`
+  (the value of a non-type template argument in an instantiated
+  member's initializer) is the one token of the parameter's name it
+  replaces.
 - **Rewritten operators** (`a != b` as `!(a == b)`, a comparison
   through `<=>`): the `CXXRewrittenBinaryOperator` has the written
   extent, from its first written operand to its last; the nodes built
   inside it are ordinary nodes, whose implicit parts are `None`.
 - **Implicit-this member access** (`x` in a member function) begins at
-  the member's name; with a qualifier (`B::x`), whose begin the tree
-  does not keep, it is `None`, as is a qualified `DeclRefExpr` whose
-  begin was not recorded.
+  the member's name; with a qualifier (`B::x`, `T::x` naming a member of
+  a dependent base) at the qualifier, whose begin the parser records; a
+  qualified access or `DeclRefExpr` whose begin was not recorded is
+  `None`.
 - First token: the first operand for binary, conditional, subscript,
   call, member-call, postfix and overloaded non-prefix operators, and
   the pattern of a pack expansion or a pack index; the
@@ -3854,10 +4122,12 @@ This section is the promise kiln makes, and where it makes none.
   parentheses are a `ParenExpr`); the list of a compound literal; the
   node itself for one-token literals, `this`, postfix operators, the
   `...` of a pack expansion and an ext-vector accessor; the last
-  piece of a concatenated string literal; a plain identifier name. A
-  name that is an operator, conversion or destructor name, or that has
-  template arguments (a variable template specialization always has),
-  with no stored end: `None`.
+  piece of a concatenated string literal; a plain identifier name; the
+  stored last token of a name that is not one token (an operator,
+  conversion or destructor name, template arguments) and of a
+  pseudo-destructor's destroyed type (`p->~T`, `x.~decltype(x)`). Such
+  a name with no stored end (a variable template specialization always
+  has template arguments): `None`.
 
 ### 21.3 Kinds that may be `None`
 
@@ -3875,40 +4145,37 @@ Two reasons recur, named here once:
 - **(W) a wrapper of a `None`**: an implicit wrapper (21.2) whose written
   node has none.
 
-The counts are stage 1's at WP-2327 (`None` / all nodes of the kind);
+The counts are stage 1's at WP-2350 (`None` / all nodes of the kind);
 the baseline, not this table, is the gate.
 
 | Kind | `None` | Reasons |
 |---|---|---|
 | `ArrayInitIndexExpr`, `ArrayInitLoopExpr` | 15/15 each | nothing written: an array member's copy in an implicit or defaulted copy |
 | `ArraySubscriptExpr` | 138/1522 | M; the element accesses of a defaulted comparison |
-| `BinaryOperator` | 11053/27430 | M (most: test macros over comparisons); a range-`for`'s `__begin != __end`; a defaulted comparison's operations |
+| `BinaryOperator` | 11038/27448 | M (most: test macros over comparisons); a range-`for`'s `__begin != __end`; a defaulted comparison's operations |
 | `CStyleCastExpr` | 623/2112 | M |
-| `CXXBindTemporaryExpr`, `MaterializeTemporaryExpr`, `ExprWithCleanups`, `ConstantExpr`, `ImplicitCastExpr` | 2294/2928, 2430/4617, 1436/3263, 9/1180, 8940/56488 | W; M |
-| `CXXBoolLiteralExpr`, `CXXNullPtrLiteralExpr`, `GNUNullExpr`, `FloatingLiteral`, `IntegerLiteral`, `StringLiteral` | 417/1912, 1/561, 1/54, 152/1029, 9938/39099, 344/2919 | M |
-| `CXXConstructExpr` | 3860/6304 | M; a default construction (`S s;`, an element or member with no initializer): nothing written |
+| `CXXBindTemporaryExpr`, `MaterializeTemporaryExpr`, `ExprWithCleanups`, `ConstantExpr`, `ImplicitCastExpr` | 2294/2930, 2430/4618, 1434/3265, 9/1180, 8891/56549 | W; M |
+| `CXXBoolLiteralExpr`, `CXXNullPtrLiteralExpr`, `GNUNullExpr`, `FloatingLiteral`, `IntegerLiteral`, `StringLiteral` | 417/1912, 1/561, 1/54, 152/1029, 9938/39112, 344/2919 | M |
+| `CXXConstructExpr` | 3862/6314 | M; a default construction (`S s;`, an element or member with no initializer): nothing written |
 | `CXXDefaultArgExpr`, `CXXDefaultInitExpr` | 352/352, 522/522 | nothing written: the parameter's or member's default |
-| `CXXDependentScopeMemberExpr` | 136/511 | M; a member template-id (`this->f<T>`, whose `>` the tree does not keep); a qualified member (`this->B::f`) through an implicit `this`; an operator name (`x.operator()<1>`) |
+| `CXXDependentScopeMemberExpr` | 54/512 | M; a member named by a dependent using-declarator (`using T::f;` then `f()`: the qualifier is the declarator's, not written at the name); an implicit `this->operator T` (a conversion-function-id naming a dependent type) |
 | `CXXFoldExpr` | 5/151 | the fold of a constrained pack (`C... Ts`, 21.2): no parentheses written |
-| `CXXFunctionalCastExpr`, `CXXUnresolvedConstructExpr`, `CXXStaticCastExpr`, `CXXNoexceptExpr`, `CXXThrowExpr`, `LambdaExpr`, `OffsetOfExpr`, `TypeTraitExpr`, `UnaryExprOrTypeTraitExpr`, `CompoundAssignOperator` | 2492/5382, 94/495, 105/624, 29/171, 16/229, 45/970, 12/85, 68/1760, 141/1852, 256/1148 | M (`CXXStaticCastExpr`: one in an implicit member's body) |
-| `CXXMemberCallExpr`, `CallExpr`, `MemberExpr`, `DeclRefExpr` | 2728/4801, 1483/12748, 4510/12276, 6316/45673 | M; the calls and names a coroutine, a range-`for`, a structured binding or a defaulted function makes (promise, awaiter, `begin`/`end`, `get`); the `operator()` a lambda call names; a qualified name through an implicit `this` (`B::x`) or with an unrecorded qualifier begin; a name with template arguments whose `>` is not kept |
+| `CXXFunctionalCastExpr`, `CXXUnresolvedConstructExpr`, `CXXStaticCastExpr`, `CXXNoexceptExpr`, `CXXThrowExpr`, `LambdaExpr`, `OffsetOfExpr`, `TypeTraitExpr`, `UnaryExprOrTypeTraitExpr`, `CompoundAssignOperator` | 2492/5382, 94/496, 105/624, 29/171, 16/229, 45/970, 12/85, 68/1760, 141/1855, 256/1150 | M (`CXXStaticCastExpr`: one in an implicit member's body) |
+| `CXXMemberCallExpr`, `CallExpr`, `MemberExpr`, `DeclRefExpr` | 2710/4809, 1472/12766, 4351/12292, 6272/45728 | M; the calls and names a coroutine, a range-`for`, a structured binding or a defaulted function makes (promise, awaiter, `begin`/`end`, `get`); the `operator()` a lambda call names; a conversion function's implicit call; a qualified name of a member without an object (`&B::f`, a static `B::s<0>` through an implicit `this`): its qualifier begin is not recorded |
 | `CXXOperatorCallExpr` | 73/1197 | M; a range-`for`'s `++__begin`/`*__begin` and a defaulted comparison's operations on class iterators and members |
-| `CXXParenListInitExpr` | 71/71 | the parenthesized aggregate initialization of a variable (`S s(1, 2)`) or a cast (`static_cast<int[3]>(42)`): the parentheses belong to the declarator or the cast, which the node does not keep |
-| `CXXPseudoDestructorExpr` | 85/85 | the end of the destroyed type (`p->~T`, `x.~decltype(x)`) is not kept |
+| `CXXParenListInitExpr` | 3/71 | the parenthesized aggregate initialization of an array `new` (`new int[](1, 2, 3)`) or of an element of a nested array (`R[2][2]({R(4)})`): the parentheses are not kept |
 | `CXXStdInitializerListExpr` | 2/71 | W (a list sema builds) |
-| `CXXThisExpr` | 2515/2918 | an implicit `this`; M |
+| `CXXThisExpr` | 2517/2921 | an implicit `this`; M |
 | `CoawaitExpr` | 48/58 | an implicit `co_await` (an initial or final suspend point) |
-| `ConceptSpecializationExpr` | 142/761 | a type-constraint's immediately-declared constraint (`C<X> T` is `C<T, X>`): not written as an expression; a qualified concept-id whose qualifier begin is not recorded; M |
+| `ConceptSpecializationExpr` | 125/761 | a type-constraint's immediately-declared constraint (`C<X> T` is `C<T, X>`): not written as an expression; M |
 | `ConditionalOperator` | 239/1025 | M; a defaulted comparison's operations |
-| `DependentScopeDeclRefExpr`, `UnresolvedLookupExpr` | 58/304, 261/651 | M; a template-id whose `>` the tree does not keep (`T::template v<int>`); an operator name (`operator==(a, b)`) |
-| `DesignatedInitExpr`, `DesignatedInitUpdateExpr` | 48/48, 19/19 | the designator's parts are not kept (21.2) |
+| `DependentScopeDeclRefExpr`, `UnresolvedLookupExpr` | 34/304, 249/651 | M; an `UnresolvedLookupExpr` of a dependent operator (`m[is...]`, an operator lookup at instantiation): no name written |
+| `DesignatedInitUpdateExpr` | 19/19 | the update of an earlier initializer by a later designator (`{.a = x, .a.b = 1}`): not mapped |
 | `ImplicitValueInitExpr`, `NoInitExpr`, `OpaqueValueExpr` | 861/861, 26/26, 117/117 | nothing written |
 | `InitListExpr` | 398/4357 | a list sema builds for an element or member with no initializer (at the enclosing `}`); a list a designator opens; M |
-| `PackExpansionExpr` | 5/93 | its pattern has none (an expansion of a braced construction) |
 | `ParenExpr` | 9412/11054 | M (the parentheses of a macro body, `#define F(x) (x)`) |
 | `PseudoObjectExpr` | 5/5 | the operations a defaulted comparison makes |
-| `SubstNonTypeTemplateParmExpr` | 10/10 | the value of a template argument in an instantiated member's initializer: written as the parameter's name, not mapped |
-| `UnaryOperator` | 1894/7587 | M; a range-`for`'s `++__begin` and `*__begin` |
+| `UnaryOperator` | 1887/7590 | M; a range-`for`'s `++__begin` and `*__begin` |
 
 ### 21.4 The dump (`-fkiln-dump-expr-extents`)
 

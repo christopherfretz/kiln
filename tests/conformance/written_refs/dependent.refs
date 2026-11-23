@@ -6,7 +6,7 @@
 16:32-16:33  type  'T' -> T@16:17 in=t@16:34
 17:11-17:17  expr  'helper' -> helper@8:5 in=a@17:7 adl-ns=
 17:18-17:23  expr  'fixed' -> fixed@9:5 in=a@17:7
-18:11-18:18  expr  'convert' -> (dependent) in=b@18:7
+18:11-18:18  expr  'convert' -> (dependent) in=b@18:7 def=0+adl
 18:11-18:18  expr  'convert' -> user::convert@29:5 spec=pattern<user::U>@16:24 how=adl adl-ns=user@23:11 adl-cls=user::U@24:8
 18:19-18:20  expr  't' -> t@16:34 in=b@18:7
 19:11-19:12  expr  't' -> t@16:34 in=c@19:7

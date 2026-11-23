@@ -1079,3 +1079,171 @@ fn a_failed_on_demand_read_fails_later_runs_alike() {
         assert_eq!(s.variable_value_named("B2::v", cap), Err(ValueError::NotAConstant));
     });
 }
+
+/// The parts of `RunError::Uncaught` of a run of `name`, which must end so.
+#[track_caller]
+fn uncaught(
+    s: &mut EvalSession<'_, '_>,
+    name: &str,
+) -> (kiln_parse::Entity, Vec<u64>, Result<ValueTree, String>, Vec<String>) {
+    // The tree unboxed, to compare with a result's.
+    let r = run_budget(s, name, RunBudget::PROGRAM);
+    let msgs: Vec<String> = r.diagnostics.iter().map(|d| d.message.clone()).collect();
+    match r.result {
+        Err(RunError::Uncaught { ty, scalars, value, .. }) => {
+            let mut notes = Vec::new();
+            for d in &r.diagnostics {
+                notes.extend(d.notes.iter().map(|n| n.message.clone()));
+            }
+            (ty, scalars, value.map(|v| *v), notes)
+        }
+        other => panic!("{name}: {other:?} {msgs:?}"),
+    }
+}
+
+/// WP-2480 and WP-2502 (spec/eval-session.md §8, [except.throw]/3): an
+/// exception of a namespaced class type leaving the entry names its type
+/// fully qualified, with the class's declaration, and hands over the
+/// thrown object's value as a run's result of that type would be read
+/// (the value the note renders); a class of the same name in another
+/// namespace is told apart by both.
+#[test]
+fn an_uncaught_class_has_its_qualified_type_declaration_and_value() {
+    session(
+        "namespace ns::v0 { struct error { int code; int line; }; }\n\
+         namespace other { struct error { int code; int line; }; }\n\
+         consteval ns::v0::error make() { return {2, 1}; }\n\
+         consteval other::error make_other() { return {2, 1}; }\n\
+         constexpr void fail(int c) { throw ns::v0::error{c, 1}; }\n\
+         consteval int throws() { fail(2); return 0; }\n\
+         consteval int throws_other() { throw other::error{2, 1}; }\n",
+        |s| {
+            let made = tree(s, "make");
+            let made_other = tree(s, "make_other");
+            let decl = record(&made.root).ty.decl;
+            assert!(decl.is_some());
+            for _ in 0..2 {
+                let (ty, scalars, value, notes) = uncaught(s, "throws");
+                assert_eq!((&*ty.display, ty.decl), ("ns::v0::error", decl));
+                assert_eq!(scalars, vec![2, 1]);
+                assert_eq!(value.as_ref(), Ok(&made), "{value:?}");
+                assert!(
+                    notes.iter().any(|n| n.contains("of type 'ns::v0::error' with content {2, 1}")),
+                    "{notes:?}"
+                );
+                let (ty, _, value, _) = uncaught(s, "throws_other");
+                assert_eq!(&*ty.display, "other::error");
+                assert_eq!(ty.decl, record(&made_other.root).ty.decl);
+                assert_ne!(ty.decl, decl);
+                assert_eq!(value, Ok(made_other.clone()));
+            }
+        },
+    );
+}
+
+/// WP-2502 ([expr.throw]/4, [except.handle]/16): `throw;` rethrows the
+/// handled exception object itself, so the value handed over is that
+/// object's as the handler left it; `throw e;` in a handler throws a new
+/// object, whose value is handed over.
+#[test]
+fn a_rethrown_exception_hands_over_the_rethrown_value() {
+    session(
+        "struct boxed { int v; };\n\
+         constexpr void inner() { throw boxed{1}; }\n\
+         consteval int rethrow() { try { inner(); } catch (boxed& b) { b.v = 7; throw; } return 0; }\n\
+         consteval int rethrow_new() { try { inner(); } catch (boxed b) { throw boxed{b.v + 40}; } return 0; }\n\
+         consteval int nested() { try { try { inner(); } catch (boxed& b) { b.v = 2; throw; } } \
+           catch (boxed& b) { b.v *= 10; throw; } return 0; }\n\
+         consteval boxed seven() { return {7}; }\n\
+         consteval boxed forty_one() { return {41}; }\n\
+         consteval boxed twenty() { return {20}; }\n",
+        |s| {
+            let want = [("rethrow", "seven"), ("rethrow_new", "forty_one"), ("nested", "twenty")];
+            for (entry, made) in want {
+                let made = tree(s, made);
+                let (ty, scalars, value, _) = uncaught(s, entry);
+                assert_eq!(&*ty.display, "boxed", "{entry}");
+                assert_eq!(ty.decl, record(&made.root).ty.decl, "{entry}");
+                assert_eq!(value, Ok(made.clone()), "{entry}");
+                assert_eq!(
+                    made.root.field("v").and_then(RunValue::as_i128),
+                    Some(i128::from(scalars[0]))
+                );
+            }
+        },
+    );
+}
+
+/// WP-2480 and WP-2502 ([except.throw]/3, [except.handle]/16): the type
+/// handed over is the exception object's: a class derived from another
+/// exception class keeps its own type and its base subobject's value; a
+/// `throw` of a base reference to a derived object copies the base
+/// (the operand's static type); a rethrow of a derived object caught by a
+/// base reference rethrows the derived object.
+#[test]
+fn a_derived_exception_type_is_its_own() {
+    session(
+        "namespace app { struct base_error { int code; }; \
+         struct derived_error : base_error { int extra; }; }\n\
+         using namespace app;\n\
+         consteval derived_error make_derived() { return {{3}, 4}; }\n\
+         consteval base_error make_base() { return {3}; }\n\
+         consteval int derived() { throw derived_error{{3}, 4}; }\n\
+         consteval int sliced() { derived_error d{{3}, 4}; base_error& r = d; throw r; }\n\
+         consteval int rethrown() { try { throw derived_error{{3}, 4}; } catch (base_error&) { throw; } }\n",
+        |s| {
+            let derived = tree(s, "make_derived");
+            let base = tree(s, "make_base");
+            assert_eq!(
+                names(&derived.root),
+                vec![
+                    (FieldKind::Base, "app::base_error".into()),
+                    (FieldKind::Member, "extra".into())
+                ]
+            );
+            for (entry, want, display) in [
+                ("derived", &derived, "app::derived_error"),
+                ("sliced", &base, "app::base_error"),
+                ("rethrown", &derived, "app::derived_error"),
+            ] {
+                let (ty, _, value, _) = uncaught(s, entry);
+                assert_eq!(&*ty.display, display, "{entry}");
+                assert_eq!(ty.decl, record(&want.root).ty.decl, "{entry}");
+                assert_eq!(value.as_ref(), Ok(want), "{entry}");
+            }
+        },
+    );
+}
+
+/// WP-2502 (spec/eval-session.md §8): a thrown object that has no value a
+/// result could have (a pointer to an object the run allocated, a member
+/// not initialized) hands over no value, with the reason; a pointer to a
+/// string literal is a pointer into the constants table, as in a result.
+#[test]
+fn an_unrepresentable_thrown_value_says_why() {
+    session(
+        "struct holder { int* p; };\n\
+         struct gap { int a; int b; constexpr gap() : a(1) {} };\n\
+         struct message { const char* text; int n; };\n\
+         consteval int heap() { throw holder{new int(1)}; }\n\
+         consteval int partial() { throw gap(); }\n\
+         consteval int literal() { throw message{\"boom\", 2}; }\n",
+        |s| {
+            for _ in 0..2 {
+                let (ty, scalars, value, _) = uncaught(s, "heap");
+                assert_eq!((&*ty.display, scalars.len()), ("holder", 0));
+                let why = value.expect_err("a pointer to the run's heap");
+                assert_eq!(why, "pointer to heap-allocated object is not a constant expression");
+                let (_, scalars, value, _) = uncaught(s, "partial");
+                assert_eq!(scalars, vec![1]);
+                let why = value.expect_err("a member not initialized");
+                assert_eq!(why, "subobject 'b' is not initialized");
+                let (_, _, value, _) = uncaught(s, "literal");
+                let v = value.expect("a pointer to a string literal");
+                let p = pointer(&record(&v.root).fields[0].value);
+                assert!(matches!(p.base, PointerBase::Constant(0)), "{p:?}");
+                assert!(matches!(v.constants[0], RunValue::Text { .. }), "{:?}", v.constants);
+            }
+        },
+    );
+}

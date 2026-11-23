@@ -743,7 +743,8 @@ impl Cg<'_> {
                     != ast.types.canonical(pq).without_quals()
                 && !transparent(sq)
                 && !transparent(pq);
-            let pv = self.prolog_arg(&info.kind, if demote { sq } else { pq }, &mut arg_no)?;
+            let da = self.param_decl_align(p);
+            let pv = self.prolog_arg(&info.kind, if demote { sq } else { pq }, da, &mut arg_no)?;
             let pv = match pv {
                 ParamVal::Direct(v)
                     if sig.abis.get(i) == Some(&kiln_ast::types::ParamAbi::SwiftErrorResult) =>
@@ -764,7 +765,7 @@ impl Cg<'_> {
             if let Some(&(_, t, _)) = object_sizes.iter().find(|o| o.0 == i) {
                 let info = sig.info.args[si].clone();
                 si += 1;
-                if let ParamVal::Direct(v) = self.prolog_arg(&info.kind, size_q, &mut arg_no)? {
+                if let ParamVal::Direct(v) = self.prolog_arg(&info.kind, size_q, 0, &mut arg_no)? {
                     hidden.push((p, t, v));
                 }
             }
@@ -818,6 +819,7 @@ impl Cg<'_> {
                 ParamVal::Direct(v) => {
                     let mt = self.mty(pq);
                     let (_, align) = self.size_align(pq);
+                    let align = align.max(self.param_decl_align(p));
                     let a = self.f.fir.alloca(mt, align);
                     let addr = Addr { v: a, ty: mt, align };
                     self.store_scalar(v, addr, pq);
@@ -1754,7 +1756,27 @@ impl Cg<'_> {
         temp
     }
 
-    fn prolog_arg(&mut self, kind: &ArgKind, pq: QualType, arg_no: &mut u32) -> R<ParamVal> {
+    /// The alignment an `aligned` attribute gives parameter `p`'s own
+    /// storage (clang `EmitParmDecl` / `EmitFunctionProlog`:
+    /// `getDeclAlign(Arg)`), 0 without one.
+    fn param_decl_align(&mut self, p: DeclId) -> u64 {
+        let ast = self.ast;
+        let aligned = ast
+            .lists
+            .iter::<kiln_ast::AttrId>(ast.attrs.of_decl(p))
+            .any(|a| ast.attrs.get(a).kind == kiln_ast::attr::AttrKind::ALIGNED);
+        if aligned { self.var_align(p) } else { 0 }
+    }
+
+    /// One parameter's incoming value; `decl_align` the alignment of its
+    /// own storage ([`Self::param_decl_align`]).
+    fn prolog_arg(
+        &mut self,
+        kind: &ArgKind,
+        pq: QualType,
+        decl_align: u64,
+        arg_no: &mut u32,
+    ) -> R<ParamVal> {
         let mt = self.mty(pq);
         // A `_Complex` parameter lives in memory like an aggregate (clang
         // `EmitFunctionProlog`: not of scalar evaluation kind).
@@ -1765,6 +1787,7 @@ impl Cg<'_> {
             ArgKind::Ignore => {
                 if agg {
                     let (_, align) = self.size_align(pq);
+                    let align = align.max(decl_align);
                     let a = self.f.fir.alloca(mt, align);
                     Ok(ParamVal::Indirect(Addr { v: a, ty: mt, align }, false))
                 } else {
@@ -1780,7 +1803,7 @@ impl Cg<'_> {
                 // clang `EmitFunctionProlog`, `CoerceAndExpand`: each part
                 // stored into the class's memory, a fixed-length vector
                 // extracted from its scalable register type.
-                let align = self.global_align(pq);
+                let align = self.global_align(pq).max(decl_align);
                 let alloca = Addr { v: self.f.fir.alloca(mt, align), ty: mt, align };
                 if self.ast.types.as_complex(pq).is_some() {
                     // A Swift complex (clang `Expand`, `ExpandTypeFromArgs`):
@@ -1826,7 +1849,7 @@ impl Cg<'_> {
                         return Ok(ParamVal::Direct(v));
                     }
                 }
-                let align = self.global_align(pq);
+                let align = self.global_align(pq).max(decl_align);
                 let a = self.f.fir.alloca(mt, align);
                 let alloca = Addr { v: a, ty: mt, align };
                 if offset != 0 {

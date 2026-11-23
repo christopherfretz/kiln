@@ -180,6 +180,13 @@ pub(super) fn carried(node: &AttrNode, nsyms: usize) -> bool {
         {
             false
         }
+        // So does an `align_value` still dependent (a template's parameter).
+        Some(Op::Words(..))
+            if node.kind == AttrKind::ALIGN_VALUE
+                && node.flags & AttrNode::ALIGN_VALUE_DEPENDENT != 0 =>
+        {
+            false
+        }
         Some(Op::Words(am, bm)) => node.a <= am && node.b <= bm,
         Some(Op::Exprs | Op::ExprA | Op::ExprList) => true,
         Some(Op::Builtin) => node.b == 0 && builtin::info(node.a).is_some(),
@@ -1128,6 +1135,8 @@ mod tests {
         (AttrKind::CFI_CANONICAL_JUMP_TABLE, FLAG),
         (AttrKind::FORCE_ALIGN_ARG_POINTER, FLAG),
         (AttrKind::ASSUME_ALIGNED, Op::Words(ANY, ANY)),
+        // The checked alignment; a dependent one (`ALIGN_VALUE_DEPENDENT`,
+        // its expression in `a`) is not carried.
         (AttrKind::ALIGN_VALUE, Op::Words(ANY, 0)),
         (AttrKind::CALLBACK, Op::RawList),
         (AttrKind::MAYBE_UNDEF, FLAG),

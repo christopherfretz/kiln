@@ -77,17 +77,6 @@ impl Sema<'_, '_> {
         valid
     }
 
-    /// The parameter ABI attributes of parameter declaration `d`, which
-    /// its instantiations carry (clang `SubstParmVarDecl` →
-    /// `InstantiateAttrs`).
-    pub(crate) fn param_abi_attrs(&self, d: kiln_ast::DeclId) -> Vec<AttrId> {
-        self.ast
-            .lists
-            .iter::<AttrId>(self.ast.attrs.of_decl(d))
-            .filter(|&a| self.ast.attrs.get(a).kind == AttrKind::SWIFT_PARAM_ABI)
-            .collect()
-    }
-
     /// `info` with the parameter ABIs of `params` (an instantiated
     /// function's, a pack expanded into one parameter each), when the
     /// pattern's has any.
