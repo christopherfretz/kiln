@@ -497,3 +497,56 @@ fn cpp_rescan_expansion_entries_and_parents() {
         );
     });
 }
+
+/// `kiln_lex::token_range` (spec/lex.md "Token ranges"): from the starts
+/// of a first and a last token alone (what an expression's extent
+/// holds), the bytes of the file they are written as, by the rule of
+/// `editable_range`, for every case of that rule: file text, one
+/// argument, the whole expansion of a function-like and of an
+/// object-like macro, an end inside a replacement list, ends in two
+/// arguments, a pasted and a stringised token.
+#[test]
+fn token_range_from_token_starts() {
+    let src = "#define ONE 1\n#define P a + b\n#define F(x) (x)\n#define G(x, y) (x + y)\n\
+               #define S(x) #x\n#define CAT(a) a ## _s\n#define H(x) f(#x)\n#define CAT2(a) int a ## _t;\n\
+               int v = c + d; int w = F(k + m); int x = P; int y = ONE + e;\n\
+               int z = G(p, q); const char *s = S(abc); int CAT(foo); int t = H(u); CAT2(bar)\n";
+    with_run(src, &[], |r| {
+        let range = |first: (&str, usize), last: (&str, usize)| {
+            let (lo, hi) = (r.nth(first.0, first.1), r.nth(last.0, last.1));
+            let (lo, hi) = (r.toks[lo].span.lo, r.toks[hi].span.lo);
+            let (file, begin, end) =
+                kiln_lex::token_range(r.sm, r.interner, lo, hi, LexOptions::default())?;
+            assert_eq!(file, r.main);
+            Some(src[begin as usize..end as usize].to_owned())
+        };
+        let s = |t: &str| Some(t.to_owned());
+        // File text.
+        assert_eq!(range(("c", 0), ("d", 0)), s("c + d"));
+        assert_eq!(range(("c", 0), ("c", 0)), s("c"));
+        // One use of one argument: its spelling.
+        assert_eq!(range(("k", 0), ("m", 0)), s("k + m"));
+        // The whole expansion of a function-like macro: through `)`.
+        assert_eq!(range(("(", 0), (")", 0)), s("F(k + m)"));
+        // The whole expansion of an object-like macro: its name; and a
+        // range that starts with one and ends in the file.
+        assert_eq!(range(("a", 0), ("b", 0)), s("P"));
+        assert_eq!(range(("1", 0), ("e", 0)), s("ONE + e"));
+        // An end inside a replacement list.
+        assert_eq!(range(("a", 0), ("a", 0)), None);
+        assert_eq!(range(("+", 2), ("b", 0)), None);
+        // Ends in two arguments.
+        assert_eq!(range(("p", 0), ("q", 0)), None);
+        assert_eq!(range(("p", 0), ("p", 0)), s("p"));
+        // A stringised token: the whole expansion maps, a part does not.
+        assert_eq!(range(("\"abc\"", 0), ("\"abc\"", 0)), s("S(abc)"));
+        assert_eq!(range(("\"u\"", 0), ("\"u\"", 0)), None);
+        assert_eq!(range(("f", 0), (")", 2)), s("H(u)"));
+        // A pasted token is written nowhere, even as the whole expansion
+        // (as in clang, whose paste result has an expansion of its own).
+        assert_eq!(range(("foo_s", 0), ("foo_s", 0)), None);
+        assert_eq!(range(("bar_t", 0), ("bar_t", 0)), None);
+        // Out of order, or a `last` that starts no token.
+        assert_eq!(range(("d", 0), ("c", 0)), None);
+    });
+}

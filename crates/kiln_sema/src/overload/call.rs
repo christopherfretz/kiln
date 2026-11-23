@@ -471,6 +471,9 @@ impl Sema<'_, '_> {
                 return ControlFlow::Break(Some(e));
             };
             self.retarget_written_ref(ule, x);
+            // The access ends at the template-id's `>`, as the member it
+            // resolves to does.
+            self.keep_template_id_end(ule, x);
             return ControlFlow::Break(self.resolve_member_call(e, args, braced));
         }
         if self.lacks_implicit_object(cands) {
@@ -880,6 +883,7 @@ impl Sema<'_, '_> {
             {
                 let _ = self.ast.exprs.set_member_template_args(e, targs);
             }
+            self.keep_template_id_end(ule, e);
             return e;
         }
         // The only candidate's constraints first ([expr.prim.id.general]/4,
@@ -910,6 +914,7 @@ impl Sema<'_, '_> {
         {
             let _ = self.ast.templates.expr_begin.insert(e, b);
         }
+        self.keep_template_id_end(ule, e);
         if single {
             self.note_function_name_use(d, e, loc, nns.is_none());
             if nns.is_none() {
@@ -917,5 +922,15 @@ impl Sema<'_, '_> {
             }
         }
         e
+    }
+
+    /// The `>` closing the template-id `ule` names, kept on the reference
+    /// `e` resolved from it (clang's `getEndLoc` of the reference).
+    pub(crate) fn keep_template_id_end(&mut self, ule: ExprId, e: ExprId) {
+        if let Some(end) = self.ast.exprs.end_loc(ule)
+            && matches!(self.ast.exprs.get(e).kind(), ExprKind::DeclRefExpr | ExprKind::MemberExpr)
+        {
+            self.set_template_id_end(e, end);
+        }
     }
 }

@@ -34,6 +34,17 @@ impl SourceManager {
                 return None;
             }
         }
+        // A function-like builtin macro's result (`__has_builtin(x)`)
+        // takes the location of its `)`, as in clang, but the invocation
+        // begins at the name.
+        if let ExpansionKind::Macro { name } = e.kind
+            && name.lo.is_file()
+            && e.expansion.lo.is_file()
+            && name.lo != e.expansion.lo
+            && self.same_entry_distance(name.lo, e.expansion.lo).is_some()
+        {
+            return Some(name.lo);
+        }
         Some(e.expansion.lo)
     }
 

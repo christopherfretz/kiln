@@ -2217,7 +2217,9 @@ impl Sema<'_, '_> {
                 && let Some(sym) = name.as_ident()
                 && let Some(b) = self.lazily_create_builtin(sym, loc)
             {
-                return self.build_decl_ref(b, loc);
+                let e = self.build_decl_ref(b, loc);
+                self.set_qualified_begin(e, begin, loc);
+                return e;
             }
             if qualifier.is_none()
                 && self.deferring_call_ref

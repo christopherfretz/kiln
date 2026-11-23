@@ -1,0 +1,65 @@
+# How kiln's expression kinds meet clang's in `cargo xtask extents`
+# (spec/harness.md "Expression extents").
+#
+#   map <KilnKind> <ClangKind>[,<ClangKind>...]  clang's kinds a kiln node of the kind
+#                                                also matches (besides its own name);
+#                                                `*` is any kind
+#   none <KilnKind> <reason>                     kiln never gives the kind an extent
+#   opaque <ClangKind> <reason>                  clang's dump leaves out operands of the kind:
+#                                                kiln's nodes inside one are compared only
+#                                                where clang has a node at the same begin
+#   quirk <file>:<begin> <reason>                clang's range at the place is wrong: kiln's
+#                                                nodes beginning there are not compared
+#   skip <KilnKind> <reason>                     not compared; followed by one to three
+#                                                indented lines of a source on which the
+#                                                two front ends build different nodes
+#
+# A clang kind is read when it ends in Expr, Operator or Literal, or is on a map line.
+
+# An implicit wrapper has the extent of the written node inside it
+# (spec/ast.md §21.2), whatever clang wraps there: in a template clang
+# builds the wrappers only when it instantiates.
+map ImplicitCastExpr *
+map MaterializeTemporaryExpr *
+map CXXBindTemporaryExpr *
+map ExprWithCleanups *
+map ConstantExpr *
+# In a template, clang builds an operator call when unqualified lookup
+# found an operator function, kiln the built-in node until instantiation.
+map BinaryOperator CXXOperatorCallExpr
+map UnaryOperator CXXOperatorCallExpr
+map CompoundAssignOperator CXXOperatorCallExpr
+# A member of an overload set, or of a dependent object.
+map MemberExpr UnresolvedMemberExpr,CXXDependentScopeMemberExpr
+# A name of a dependent scope or an overload set kiln has resolved.
+map DeclRefExpr DependentScopeDeclRefExpr,UnresolvedLookupExpr
+# The other way: kiln keeps a name unresolved in a template where clang
+# has resolved it, to a local function, a member (through an implicit
+# `this`) or a member of the current instantiation.
+map UnresolvedLookupExpr DeclRefExpr,UnresolvedMemberExpr,MemberExpr,CXXDependentScopeMemberExpr
+map CXXDependentScopeMemberExpr MemberExpr,UnresolvedMemberExpr
+map DependentScopeDeclRefExpr DeclRefExpr
+# A user-defined literal is a call in kiln; so is a call of a lambda
+# in a template, which clang builds as an operator call.
+map CallExpr UserDefinedLiteral,CXXOperatorCallExpr
+# A construction in functional notation: clang and kiln build a
+# temporary object, a functional cast or a compound literal (GNU, of
+# class type) for one another, and a value-initialization in a template
+# as an unresolved construction.
+map CXXTemporaryObjectExpr CXXFunctionalCastExpr,CompoundLiteralExpr
+map CXXFunctionalCastExpr CXXTemporaryObjectExpr
+map CXXScalarValueInitExpr CXXUnresolvedConstructExpr
+
+none CXXDefaultArgExpr nothing is written: the argument is the parameter's default
+none CXXDefaultInitExpr nothing is written: the initializer is the member's default
+
+opaque ExpressionTraitExpr clang's node has no children: the operand is not dumped
+opaque UnresolvedMemberExpr clang's dump leaves out the explicit template arguments (and an implicit object)
+opaque CXXDependentScopeMemberExpr clang's dump leaves out the explicit template arguments
+
+# `S(S())` with -fno-elide-constructors: clang 19 gives the inner `S()`
+# the end of the outer cast's `)`.
+quirk tests/conformance/class.copy.elision/no-elide-constructors-run.cpp:1315 clang's inner temporary ends at the outer `)`
+# A base initializer `B{...}` that picks an initializer-list constructor:
+# clang 19 gives the construction the range of the type name alone.
+quirk tests/conformance/templates/ctad/over.match.class.deduct-init-list.cpp:1067 clang's initializer-list construction of a base ends at its name

@@ -1820,8 +1820,13 @@ impl Parser<'_, '_> {
         // `e.f<args>` naming a member function template ([temp.names]/3).
         if self.at(Punct::Less) && self.s.is_member_template_ref(e) {
             let (args, _, _) = self.parse_template_arg_list()?;
+            let r_angle = self.prev_lo();
             let l = self.s.ast.types.arg_list(&args);
             e = self.s.act_on_member_template_args(e, l);
+            // The member access ends at the `>`.
+            if self.s.ast.exprs.get(e).kind() == ExprKind::MemberExpr {
+                self.s.set_template_id_end(e, r_angle);
+            }
         } else if self.at(Punct::Less)
             && self.s.dependent_member_names_template(e, qual.map(|q| q.ctx))
         {
@@ -2557,7 +2562,7 @@ impl Parser<'_, '_> {
             let name = self.ident()?;
             let nl = self.bump().span.lo;
             self.note_wname_dtor(tl, nl, link);
-            let this = self.s.act_on_this(begin);
+            let this = self.s.act_on_implicit_this(begin);
             return Some(self.s.act_on_member_destructor_q(
                 this,
                 Some(q),

@@ -7,7 +7,7 @@ mod cfg_shape;
 mod compare;
 mod diag_parse;
 pub(crate) mod directives;
-mod discover;
+pub(crate) mod discover;
 pub(crate) mod external;
 mod inst_report;
 mod pp_tokens;

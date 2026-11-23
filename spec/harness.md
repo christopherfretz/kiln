@@ -1991,6 +1991,117 @@ Scratch files live in `<target>/xtask-test/run-<pid>-<nanos>/t<index>/`. Each
 test's directory is removed when the test finishes, and the run directory is
 removed at the end of the run.
 
+## Expression extents
+
+`cargo xtask extents [options] [paths...]` (WP-2327) checks the written
+extents of spec/ast.md §21 against clang: every expression kiln dumps
+with `-fkiln-dump-expr-extents` (§21.4) is matched with the node clang's
+`-Xclang -ast-dump=json` gives the same file, kind and first byte, and a
+written extent kiln states must be the range clang gives that node.
+
+- **Units.** Stage 1 (the default, and run 7 of `ci`): the test files
+  under `paths` (default `tests/conformance`) that both front ends can
+  take alone with their own `-std=` and `args:`: not `compile-fail`,
+  `pp` or `ice`; no `module:`, `unit:`, `header-unit:`, `pch:` or
+  `as-header-unit`; not `gcc` (GCC is its oracle: what clang accepts
+  may differ); no `skip` for kiln or clang; no `requires-*` or
+  `min-oracle`; no `-fkiln*`, `-fclang-compat` or `%{...}` argument; and
+  no `#include`, `#import` or `#embed` of a `<...>` header (wall time,
+  and the comparison is of the test, not the library). Both run from the
+  repository root with `-fsyntax-only`. A unit either front end rejects
+  (exit 1) is listed as `rejected <unit>: <who>: <first error>` and not
+  compared, as is one clang crashes on (clang's failure, not kiln's); a
+  kiln crash, a hang of either (600 s), or a dump that cannot be read is
+  `failed <unit>: ...`, a failure. Stage 2 is `--compdb
+  <compile_commands.json>` (with `--filter <substr>` on the file names):
+  each entry's command without the compiler, `-c`, `-o` and the source;
+  it is a report, not gated by the baseline.
+- **Clang's side** is read as a stream (`xtask/src/extents/json.rs`, a
+  pull reader; `clang.rs`), so a dump of any size takes constant memory.
+  Clang prints a location's `file` only when it differs from the
+  location printed last in document order, so the reader carries the
+  file forward over every location of the dump, read or skipped. Skipped:
+  implicit declarations, the specializations a template prints under
+  itself (its first templated declaration is the pattern), and
+  class and variable template specializations listed under the template.
+  The nodes read are the kinds ending in `Expr`, `Operator` or
+  `Literal`, and the clang kinds of the kinds table. A node's range is
+  `begin.offset` to `end.offset + end.tokLen`.
+- **The kinds table** `tests/extents/kinds.txt`: `map <KilnKind>
+  <ClangKind>[,...]` (clang's kinds compared as kiln's; `*` is any kind,
+  for the implicit wrappers, which have the extent of the written node
+  inside them where clang may build another node or none), `none
+  <KilnKind> <reason>` (a kind kiln never gives an extent: an extent of
+  one is a mismatch), `opaque <ClangKind> <reason>` (clang's dump leaves
+  out operands of the kind: a kiln node strictly inside one is compared
+  only where clang has a node at the same first byte), `quirk
+  <file>:<begin> <reason>` (clang's range there is wrong: kiln's nodes
+  beginning there are not compared) and `skip <KilnKind> <reason>` (not
+  compared), followed by one to three indented lines of a source on
+  which the two front ends build different nodes. A malformed table is
+  an error.
+- **Matching.** Per unit, clang's file-text nodes are keyed by (file,
+  first byte); a kiln extent matches a node of its key with the same
+  end whose kind is kiln's or matches it by the table, the node of the
+  same kind first. Ends are compared as sets: a node one tree has more
+  often at one place (a conversion clang builds twice) is a shape
+  difference, not an extent one. A clang node touching a macro gets the
+  ranges the rule of spec/lex.md "Token ranges" could give it: when both
+  ends are in one argument use, the spelling (when the argument is
+  itself a macro, clang's spelling is in that macro's definition, not
+  the argument's text: a kiln node of a matching kind inside the
+  invocation is then macro-skipped); and the expansion: the begin's file
+  offset or invocation start, to the end's file end or the invocation's
+  end (the name's end and, when `(` follows, the balanced `)`: clang
+  does not say which macros are function-like, so both are candidates);
+  a builtin macro's result (`__has_builtin(x)`), spelled in clang's
+  scratch space and expanded at the invocation's `)`, also begins at the
+  invocation's name. A kiln extent left over is matched against those. A clang node
+  touching a macro with no candidate (a scratch-buffer spelling, ends in
+  two files) is *macro-skipped*. A kiln extent still left over passes
+  when it is the extent of a matched kiln node (an implicit node around
+  a written one, where clang builds none), when a clang node of a
+  matching kind with no valid begin has its end (clang 19's
+  construction of a pack-indexed type), and is not compared when no
+  clang node of the file overlaps it (text clang did not compile as an
+  expression: the other branch of a conditional inclusion, the message
+  of `= delete("...")`). Unmatched clang nodes are *clang-only* (kiln's
+  `None`, or a node kiln does not build): counted, never a failure.
+  Only the files of the repository are compared in a test unit (a node
+  of a system header is dropped), and an initializer list's
+  `array_filler` is read as its children. **A unit passes** when every
+  kiln extent is matched, no line is `!` (an extent that is no file
+  range), and the baseline holds.
+- **The baseline** `tests/extents/baseline.txt`: per unit, the FNV-1a
+  hash of its text and each kind with a `None` share, `unit <path> <hash>
+  <Kind>=<none>/<total>...`. A unit whose text is unchanged may not get
+  a larger `None` share of any kind (`none-grew <unit> <Kind>: n/t
+  (baseline n/t)`, a failure); a new or changed unit is not gated and is
+  counted on a `baseline:` line. `--update-baseline` rewrites the file
+  from a whole default run (not with `--shard`, `--compdb` or
+  `--filter`).
+- **Output**, deterministic: `extents: <units> units, <n> compared, <m>
+  mismatches, <s> macro-skipped`; one `kind <Kind>: some <a> none <b>
+  clang-only <c> mismatch <d>` per kind, sorted; then, sorted, the
+  `failed`, `mismatch`, `none-grew` and `rejected` lines, `mismatch
+  <file>:<begin>-<end> <Kind> kiln "<text>" clang <begin>-<end> "<text>"`
+  (clang's node of the same key, else of the same end, else `- ""`);
+  `-v` adds a `unit <name>: ok|FAIL` line per unit, `--nones` a `none
+  <file>:<offset> <Kind> "<text>"` line per `None` (`none - <Kind>`
+  without a file location: a part of a macro body), the inventory
+  behind spec/ast.md §21.3. Exit 0 when every
+  unit passes, 1 otherwise, 2 on a usage or table error.
+- Options: `--kiln` (default: build it), `--clang` (default
+  `clang++-19`), `--kinds`, `--baseline`, `--shard K/N` (the sorted
+  units, as for `test`), `-j`/`--jobs <n>` (units at once; default the
+  CPUs), `--nones`.
+- Tests: `xtask/src/extents/tests.rs` (the JSON reader, the file carry
+  and the template skip, the table, the baseline, matching with macros
+  and sets, what clang cannot show, a builtin macro's invocation begin,
+  the unit filter, and spec/ast.md §21.3 against the baseline's kinds).
+- Wall time: stage 1 (2808 units, about 198k nodes compared) takes
+  about 2-5 minutes at `-j 4` with a debug kiln, under 160 MB RSS.
+
 ## The mangling differential
 
 `crates/kiln_codegen/tests/mangle_vs_clang.rs` (WP-980) compiles every
@@ -2245,6 +2356,12 @@ if the first fails, so one cannot hide the other:
    Like run 5 they are selected by `--step kiln`, take the same `--shard`
    and are judged like run 4; `--oracle-only` skips them (they run no
    oracle).
+7. **Expression extents** (WP-2327): `cargo xtask extents --kiln <that
+   kiln>`, stage 1 ("Expression extents"), printed as `corpus (kiln
+   extents)`; its line counts units (a unit with a mismatch, a failure or
+   a grown `None` share is a FAIL; a test file that is no unit is a
+   SKIP). Selected by `--step kiln`, takes the same `--shard`;
+   `--oracle-only` skips it.
 
 `ci` then prints one line per corpus run, `xtask ci: corpus (<run>): <line>`,
 where `<line>` is the run's summary line ("Output"), `skipped (<reason>)`, or

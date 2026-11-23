@@ -205,6 +205,48 @@ pub fn for_each_written_expr(
     }
 }
 
+/// Every expression node of the written bodies and initializers of
+/// `ast`, each once, in the dump's order (spec/ast.md §21.4): what
+/// `-fdump-ast=all-files` prints, minus implicit declarations and the
+/// specializations a template's instantiation or an explicit
+/// instantiation made (a template's pattern and an explicit
+/// specialization are written). The walk is the dump's own, so it reaches
+/// the nodes clang's dump prints under the same declarations.
+pub fn written_exprs(ast: &Ast) -> Vec<ExprId> {
+    let opts = DumpOptions { all_files: true, ..DumpOptions::default() };
+    let d = Dumper::new(ast, &opts, io::sink());
+    let mut out = Vec::new();
+    let mut seen_exprs = kiln_source::fx::FxHashSet::default();
+    let mut seen_decls = kiln_source::fx::FxHashSet::default();
+    let mut stack = vec![Node::Decl(ast.tu)];
+    let mut kids = Vec::new();
+    while let Some(node) = stack.pop() {
+        match node {
+            Node::Decl(x) => {
+                let made = ast
+                    .spec_info(x)
+                    .is_some_and(|(_, i)| !matches!(i.kind, SpecKind::ExplicitSpecialization));
+                let implicit = x != ast.tu && ast.decls.get(x).has(DeclFlags::IMPLICIT);
+                if made || implicit || !seen_decls.insert(x) {
+                    continue;
+                }
+            }
+            Node::SpecRef(_) => continue,
+            Node::Expr(e) => {
+                if !seen_exprs.insert(e) {
+                    continue;
+                }
+                out.push(e);
+            }
+            _ => {}
+        }
+        kids.clear();
+        d.children(node, &mut kids);
+        stack.extend(kids.iter().rev().map(|&(k, _)| k));
+    }
+    out
+}
+
 /// A printed node.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Node {

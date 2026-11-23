@@ -3413,6 +3413,9 @@ impl Sema<'_, '_> {
             };
         let s = Sub { braced: false, entry: Some(k2), prior, update, direct: false };
         let e = self.check_aggregate_in(ty, items, pos, s, at, at);
+        if self.ast.exprs.get(e).kind() == ExprKind::InitListExpr {
+            self.ast.exprs.set_init_list_designated(e);
+        }
         match base {
             Some(b) => self.builder().designated_init_update(ty, b, e),
             None => e,

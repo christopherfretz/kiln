@@ -1145,7 +1145,7 @@ impl Substituter<'_, '_, '_> {
                 let c = self.expr(c)?;
                 let l = self.expr(l)?;
                 let r = self.expr(r)?;
-                Ok(self.sema.act_on_choose_expr(loc, c, l, r, loc))
+                Ok(self.sema.act_on_choose_expr(loc, c, l, r, end))
             }
             // clang `TransformGenericSelectionExpr`: the controlling
             // operand (unevaluated), each association type and

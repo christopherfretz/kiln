@@ -32,7 +32,7 @@ pub use lexer::Lexer;
 pub use options::{CStd, LexMode, LexOptions, Std};
 pub use spelling::{clean, source_offset, spelling};
 pub use token::{Encoding, Punct, TokFlags, TokKind, Token};
-pub use token_end::token_end;
+pub use token_end::{token_end, token_range};
 pub use unicode::{NameMatch, is_identifier, lookup_char_name};
 
 /// The Unicode version of the identifier tables ([lex.name] uses UAX #31

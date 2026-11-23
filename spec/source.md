@@ -286,13 +286,20 @@ the preprocessing record build on):
 Editable file ranges (WP-2150; clang `Lexer::makeFileCharRange`,
 `Lexer::isAtStartOfMacroExpansion` / `isAtEndOfMacroExpansion`,
 `edit::Commit::canInsert`). The fix-its of spec/sema.md §7.10.1 use
-these queries, so fix-it placement and tooling clients never differ.
+these queries, so fix-it placement and tooling clients never differ;
+`kiln_lex::token_range` (spec/lex.md "Token ranges") is the rule applied
+to a pair of token starts, and the written extents of spec/ast.md §21 are
+file ranges by it.
 - `file_loc_at_macro_start(loc) -> Option<Loc>`: identity for a file
   location; for a macro location, when `loc` is the first location of its
   entry and of every expansion outward (an argument begins its
   parameter's expansion unless the previous entry continues the same
   argument use, i.e. has the same `expansion.lo`), the start of the
-  outermost invocation; else `None`.
+  outermost invocation; else `None`. The result of a function-like
+  builtin macro (`__has_builtin(x)`) takes the location of its `)`, as
+  in clang (its entry's `expansion` is the `)`), but its invocation
+  starts at the name: an entry whose `name` is a file location before
+  its `expansion` in the same buffer starts at the name.
 - `file_loc_at_macro_end(end) -> Option<Loc>`: the same for an exclusive
   end: `end` must be the entry's last location (`base + len`) at every
   level (an argument ends its parameter's expansion unless the next entry

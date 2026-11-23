@@ -208,7 +208,7 @@ impl Sema<'_, '_> {
         cond: ExprId,
         lhs: ExprId,
         rhs: ExprId,
-        _rparen: Loc,
+        rparen: Loc,
     ) -> ExprId {
         if [cond, lhs, rhs].iter().any(|&x| self.is_err_expr(x)) {
             return self.recover_err(&[cond, lhs, rhs], loc);
@@ -220,7 +220,10 @@ impl Sema<'_, '_> {
         }
         let deps = self.ast.exprs.get(cond).deps();
         if deps.intersects(kiln_ast::expr::ExprDeps::TYPE.with(kiln_ast::expr::ExprDeps::VALUE)) {
-            return self.builder().choose_expr(cond, lhs, rhs, None, loc);
+            let e = self.builder().choose_expr(cond, lhs, rhs, None, loc);
+            // The `)` (clang's `getEndLoc`), for the written extent.
+            self.builder().record_end_loc(e, rparen);
+            return e;
         }
         let at = self.begin_loc(cond);
         let c = conv::lvalue_to_rvalue(self, cond);
@@ -237,7 +240,9 @@ impl Sema<'_, '_> {
                 let ty = self.ast.exprs.get(c).ty();
                 let cv = self.int_const(ty, v);
                 let wrapped = self.builder().constant_expr(c, Some(cv));
-                self.builder().choose_expr(wrapped, lhs, rhs, Some(v != 0), loc)
+                let e = self.builder().choose_expr(wrapped, lhs, rhs, Some(v != 0), loc);
+                self.builder().record_end_loc(e, rparen);
+                e
             }
             Err(mut f) => {
                 let at = Self::fold_lone_invalid(&mut f, at);

@@ -683,6 +683,7 @@ impl SyntaxJob<'_> {
             None
         };
         let pp_record_row = crate::pp_record_row(&pp);
+        let lex_options = *pp.lex_options();
         drop(pp);
         result.dep_list = deps;
         job.write_image_reports(sm, tu.image_census.as_ref(), engine);
@@ -713,6 +714,10 @@ impl SyntaxJob<'_> {
         }
         if a.dump_decl_extents {
             result.output.push_str(&tu.ast.decl_extents.dump(&tu.ast, sm, main_id));
+        }
+        if a.dump_expr_extents {
+            let x = kiln_parse::ExprExtents::new(&tu.ast, sm, interner, lex_options);
+            result.output.push_str(&x.dump());
         }
         if let Some(d) = pp_record {
             result.output.push_str(&d);

@@ -3651,3 +3651,171 @@ Every value in these tables (a row's roles, an enum maximum, a field's
 bits, a named constant, a descriptor) is stable within a snapshot
 `FORMAT_VERSION`: a change to any of them is a format bump, and the
 tests above fail on one that is not.
+
+## 21. Written extents of expressions (WP-2327)
+
+A tooling client that moves, wraps or replaces an expression as text
+needs its first and last token exactly; a range one token short (clang's
+`getEndLoc` falling back to the node's own location) breaks the edit.
+This section is the promise kiln makes, and where it makes none.
+
+### 21.1 The guarantee
+
+- `kiln_ast::expr_extent::WrittenExtents::new(ast)` is the tree's view
+  and its `get(e) -> Option<(Loc, Loc)>` the location of the first and
+  of the last token of `e` as written, on the finished tree, or `None`.
+  A `Some` is exact for every kind: there is no fallback to the node's
+  own location. The two locations are token starts and may be macro
+  locations. `new` makes one pass over the lambdas and one over the
+  expressions (to find the nodes of 21.2 with nothing written: capture
+  initializers, the names unwritten calls call by, synthesized array
+  bounds), keeping them in a hash set: per node of the tree a one-word
+  kind test at view time, and a set entry only for a node found; `get`
+  reads only the tree and the set.
+- `kiln_parse::ExprExtents::new(ast, sm, interner, lex_options)` is the
+  client's view: its `written_extent(e)` is `WrittenExtents::get` when
+  the pair is one file range by the rule of spec/lex.md "Token ranges"
+  (and not a scratch buffer), else `None`, so a `Some` is always
+  expressible; `written_range(e) -> Option<(FileId, u32, u32)>` is that
+  range in bytes, end exclusive.
+- Nothing is computed while parsing: the walk reads what the tree already
+  holds (operands, `ExprArena::end_loc` and its cold side table of
+  closing tokens, the qualified-name begins of `templates.expr_begin`).
+  No node grew and no stored location was added; one per-kind flag bit
+  (`ExprFlags::DESIGNATED` on `InitListExpr`, 21.2) is new, carried in
+  the node's bits as every flag is, so the module image and the PCH
+  snapshot keep their layout (no format bump). Sema records a few more
+  closing tokens and qualifier begins in the tables it already has (the
+  `>` of a member template-id and of a resolved function template-id,
+  the `::` of a qualified builtin, the `)` of `__builtin_bit_cast` and
+  `__builtin_choose_expr`), which clang's `getBeginLoc` / `getEndLoc`
+  give too, and a member call whose object it converts
+  keeps the `__extension__`, `__builtin_choose_expr` or `_Generic`
+  around its callee, as clang converts the object in place (before,
+  only parentheses were kept, and the call began at the member).
+
+### 21.2 Decisions
+
+- **Implicit wrappers** (`ImplicitCastExpr`, `MaterializeTemporaryExpr`,
+  `CXXBindTemporaryExpr`, `ExprWithCleanups`, `ConstantExpr`,
+  `CXXStdInitializerListExpr`) have the extent of the written node
+  inside them.
+- **Nothing written**: `CXXDefaultArgExpr`, `CXXDefaultInitExpr`,
+  `ImplicitValueInitExpr`, `NoInitExpr`, `ArrayInitLoopExpr`,
+  `ArrayInitIndexExpr`, `OpaqueValueExpr`, an implicit `CoawaitExpr`
+  (an initial or final suspend point), an implicit `CXXThisExpr`
+  (also the object of `X::~X()` in a member function), the initializer
+  of an implicit lambda capture and of a variable length array bound's
+  capture, a reference to an implicitly declared variable (a coroutine's
+  promise), a member access whose object the compiler made (an awaiter)
+  a call with no written parentheses that is not a user-defined
+  literal, the name such a call calls by (a coroutine's
+  `from_address`), and an array bound `new` takes from an array typedef
+  or completes from the initializer (`new int[]{1, 2}`) are `None`.
+- **Calls without parentheses**: a user-defined literal (`12_k`,
+  `"ab" "cd"_sv`) is its literal, through the last piece of a
+  concatenation; an implicit conversion function call (`int i = s;`)
+  is its object.
+- **Brace elision**: a list whose braces were elided begins at its first
+  written initializer and ends at its last; one a designator opens
+  (`.a.y = 3`'s list of `a`) begins inside the designator, whose parts
+  the tree does not keep, and is `None` (`ExprFlags::DESIGNATED`).
+- **Rewritten operators** (`a != b` as `!(a == b)`, a comparison
+  through `<=>`): the `CXXRewrittenBinaryOperator` has the written
+  extent, from its first written operand to its last; the nodes built
+  inside it are ordinary nodes, whose implicit parts are `None`.
+- **Implicit-this member access** (`x` in a member function) begins at
+  the member's name; with a qualifier (`B::x`), whose begin the tree
+  does not keep, it is `None`, as is a qualified `DeclRefExpr` whose
+  begin was not recorded.
+- First token: the first operand for binary, conditional, subscript,
+  call, member-call, postfix and overloaded non-prefix operators, and
+  the pattern of a pack expansion or a pack index; the
+  node's own location for the kinds that begin with a keyword or a
+  punctuator (casts, `sizeof`, `new`, `delete`, `throw`, lambdas, braced
+  lists, parentheses, prefix operators); a name's qualifier begin when
+  it has one.
+- Last token: the stored closing token (`)`, `]`, `}`, `>` of a named
+  cast is followed by its `)`) when the kind keeps one; the last operand
+  for binary, conditional, C-style cast, prefix, `delete`, `co_await`,
+  `co_yield` and `sizeof`/`alignof` of an expression (`sizeof(e)`'s
+  parentheses are a `ParenExpr`); the list of a compound literal; the
+  node itself for one-token literals, `this`, postfix operators, the
+  `...` of a pack expansion and an ext-vector accessor; the last
+  piece of a concatenated string literal; a plain identifier name. A
+  name that is an operator, conversion or destructor name, or that has
+  template arguments (a variable template specialization always has),
+  with no stored end: `None`.
+
+### 21.3 Kinds that may be `None`
+
+The kinds for which stage 1 of `cargo xtask extents` (spec/harness.md
+"Expression extents") finds a `None`, each with the reason; the
+per-unit `None` counts are gated by `tests/extents/baseline.txt`, so
+none of them grows unnoticed.
+
+Two reasons recur, named here once:
+
+- **(M) a part of a macro body**: the node's tokens are spelled in a
+  `#define`; the rule of spec/lex.md "Token ranges" maps a whole
+  expansion or one argument use, never a part of a body (nor a pasted
+  or stringized token, spelled in a scratch buffer).
+- **(W) a wrapper of a `None`**: an implicit wrapper (21.2) whose written
+  node has none.
+
+The counts are stage 1's at WP-2327 (`None` / all nodes of the kind);
+the baseline, not this table, is the gate.
+
+| Kind | `None` | Reasons |
+|---|---|---|
+| `ArrayInitIndexExpr`, `ArrayInitLoopExpr` | 15/15 each | nothing written: an array member's copy in an implicit or defaulted copy |
+| `ArraySubscriptExpr` | 138/1522 | M; the element accesses of a defaulted comparison |
+| `BinaryOperator` | 11053/27430 | M (most: test macros over comparisons); a range-`for`'s `__begin != __end`; a defaulted comparison's operations |
+| `CStyleCastExpr` | 623/2112 | M |
+| `CXXBindTemporaryExpr`, `MaterializeTemporaryExpr`, `ExprWithCleanups`, `ConstantExpr`, `ImplicitCastExpr` | 2294/2928, 2430/4617, 1436/3263, 9/1180, 8940/56488 | W; M |
+| `CXXBoolLiteralExpr`, `CXXNullPtrLiteralExpr`, `GNUNullExpr`, `FloatingLiteral`, `IntegerLiteral`, `StringLiteral` | 417/1912, 1/561, 1/54, 152/1029, 9938/39099, 344/2919 | M |
+| `CXXConstructExpr` | 3860/6304 | M; a default construction (`S s;`, an element or member with no initializer): nothing written |
+| `CXXDefaultArgExpr`, `CXXDefaultInitExpr` | 352/352, 522/522 | nothing written: the parameter's or member's default |
+| `CXXDependentScopeMemberExpr` | 136/511 | M; a member template-id (`this->f<T>`, whose `>` the tree does not keep); a qualified member (`this->B::f`) through an implicit `this`; an operator name (`x.operator()<1>`) |
+| `CXXFoldExpr` | 5/151 | the fold of a constrained pack (`C... Ts`, 21.2): no parentheses written |
+| `CXXFunctionalCastExpr`, `CXXUnresolvedConstructExpr`, `CXXStaticCastExpr`, `CXXNoexceptExpr`, `CXXThrowExpr`, `LambdaExpr`, `OffsetOfExpr`, `TypeTraitExpr`, `UnaryExprOrTypeTraitExpr`, `CompoundAssignOperator` | 2492/5382, 94/495, 105/624, 29/171, 16/229, 45/970, 12/85, 68/1760, 141/1852, 256/1148 | M (`CXXStaticCastExpr`: one in an implicit member's body) |
+| `CXXMemberCallExpr`, `CallExpr`, `MemberExpr`, `DeclRefExpr` | 2728/4801, 1483/12748, 4510/12276, 6316/45673 | M; the calls and names a coroutine, a range-`for`, a structured binding or a defaulted function makes (promise, awaiter, `begin`/`end`, `get`); the `operator()` a lambda call names; a qualified name through an implicit `this` (`B::x`) or with an unrecorded qualifier begin; a name with template arguments whose `>` is not kept |
+| `CXXOperatorCallExpr` | 73/1197 | M; a range-`for`'s `++__begin`/`*__begin` and a defaulted comparison's operations on class iterators and members |
+| `CXXParenListInitExpr` | 71/71 | the parenthesized aggregate initialization of a variable (`S s(1, 2)`) or a cast (`static_cast<int[3]>(42)`): the parentheses belong to the declarator or the cast, which the node does not keep |
+| `CXXPseudoDestructorExpr` | 85/85 | the end of the destroyed type (`p->~T`, `x.~decltype(x)`) is not kept |
+| `CXXStdInitializerListExpr` | 2/71 | W (a list sema builds) |
+| `CXXThisExpr` | 2515/2918 | an implicit `this`; M |
+| `CoawaitExpr` | 48/58 | an implicit `co_await` (an initial or final suspend point) |
+| `ConceptSpecializationExpr` | 142/761 | a type-constraint's immediately-declared constraint (`C<X> T` is `C<T, X>`): not written as an expression; a qualified concept-id whose qualifier begin is not recorded; M |
+| `ConditionalOperator` | 239/1025 | M; a defaulted comparison's operations |
+| `DependentScopeDeclRefExpr`, `UnresolvedLookupExpr` | 58/304, 261/651 | M; a template-id whose `>` the tree does not keep (`T::template v<int>`); an operator name (`operator==(a, b)`) |
+| `DesignatedInitExpr`, `DesignatedInitUpdateExpr` | 48/48, 19/19 | the designator's parts are not kept (21.2) |
+| `ImplicitValueInitExpr`, `NoInitExpr`, `OpaqueValueExpr` | 861/861, 26/26, 117/117 | nothing written |
+| `InitListExpr` | 398/4357 | a list sema builds for an element or member with no initializer (at the enclosing `}`); a list a designator opens; M |
+| `PackExpansionExpr` | 5/93 | its pattern has none (an expansion of a braced construction) |
+| `ParenExpr` | 9412/11054 | M (the parentheses of a macro body, `#define F(x) (x)`) |
+| `PseudoObjectExpr` | 5/5 | the operations a defaulted comparison makes |
+| `SubstNonTypeTemplateParmExpr` | 10/10 | the value of a template argument in an instantiated member's initializer: written as the parameter's name, not mapped |
+| `UnaryOperator` | 1894/7587 | M; a range-`for`'s `++__begin` and `*__begin` |
+
+### 21.4 The dump (`-fkiln-dump-expr-extents`)
+
+With `-fsyntax-only`, one line per expression node of every written body
+and initializer (function bodies; variable, field, enumerator, parameter
+and template-parameter initializers; constraint and `noexcept`
+expressions; template patterns, not instantiations; no implicit
+members), in the order of the AST dump walk (`kiln_ast::dump::
+written_exprs`): `<kind> TAB <file> TAB <begin> TAB <end>`, byte offsets
+of `ExprExtents::written_range`, `end` exclusive. A `None` has `-` for
+`end`, and for `begin` the offset of the node's own location when that
+is file text (else `-`, with `-` for the file). A `Some` that were no
+file range would print `<kind> TAB ! TAB unmapped TAB -`; the harness
+fails on one.
+
+### 21.5 Tests
+
+`crates/kiln_parse/tests/expr_extents.rs` (every kind of 21.2 and the
+macro cases: an argument, a whole invocation, a part of a body, a
+pasted token) and `cargo xtask extents` (stage 1 in `ci`); the xtask
+test `the_none_table_is_the_baselines_kinds` holds the table of 21.3 to
+exactly the kinds of the baseline.

@@ -175,6 +175,7 @@ fn excluded(args: &Args) -> Args {
         // §18.10.1): either side may differ.
         written_refs: d.written_refs,
         dump_decl_extents: d.dump_decl_extents,
+        dump_expr_extents: d.dump_expr_extents,
         // The preprocessing record likewise: carried when the producer
         // recorded it, read when the consumer records (spec/pp.md
         // "Preprocessing record", stage 4).
@@ -1218,6 +1219,7 @@ pub(crate) fn single_pass_blocker(
         (args.dump_cfg, "-fkiln-dump-cfg"),
         (args.dump_written_refs, "-fkiln-dump-written-refs"),
         (args.dump_decl_extents, "-fkiln-dump-decl-extents"),
+        (args.dump_expr_extents, "-fkiln-dump-expr-extents"),
         (args.dump_pp_record, "-fkiln-dump-pp-record"),
         (args.cfg_stats, "-fkiln-cfg-stats"),
         (args.bmi_image_census || args.bmi_image_census_all, "-fkiln-bmi-image-census"),

@@ -23,6 +23,7 @@ pub mod decl_extents;
 pub mod diag_names;
 pub mod dump;
 pub mod expr;
+pub mod expr_extent;
 pub mod fp;
 pub mod ids;
 pub mod journal;

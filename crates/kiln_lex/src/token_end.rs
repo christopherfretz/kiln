@@ -58,3 +58,31 @@ pub fn token_end(
     let t = lx.next();
     (t.kind != TokKind::Eof && t.span.lo == loc).then_some(t.span.hi)
 }
+
+/// The bytes of one file that the tokens from the one at `first` through
+/// the one at `last` are written as: `(file, begin, end)` with `end`
+/// exclusive, or `None` (spec/lex.md "Token ranges", spec/source.md
+/// "Editable file ranges").
+///
+/// `last`'s token is measured by [`token_end`], and the range
+/// `[first, end)` is mapped by `SourceManager::editable_file_range`, the
+/// rule fix-its use: two file locations give themselves; ends in one use
+/// of one macro argument give where the argument is written; a range
+/// that begins (ends) every expansion it begins (ends) in gives the
+/// invocations, from the macro name through the closing parenthesis (the
+/// name alone for an object-like macro). Anything else (an end inside a
+/// replacement list, ends in two arguments, a token made by `#` or `##`
+/// that is not the whole expansion, a range across files) is `None`, as
+/// are invalid locations and a `last` that starts no token. A range one
+/// token long is `token_range(sm, interner, at, at, opts)`.
+pub fn token_range(
+    sm: &SourceManager,
+    interner: &Interner,
+    first: Loc,
+    last: Loc,
+    opts: LexOptions,
+) -> Option<(kiln_source::FileId, u32, u32)> {
+    let end = token_end(sm, interner, last, opts)?;
+    let (file, begin, end) = sm.editable_file_range(kiln_source::Span::new(first, end))?;
+    (begin < end).then_some((file, begin, end))
+}

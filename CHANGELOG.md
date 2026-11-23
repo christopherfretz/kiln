@@ -65,6 +65,14 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   `-fkiln-dump-pp-record=source-order` prints a condition's reads in
   source order. Off, a snapshot has no byte of the record (PCH
   `FORMAT_VERSION` 150).
+- Written extents of expressions for tooling clients (WP-2327, WP-2328;
+  spec/ast.md §21, spec/lex.md "Token ranges"):
+  `kiln_ast::expr_extent::WrittenExtents` gives the first and last token
+  of an expression exactly or `None`, and
+  `kiln_parse::ExprExtents` maps it to bytes of one file by the rule the
+  macro fix-its use (`kiln_lex::token_range`); `-fkiln-dump-expr-extents`
+  prints them, and `cargo xtask extents` compares them with clang's source
+  ranges, its stage 1 (the conformance corpus) a run of `ci`.
 - The written-reference table's stage-4 gaps are closed (WP-2220..WP-2224,
   WP-2170; spec/ast.md §18.8, §18.9): per-specialization entries name the
   using-directive their lookup went through (`SpecRef::udir`), re-find

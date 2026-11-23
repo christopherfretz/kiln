@@ -768,6 +768,20 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The implicit object of a member named without `this->` at `loc`
+    /// (`X::~X()` in a member function): `this`, marked implicit as
+    /// clang's is.
+    pub fn act_on_implicit_this(&mut self, loc: Loc) -> ExprId {
+        match self.current_this() {
+            Some(t) => {
+                self.watch_this_use(loc, true);
+                self.note_this_use(loc);
+                self.build_this(t, true, loc)
+            }
+            None => self.act_on_this(loc),
+        }
+    }
+
     /// Whether a member access into class `r` may treat it as complete
     /// although it is still being defined: `this` may appear here outside
     /// a member function body (a trailing return type or
