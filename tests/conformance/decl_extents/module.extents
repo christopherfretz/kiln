@@ -17,8 +17,8 @@ Export '(anonymous)'  full=extents_mod.cppm:12:1-extents_mod.cppm:14:2 } body=ex
 ParmVar 'a'  full=extents_mod.cppm:13:9-extents_mod.cppm:13:14 - own=extents_mod.cppm:13:13-extents_mod.cppm:13:14 name=extents_mod.cppm:13:13-extents_mod.cppm:13:14 'a' specs-end=extents_mod.cppm:13:12
 ParmVar 'b'  full=extents_mod.cppm:13:16-extents_mod.cppm:13:25 - own=extents_mod.cppm:13:20-extents_mod.cppm:13:25 name=extents_mod.cppm:13:20-extents_mod.cppm:13:21 'b' specs-end=extents_mod.cppm:13:19
 Function 'top'  full=extents_mod.cppm:13:1-extents_mod.cppm:13:27 ; own=extents_mod.cppm:13:5-extents_mod.cppm:13:26 name=extents_mod.cppm:13:5-extents_mod.cppm:13:8 'top' specs-end=extents_mod.cppm:13:4
-Export '(anonymous)'  full=extents_mod.cppm:15:1-extents_mod.cppm:22:2 }
-Namespace 'geo'  full=extents_mod.cppm:15:1-extents_mod.cppm:22:2 } name=extents_mod.cppm:15:18-extents_mod.cppm:15:21 'geo' body=extents_mod.cppm:15:22-extents_mod.cppm:22:2
+Export '(anonymous)'  full=extents_mod.cppm:15:1-extents_mod.cppm:24:2 }
+Namespace 'geo'  full=extents_mod.cppm:15:1-extents_mod.cppm:24:2 } name=extents_mod.cppm:15:18-extents_mod.cppm:15:21 'geo' body=extents_mod.cppm:15:22-extents_mod.cppm:24:2
 TemplateTypeParm 'geo::T'  full=extents_mod.cppm:16:11-extents_mod.cppm:16:18 - name=extents_mod.cppm:16:17-extents_mod.cppm:16:18 'T'
 CXXRecord 'geo::Box'  full=extents_mod.cppm:16:1-extents_mod.cppm:16:34 ; own=extents_mod.cppm:16:20-extents_mod.cppm:16:33 name=extents_mod.cppm:16:27-extents_mod.cppm:16:30 'Box' body=extents_mod.cppm:16:31-extents_mod.cppm:16:33
 ClassTemplate 'geo::Box'  full=extents_mod.cppm:16:1-extents_mod.cppm:16:34 ; own=extents_mod.cppm:16:20-extents_mod.cppm:16:33 name=extents_mod.cppm:16:27-extents_mod.cppm:16:30 'Box' body=extents_mod.cppm:16:31-extents_mod.cppm:16:33
@@ -29,4 +29,7 @@ TemplateTypeParm 'geo::T'  full=extents_mod.cppm:18:11-extents_mod.cppm:18:18 - 
 Enum 'geo::Opaque'  full=extents_mod.cppm:19:1-extents_mod.cppm:19:25 ; own=extents_mod.cppm:19:1-extents_mod.cppm:19:24 name=extents_mod.cppm:19:12-extents_mod.cppm:19:18 'Opaque'
 Enum 'geo::Opaque'  full=extents_mod.cppm:20:1-extents_mod.cppm:20:25 ; own=extents_mod.cppm:20:1-extents_mod.cppm:20:24 name=extents_mod.cppm:20:12-extents_mod.cppm:20:18 'Opaque'
 CXXRecord 'geo::Box'  full=extents_mod.cppm:21:1-extents_mod.cppm:21:26 ; own=extents_mod.cppm:21:10-extents_mod.cppm:21:25 name=extents_mod.cppm:21:17-extents_mod.cppm:21:25 'Box<int>'
+CXXRecord 'geo::Box'  full=extents_mod.cppm:22:1-extents_mod.cppm:22:66 ; own=extents_mod.cppm:22:10-extents_mod.cppm:22:65 name=extents_mod.cppm:22:56-extents_mod.cppm:22:65 'Box<long>' attr=Visibility@extents_mod.cppm:22:32-extents_mod.cppm:22:53
+ParmVar '(anonymous)'  full=extents_mod.cppm:23:66-extents_mod.cppm:23:70 - own=extents_mod.cppm:23:70-extents_mod.cppm:23:70 specs-end=extents_mod.cppm:23:70
+Function 'geo::twice<long>'  full=extents_mod.cppm:23:1-extents_mod.cppm:23:72 ; own=extents_mod.cppm:23:54-extents_mod.cppm:23:71 name=extents_mod.cppm:23:54-extents_mod.cppm:23:65 'twice<long>' specs-end=extents_mod.cppm:23:53 attr=Visibility@extents_mod.cppm:23:25-extents_mod.cppm:23:46
 Function 'use'  full=11:1-11:45 } own=11:5-11:45 name=11:5-11:8 'use' body=11:11-11:45 specs-end=11:4

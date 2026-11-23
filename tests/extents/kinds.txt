@@ -35,9 +35,12 @@ map MemberExpr UnresolvedMemberExpr,CXXDependentScopeMemberExpr
 map DeclRefExpr DependentScopeDeclRefExpr,UnresolvedLookupExpr
 # The other way: kiln keeps a name unresolved in a template where clang
 # has resolved it, to a local function, a member (through an implicit
-# `this`) or a member of the current instantiation.
+# `this`) or a member of the current instantiation. A member named by a
+# dependent using-declarator is an implicit `this->name` with no object
+# in kiln, also in a static member function, where clang keeps the
+# lookup (an `UnresolvedLookupExpr` over the using-declarator).
 map UnresolvedLookupExpr DeclRefExpr,UnresolvedMemberExpr,MemberExpr,CXXDependentScopeMemberExpr
-map CXXDependentScopeMemberExpr MemberExpr,UnresolvedMemberExpr
+map CXXDependentScopeMemberExpr MemberExpr,UnresolvedMemberExpr,UnresolvedLookupExpr
 map DependentScopeDeclRefExpr DeclRefExpr
 # A user-defined literal is a call in kiln; so is a call of a lambda
 # in a template, which clang builds as an operator call.

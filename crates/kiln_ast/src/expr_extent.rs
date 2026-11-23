@@ -203,7 +203,7 @@ impl<'a> WrittenExtents<'a> {
                         // An implicit conversion function call: the object.
                         Some(obj) => e = obj,
                         // A literal with a ud-suffix is written.
-                        None if self.call_is_udl(e) => return Some(e),
+                        None if self.is_udl_call(e) => return Some(e),
                         None => return None,
                     }
                 }
@@ -247,10 +247,18 @@ impl<'a> WrittenExtents<'a> {
                     self.exprs.first_child(e, &self.lists)?
                 }
                 ExprKind::MemberExpr | ExprKind::CXXDependentScopeMemberExpr => {
-                    let base = self.exprs.first_child(e, &self.lists)?;
-                    if self.written_node(base).is_some() {
+                    // A dependent member access with no object is an
+                    // implicit `this->name`: a dependent
+                    // conversion-function-id (`operator T*()`) or a member
+                    // named by a dependent using-declarator (`using
+                    // T::f;` then `f()`), as clang's implicit `this`.
+                    let base = self.exprs.first_child(e, &self.lists);
+                    let written = base.filter(|&b| self.written_node(b).is_some());
+                    if let Some(base) = written {
                         base
-                    } else if !self.is_implicit_this(base) {
+                    } else if base.map_or(n.kind() != ExprKind::CXXDependentScopeMemberExpr, |b| {
+                        !self.is_implicit_this(b)
+                    }) {
                         // A base the compiler made (an awaiter, a
                         // structured binding's object): nothing written.
                         return None;
@@ -524,32 +532,6 @@ impl WrittenExtents<'_> {
             .map(|&i| ExprId::new(i))
             .find(|&i| self.written_node(i).is_some())?;
         self.written_last(last)
-    }
-
-    /// Whether the unwritten call `e` calls a literal operator.
-    fn call_is_udl(&self, e: ExprId) -> bool {
-        if self.exprs.get(e).kind() != ExprKind::CallExpr {
-            return false;
-        }
-        let mut c = self.exprs.callee(e);
-        for _ in 0..8 {
-            let n = self.exprs.get(c);
-            match n.kind() {
-                ExprKind::ImplicitCastExpr => match self.exprs.first_child(c, &self.lists) {
-                    Some(x) => c = x,
-                    None => return false,
-                },
-                ExprKind::DeclRefExpr => {
-                    let d = self.exprs.decl(c);
-                    return self.decls.get(d).name().kind() == DeclNameKind::LiteralOperator;
-                }
-                ExprKind::UnresolvedLookupExpr => {
-                    return self.unresolved_name(c).kind() == DeclNameKind::LiteralOperator;
-                }
-                _ => return false,
-            }
-        }
-        false
     }
 }
 

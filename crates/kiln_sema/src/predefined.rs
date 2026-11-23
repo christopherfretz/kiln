@@ -74,6 +74,7 @@ impl Sema<'_, '_> {
         // (`C<N::X>::m`), as clang prints the arguments it stores.
         let mut names = AstNames::with_sources(ast, self.diags.sm());
         names.closure_as_lambda = self.clang_compat >= 22;
+        names.local_scopes = self.clang_compat >= 22;
         names.scoped_spec_args = true;
         if kind != PredefinedKind::PrettyFunction {
             let mut s = String::new();

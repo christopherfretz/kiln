@@ -168,6 +168,21 @@ pub struct ModuleDeclExtent {
     pub kind: ModuleDeclKind,
 }
 
+/// An attribute written on the declaration of a row that keeps no node
+/// of it as written (spec/ast.md §19.2; WP-2541): an explicit
+/// instantiation's, which sema merges onto the specialization (whose own
+/// attribute list then holds it with the location of its name only).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kiln_snap::Snap)]
+pub struct WrittenAttr {
+    /// The attribute's kind.
+    pub kind: crate::attr::AttrKind,
+    /// How it is written (`[[...]]`, `__attribute__((...))`, a keyword).
+    pub syntax: crate::attr::AttrSyntax,
+    /// From its name (a scoped one's scope) to the end of its last token
+    /// (the `)` of its arguments).
+    pub span: Span,
+}
+
 /// A position in the table, for rollback ([`DeclExtents::truncate`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ExtentMark(u32);
@@ -190,6 +205,9 @@ pub struct DeclExtents {
     /// The module and import declarations, in the order the parser saw
     /// them (WP-2091).
     modules: Vec<ModuleDeclExtent>,
+    /// The written attributes of rows ([`WrittenAttr`]; WP-2541): `(row,
+    /// attribute)`, ascending by row, a row's in source order.
+    attrs: Vec<(u32, WrittenAttr)>,
 }
 
 impl DeclExtents {
@@ -248,9 +266,42 @@ impl DeclExtents {
     /// Every row of declaration `d`, in source order: one per declaration
     /// of `d` written under this id (spec/ast.md §19.1; WP-2470).
     pub fn rows_of(&self, d: DeclId) -> impl Iterator<Item = &DeclExtent> + '_ {
+        self.row_indices(d).map(|r| &self.rows[r])
+    }
+
+    /// The table indices of `d`'s rows, in source order.
+    fn row_indices(&self, d: DeclId) -> impl Iterator<Item = usize> + '_ {
         let first = self.first_row(d);
         let more = first.map_or(&[][..], |f| self.more_of(f));
-        first.into_iter().chain(more.iter().map(|&(_, r)| r as usize)).map(|r| &self.rows[r])
+        first.into_iter().chain(more.iter().map(|&(_, r)| r as usize))
+    }
+
+    /// The written attributes of table row `r`.
+    fn attrs_at(&self, r: usize) -> &[(u32, WrittenAttr)] {
+        let r = r as u32;
+        let lo = self.attrs.partition_point(|&(x, _)| x < r);
+        let hi = self.attrs.partition_point(|&(x, _)| x <= r);
+        &self.attrs[lo..hi]
+    }
+
+    /// The written attributes ([`WrittenAttr`]) of the `n`th row of `d`
+    /// ([`Self::rows_of`] order), in source order: an explicit
+    /// instantiation's (WP-2541); none for other rows.
+    pub fn row_attrs(&self, d: DeclId, n: usize) -> impl Iterator<Item = WrittenAttr> + '_ {
+        let at = self.row_indices(d).nth(n).map_or(&[][..], |r| self.attrs_at(r));
+        at.iter().map(|&(_, a)| a)
+    }
+
+    /// Records `a` as written on `d`'s last row (the declaration being
+    /// parsed); nothing when off or when `d` has no row.
+    pub fn add_attr(&mut self, d: DeclId, a: WrittenAttr) {
+        if !self.on {
+            return;
+        }
+        let Some(r) = self.row_of(d) else { return };
+        let r = r as u32;
+        let at = self.attrs.partition_point(|&(x, _)| x <= r);
+        self.attrs.insert(at, (r, a));
     }
 
     /// Every row, by declaration in declaration-id order, a declaration's
@@ -322,6 +373,7 @@ impl DeclExtents {
         self.index.shrink_to_fit();
         self.more.shrink_to_fit();
         self.modules.shrink_to_fit();
+        self.attrs.shrink_to_fit();
     }
 
     /// `d`'s row, created empty when it has none; `None` when off.
@@ -365,6 +417,7 @@ impl DeclExtents {
             self.more.remove(k);
             if r + 1 == self.rows.len() {
                 self.rows.pop();
+                self.attrs.retain(|&(x, _)| (x as usize) < r);
             }
         } else if r + 1 == self.rows.len() {
             self.truncate(ExtentMark(r as u32));
@@ -393,6 +446,7 @@ impl DeclExtents {
         self.rows.truncate(n as usize);
         // A later row's first row is before it.
         self.more.retain(|&(_, r)| r < n);
+        self.attrs.retain(|&(r, _)| r < n);
         for r in &mut self.index {
             if *r > n {
                 *r = 0;
@@ -420,6 +474,11 @@ impl DeclExtents {
         if !later_ok {
             return Err("declaration extent later rows out of order");
         }
+        let attrs_ok = self.attrs.iter().all(|&(r, _)| (r as usize) < self.rows.len())
+            && self.attrs.windows(2).all(|w| w[0].0 <= w[1].0);
+        if !attrs_ok {
+            return Err("declaration extent attributes out of order");
+        }
         if self.modules.iter().any(|m| m.before as usize > decls + 1) {
             return Err("module declaration extent past the decl arena");
         }
@@ -433,17 +492,20 @@ impl DeclExtents {
         }
         let sz = size_of::<DeclExtent>() as u64;
         let msz = size_of::<ModuleDeclExtent>() as u64;
+        let asz = size_of::<(u32, WrittenAttr)>() as u64;
         Some(MemRow::new(
             "decl_extents",
             (self.rows.len() + self.modules.len()) as u64,
             self.rows.len() as u64 * sz
                 + self.index.len() as u64 * 4
                 + self.more.len() as u64 * 8
-                + self.modules.len() as u64 * msz,
+                + self.modules.len() as u64 * msz
+                + self.attrs.len() as u64 * asz,
             self.rows.capacity() as u64 * sz
                 + self.index.capacity() as u64 * 4
                 + self.more.capacity() as u64 * 8
-                + self.modules.capacity() as u64 * msz,
+                + self.modules.capacity() as u64 * msz
+                + self.attrs.capacity() as u64 * asz,
         ))
     }
 
@@ -494,7 +556,12 @@ impl DeclExtents {
             }
             out.push('\n');
         };
-        for (d, e) in self.iter() {
+        let rows = self.index.iter().enumerate().filter(|(_, r)| **r != 0).flat_map(|(i, _)| {
+            let d = DeclId::new(u32::try_from(i).unwrap_or(u32::MAX));
+            self.row_indices(d).map(move |r| (d, r))
+        });
+        for (d, r) in rows {
+            let e = &self.rows[r];
             while let Some(m) = mods.next_if(|m| m.before <= d.index()) {
                 module_line(&mut out, m);
             }
@@ -531,6 +598,9 @@ impl DeclExtents {
             if sm.is_macro_loc(e.full.lo) {
                 let _ = write!(out, " exp={}", pos(sm.expansion_loc(e.full.lo)));
             }
+            for &(_, a) in self.attrs_at(r) {
+                let _ = write!(out, " attr={}@{}", written_attr_name(a), range(a.span));
+            }
             out.push('\n');
         }
         for m in mods {
@@ -556,6 +626,20 @@ fn strip_lambda_dirs(name: &str) -> String {
     }
     out.push_str(rest);
     out
+}
+
+/// The dump's name of a written attribute: clang's attribute class name
+/// without `Attr`, or `kind<N>`.
+fn written_attr_name(a: WrittenAttr) -> String {
+    let node = crate::attr::AttrNode {
+        kind: a.kind,
+        syntax: a.syntax,
+        flags: 0,
+        loc: Loc::INVALID,
+        a: 0,
+        b: 0,
+    };
+    crate::dump::attrs::class_name(&node).map_or_else(|| format!("kind{}", a.kind.0), str::to_owned)
 }
 
 #[cfg(test)]

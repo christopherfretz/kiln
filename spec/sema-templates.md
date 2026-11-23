@@ -2422,7 +2422,8 @@ Out-of-class partial specializations of a member template (WP-150):
     valid.
 
   Test: `temp.spec.partial.general/pack-not-deducible.cpp`.
-- *Wrong class-key*. An explicit or partial specialization whose class-key
+- *Wrong class-key*. An explicit or partial specialization or an explicit
+  instantiation (WP-2547) whose class-key
   does not match the primary's, and a reference `union B<int>` to a class
   specialization, get `use of 'X' with tag type that does not match
   previous declaration`. It is reported at the class-key, with `previous
@@ -2448,6 +2449,37 @@ Out-of-class partial specializations of a member template (WP-150):
   template, a missing template-id, or an undeclared name take clang's
   errors (WP-409, `temp.expl.spec/qualified-class-spec{,-errors,-non-template}.cpp`,
   `temp.expl.spec/qualified-class-name-errors.cpp`).
+- An unqualified class name followed by `<` that ordinary lookup does not
+  find ([temp.names]/3: it is no template-name) in an explicit
+  specialization or instantiation, an elaborated-type-specifier or a
+  friend (`template struct v<M>;` in `namespace b` with the template in
+  `namespace a`) is clang's `TNK_Undeclared_template` (WP-2547). When a
+  visible class template's name is the best typo correction
+  (`correct_class_template_typo`, clang's `resolveAssumedTemplateNameAsType`
+  filtered to type templates; not inside an instantiation), the error is
+  "no template named 'v'; did you mean 'a::v'?" with "'a::v' declared
+  here", and the declaration goes on with `a::v` as if written: an explicit
+  specialization is then "class template specialization of 'v' not in a
+  namespace enclosing 'a'", an explicit instantiation "explicit
+  instantiation of 'a::v' must occur in namespace 'a'" with "explicit
+  instantiation refers here". A corrected name is checked with the C++20
+  [temp.explicit]/5 rule at every `-std` (`TemplState::typo_corrected`),
+  as clang does; kiln's C++23 acceptance of an unqualified name outside the
+  namespace (docs/status/deviations.md) is for a name lookup finds. The
+  look-ahead `has_class_template_typo` keeps a corrected `template<>
+  struct v<M> {}` on the explicit-specialization path. Without a
+  correction the error is "explicit {specialization|instantiation} of
+  {non-|undeclared }template struct 'w'" (`sema_explicit_spec_non_template`;
+  "undeclared" when the name is unqualified and declared nowhere), the
+  template arguments are skipped, and an explicit instantiation recovers as
+  the declaration `struct w;` (it declares `b::w`, as clang). Either way no
+  class `b::v` is declared. Not yet: the correction in a simple-declaration
+  (`v<long> *x;` is "no template named 'v'"), and clang's "refers to a
+  function template" wording for a name that finds a function. Tests:
+  `temp.explicit/unqualified-undeclared-template-typo.cpp`,
+  `temp.explicit/undeclared-template-name-recovery.cpp`,
+  `temp.expl.spec/unqualified-undeclared-template-typo.cpp`, and
+  `explicit_instantiation_typo_declares_nothing` (crates/kiln_parse/tests/templ.rs).
 - A qualifier naming a declared but undefined explicit specialization
   (`A<long>::B<int>::f` after `template<> template<> struct A<long>::B<int>;`)
   is "implicit instantiation of undefined template" / "incomplete type

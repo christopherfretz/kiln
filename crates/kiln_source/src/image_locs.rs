@@ -60,13 +60,18 @@ pub enum SlocRec {
     Macro { spelling: u32, len: u32, exp: [u32; 2], name: [u32; 2] },
     /// A macro argument substituted for the parameter at `exp`.
     Arg { spelling: u32, len: u32, exp: [u32; 2] },
+    /// The bytes of the `#embed` directive whose `#` is `exp`
+    /// (`ExpansionKind::Embed`, WP-2544).
+    Embed { spelling: u32, len: u32, exp: [u32; 2] },
 }
 
 /// The record lengths, given the file table.
 pub fn sloc_len(files: &[FileRec], s: &SlocRec) -> Option<u32> {
     match s {
         SlocRec::File { file, .. } => files.get(*file as usize).map(|f| f.len),
-        SlocRec::Macro { len, .. } | SlocRec::Arg { len, .. } => Some(*len),
+        SlocRec::Macro { len, .. } | SlocRec::Arg { len, .. } | SlocRec::Embed { len, .. } => {
+            Some(*len)
+        }
     }
 }
 
@@ -156,6 +161,13 @@ impl LocTable {
         Ok(self.bases[k as usize] + (l.to_raw() - start.to_raw()))
     }
 
+    /// The image location of `l` when its range or entry is already
+    /// carried (no record is made), else `None`.
+    pub fn carried_loc(&self, sm: &SourceManager, l: Loc) -> Option<u32> {
+        let o = self.carried(sm, l);
+        (o != NONE).then_some(o)
+    }
+
     /// The image location of `l`, whose entry is carried.
     fn carried(&self, sm: &SourceManager, l: Loc) -> u32 {
         if !l.is_valid() {
@@ -215,6 +227,7 @@ impl LocTable {
                     name: [self.carried(sm, name.lo), self.carried(sm, name.hi)],
                 },
                 ExpansionKind::MacroArg => SlocRec::Arg { spelling, len: x.len, exp },
+                ExpansionKind::Embed => SlocRec::Embed { spelling, len: x.len, exp },
             };
             (rec, x.len)
         } else {
@@ -381,7 +394,7 @@ pub fn validate(files: &[FileRec], slocs: &[SlocRec]) -> Result<Vec<u32>, &'stat
                     return Err("a macro name location out of range");
                 }
             }
-            SlocRec::Arg { spelling, len, exp } => {
+            SlocRec::Arg { spelling, len, exp } | SlocRec::Embed { spelling, len, exp } => {
                 check_exp(&bases, &lens, *spelling, *len, *exp, &ok)?;
             }
         }
@@ -481,6 +494,9 @@ impl Locs {
                 SlocRec::Arg { spelling, len, exp } => sm
                     .add_expansion(m.get(*spelling), *len, m.span(*exp), ExpansionKind::MacroArg)
                     .map_err(|_| "no location space")?,
+                SlocRec::Embed { spelling, len, exp } => sm
+                    .add_expansion(m.get(*spelling), *len, m.span(*exp), ExpansionKind::Embed)
+                    .map_err(|_| "no location space")?,
             };
             m.runs.push((bases[k], len, base));
         }
@@ -556,6 +572,12 @@ pub fn encode(files: &[FileRec], slocs: &[SlocRec], out: &mut Vec<u8>) {
             }
             SlocRec::Arg { spelling, len: n, exp } => {
                 out.push(2);
+                for v in [*spelling, *n, exp[0], exp[1]] {
+                    u32(out, v);
+                }
+            }
+            SlocRec::Embed { spelling, len: n, exp } => {
+                out.push(3);
                 for v in [*spelling, *n, exp[0], exp[1]] {
                     u32(out, v);
                 }
@@ -644,6 +666,7 @@ pub fn decode(r: &mut Reader<'_>) -> W<(Vec<FileRec>, Vec<SlocRec>, Vec<u32>)> {
                 name: [r.u32()?, r.u32()?],
             },
             2 => SlocRec::Arg { spelling: r.u32()?, len: r.u32()?, exp: [r.u32()?, r.u32()?] },
+            3 => SlocRec::Embed { spelling: r.u32()?, len: r.u32()?, exp: [r.u32()?, r.u32()?] },
             _ => return Err("bad location record"),
         };
         slocs.push(s);

@@ -2479,6 +2479,16 @@ argument deduction not allowed in function prototype"); the ids
     a class template redeclaration is, and a later definition joins
     that chain. An enumeration redeclaration creates no decl. Test:
     class.name/redeclaration-ast.cpp.
+  - A reference that declares a new class ([basic.scope.pdecl]/7.2)
+    declares it in the smallest enclosing namespace or block scope,
+    skipping class and prototype scopes (`tag_decl_context`). From a
+    local class's member declaration (`void g(struct Q *);`,
+    `struct Q *p;`) that is the block scope enclosing the class: the
+    class's semantic and lexical context is the function, its name is
+    entered in that block (`push_local_block`, past the class scope),
+    and a later `struct Q { ... };` in the block redeclares it (one
+    redeclaration chain, so `a.g(&q)` with `Q q;` type-checks; WP-2506,
+    `basic.scope.pdecl/elaborated-type-local-class-member-{run,refs}.cpp`).
   - A definition checks for redefinition and kind mismatch. A
     redefinition ([basic.def.odr]/1) is diagnosed once and recovered
     from as clang's `ActOnTag` does (it makes the new tag anonymous and
@@ -2599,7 +2609,12 @@ argument deduction not allowed in function prototype"); the ids
     class templates, specializations and references to specializations
     (named `'B<float>'`, as clang 19 does), and the instantiation of a
     dependent `struct T::X`. A reference recovers to the declaration it
-    found. Test: `dcl.type.elab/wrong-tag-kind.cpp`.
+    found; a declaration `union w;` of a class first declared `struct w`
+    redeclares it with the earlier class-key (clang's `ActOnTag`; WP-2547:
+    it was a second entity, so a later `w` was ambiguous; an `enum`
+    against a class is still a new entity). Tests:
+    `dcl.type.elab/wrong-tag-kind.cpp`,
+    `dcl.type.elab/class-key-mismatch-same-entity.cpp`.
   - *`enum class E` as a reference or friend* (no enum-base). The error
     `reference to enumeration must use 'enum' not 'enum class'`
     (`-Welaborated-enum-class`, an error by default) is reported at the
@@ -3705,6 +3720,35 @@ instantiation unless stated.
   `tests/conformance/ext.gnu.visibility/`,
   `tests/conformance/cpp.pragma/gcc-visibility{,-syntax,-namespace}.cpp`,
   `tests/codegen/visibility_explicit_inst.cpp`.
+- **Explicit instantiation attributes** (WP-2541; clang
+  `ActOnExplicitInstantiation`, `decl_attrs.rs`
+  `explicit_inst_attrs`). An explicit instantiation of a function,
+  variable or static data member has no declaration of its own (the
+  specialization's `SpecKind` stands for it), so its attributes go where
+  clang puts them. Only the decl-specifier attributes are merged onto the
+  specialization (clang processes `D.getDeclSpec().getAttributes()`);
+  those after the declarator (`template void f<char>(char)
+  __attribute__((weak));`, `f<short> [[gnu::weak]] (short)`) are dropped
+  without a diagnostic, as clang drops them. Visibility merges as above;
+  every other attribute passes its subject check (not the "after
+  definition" check: clang adds it to the instantiated definition) and
+  joins the specialization's attributes unless the same one is there
+  already. So `weak` makes an explicit instantiation definition `weak`
+  (and its variable `weak`) and an `extern template` declaration
+  `extern_weak`, and `deprecated` warns at the uses with the note at the
+  attribute. A standard attribute (`[[...]]`) before an explicit
+  instantiation's decl-specifiers (also after GNU ones) is "an attribute
+  list cannot appear here" once, at its first `[[` (clang
+  `ProhibitCXX11Attributes`); after the class-key of a class's explicit
+  instantiation it is the same error once per attribute, at its name,
+  and the attribute is dropped. An annotation-list (`[[=...]]`) is
+  neither: it is the explicit instantiation's own
+  ([dcl.attr.annotation]/3, P3394; GCC accepts it), so the leading check
+  skips it and the class-key check keeps it. Every attribute written on an explicit
+  instantiation, merged or dropped, is also recorded on its row of the
+  declaration-extent table (spec/ast.md §19.2). Tests:
+  `tests/conformance/temp.explicit/explicit-inst-attrs*.cpp`,
+  `crates/kiln_parse/tests/decl_extents.rs`.
 - **Function multiversioning** (clang extension; AttrDocs "target",
   "target_clones", "cpu_dispatch", "cpu_specific"). On AArch64 kiln is
   clang without the `fmv` target feature (spec/landed/codegen/WP-810.md):
@@ -7848,6 +7892,29 @@ for them.
     destroyed at the end of the enclosing full-expression, after the
     temporaries of its own last statement (WP-1458,
     `ext.gnu.stmt.expr/result-destroyed-after-own-temporaries-run.cpp`).
+  - In a default member initializer or a member function's default
+    argument of a local class (or a class nested in one), the
+    statement expression is in a function body. Its compound statement
+    is a block scope whose context is still the class (`Sema::ctx`,
+    so access, `this` and lookup are the class's), but the
+    declarations in it are block-scope declarations of the function
+    enclosing the class (`Sema::block_decl_ctx`, used by
+    `decl_contexts`): neither members of the class nor in its lookup
+    table, a variable is a local (a `static` one mangles as a static
+    local of the function, `_ZZ1fvE1s`, as in clang), and a lambda in
+    that block may have a capture-default. Naming such a local from
+    the same initializer, directly or through a lambda, is no
+    reference to a local of an enclosing function (`capture_chain`
+    stops at the class scope when the variable is in a block opened
+    inside it). The initializer is evaluated in each constructor that
+    uses it, the locals in that constructor's frame. Clang (19 and 22)
+    gives the locals the function as their context too but then
+    reports every use from a constructor as a reference to a local of
+    the enclosing function (and declares them static data members when
+    it instantiates the class); kiln accepts those programs (WP-2474,
+    `class.local/stmt-expr-local-in-default-{arg,member-init}-run.cpp`;
+    a class that is not local still gets the file-scope error,
+    `ext.gnu.stmt.expr/default-member-init-namespace-class.cpp`).
   - Dependence (clang `computeDependence(StmtExpr*, TemplateDepth)`):
     the type's dependence, plus the result expression's, plus value-
     and instantiation-dependence whenever it appears in a dependent
@@ -8427,7 +8494,8 @@ clang's `ActOnCXXNew`/`BuildCXXNew` and `ActOnCXXDelete` for non-class
 and aggregate element types.
 - **Implicit global operators** ([basic.stc.dynamic.general]/2):
   `declare_global_new_delete` runs once, the first time a new- or
-  delete-expression, a declaration of a global `operator new`/`delete`,
+  delete-expression, a declaration of a global `operator new`/`delete`
+  (a friend one too, even in a class template's pattern, as clang),
   or an unqualified or `::`-qualified id-expression naming one
   (`::operator new(n)`, WP-158) needs it (clang's
   `DeclareGlobalNewDelete`). It declares, as implicit
@@ -8450,7 +8518,24 @@ and aggregate element types.
 - **User declarations** of a global `operator new`/`delete`
   (`act_on_global_new_delete_decl`) redeclare a matching implicit one; a
   deallocation function without an exception specification is
-  implicitly `noexcept` ([except.spec]/11).
+  implicitly `noexcept` ([except.spec]/11). The previous declaration is
+  found by redeclaration lookup in the global namespace
+  (`global_op_redecl_candidates`, WP-2540): it includes friends that
+  only ADL finds ([namespace.memdef]/3), but not a friend in a class
+  template's pattern (`is_dependent_friend_fn`), which declares nothing
+  until the class is instantiated ([temp.inst]/4, [temp.friend]/1). So
+  a global declaration after `template <class T> struct A { friend
+  void *operator new(size_t); };` redeclares the implicit one (and, once
+  `A<int>` exists, its instantiated friend, which chained onto the
+  implicit one): one entity, before or after the instantiation. The
+  same rule keeps such a friend `main` from making a later `int
+  main(int, char **)` a conflicting redeclaration ([basic.start.main]/3,
+  `main_overload_prev`). New-expressions, delete-expressions and
+  `__builtin_operator_new`/`delete` find the global functions by
+  ordinary lookup (`global_op_lookup`), which never sees a pattern's
+  friend. `tests/conformance/temp.friend/global-alloc-friend-in-template.cpp`,
+  `ir-global-alloc-friend-in-template.cpp`,
+  `class.friend/global-alloc-qualified-friend.cpp`.
 - **The allocated type** ([expr.new]/1-2): not a function type, a
   reference or an incomplete type; `auto` is deduced from a single
   parenthesized or braced argument (`new auto(x)`; `new auto*(p)`
@@ -10292,7 +10377,19 @@ Each rule names the libc++ test it fixed and its corpus test.
   named `_` is name-independent when it is a block-scope variable of
   automatic storage duration, a structured binding not at namespace
   scope, an init-capture (spec/sema-lambda.md §2) or a non-static data
-  member. Redeclaring such a `_` in the same scope is not a conflict;
+  member of other than an anonymous union. A member `_` of an anonymous
+  union (or anonymous struct, an extension) is injected into the
+  enclosing scope as an ordinary declaration: it conflicts with an
+  earlier `_` there or in the same union (`member of anonymous union
+  redeclares '_'`), and a later name-independent `_` does not conflict
+  with it; its `name_independent` bit, set while the union could still
+  be named, is cleared when the union proves anonymous (WP-2477; clang
+  19/22 and GCC 16.1 accept the conflicting forms, kiln follows the
+  text: `basic.scope.scope/p2169-anon-union-member.cpp`). A use that
+  finds it with a later name-independent `_` keeps clang's placeholder
+  wording, since clang's `isPlaceholderVar` counts every data member
+  (`p2169-anon-union-member-ambiguous.cpp`). Redeclaring
+  such a `_` in the same scope is not a conflict;
   before C++26 it is `sema_ext_placeholder_var`
   (`-Wc++26-extensions`). A *use* of `_` that finds more than one is
   `sema_placeholder_ambiguous` with a `note_placeholder_declared` per

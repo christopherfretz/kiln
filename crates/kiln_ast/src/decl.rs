@@ -415,26 +415,12 @@ pub enum FriendKind {
     Undeclared = 2,
 }
 
-/// Module ownership of a declaration ([module.reach], M4).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug, kiln_snap::Snap)]
-#[repr(u8)]
-pub enum ModuleOwnership {
-    /// Not owned by a named module.
-    #[default]
-    Unowned = 0,
-    /// Visible.
-    Visible = 1,
-    /// Visible when imported.
-    VisibleWhenImported = 2,
-    /// Reachable when imported.
-    ReachableWhenImported = 3,
-    /// Module-private.
-    ModulePrivate = 4,
-}
-
 /// `DeclNode.misc` (spec/ast.md §4.1): `access(2) friend(2)
-/// local_extern(1) module_ownership(3) name_independent(1)
-/// linkage_cache(3) visibility(2) first(1) definition(1)`.
+/// local_extern(1) reserved(3) name_independent(1) linkage_cache(3)
+/// visibility(2) first(1) definition(1)`. The reserved bits are zero:
+/// a declaration's owning module is the module table's
+/// ([`crate::modules::ModuleTable::owner`]), not a bit of its header
+/// (WP-2477).
 ///
 /// `first` and `definition` are query caches the arena owns (WP-655):
 /// set, the declaration is its entity's first declaration
@@ -496,21 +482,6 @@ impl DeclMisc {
     #[must_use]
     pub const fn with_local_extern(self, v: bool) -> Self {
         self.with_field(4, 1, v as u16)
-    }
-    /// Module ownership.
-    pub const fn module_ownership(self) -> ModuleOwnership {
-        match self.field(5, 3) {
-            1 => ModuleOwnership::Visible,
-            2 => ModuleOwnership::VisibleWhenImported,
-            3 => ModuleOwnership::ReachableWhenImported,
-            4 => ModuleOwnership::ModulePrivate,
-            _ => ModuleOwnership::Unowned,
-        }
-    }
-    /// With module ownership `m`.
-    #[must_use]
-    pub const fn with_module_ownership(self, m: ModuleOwnership) -> Self {
-        self.with_field(5, 3, m as u16)
     }
     /// A name-independent declaration (P2169 `_`, [basic.scope.scope]/5).
     pub const fn name_independent(self) -> bool {
@@ -728,7 +699,7 @@ pub enum Defaulted {
 /// deleted(1) explicit(1) trivial(1) immediate_escalating(1)
 /// has_contracts(1) is_coroutine(1) escalated(1) variadic(1) override(1)
 /// final(1) explicit_object(1) virtual_written(1) storage_inherited(1)
-/// not_selected(1)`.
+/// not_selected(1) return_deduced(1) exc_spec_computed(1)`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug, kiln_snap::Snap)]
 pub struct FnSpec(u32);
 
@@ -813,7 +784,9 @@ impl FnSpec {
     /// known only at `= default` after the declarator, [dcl.fct.def.default],
     /// [dcl.constexpr]/7; WP-289: `not_selected`, known only at the
     /// class's `}`, [class.dtor]/4; WP-389: `return_deduced`, known only
-    /// at the first `return`, [dcl.spec.auto.general]/3). The two fields are OR-ed in, so sema
+    /// at the first `return`, [dcl.spec.auto.general]/3; WP-2505:
+    /// `exc_spec_computed`, known when the deferred exception
+    /// specification is resolved, [except.spec]/7-8). The two fields are OR-ed in, so sema
     /// sets them only from [`Defaulted::No`] / [`ConstexprKind::None`].
     pub const LATE: FnSpec = FnSpec(
         (1 << 3)
@@ -825,7 +798,8 @@ impl FnSpec {
             | (1 << 15)
             | (1 << 16)
             | (1 << 23)
-            | (1 << 24),
+            | (1 << 24)
+            | (1 << 25),
     );
 }
 
@@ -886,6 +860,17 @@ bit_accessors!(FnSpec:
     /// return type is deduced (WP-389; clang looks only at the type as
     /// written for the linkage, `getLVForNamespaceScopeDecl`).
     return_deduced / with_return_deduced = 24;
+    /// The exception specification on the function's type was computed,
+    /// not written: it was deferred to the function (`ExcSpec::Deferred`:
+    /// an implicitly declared special member, one explicitly defaulted on
+    /// its first declaration with no *noexcept-specifier*, a destructor
+    /// declared without one, a defaulted comparison or an inheriting
+    /// constructor; [except.spec]/7-8, [dcl.fct.def.default]/2,
+    /// [class.compare.default]) and sema has since resolved it to
+    /// `noexcept` or `noexcept(false)`. A written specification, even on
+    /// a defaulted function (`S() noexcept(false) = default;`), never
+    /// sets it. [`crate::Ast::exception_spec_computed`] (WP-2505).
+    exc_spec_computed / with_exc_spec_computed = 25;
 );
 
 /// Hot payload of function kinds (24 bytes, spec/ast.md §4.2).
@@ -2741,6 +2726,14 @@ impl DeclArena {
     pub fn set_access(&mut self, d: DeclId, a: Access) {
         let n = &mut self.nodes[d.index() as usize];
         n.misc = n.misc.with_access(a);
+    }
+
+    /// Clears or sets the name-independent bit of `d` ([`DeclMisc`]):
+    /// sema clears it on the members of an anonymous union once the
+    /// union is known to be anonymous ([basic.scope.scope]/5).
+    pub fn set_name_independent(&mut self, d: DeclId, v: bool) {
+        let n = &mut self.nodes[d.index() as usize];
+        n.misc = n.misc.with_name_independent(v);
     }
 
     /// Sets a function's body (write-once, §2.4).

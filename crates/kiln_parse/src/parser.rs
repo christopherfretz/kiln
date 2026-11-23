@@ -282,6 +282,12 @@ pub struct Parser<'a, 'sm> {
     /// `parse_member_declaration`: a later declarator is "a template
     /// declaration can only declare a single entity" ([temp.pre]/5).
     pub(crate) template_decl_kind: Option<crate::templ::TemplateDeclKind>,
+    /// With declaration extents on, where each attribute parsed inside the
+    /// current explicit instantiation ends (the end of its last token), so
+    /// the instantiation's row records its attributes as written
+    /// (spec/ast.md §19.2; WP-2541). Cleared at every explicit
+    /// instantiation's end, so it holds one declaration's attributes only.
+    pub(crate) attr_ends: Vec<(AttrId, Loc)>,
     /// The leading attribute-specifier-seq of a statement, parsed before
     /// it is known to be a declaration: the declaration's decl-specifiers
     /// take it ([dcl.pre]/5, [dcl.attr.grammar]/5).
@@ -385,6 +391,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
 
     /// A parser over `src`. `s`'s AST must use the preprocessor's
     /// interner.
+    #[allow(clippy::too_many_lines, reason = "one initializer per field")]
     pub fn new(
         mut s: Sema<'a, 'sm>,
         mut src: TokenSource<'a, 'sm>,
@@ -482,6 +489,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             decltype_scope: None,
             template_delay_level: None,
             template_decl_kind: None,
+            attr_ends: Vec::new(),
             stmt_attrs: Vec::new(),
             lead_decl_attrs: Vec::new(),
             stmt_attrs_loc: None,
@@ -606,6 +614,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             loop_hints,
             fp_pragmas,
             fp_intrin: _,
+            attr_ends,
         } = self;
         let open = [
             ("replay", !replay.is_empty()),
@@ -624,6 +633,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             ("template_decl_kind", template_decl_kind.is_some()),
             ("halt", halt.get().is_some()),
             ("in_stmt_expr", *in_stmt_expr),
+            ("attr_ends", !attr_ends.is_empty()),
         ];
         match open.iter().find(|o| o.1) {
             Some(("depth", _)) => {

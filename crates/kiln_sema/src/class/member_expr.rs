@@ -3291,7 +3291,10 @@ impl Sema<'_, '_> {
                 DeclRefExtra { qualifier: Some(q), template_args: None, found_decl: None }
             });
             let x = self.builder().decl_ref(d, declared, at, extra, nou, ExprFlags::NONE);
-            if let Some(b) = r.begin {
+            // The qualifier's begin: recorded on the pending reference, or
+            // on the access an overload set resolved to (`&B::f` of an
+            // overloaded `f`), spec/ast.md §21.
+            if let Some(b) = r.begin.or_else(|| self.ast.templates.expr_begin.get(e).copied()) {
                 let _ = self.ast.templates.expr_begin.insert(x, b);
             }
             x

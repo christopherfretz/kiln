@@ -138,7 +138,7 @@ macro_rules! sema_fields {
                 volatile_assigns, imm, invalid_defining, local_externs, c_param_tags,
                 dropped_qualified_locals, vis_stack, weak_pending, extname_pending, pragma_attrs,
                 missing_typename_fns, extern_c,
-                split_greaters, global_ops, braced_args, unowned_params, decomp_written,
+                global_ops, braced_args, unowned_params, decomp_written,
                 binding_packs, shadow_ctor, binding_pack_elems, refs_minus_assign, attr_macros,
                 declared_returns, handler_type_locs, type_spec_locs, inline_fn_begin_locs,
                 ref_locs, inner_chunk_locs, pending_chunk_loc, constexpr_begin_locs,

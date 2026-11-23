@@ -87,7 +87,7 @@ pub(crate) fn file_loc(sm: &SourceManager, mut loc: Loc) -> Loc {
         let Some(e) = sm.expansion_info(loc) else { return Loc::INVALID };
         loc = match e.kind {
             ExpansionKind::MacroArg => sm.immediate_spelling_loc(loc),
-            ExpansionKind::Macro { .. } => e.expansion.lo,
+            ExpansionKind::Macro { .. } | ExpansionKind::Embed => e.expansion.lo,
         };
     }
     loc
@@ -260,6 +260,7 @@ fn macro_name(sm: &SourceManager, mut loc: Loc) -> Option<&str> {
         let e = sm.expansion_info(loc)?;
         match e.kind {
             ExpansionKind::MacroArg => loc = e.expansion.lo,
+            ExpansionKind::Embed => return None,
             ExpansionKind::Macro { name } => {
                 let spell = sm.spelling_loc(loc);
                 let (file, _) = sm.offset_of(spell)?;
@@ -328,7 +329,10 @@ fn push_diagnostic(
         ranges: map_ranges(sm, floc, &raw),
         fixits: d.fixits.clone(),
     });
-    if loc.is_macro() {
+    // An `#embed`'s bytes are at its `#` in clang (one `annot_embed`
+    // token): no expansion note (WP-2544).
+    let embed = sm.expansion_info(loc).is_some_and(|e| e.kind == ExpansionKind::Embed);
+    if loc.is_macro() && !embed {
         // clang 22 also sees the invalid ranges a diagnostic streams.
         let all: Vec<Range> = if compat >= 22 {
             let mut all: Vec<Range> = d

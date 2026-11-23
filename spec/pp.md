@@ -1286,7 +1286,7 @@ input give equal `CondIx` and `IncIx`, as they do `DefIx` and `ExpIx`.
 `file:offset` (the file's last path component), to standard output:
 after the compile with `-fsyntax-only` (and code generation), or in place
 of the preprocessed text with `-E`, where one `tok <spelling> <origin>`
-line per output token at a macro location comes first. Lines:
+line per output token at a macro location comes first (an `#embed`'s bytes too, origin `embed`: they are an expansion of the directive, WP-2544). Lines:
 `def <key> <name>[(<params>)] <source> [dir <#>..<end>] = <body>
 [ended ...]`, `param <def> <i> <name> <loc> uses <b3:plain|str|paste[/va-opt]>...`,
 `undef <key> <name> ends <def>|none`, `exp <key> <name> def <def>
@@ -1557,7 +1557,26 @@ dump goldens under `tests/conformance/cpp.replace/record`,
 - **`#embed`.** The core produces `prefix`, then the byte tokens
   (`is_embed_byte`: a pp-number per byte and the commas between them,
   spelled in one scratch buffer per embed), then `suffix`. An empty resource produces `if_empty`
-  instead. Each embed is preceded by `Marker::Embed`. Its diagnostic
+  instead. Each embed is preceded by `Marker::Embed`. **The bytes' link
+  back to the directive (WP-2544)** is an expansion entry, not an
+  include location: the scratch buffer sits behind one
+  `ExpansionKind::Embed` entry whose expansion range is the directive's
+  `#` (one character), as kiln records the other scratch buffers (a
+  `_Pragma` operand, a pasted or stringized token, a builtin macro's
+  result: a `Macro` entry over the scratch spelling). An include
+  location would make the bytes a file entered from the directive, with
+  "In file included from" notes and a file entry per embed in the
+  unit's inclusion order; clang 19 and 22 instead give every byte the
+  `#`'s own location (its one `annot_embed` token), and an expansion
+  entry is that: `file_loc` of a byte is the `#`, so a diagnostic in the
+  bytes (`T t = {` `#embed "one.bin"` `};` with `T` holding an `int *`)
+  is reported at the `#` (line and column 1 of the directive), with no
+  "expanded from" note (spec/diag.md §8.2), as clang. The spelling stays the scratch buffer,
+  so `-E` prints the bytes and `is_embed_byte` still knows them; a byte
+  has the preprocessing-record origin `Made { exp: None, kind: Embed,
+  from: <the #> }` (`embed` in the dump); `token_range` of the whole
+  byte run is the `#`, of a part of it `None`; a module image carries
+  the entry as a tag-3 location record (spec/modules.md, S7). Its diagnostic
   follows the language (WP-1331, clang 19/22 `ext_pp_embed_directive` /
   `warn_compat_pp_embed_directive`): in C++, at every standard,
   `pp_embed_ext` "#embed is a Clang extension" [-Wc23-extensions]; in C

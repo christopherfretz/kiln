@@ -416,6 +416,7 @@ impl Parser<'_, '_> {
             self.expect_closing(Punct::RParen, Punct::LParen, open);
         }
         if let Some(a) = self.s.act_on_sme_attribute(idx, &states, loc) {
+            self.note_attr_end(a);
             out.push(a);
         }
     }
@@ -514,6 +515,16 @@ impl Parser<'_, '_> {
         let at = self.loc();
         self.prohibit_attrs_at(Some(at));
         self.parse_attributes(attrs);
+    }
+
+    /// With declaration extents on, inside an explicit instantiation,
+    /// notes where attribute `a`, just parsed, ends (the end of its last
+    /// token; [`Parser::attr_ends`]).
+    fn note_attr_end(&mut self, a: AttrId) {
+        if self.ext_on() && self.s.has_explicit_inst_head() {
+            let end = self.prev_end();
+            self.attr_ends.push((a, end));
+        }
     }
 
     pub(crate) fn prohibit_attrs_at(&mut self, at: Option<Loc>) {
@@ -1092,6 +1103,7 @@ impl Parser<'_, '_> {
             if let Some(args) = args
                 && let Some(a) = self.s.act_on_attribute(AttrSyntax::Cxx11, scope, name, &args, loc)
             {
+                self.note_attr_end(a);
                 out.push(a);
             }
             // clang `ParseCXX11AttributeSpecifierInternal`: anything but
@@ -1215,6 +1227,7 @@ impl Parser<'_, '_> {
             if let Some(args) = args
                 && let Some(a) = self.s.act_on_attribute(AttrSyntax::Gnu, None, name, &args, loc)
             {
+                self.note_attr_end(a);
                 out.push(a);
             }
             if !self.at(Punct::Comma) {
@@ -1657,6 +1670,7 @@ impl Parser<'_, '_> {
         self.expect_closing(Punct::RParen, Punct::LParen, open);
         let name = self.s.intern("alignas");
         if let Some(a) = self.s.act_on_attribute(AttrSyntax::Keyword, None, name, &[arg], loc) {
+            self.note_attr_end(a);
             out.push(a);
         }
     }

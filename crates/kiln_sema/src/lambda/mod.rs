@@ -308,10 +308,12 @@ impl Sema<'_, '_> {
     /// could be captured). Clang's `ActOnLambdaExpressionAfterIntroducer`
     /// test: the closure's parent is not a function and `this` is not
     /// capturable here. Checked once, at the definition (a simple-capture
-    /// there fails as a capture of a non-automatic variable).
+    /// there fails as a capture of a non-automatic variable). A statement
+    /// expression's block in a local class's default argument is a block
+    /// scope ([`Sema::block_decl_ctx`]; WP-2474).
     fn check_non_local_capture_default(&mut self, intro: &LambdaIntroducer) {
         if intro.default != CaptureDefault::None
-            && !is_function(self.kind_of(self.ctx))
+            && !is_function(self.kind_of(self.block_decl_ctx()))
             && !self.this_capturable()
         {
             self.error(DiagId::sema_lambda_capture_default_non_local, intro.default_loc);

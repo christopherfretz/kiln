@@ -930,9 +930,9 @@ impl Sema<'_, '_> {
 
     /// The last token of the name `ule` (a template-id's `>`, an
     /// operator name's last token), kept on the reference `e` resolved
-    /// from it (clang's `getEndLoc` of the reference), and for a member
-    /// access through an implicit `this` the qualifier's begin
-    /// (spec/ast.md §21).
+    /// from it (clang's `getEndLoc` of the reference), and the
+    /// qualifier's begin of a name through an implicit `this` or of a
+    /// qualified overload set (spec/ast.md §21).
     pub(crate) fn keep_template_id_end(&mut self, ule: ExprId, e: ExprId) {
         let kind = self.ast.exprs.get(e).kind();
         if !matches!(
@@ -944,12 +944,14 @@ impl Sema<'_, '_> {
         if let Some(end) = self.ast.exprs.end_loc(ule) {
             self.set_template_id_end(e, end);
         }
-        if kind != ExprKind::DeclRefExpr
-            && matches!(
-                self.ast.exprs.get(ule).kind(),
-                ExprKind::MemberExpr | ExprKind::UnresolvedLookupExpr
-            )
-            && let Some(&b) = self.ast.templates.expr_begin.get(ule)
+        // Also a `DeclRefExpr`: `&B::f` of an overloaded member, or a
+        // static member template's specialization `B::s<0>` named through
+        // an implicit `this`, begins at `B` (clang's qualified
+        // `DeclRefExpr`).
+        if matches!(
+            self.ast.exprs.get(ule).kind(),
+            ExprKind::MemberExpr | ExprKind::UnresolvedLookupExpr
+        ) && let Some(&b) = self.ast.templates.expr_begin.get(ule)
             && self.ast.templates.expr_begin.get(e).is_none()
         {
             let _ = self.ast.templates.expr_begin.insert(e, b);

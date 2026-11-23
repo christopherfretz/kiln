@@ -10,6 +10,23 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- `Ast::exception_spec_computed` (WP-2505, spec/ast.md §4.2): a tooling
+  client tells an explicitly defaulted function's written exception
+  specification (`S() noexcept(false) = default;`) from one computed
+  from its subobjects, which has the same type once resolved; the new
+  `FnSpec::exc_spec_computed` bit is set on every redeclaration when sema
+  resolves a deferred specification, and PCH snapshots and module images
+  (`IMAGE_VERSION` 83) carry it.
+- Tooling locations (WP-2541, WP-2542): the row of an explicit
+  instantiation in the declaration-extent table records the attributes
+  written on it, each one's kind, syntax and extent
+  (`DeclExtents::row_attrs`, spec/ast.md §19.2; carried by PCH snapshots
+  and module images); the split `>` locations move onto `Ast`
+  (`Ast::split_greaters`, carried by module images) and the public
+  token-end query has a split-aware form (`kiln_lex::token_end_split`,
+  `token_range_split`), so an expression ending at the first `>` of a
+  `>>`, `>=`, `>>=` or `>>>` ends where sema says.
+
 - Native stack sizing for evaluation-session workers (WP-2500,
   spec/eval-session.md §9 "Limits that bound the native depth"): every
   kiln limit that bounds how deep a run's semantic work recurses on the
@@ -812,6 +829,14 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Changed
 
+- `kiln_ast::dump::AstNames::for_keys` / `type_key` print a type as a
+  key: unlike the diagnostic text, two different types never print alike
+  (a typed null pointer argument keeps its type, a local class its
+  enclosing function and a block ordinal, an unnamed class or closure its
+  location; spec/types.md §12.1). `oper_lookup::SetSpan` is public, with
+  `OperLookups::span`. The unused `DeclMisc` module-ownership bits are
+  removed (the owner is `ModuleTable::owner`) (WP-2477, WP-2545).
+
 - Breaking, for tooling clients (WP-2480, WP-2502, WP-2500, WP-2503;
   spec/eval-session.md §8, §9): what a failed evaluation-session run
   hands over. `RunError` moved from `kiln_oven` to `kiln_sema::session`
@@ -968,6 +993,53 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- A global `operator new` or `operator delete` declared after a class
+  template whose pattern befriends it is one function with the implicit
+  declaration and the instantiated friend, before or after the
+  instantiation (WP-2540): it was chained to the pattern's friend, which
+  declares nothing, and a new-expression could call that friend. A friend
+  allocation function declares the implicit ones (so a `::`-qualified
+  friend `operator new[]` is valid), and a friend `main` in a class
+  template no longer makes `int main(int, char **)` a conflicting
+  declaration.
+- An unqualified `v<...>` that ordinary lookup does not find, in an
+  explicit instantiation or specialization, an elaborated type or a
+  friend, no longer declares a class `v` (WP-2547): it is clang's "no
+  template named 'v'; did you mean 'a::v'?" followed by the
+  namespace-placement error for `a::v`, or "explicit instantiation of
+  undeclared template struct 'w'" when no template resembles it. An
+  explicit instantiation whose class-key does not match the template is
+  a tag mismatch, and `union w;` after `struct w;` redeclares the same
+  class rather than making `w` ambiguous.
+- A statement expression in a default member initializer or a default
+  argument of a local class (WP-2474, spec/sema.md §5.8): its locals and
+  local classes belong to the enclosing function (clang's mangling,
+  `_ZZ1fvE1s`), and the statement expression may use them, capture
+  them in a lambda (`[&]` is a local lambda there) and declare
+  `static` ones; they were rejected as references to a local of the
+  enclosing function. A namespace-scope class's default member
+  initializer keeps clang's `statement expression not allowed at file
+  scope`.
+- An elaborated-type-specifier in a local class member function's
+  parameter list (`void g(struct Q *);`) declares `Q` in the enclosing
+  block scope (WP-2506, [basic.scope.pdecl]/7.2), so the later
+  block-scope definition redeclares it: one redeclaration chain, and
+  `a.g(&q)` type-checks.
+- `clone_with_children` copies a `LambdaExpr` (WP-2507, spec/ast.md):
+  the copy gets its own lambda record (a new capture-initializer list)
+  and shares the closure type, call operator and body; it returned
+  `None`, so a rebuilt expression holding a lambda was not copied.
+
+- Five expression shapes that had no written extent for tooling clients
+  now have clang's (WP-2460..WP-2464, spec/ast.md §21): an implicit
+  `this->operator T*` in a class template ends at the conversion type's
+  last token; a member named by a dependent using-declarator (`using
+  T::f;` then `f()`) begins at its name; `&B::f` of an overloaded member
+  and a static member template's specialization through an implicit
+  `this` (`s<0>`, `B::s<1>`) begin at the qualifier; an array `new`'s
+  parenthesized initialization (`new int[2](1, 2)`) begins at its `(`;
+  and `&this->sf<int>` ends at its `>`. `cargo xtask extents` compares
+  them all with clang 19. No node, image or snapshot change.
 - Parameter attributes follow clang across declarations and templates
   (WP-2476): a redeclaration's parameter inherits the previous
   declaration's `nonnull`, `annotate`, `carries_dependency` and Swift ABI
@@ -998,6 +1070,35 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 - A designated initializer list nested N deep in a template keeps N + 1
   written lists, not (N + 1)(N + 2)/2: the written forms of the inner
   lists are shared (WP-2478).
+- Under `-fclang-compat=22`, a class nested in a local class or in an
+  unnamed class prints in a canonical diagnostic, `__PRETTY_FUNCTION__`
+  and a failed requirement as clang 22 prints it: with its enclosing
+  function and parameter types (`store<n::f(int, ...)::Local::In>`) and
+  `O::(unnamed struct)::In`; clang 19's form skips an unnamed enclosing
+  class (`O::In`). A closure in a failed `static_assert` requirement
+  prints `(lambda at file:line:col)` under both releases (WP-2545).
+- A `_` member of an anonymous union or anonymous struct is no longer
+  marked name-independent ([basic.scope.scope]/5); an ambiguous use of it
+  keeps clang's placeholder wording (WP-2477).
+- The attributes of an explicit instantiation (WP-2541): the
+  decl-specifier ones are merged onto the specialization as clang merges
+  them, so `template __attribute__((weak)) void f<long>(long);` defines
+  a `weak` function, `extern template __attribute__((weak)) ...`
+  declares it `extern_weak`, a `weak` variable instantiation is `weak`,
+  and `deprecated` warns at the uses; one after the declarator is
+  dropped, as clang drops it. A standard attribute before the
+  decl-specifiers, or after the class-key of a class's explicit
+  instantiation, is "an attribute list cannot appear here". A `weak` (or
+  other interposable) function definition is no longer inferred
+  `nounwind` (clang `TryMarkNoThrow`).
+- A user-defined literal's call, and an expression it begins, begin at
+  the literal's token rather than at its suffix; a concatenated string
+  literal's call ends at its last piece (WP-2543).
+- `#embed` data has a place in the unit (WP-2544): its scratch buffer is
+  an expansion of the directive, so a diagnostic in the embedded data
+  points at the `#embed` line as clang's does, and tooling clients can
+  map every embedded token back to its directive.
+
 - `EvalSession::variable_value` instantiates on demand a static data
   member's initializer that nothing instantiated (an in-class `constexpr`
   member of a class template specialization, an out-of-line `const` one),

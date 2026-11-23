@@ -24,8 +24,8 @@
 use kiln_ast::consts::Scalar;
 use kiln_ast::decl::{
     Access, ConstexprKind, CtorInitKind, DeclFlags, DeclKind, Defaulted, DefinitionBits, EnumData,
-    FnSpec, FnStorage, FriendKind, FriendTarget, InitStyle, ModuleOwnership, ParamData, TagKind,
-    TemplLinkKind, TlsKind, VarSpec, VarStorage,
+    FnSpec, FnStorage, FriendKind, FriendTarget, InitStyle, ParamData, TagKind, TemplLinkKind,
+    TlsKind, VarSpec, VarStorage,
 };
 use kiln_ast::modules::{Owner, UnitKind};
 use kiln_ast::names::{DeclName, DeclNameView, OverloadedOperator};
@@ -91,6 +91,7 @@ mod spec;
 mod specbase;
 mod specinit;
 mod specparam;
+mod splits;
 mod templ;
 mod tttp;
 mod varspec;
@@ -102,7 +103,7 @@ pub(crate) use locs::Locs;
 use locs::{FileRec, LocTable, SlocRec};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 82;
+pub(crate) const IMAGE_VERSION: u32 = 84;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -748,6 +749,9 @@ struct Image {
     declocs: declocs::DeclLocs,
     /// WP-2090: the records' declaration extents (spec/ast.md §19.6).
     extents: extents::Extents,
+    /// WP-2542: the split `>` tokens at carried locations (spec/ast.md
+    /// §21.2), ascending.
+    splits: Vec<u32>,
     /// WP-1934: the written-reference table (spec/ast.md §18.10.2), the
     /// last section.
     refs: refs::Refs,
@@ -906,9 +910,9 @@ const DEF_BITS: u64 = {
 /// Function specifier bits carried: storage, inline (written and
 /// implicit), `constexpr`/`consteval`, explicitly defaulted, deleted,
 /// `explicit`, trivial, immediate-escalating, escalated, `...`, inherited
-/// storage, not selected ([special]/6, WP-1109), deduced return type;
-/// since WP-1120 virtual (semantic and written), pure, `override` and
-/// `final`. Anything else (implicitly defaulted, coroutine, contracts,
+/// storage, not selected ([special]/6, WP-1109), deduced return type,
+/// computed exception specification (WP-2505); since WP-1120 virtual
+/// (semantic and written), pure, `override` and `final`. Anything else (implicitly defaulted, coroutine, contracts,
 /// explicit object parameter, ...) is not carried yet.
 fn fn_spec(bits: u32) -> Option<FnSpec> {
     let storage = match bits & 3 {
@@ -945,7 +949,8 @@ fn fn_spec(bits: u32) -> Option<FnSpec> {
         .with_virtual_written(bit(21))
         .with_storage_inherited(bit(22))
         .with_not_selected(bit(23))
-        .with_return_deduced(bit(24));
+        .with_return_deduced(bit(24))
+        .with_exc_spec_computed(bit(25));
     (spec.bits() == bits).then_some(spec)
 }
 
@@ -1431,6 +1436,12 @@ fn encode(img: &Image) -> Vec<u8> {
                     w.u32(v);
                 }
             }
+            SlocRec::Embed { spelling, len, exp } => {
+                w.u8(3);
+                for v in [*spelling, *len, exp[0], exp[1]] {
+                    w.u32(v);
+                }
+            }
         }
     }
     w.len(img.pnames.len());
@@ -1584,6 +1595,7 @@ fn encode(img: &Image) -> Vec<u8> {
     specbase::encode_member_classes(&mut w, &img.mclasses);
     fpstate::encode_fp_inits(&mut w, &img.fp_inits);
     extents::encode_extents(&mut w, &img.extents);
+    splits::encode_splits(&mut w, &img.splits);
     refs::encode_refs(&mut w, &img.refs);
     w.0
 }
@@ -2098,6 +2110,7 @@ fn decode_locs(r: &mut Rd<'_>, img: &mut Image) -> Res<()> {
                 name: [r.u32()?, r.u32()?],
             },
             2 => SlocRec::Arg { spelling: r.u32()?, len: r.u32()?, exp: [r.u32()?, r.u32()?] },
+            3 => SlocRec::Embed { spelling: r.u32()?, len: r.u32()?, exp: [r.u32()?, r.u32()?] },
             _ => return bad("bad location record"),
         };
         img.slocs.push(s);
@@ -2318,6 +2331,7 @@ fn decode_with(bytes: &[u8], want_refs: bool) -> Res<Image> {
     img.mclasses = specbase::decode_member_classes(&mut r)?;
     img.fp_inits = fpstate::decode_fp_inits(&mut r)?;
     img.extents = extents::decode_extents(&mut r)?;
+    img.splits = splits::decode_splits(&mut r)?;
     img.refs = refs::decode_refs(&mut r, want_refs)?;
     if !r.0.is_empty() {
         return bad("trailing bytes");
@@ -4167,10 +4181,7 @@ impl Writer<'_, '_, '_> {
         if m.friend() != FriendKind::None {
             self.friend_gate(d)?;
         }
-        if m.local_extern()
-            || m.name_independent()
-            || m.module_ownership() != ModuleOwnership::Unowned
-        {
+        if m.local_extern() || m.name_independent() {
             return Err("a declaration with local scope");
         }
         let access = m.access() as u8;
@@ -5019,6 +5030,8 @@ impl Writer<'_, '_, '_> {
         self.fp_inits();
         self.extents_section()?;
         self.refs_section()?;
+        // Last: only locations the sections above carry.
+        self.splits_section();
         Ok(())
     }
 
@@ -5774,6 +5787,7 @@ impl Sema<'_, '_> {
             classtempl::class_spec_locs(&img, &mut offs);
             declocs::decl_loc_offsets(&img, &mut offs);
             extents::extent_offsets(&img, &mut offs);
+            splits::split_offsets(&img, &mut offs);
             refs::refs_offsets(&img, &mut offs);
             explinst::explicit_inst_locs(&img, &mut offs);
             patinit::pattern_init_locs(&img, &mut offs);
@@ -6371,6 +6385,7 @@ impl Sema<'_, '_> {
         self.image_virtuals(img, &ids);
         self.image_decl_locs(img, &ids, |o| main.get(o));
         self.image_extents(img, &ids, None, |o| main.get(o));
+        self.image_splits(img, |o| main.get(o));
         self.image_local_externs(img, &ids);
         // The requires-expression parameters, which the types of their
         // requirements may name (WP-1343); then every type before the
@@ -7141,6 +7156,7 @@ mod tests {
             cspecs: classtempl::ClassSpecs::default(),
             declocs: declocs::DeclLocs::default(),
             extents: extents::Extents::default(),
+            splits: Vec::new(),
             refs: refs::Refs::default(),
             explinsts: explinst::ExplInsts::default(),
             patinits: patinit::PatInits::default(),
@@ -7315,6 +7331,10 @@ mod tests {
         };
         let spec = FnSpec::new().with_not_selected(true);
         assert_eq!(fn_spec(spec.bits()), Some(spec));
+        // A computed exception specification (WP-2505).
+        let computed = FnSpec::new().with_exc_spec_computed(true);
+        assert_eq!(fn_spec(computed.bits()), Some(computed));
+        assert_eq!(fn_spec(1 << 26), None, "an uncarried bit");
         let mut img = class_sample();
         set_bits(&mut img, nontrivial | B::TRIVIAL_DEFAULT_CTOR.bits());
         if let Payload::Function { spec: s, .. } = &mut img.decls[13].payload {

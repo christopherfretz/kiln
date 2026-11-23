@@ -22,6 +22,7 @@
 //! | `inst` | state | the instantiation meter, as data |
 //! | `written_refs` | own section | not in this encoding: `Sema`'s root writes it right after, as one length-prefixed section ([`Ast::put_written_refs`], spec/ast.md §18.10.1); read back empty and off here |
 //! | `decl_extents` | state | as data, then checked against the decl arena (spec/ast.md §19.6); the consumer sets recording from its own options, which the PCH identity makes the producer's |
+//! | `split_greaters` | state | as data (spec/ast.md §21.2) |
 
 use std::sync::Arc;
 
@@ -176,6 +177,7 @@ impl Snap for Ast {
             contract_sites,
             written_refs: _,
             decl_extents,
+            split_greaters,
             symbols,
             inst,
         } = self;
@@ -205,6 +207,7 @@ impl Snap for Ast {
         freestanding.put(w);
         contract_sites.put(w);
         decl_extents.put(w);
+        split_greaters.put(w);
         inst.put(w);
     }
 
@@ -235,6 +238,7 @@ impl Snap for Ast {
         let freestanding = timed(r, "Ast.freestanding")?;
         let contract_sites = timed(r, "Ast.contract_sites")?;
         let decl_extents: crate::decl_extents::DeclExtents = timed(r, "Ast.decl_extents")?;
+        let split_greaters = timed(r, "Ast.split_greaters")?;
         let inst = timed(r, "Ast.inst")?;
         let ast = Ast {
             types,
@@ -263,6 +267,7 @@ impl Snap for Ast {
             contract_sites,
             written_refs: crate::written_refs::WrittenRefs::default(),
             decl_extents,
+            split_greaters,
             symbols,
             inst,
         };
@@ -299,6 +304,7 @@ impl Snap for Ast {
         .field::<bool>("freestanding")
         .field::<ColdMap<StmtId, ContractSite>>("contract_sites")
         .field::<crate::decl_extents::DeclExtents>("decl_extents")
+        .field::<kiln_source::fx::FxHashSet<kiln_source::Loc>>("split_greaters")
         .field::<InstantiationMeter>("inst")
         .finish();
     fn schema(s: &mut Schema) {
@@ -330,6 +336,7 @@ impl Snap for Ast {
             .field::<bool>("freestanding")
             .field::<ColdMap<StmtId, ContractSite>>("contract_sites")
             .field::<crate::decl_extents::DeclExtents>("decl_extents")
+            .field::<kiln_source::fx::FxHashSet<kiln_source::Loc>>("split_greaters")
             .field::<InstantiationMeter>("inst");
         if s.register::<Self>(d) {
             Arc::<Interner>::schema(s);
@@ -357,6 +364,7 @@ impl Snap for Ast {
             bool::schema(s);
             ColdMap::<StmtId, ContractSite>::schema(s);
             crate::decl_extents::DeclExtents::schema(s);
+            kiln_source::fx::FxHashSet::<kiln_source::Loc>::schema(s);
             InstantiationMeter::schema(s);
         }
     }

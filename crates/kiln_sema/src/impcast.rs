@@ -540,13 +540,14 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// The parser split a one-character `>` token at `at` off a `>>` or
-    /// `>>=` ([temp.names]/4): [`Self::token_end`] measures it as one
-    /// character. A tentative parse that is rolled back may leave one
-    /// recorded; only a diagnostic range ending at a `>>` operator at
-    /// the same location would notice.
+    /// The parser split a one-character `>` token at `at` off a `>>`,
+    /// `>=` or `>>=` ([temp.names]/4): [`Self::token_end`] and
+    /// `kiln_lex::token_end_split` measure it as one character
+    /// (`Ast::split_greaters`, spec/ast.md §21.2). A tentative parse
+    /// that is rolled back may leave one recorded; only a range ending
+    /// at a `>>` operator at the same location would notice.
     pub fn note_split_greater(&mut self, at: Loc) {
-        self.split_greaters.insert(at);
+        self.ast.split_greaters.insert(at);
     }
 
     /// The end of the identifier, keyword, number or punctuator token at
@@ -556,7 +557,7 @@ impl Sema<'_, '_> {
     /// if it would leave the entry.
     pub(crate) fn token_end(&self, at: Loc) -> Option<Loc> {
         let sm = self.diags.sm();
-        if self.split_greaters.contains(&at) {
+        if self.ast.split_greaters.contains(&at) {
             return Some(at.with_offset(1));
         }
         if at.is_macro() {

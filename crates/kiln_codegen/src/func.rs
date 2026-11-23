@@ -1042,7 +1042,7 @@ impl Cg<'_> {
             || const_pure
             || self.ast.has_nothrow_attr(d)
             || !self.opts.exceptions
-            || (thunk.is_none() && self.no_throw_calls());
+            || (thunk.is_none() && !self.interposable(f) && self.no_throw_calls());
         let noreturn = self.ast.is_noreturn_fn(d);
         let inline = if thunk.is_some() && !self.opts.optimize() {
             crate::module::DefInline::OptNone
@@ -1208,6 +1208,16 @@ impl Cg<'_> {
                 _ => return false,
             }
         }
+    }
+
+    /// clang `TryMarkNoThrow` returns first for a function another
+    /// definition may replace at link time (`isInterposable`: `weak`,
+    /// `linkonce`, `extern_weak`, `common`), whose `nounwind` would be a
+    /// promise about a body it may not have (`__attribute__((weak))`, an
+    /// explicit instantiation's `weak`; WP-2541).
+    fn interposable(&self, f: FuncId) -> bool {
+        use kiln_llvm::Linkage as L;
+        matches!(self.m.func(f).linkage, L::Weak | L::LinkOnce | L::ExternWeak | L::Common)
     }
 
     /// clang `TryMarkNoThrow`: no call or invoke in the body may throw,

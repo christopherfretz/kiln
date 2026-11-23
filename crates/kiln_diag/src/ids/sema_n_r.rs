@@ -43,6 +43,7 @@ sema_no_member_template_suggest = Error (3) "no template named '{0}' in {1}; did
 sema_no_subscript_operator = Error (1) "type {0} does not provide a subscript operator";
 sema_no_suitable_delete_member = Error (2) "no suitable member {0} in {1}";
 sema_no_template_named = Error (1) "no template named '{0}'";
+sema_no_template_suggest = Error (2) "no template named '{0}'; did you mean '{1}'?";
 sema_no_viable_conversion = Error (2) "no viable conversion from {0} to {1}";
 sema_no_viable_conversion_return = Error (2) "no viable conversion from returned value of type {0} to function return type {1}";
 sema_no_viable_destructor = Error (1) "no viable destructor found for class {0}";

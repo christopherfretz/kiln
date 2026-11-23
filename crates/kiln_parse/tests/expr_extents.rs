@@ -354,3 +354,274 @@ fn recorded_ends_and_begins_have_their_text() {
     // the four casts.
     assert_eq!(parens, 9, "{some:?}");
 }
+
+/// The five shapes WP-2350 left without a begin or an end (WP-2460..
+/// WP-2464): an implicit `this->operator T*`, a member named by a
+/// dependent using-declarator, `&B::f` of an overloaded member and a
+/// static member template's specialization through an implicit `this`, an
+/// array `new`'s parenthesized aggregate initialization, and
+/// `&this->sf<int>`.
+const LEFT: &str = r"
+template <class T> struct C {
+  operator T*() const;
+  T* g() const { return operator T*(); }
+};
+template <class T> struct U : T {
+  using T::f;
+  int h() { return f(); }
+};
+struct B {
+  int f();
+  int f(int);
+  template <int N> static int s(int);
+  template <int N> int s(long);
+};
+struct D : B {
+  int h() { int (B::*q)() = &B::f; return s<0>(0) + B::s<1>(0) + (this->*q)(); }
+};
+struct S { template <class V> static int sf(); };
+template <class T> struct X : S { auto g() { return &this->sf<int>; } };
+struct Y : S { auto g() { return &this->sf<int>; } };
+struct R { int v; };
+int *pn() { return new int[2](1, 2); }
+int *pu() { return new int[](1, 2, 3); }
+R (*pr())[2] { return new R[2][2]({R(4)}); }
+";
+
+#[test]
+fn the_left_shapes_have_their_text() {
+    let p = parse_src(LEFT);
+    let (some, _) = extents(&p);
+    let count =
+        |kind: &str, text: &str| some.iter().filter(|(k, t)| k == kind && t == text).count();
+    let has = |kind: &str, text: &str| {
+        assert!(
+            count(kind, text) > 0,
+            "no {kind} `{text}` among {:?}",
+            some.iter().filter(|(k, _)| k == kind).collect::<Vec<_>>()
+        );
+    };
+    // WP-2460: the conversion-type-id's last token ends the name.
+    has("CXXDependentScopeMemberExpr", "operator T*");
+    has("CallExpr", "operator T*()");
+    // WP-2461: the written name begins it.
+    has("CXXDependentScopeMemberExpr", "f");
+    has("CallExpr", "f()");
+    // WP-2462: the qualifier begins the reference, `&` the address-of.
+    has("DeclRefExpr", "B::f");
+    has("UnaryOperator", "&B::f");
+    has("DeclRefExpr", "s<0>");
+    has("DeclRefExpr", "B::s<1>");
+    // WP-2463: an array `new`'s list begins at its `(`.
+    has("CXXParenListInitExpr", "(1, 2)");
+    has("CXXParenListInitExpr", "(1, 2, 3)");
+    has("CXXParenListInitExpr", "({R(4)})");
+    // WP-2464: `this` begins the access, the `>` ends it.
+    assert_eq!(count("MemberExpr", "this->sf<int>"), 2, "{some:?}");
+    assert_eq!(count("UnaryOperator", "&this->sf<int>"), 2, "{some:?}");
+}
+
+/// Template-ids closed by the first `>` of a `>>`, a `>=` or a `>>=`
+/// ([temp.names]/4), and by a `>>` then a `>` (`>>>`).
+const SPLITS: &str = r"
+template <class T> struct W { static const int v = 1; };
+template <class T> int tv = 0;
+void f() {
+  int a = tv<W<int>>;
+  tv<int>= 5;
+  tv<W<int>>= 6;
+  int c = tv<W<W<int>>>;
+}
+";
+
+/// The parse of `src`, whatever it diagnoses (kiln accepts a `>=` or a
+/// `>>=` closing a template argument list, where clang asks for a space
+/// and recovers by the same split).
+fn parse_any(src: &str) -> Parsed {
+    let sm = SourceManager::new();
+    let file = sm.add_virtual("t.cpp", src.to_owned()).expect("location space");
+    let interner = Arc::new(Interner::new());
+    let engine = DiagEngine::new(&sm, &DiagOptions::default(), MemorySink::new());
+    let opts = ParseOptions::default();
+    let target = Target::for_arch(Arch::X86_64);
+    let tu = parse_tu(&sm, &interner, file, &engine, target, &opts, ConstexprLimits::default());
+    drop(engine);
+    Parsed { sm, interner, tu }
+}
+
+/// WP-2542 (spec/ast.md §21.2, spec/lex.md "End of a token"): the AST
+/// carries the split `>` locations, so the public token-end query and
+/// the client's extents end a template-id at its own `>`.
+#[test]
+fn a_split_greater_ends_at_its_own_character() {
+    let p = parse_any(SPLITS);
+    let opts = LexOptions::new(ParseOptions::default().std);
+    let splits = &p.tu.ast.split_greaters;
+    // Every split location is a `>` that began or continued a longer token.
+    let first = *splits.iter().next().expect("split locations");
+    let text = p.sm.text(p.sm.offset_of(first).expect("a file location").0);
+    for &l in splits {
+        let (_, off) = p.sm.offset_of(l).expect("a file location");
+        assert_eq!(&text[off as usize..=off as usize], ">");
+        let end = kiln_lex::token_end_split(&p.sm, &p.interner, l, opts, splits).unwrap();
+        assert_eq!(end, l.with_offset(1));
+        // The split-unaware query measures the whole lexed token.
+        let whole = kiln_lex::token_end(&p.sm, &p.interner, l, opts).unwrap();
+        let (_, we) = p.sm.offset_of(whole).unwrap();
+        assert!(we > off + 1 || text.as_bytes()[off as usize - 1] == b'>', "at {off}");
+    }
+    // `>>` (both halves), `>=`, `>>=` (the `>` and the `>` of the `>=`
+    // rest), `>>` + `>` (the `>>` halves).
+    let at = |needle: &str, k: usize| -> u32 {
+        let base = text.find(needle).expect(needle) + k;
+        u32::try_from(base).unwrap()
+    };
+    let split_offs: std::collections::BTreeSet<u32> =
+        splits.iter().map(|&l| p.sm.offset_of(l).unwrap().1).collect();
+    for (needle, k) in [
+        ("tv<W<int>>;", 8),
+        ("tv<W<int>>;", 9),
+        ("tv<int>=", 6),
+        ("tv<W<int>>=", 8),
+        ("tv<W<int>>=", 9),
+        ("tv<W<W<int>>>", 10),
+        ("tv<W<W<int>>>", 11),
+    ] {
+        assert!(split_offs.contains(&at(needle, k)), "{needle} +{k}: {split_offs:?}");
+    }
+    let (some, _) = extents(&p);
+    let refs: Vec<&str> =
+        some.iter().filter(|(k, _)| k == "DeclRefExpr").map(|(_, t)| t.as_str()).collect();
+    for t in ["tv<W<int>>", "tv<int>", "tv<W<W<int>>>"] {
+        assert!(refs.contains(&t), "no DeclRefExpr `{t}` among {refs:?}");
+    }
+    assert!(!refs.iter().any(|t| t.ends_with('=')), "{refs:?}");
+}
+
+/// WP-2543 (spec/ast.md §19): a user-defined literal's call and the
+/// expression it begins start at the literal token, as clang's
+/// `UserDefinedLiteral`; the callee stays at the ud-suffix.
+const UDLS: &str = r#"
+unsigned long long operator""_k(unsigned long long v) { return v; }
+long double operator""_f(long double v) { return v; }
+int operator""_s(const char *, unsigned long) { return 1; }
+int operator""_c(char) { return 2; }
+template <char...> int operator""_t() { return 3; }
+int operator""_r(const char *) { return 4; }
+auto a = 12_k + 1;
+auto b = 1.5_f + 1;
+auto c = "ab"_s + 1;
+auto d = "a" "b"_s + 1;
+auto e = 'x'_c + 1;
+auto g = 42_t + 1;
+auto h = 7_r + 1;
+"#;
+
+#[test]
+fn a_user_defined_literal_begins_at_its_token() {
+    let p = parse_src(UDLS);
+    let ast = &p.tu.ast;
+    let lc = |l: kiln_source::Loc| {
+        let x = p.sm.line_col(l).expect("a file location");
+        (x.line, x.col)
+    };
+    let mut calls = Vec::new();
+    let mut binops = Vec::new();
+    for e in written_exprs(ast) {
+        match ast.exprs.get(e).kind() {
+            kiln_ast::expr::ExprKind::CallExpr => {
+                assert!(ast.is_udl_call(e));
+                let callee = ast.exprs.callee(e);
+                calls.push((lc(ast.begin_loc(e)), lc(ast.end_loc(e)), lc(ast.begin_loc(callee))));
+            }
+            kiln_ast::expr::ExprKind::BinaryOperator => binops.push(lc(ast.begin_loc(e))),
+            _ => {}
+        }
+    }
+    // (begin, end, callee) per line; the callee at the suffix (clang 19
+    // and 22 alike), a concatenated string's end at its last piece.
+    let want = [
+        ((8, 10), (8, 10), (8, 12)),
+        ((9, 10), (9, 10), (9, 13)),
+        ((10, 10), (10, 10), (10, 14)),
+        ((11, 10), (11, 14), (11, 17)),
+        ((12, 10), (12, 10), (12, 13)),
+        ((13, 10), (13, 10), (13, 12)),
+        ((14, 10), (14, 10), (14, 11)),
+    ];
+    assert_eq!(calls, want);
+    assert_eq!(binops, (8..=14).map(|l| (l, 10)).collect::<Vec<_>>());
+}
+
+/// WP-2544 (spec/pp.md "`#embed`"): an `#embed`'s bytes are spelled in a
+/// scratch buffer behind one `Embed` expansion entry whose expansion is
+/// the directive's `#`, so every byte leads back to the directive (clang
+/// gives each byte the `#`'s location): the whole run is the `#`, one
+/// byte of it has no file range of its own.
+#[test]
+fn embed_bytes_lead_back_to_their_directive() {
+    let src = "int a[] = {\n#embed \"d.bin\"\n};\nint b[] = {\n  #  embed \"d.bin\" limit(1)\n};\n";
+    let sm = SourceManager::new();
+    let file = sm.add_virtual("t.cpp", src.to_owned()).expect("location space");
+    let interner = Arc::new(Interner::new());
+    let engine = DiagEngine::new(&sm, &DiagOptions::default(), MemorySink::new());
+    let opts = ParseOptions::default();
+    let mut ppo = kiln_pp::PpOptions::new(opts.std);
+    ppo.parser_pragmas = true;
+    let mut pp = kiln_pp::Preprocessor::new(&sm, &engine, &interner, ppo);
+    pp.set_include_resolver(Box::new(
+        kiln_pp::MemoryResolver::new().with_resource("d.bin", b"\x01\x02\x03"),
+    ));
+    pp.enter_main_file(file);
+    let target = Target::for_arch(Arch::X86_64);
+    let (tu, pp) = kiln_parse::parse_preprocessed(
+        pp,
+        Arc::clone(&interner),
+        &engine,
+        target,
+        &opts,
+        ConstexprLimits::default(),
+    );
+    drop(pp);
+    assert_eq!(engine.error_count(), 0);
+    drop(engine);
+    let p = Parsed { sm, interner, tu };
+    let hashes = [src.find('#').unwrap(), src.rfind('#').unwrap()];
+    // One entry per directive, a root, over the `#`.
+    let entries: Vec<_> = p.sm.expansion_entries(0).collect();
+    let embeds: Vec<_> =
+        entries.iter().filter(|e| e.info.kind == kiln_source::ExpansionKind::Embed).collect();
+    assert_eq!(embeds.len(), 2);
+    for (e, &h) in embeds.iter().zip(&hashes) {
+        assert_eq!(e.parent, None);
+        let (f, lo) = p.sm.offset_of(e.info.expansion.lo).unwrap();
+        let (_, hi) = p.sm.offset_of(e.info.expansion.hi).unwrap();
+        assert_eq!((f, lo as usize, hi as usize), (file, h, h + 1));
+    }
+    // Every byte's literal is in an `Embed` entry: the bytes of the first
+    // directive, then the one of the second.
+    let ast = &p.tu.ast;
+    let lits: Vec<_> = written_exprs(ast)
+        .into_iter()
+        .filter(|&e| ast.exprs.get(e).kind() == kiln_ast::expr::ExprKind::IntegerLiteral)
+        .collect();
+    assert_eq!(lits.len(), 4);
+    for &e in &lits {
+        let x = p.sm.expansion_info(ast.exprs.get(e).loc()).expect("a macro location");
+        assert_eq!(x.kind, kiln_source::ExpansionKind::Embed);
+    }
+    let lexo = LexOptions::new(opts.std);
+    let range = |a: kiln_source::Loc, b: kiln_source::Loc| {
+        kiln_lex::token_range(&p.sm, &p.interner, a, b, lexo)
+            .map(|(f, lo, hi)| (f, lo as usize, hi as usize))
+    };
+    let loc = |e| ast.exprs.get(e).loc();
+    // The whole run of the first embed: its `#`; one byte alone: none.
+    assert_eq!(range(loc(lits[0]), loc(lits[2])), Some((file, hashes[0], hashes[0] + 1)));
+    assert_eq!(range(loc(lits[1]), loc(lits[1])), None);
+    // A one-byte resource is the whole run.
+    assert_eq!(range(loc(lits[3]), loc(lits[3])), Some((file, hashes[1], hashes[1] + 1)));
+    // The braced lists keep their written text.
+    let (some, _) = extents(&p);
+    assert!(some.iter().any(|(k, t)| k == "InitListExpr" && t == "{\n#embed \"d.bin\"\n}"));
+}

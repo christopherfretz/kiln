@@ -1152,6 +1152,81 @@ qualifies a reference argument (`R = const T`, `T = int &`), so
 | `std::nullptr_t` | `std::nullptr_t` |
 | `_BitInt(13)` unsigned | `unsigned _BitInt(13)` |
 
+### 12.1 Which printer is which; keys (WP-2477, WP-2545)
+
+Three printers name types, and only one is a key:
+
+- **The diagnostic printer** (`DiagNames`, `kiln_sema`'s names, the
+  `aka`): clang's text at the `-fclang-compat` level, for diagnostics
+  and anything compared with clang's output. It prints distinct types
+  alike wherever clang does, and so is never a key:
+  - A null pointer template argument prints `nullptr` without its type
+    (clang `TemplateArgument::print` of a `NullPtr` argument), so the
+    canonical `S<(int *)nullptr>` and `S<(char *)nullptr>` of `template
+    <auto P> struct S` both print `S<nullptr>` (an instantiation note, a
+    failed requirement, `-ast-print`). Written sugar keeps the written
+    expression: `'S<(int *)nullptr>'` in "no viable conversion from".
+  - A class or enumeration declared in a function prints without the
+    function (clang `TypePrinter::AppendScope` stops there): `Local`
+    of `f()` and of `g()` both print `store<Local>`, as do the `L` of
+    `k<int>()` and of `k<long>()`; a closure type prints `(lambda at
+    F:L:C)`, which is the same text for every instantiation of one
+    lambda-expression.
+  - In a scope, clang 19 prints nothing for an unnamed class (its own
+    scope stays: `O::In` for `In` in `struct O { struct { struct In
+    {}; } u; }`). clang 22 prints the scope's qualified name
+    (`printQualifiedName`) when the enclosing class or enumeration is
+    unnamed or declared in a function: `O::(unnamed struct)::In`,
+    `n::f(int, ...)::Local::In`, `C::m()::L::In` (no qualifiers),
+    `h(int)::L::In` for `h<int>` (no arguments),
+    `g()::(lambda)::operator()()::LL::I`; the class directly in the
+    function still prints alone (`store<Local>`). Kiln follows both, in
+    diagnostics (`DiagNames`), a failed `static_assert` requirement and
+    `__PRETTY_FUNCTION__` (`AstNames::local_scopes`). A failed
+    requirement names a closure type with its location, as clang does
+    (`sizeof((lambda at a.cpp:6:21))`).
+- **The dump printer** (`AstNames`): the AST dump's and debug
+  information's text (spec/ast-dump.md, spec/codegen.md §5.1), clang's
+  for those outputs; not a key either.
+- **The key printer** (`AstNames::for_keys(ast, sm).type_key(q)`):
+  kiln's own, for tooling clients that use a type's name as a key. Two
+  different canonical types of one translation unit never print alike,
+  and one type always prints the same, whichever use named it first.
+  It prints the canonical type with every name fully scoped (`PrintOptions
+  ::CANONICAL`), and departs from clang's text where clang's is
+  ambiguous:
+  - the scope goes through functions: `n::f(int)::Local`; a function
+    template specialization with its arguments (`k<int>()::L`); a
+    member function with its cv- and ref-qualifiers (`C::m() const
+    &::L`); parameter types canonical; a closure type as a scope by its
+    location (`g()::(lambda at a.cpp:3:12)::operator()()::LL`), as a
+    type `f()::(lambda at a.cpp:3:12)`;
+  - inline namespaces stay in the scope (`q::v::B`), since `q::B` can
+    be another class;
+  - a local class or enumeration after the first of its name in its
+    function (in a sibling block) adds its ordinal: `f()::L`, `f()::L#2`
+    (the mangling's discriminator, `_ZZ1fvE1L_0`);
+  - a class template specialization prints all its converted arguments,
+    canonical, never its first use's spelling or a `preferred_name`
+    (`std::basic_string<char, std::char_traits<char>,
+    std::allocator<char>>`);
+  - a null pointer argument of a parameter with a deduced type prints
+    as a cast, `S<(int *)nullptr>`, `S<(int X::*)nullptr>` (`nullptr` of
+    `std::nullptr_t` stays `S<nullptr>`); a parameter with a written
+    type fixes the pointer type, so `T<nullptr>` is already unique;
+  - a pointer or reference argument names its object with the same
+    scope (`P<&f()::x>` for a static local `x`).
+
+  An unnamed class's or closure's key is its location `F:L:C` (the
+  presumed location of its declaration): two unnamed classes declared
+  by one token of one macro expansion (a macro argument expanded twice)
+  print alike, the one known exception. The key is a printing of the
+  translation unit's canonical types, not a cross-unit identity (the
+  ODR digest, spec/abi.md, is). Tests: the key printer in
+  `crates/kiln_parse/tests/type_keys.rs`; the diagnostic printer's scopes
+  in `class.local/local-class-scope-printing.cpp` (clang 22) and
+  `local-class-scope-printing-clang19.cpp`.
+
 ## 13. Interface sketch
 ```rust
 impl TypeContext {

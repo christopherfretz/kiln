@@ -418,6 +418,70 @@ impl Sema<'_, '_> {
         TemplateIdTypo::Recovered(self.recover_err(&[], loc))
     }
 
+    /// `class-key name<args>` whose unqualified `name` ordinary lookup
+    /// does not find, which [temp.names]/3 makes a template name (clang's
+    /// `TNK_Undeclared_template` in `ParseClassSpecifier`): clang's
+    /// `resolveAssumedTemplateNameAsType` typo-corrects it to a type
+    /// template (`CorrectTypo` with a callback that keeps only class
+    /// templates, alias templates and template template parameters, so
+    /// nothing else competes), "no template named 'x'; did you mean 'y'?"
+    /// at `loc` with "'y' declared here", and the declaration goes on
+    /// with that class template (`namespace b { template struct v<M>; }`
+    /// with `a::v` declared: an explicit instantiation of `a::v`, which
+    /// declares nothing named `b::v`; WP-2547). `None`, with nothing
+    /// diagnosed, when there is no correction or it is not a class
+    /// template.
+    pub fn correct_class_template_typo(&mut self, name: Symbol, loc: Loc) -> Option<DeclId> {
+        let (c, t, shown) = self.class_template_typo(name)?;
+        let note = self
+            .diag(DiagId::note_entity_declared_here, self.typo_note_loc(shown))
+            .arg(format!("'{}'", c.text));
+        let msg = self
+            .diag(DiagId::sema_no_template_suggest, loc)
+            .arg(sym_str(self, name))
+            .arg(c.text.clone())
+            .with_note(note);
+        let msg = self.typo_fixes(msg, loc, &c.text, false);
+        self.emit(msg);
+        self.templ.typo_corrected = Some(self.ast.first(t));
+        Some(t)
+    }
+
+    /// Whether [`Sema::correct_class_template_typo`] would correct `name`
+    /// (nothing is diagnosed): the parser's look-ahead for `template<>
+    /// struct name<...>` ([temp.expl.spec]/1).
+    pub fn has_class_template_typo(&self, name: Symbol) -> bool {
+        self.class_template_typo(name).is_some()
+    }
+
+    /// The correction of [`Sema::correct_class_template_typo`]: the
+    /// candidate, the class template and the declaration found.
+    fn class_template_typo(&self, name: Symbol) -> Option<(Candidate, DeclId, DeclId)> {
+        if !self.inst.stack.is_empty() {
+            return None;
+        }
+        let type_template = |s: &Self, c: &Candidate| {
+            !c.decls.is_empty()
+                && matches!(
+                    s.kind_of(s.ast.strip_shadow(c.decls[s.typo_correction_decl(c)])),
+                    DeclKind::ClassTemplate
+                        | DeclKind::TypeAliasTemplate
+                        | DeclKind::TemplateTemplateParm
+                        | DeclKind::BuiltinTemplate
+                )
+        };
+        let cands: Vec<Candidate> = self
+            .template_id_typo_candidates(name)
+            .into_iter()
+            .filter(|c| type_template(self, c))
+            .collect();
+        let c = self.best_typo_among(name, cands)?;
+        let i = self.typo_correction_decl(&c);
+        let (decl, shown) = (c.decls[i], c.found[i]);
+        let t = self.ast.strip_shadow(decl);
+        (self.kind_of(t) == DeclKind::ClassTemplate).then_some((c, t, shown))
+    }
+
     /// clang 22's `DiagnoseEmptyLookup` before typo correction of the
     /// template-id `name<...>` not called: `name` declared in a class
     /// enclosing the current context (a member function whose
@@ -555,8 +619,14 @@ impl Sema<'_, '_> {
     /// [`Sema::correct_template_id_typo`]); `None` when there is none,
     /// it is too distant, or it ties with another.
     fn best_template_id_typo(&self, name: Symbol) -> Option<Candidate> {
+        self.best_typo_among(name, self.template_id_typo_candidates(name))
+    }
+
+    /// [`Sema::best_template_id_typo`] over `cands` (by distance, as
+    /// [`Sema::template_id_typo_candidates`] orders them), the candidates
+    /// a correction callback accepts.
+    fn best_typo_among(&self, name: Symbol, cands: Vec<Candidate>) -> Option<Candidate> {
         let len = sym_str(self, name).len();
-        let cands = self.template_id_typo_candidates(name);
         let mut best: Option<Candidate> = None;
         for c in cands {
             match &best {

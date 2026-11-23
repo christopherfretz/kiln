@@ -1010,3 +1010,102 @@ fn invalid_alias_enum_base_matches_the_executable() {
         }
     }
 }
+
+/// The explicitly defaulted constructor or destructor of class `class`
+/// (`dtor`: the destructor).
+fn defaulted_member(ast: &Ast, class: &str, dtor: bool) -> DeclId {
+    use kiln_ast::decl::{DeclKind, Defaulted};
+    let kind = if dtor { DeclKind::CXXDestructor } else { DeclKind::CXXConstructor };
+    let mut found = ast.decls.ids().filter(|&d| {
+        let n = ast.decls.get(d);
+        n.kind() == kind
+            && n.ctx().is_some_and(|c| ident(ast, c) == class)
+            && ast.decls.function(d).is_some_and(|f| f.spec.defaulted() == Defaulted::Explicit)
+    });
+    let d = found.next().unwrap_or_else(|| panic!("no defaulted member of {class}"));
+    assert!(found.next().is_none(), "one defaulted member of {class}");
+    d
+}
+
+/// The source of `exception_spec_computed_vs_written`: `W`'s default
+/// constructor is written `noexcept(false)`, `C`'s copy constructor is
+/// computed to be `noexcept(false)` (the `static_assert` resolves it),
+/// `D`'s destructor's specification is computed and left unresolved.
+const EXC_SPEC_SRC: &str = "struct M { M(); M(const M &) noexcept(false); };\n\
+     struct W { M m; W() noexcept(false) = default; };\n\
+     struct C { M m; C(); C(const C &) = default; };\n\
+     struct D { ~D() = default; };\n\
+     static_assert(!noexcept(C(*static_cast<const C *>(nullptr))));\n";
+
+/// Checks `exception_spec_computed` on `EXC_SPEC_SRC`'s classes.
+fn check_exc_spec_computed(ast: &Ast) {
+    let w = defaulted_member(ast, "W", false);
+    let c = defaulted_member(ast, "C", false);
+    let d = defaulted_member(ast, "D", true);
+    let nothrow = |f: DeclId| {
+        let ty = ast.decls.get(f).ty().unwrap();
+        let p = ast.types.proto(ty).unwrap();
+        ast.types.exc_spec(p)
+    };
+    // Written `noexcept(false)` and computed `noexcept(false)`: the same
+    // specification, told apart only by the query.
+    assert_eq!(nothrow(w), nothrow(c));
+    assert!(!ast.exception_spec_computed(w), "written");
+    assert!(ast.exception_spec_computed(c), "computed and resolved");
+    assert!(ast.exception_spec_computed(d), "computed");
+}
+
+/// Test (WP-2505, spec/ast.md §4.2): a tooling client tells an explicitly
+/// defaulted function's written exception specification from a computed
+/// one, in the unit itself and through a module image of it (the unit's
+/// source blanked, so the importer cannot replay it). PCH snapshots
+/// carry `FnSpec` whole (`kiln_snap::Snap`), so the bit needs no code there.
+#[test]
+fn exception_spec_computed_vs_written() {
+    let s = Scratch::new("excspec");
+    let main = s.write("main.cpp", EXC_SPEC_SRC.as_bytes());
+    let r =
+        run_front_end("kiln++", &argv(&["-fsyntax-only", "-std=c++26", &main]), quiet(), |fe| {
+            check_exc_spec_computed(fe.ast);
+        })
+        .unwrap();
+    assert_eq!((r.value, r.errors), (Some(()), 0), "{:?}", r.first_error);
+
+    let unit = format!("export module m;\nexport {{\n{EXC_SPEC_SRC}}}\n");
+    let cppm = s.write("m.cppm", unit.as_bytes());
+    let pcm = s.path("m.pcm");
+    let out =
+        Command::new(std::path::Path::new(env!("CARGO_BIN_EXE_kiln")).with_file_name("kiln++"))
+            .args([
+                "-v",
+                "-std=c++26",
+                "-fkiln-bmi-image",
+                "--precompile",
+                "-x",
+                "c++-module",
+                &cppm,
+                "-o",
+                &pcm,
+            ])
+            .output()
+            .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stderr}");
+    assert!(stderr.contains("with a declaration image of "), "{stderr}");
+    // The unit's source blanked (same length): only an importer that
+    // builds the unit from its image still compiles.
+    let mut c = kiln_pp::bmi::read(&std::fs::read(&pcm).unwrap()).unwrap();
+    let text = &mut c.files[0].text;
+    *text = text.bytes().map(|b| if b == b'\n' { '\n' } else { ' ' }).collect();
+    let blank = s.write("blank.pcm", &kiln_pp::bmi::write(&c));
+    let user = s.write("user.cpp", b"import m;\nC *p;\n");
+    let cl = argv(&[
+        "-fsyntax-only",
+        "-std=c++26",
+        "-fkiln-bmi-image",
+        &format!("-fmodule-file=m={blank}"),
+        &user,
+    ]);
+    let r = run_front_end("kiln++", &cl, quiet(), |fe| check_exc_spec_computed(fe.ast)).unwrap();
+    assert_eq!((r.value, r.errors), (Some(()), 0), "{:?}", r.first_error);
+}

@@ -3223,10 +3223,37 @@ impl Sema<'_, '_> {
 
     /// The context a declarator declares into, and its lexical context.
     pub(crate) fn decl_contexts(&self, d: &Declarator) -> (DeclId, DeclId) {
-        match d.qualifier {
-            Some(q) => (q, self.ctx),
-            None => (self.ctx, self.ctx),
+        if let Some(q) = d.qualifier {
+            (q, self.ctx)
+        } else {
+            let c = self.block_decl_ctx();
+            (c, c)
         }
+    }
+
+    /// The context an unqualified declaration in the current scope
+    /// belongs to: [`Sema::ctx`], except in a block scope whose context
+    /// is still a class, the compound statement of a GNU statement
+    /// expression in a default member initializer or a member function's
+    /// default argument (`struct L { int m = ({ int t = 2; t; }); };` in
+    /// a function body; spec/sema.md §5.8). Such a declaration is a
+    /// local of the function enclosing the class, as in clang (whose
+    /// `CurContext` there is that function: a `static` local mangles as
+    /// one of it), not a member of the class (WP-2474).
+    pub(crate) fn block_decl_ctx(&self) -> DeclId {
+        let in_block = self
+            .scopes
+            .iter()
+            .rev()
+            .find(|s| !s.is_transparent())
+            .is_some_and(|s| matches!(s.kind, ScopeKind::Block | ScopeKind::Control));
+        if in_block
+            && self.kind_of(self.ctx).payload() == kiln_ast::decl::PayloadClass::Record
+            && let Some(f) = self.enclosing_function(self.ctx)
+        {
+            return f;
+        }
+        self.ctx
     }
 
     /// The declarations of `name` a declaration may redeclare (redeclaration
@@ -4031,8 +4058,8 @@ impl Sema<'_, '_> {
             // [dcl.constexpr]/9: `constexpr` makes the declared type const.
             let ty =
                 if ds.constexpr.is_some() { self.ast.types.qualify(ty, Quals::CONST) } else { ty };
-            let attrs: Vec<_> = ds.attrs.iter().chain(&d.attrs).copied().collect();
-            self.act_on_explicit_var_inst(d, (ty, type_loc), &attrs, ext.is_some(), invalid);
+            // clang merges the decl-specifier's attributes only (WP-2541).
+            self.act_on_explicit_var_inst(d, (ty, type_loc), &ds.attrs, ext.is_some(), invalid);
             return None;
         }
         if let Some(sid) = &d.spec_id {
@@ -5409,18 +5436,22 @@ impl Sema<'_, '_> {
         };
         // A replaceable global allocation or deallocation function
         // redeclares the implicit one ([new.delete]/2).
-        let global_new_delete = d.op_name.is_some_and(|op| {
-            !method
-                && !friend
-                && self.kind_of(self.ast.redecl_context(ctx)) != DeclKind::Namespace
-                && matches!(
-                    op,
-                    OverloadedOperator::New
-                        | OverloadedOperator::ArrayNew
-                        | OverloadedOperator::Delete
-                        | OverloadedOperator::ArrayDelete
-                )
-        });
+        let global_new_delete = !method
+            && !friend
+            && self.kind_of(self.ast.redecl_context(ctx)) != DeclKind::Namespace
+            && is_global_alloc_op(d.op_name);
+        // A friend naming a global `operator new`/`delete` redeclares the
+        // implicit ones too ([basic.stc.dynamic.general]/2): they are
+        // declared before its redeclaration lookup, as clang does
+        // (WP-2540; a friend in a templated class still redeclares
+        // nothing until instantiated).
+        if friend
+            && !method
+            && is_global_alloc_op(d.op_name)
+            && self.kind_of(self.ast.redecl_context(ctx)) == DeclKind::TranslationUnit
+        {
+            self.declare_global_new_delete();
+        }
         // A qualified friend of a namespace function in a templated class
         // whose own head or type is dependent is matched only when the class
         // is instantiated: its template parameters are a level deeper than
@@ -7045,7 +7076,9 @@ impl Sema<'_, '_> {
         // [basic.scope.scope]/5 (P2169): a non-static data member `_` is
         // name-independent and conflicts with no earlier declaration of
         // the class (/6: a member function or a static data member `_`
-        // too; clang 22 still reports those as duplicates).
+        // too; clang 22 still reports those as duplicates). A member of
+        // an anonymous union is not: the bit is cleared when the union
+        // turns out anonymous (`act_on_anonymous_record`).
         let independent = name.is_some_and(|n| self.is_placeholder_name(n));
         // A class or enumeration of the same name is hidden, not
         // redeclared ([basic.scope.hiding]/2; clang `CheckFieldDecl`):
@@ -10537,6 +10570,9 @@ impl Sema<'_, '_> {
         if unnamed_template {
             self.error(DiagId::sema_template_unnamed_class, loc);
         }
+        // The class-key of a mismatched redeclaration becomes the previous
+        // declaration's (below).
+        let mut keyword = keyword;
         let mut prev = None;
         let mut redefined = false;
         // A name of another kind (`kind_conflict`): the tag is declared
@@ -10609,6 +10645,20 @@ impl Sema<'_, '_> {
                         // clang's recovery: the tag found is the one named.
                         self.mark_type_referenced(p);
                         return p;
+                    }
+                    // clang's recovery (`ActOnTag`): a declaration with the
+                    // class-key of another class kind redeclares the class
+                    // as declared (`struct w; union w;` is one entity, not
+                    // two; WP-2547).
+                    if let Some(r) = self.ast.decls.record(p)
+                        && !is_enum
+                    {
+                        prev = Some(p);
+                        keyword = match r.tag {
+                            TagKind::Union => TagKeyword::Union,
+                            TagKind::Class => TagKeyword::Class,
+                            TagKind::Struct => TagKeyword::Struct,
+                        };
                     }
                 }
             }
@@ -10795,13 +10845,22 @@ impl Sema<'_, '_> {
             self.builder().unregister_name(t.unwrap_or(d));
             return d;
         }
+        // [basic.scope.pdecl]/7: an elaborated-type-specifier in a local
+        // class's member declaration (`void g(struct Q *);`) declares
+        // `Q` in the smallest enclosing block scope, that of the class
+        // (WP-2506): a later `struct Q { ... };` there redeclares it.
+        let block_home = !self.is_c() && self.kind_of(ctx).is_function();
         if let Some((n, _)) = name
-            && (self.in_local_scope() || self.c_hoisted_to_block(ctx))
+            && (self.in_local_scope() || self.c_hoisted_to_block(ctx) || block_home)
             && qualifier.is_none()
             && (!conflict || conflict_visible)
             && !proto_tag
         {
-            self.push_local(n, d);
+            if self.in_local_scope() {
+                self.push_local(n, d);
+            } else {
+                self.push_local_block(n, d);
+            }
         }
         if let Some((n, _)) = name
             && qualifier.is_none()
@@ -12500,7 +12559,12 @@ impl Sema<'_, '_> {
         let mut req = String::new();
         kiln_ast::types::TypeNames::write_expr(
             &kiln_ast::dump::AstNames {
+                // Unnamed classes and closures with their location
+                // (`sizeof((lambda at a.cpp:3:12))`), as clang prints them.
+                sources: Some(self.diags.sm()),
                 scoped_nns: self.clang_compat >= 22,
+                local_scopes: self.clang_compat >= 22,
+                closure_as_lambda: self.clang_compat >= 22,
                 ..kiln_ast::dump::AstNames::new(&self.ast).canonical_expr_types()
             },
             c,
@@ -12871,6 +12935,15 @@ impl Sema<'_, '_> {
         for m in members {
             let mn = *self.ast.decls.get(m);
             let Some(name) = mn.name().as_ident() else { continue };
+            // [basic.scope.scope]/5: a non-static data member `_` is
+            // name-independent unless it is a member of an anonymous
+            // union, which is known only now (`union { int _; } u;` names
+            // its union); an anonymous struct's (an extension) likewise.
+            // So it conflicts with an earlier `_` of the scope it is
+            // injected into, below (clang 22 and GCC 16.1 accept).
+            if mn.kind() == DeclKind::Field && mn.misc().name_independent() {
+                self.ast.decls.set_name_independent(m, false);
+            }
             let chain: Vec<DeclId> = match mn.kind() {
                 DeclKind::Field => vec![obj, m],
                 DeclKind::IndirectField => {
@@ -13816,13 +13889,33 @@ impl Sema<'_, '_> {
 
     /// An ambiguous lookup `decls` of `_` ([basic.scope.scope]/5, P2169)
     /// that clang words as a placeholder ambiguity: the first declaration
-    /// (in source order) is name-independent.
+    /// (in source order) is a placeholder by clang's `isPlaceholderVar`.
     pub(crate) fn placeholder_ambiguity(&self, decls: &[DeclId]) -> bool {
         decls.len() > 1
             && decls
                 .iter()
                 .min_by_key(|&&d| self.ast.decls.get(d).loc())
-                .is_some_and(|&d| self.ast.decls.get(d).misc().name_independent())
+                .is_some_and(|&d| self.clang_placeholder(d))
+    }
+
+    /// Whether clang's `isPlaceholderVar` holds for `d`, a declaration of
+    /// `_`: a name-independent declaration, and also every non-static
+    /// data member and a member of an anonymous union of automatic
+    /// storage duration, which [basic.scope.scope]/5 does not make
+    /// name-independent (a member of an anonymous union) but clang counts.
+    fn clang_placeholder(&self, d: DeclId) -> bool {
+        let n = self.ast.decls.get(d);
+        match n.kind() {
+            _ if n.misc().name_independent() => true,
+            DeclKind::Field => true,
+            DeclKind::IndirectField => {
+                let chain = self.ast.indirect_field_chain(d);
+                self.ast.lists.iter::<DeclId>(chain).next().is_some_and(|o| {
+                    self.ast.decls.get(o).kind() == DeclKind::Field || self.has_automatic_storage(o)
+                })
+            }
+            _ => false,
+        }
     }
 
     /// clang's `err_reference_to_placeholder_ambiguous` for `decls` at
@@ -15760,4 +15853,19 @@ impl Sema<'_, '_> {
         };
         self.emit(self.diag(id, loc));
     }
+}
+
+/// Whether `op` names an allocation or deallocation function
+/// ([basic.stc.dynamic.general]/2): `operator new`, `new[]`, `delete` or
+/// `delete[]`.
+fn is_global_alloc_op(op: Option<OverloadedOperator>) -> bool {
+    matches!(
+        op,
+        Some(
+            OverloadedOperator::New
+                | OverloadedOperator::ArrayNew
+                | OverloadedOperator::Delete
+                | OverloadedOperator::ArrayDelete
+        )
+    )
 }

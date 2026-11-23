@@ -859,6 +859,7 @@ impl Sema<'_, '_> {
     /// ([temp.explicit]/12); a declaration only records the kind
     /// ([temp.explicit]/14). `declared` is the declared type and the
     /// location of its type specifier.
+    #[allow(clippy::too_many_lines, reason = "the two forms, in clang's order")]
     pub(crate) fn act_on_explicit_var_inst(
         &mut self,
         d: &Declarator,
@@ -883,7 +884,7 @@ impl Sema<'_, '_> {
             };
             let Some((i, info)) = self.ast.spec_info(v).map(|(i, s)| (i, *s)) else { return };
             self.note_explicit_inst_named(v);
-            self.explicit_inst_visibility_attrs(v, attrs);
+            self.explicit_inst_attrs(v, attrs);
             let n = self.var_spec_inst_name(sid.template, info.print_args);
             self.check_explicit_inst_scope(sid.template, n, d.qualifier.is_some(), name_loc);
             // Checked in clang's order: the redeclaration, then (whatever
@@ -941,6 +942,7 @@ impl Sema<'_, '_> {
         };
         let m = self.note_explicit_inst_named(m);
         self.note_written_inst_target(name_loc, m);
+        self.explicit_inst_attrs(m, attrs);
         let pattern = self.ast.instantiated_from(m).unwrap_or(m);
         let n = self.decl_name(m);
         self.check_explicit_inst_scope(pattern, n, true, name_loc);

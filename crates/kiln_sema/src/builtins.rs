@@ -3009,8 +3009,7 @@ impl Sema<'_, '_> {
         let op = if delete { OverloadedOperator::Delete } else { OverloadedOperator::New };
         self.declare_global_new_delete();
         let at = self.begin_loc(callee);
-        let tu = self.ast.tu;
-        let cands = self.ast.lookup_local(tu, DeclName::operator(op)).to_vec();
+        let cands = self.global_op_lookup(DeclName::operator(op));
         let mut best: Option<(DeclId, usize)> = None;
         for &f in &cands {
             if self.ast.decls.get(f).kind() != DeclKind::Function {

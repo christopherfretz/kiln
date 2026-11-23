@@ -180,7 +180,7 @@ impl Sema<'_, '_> {
         let nns = self.ovl.members.get(&x)?.nns?;
         let m = self.ovl.members.remove(&x)?;
         let loc = self.ast.exprs.get(x).loc();
-        Some(self.build_overload_ref(
+        let ule = self.build_overload_ref(
             m.name,
             &m.decls,
             &m.found,
@@ -188,7 +188,18 @@ impl Sema<'_, '_> {
             false,
             Some(nns),
             loc,
-        ))
+        );
+        // The set keeps its qualifier's begin and its name's end
+        // (spec/ast.md §21): `&B::f` begins at `B`.
+        if let Some(&b) = self.ast.templates.expr_begin.get(x)
+            && self.ast.exprs.get(ule).kind() == ExprKind::UnresolvedLookupExpr
+        {
+            let _ = self.ast.templates.expr_begin.insert(ule, b);
+        }
+        if let Some(end) = self.ast.exprs.end_loc(x) {
+            self.set_template_id_end(ule, end);
+        }
+        Some(ule)
     }
 
     /// The template-id `name<targs>` (qualified by `nns`, if any), whose

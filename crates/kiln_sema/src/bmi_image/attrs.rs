@@ -199,7 +199,7 @@ pub(super) fn carried(node: &AttrNode, nsyms: usize) -> bool {
     }
 }
 
-fn syntax_of(b: u8) -> Option<AttrSyntax> {
+pub(super) fn syntax_of(b: u8) -> Option<AttrSyntax> {
     Some(match b {
         0 => AttrSyntax::Cxx11,
         1 => AttrSyntax::Gnu,

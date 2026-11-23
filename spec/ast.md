@@ -159,7 +159,7 @@ struct DeclNode {        // 28 bytes
     kind: DeclKind,      // u8 (§4.2)
     flags: DeclFlags,    // u8: INVALID IMPLICIT USED REFERENCED HAS_ATTRS
                          //     HAS_LEXICAL_CTX DEPENDENT_CTX INJECTED
-    misc: DeclMisc,      // u16: access(2) friend(2) local_extern(1) module_ownership(3)
+    misc: DeclMisc,      // u16: access(2) friend(2) local_extern(1) reserved(3, zero)
                          //      name_independent(1, P2169 `_`) linkage cache(3) visibility(2)
                          //      first(1) definition(1)
     name: DeclName,      // u32
@@ -178,6 +178,10 @@ struct DeclNode {        // 28 bytes
   a non-redeclarable declaration is its own definition. A template decl
   is first when its pattern is first and describes it; a concept always
   is; `Ast::set_definition(d)` sets `d`'s definition bit.
+- The three reserved bits are zero: no declaration header records module
+  ownership; the owner is `Ast::modules.owner(d)` (spec/modules.md), and
+  the never-called `DeclMisc::with_module_ownership` and its enum were
+  removed (WP-2477).
 - The lexical context is stored in a sparse map `lexical_ctx: FxHashMap<
   DeclId, DeclId>` only when it differs from `ctx` (out-of-line member
   definitions, friends, local externs): flag `HAS_LEXICAL_CTX`.
@@ -305,12 +309,39 @@ struct FunctionData {               // 24 bytes
                                     //   return_deduced(1, bit 24: the return type was deduced from
                                     //   a placeholder, so the declared type is not the type as
                                     //   written; LATE; read by the linkage computation, WP-389)
+                                    //   exc_spec_computed(1, bit 25: the exception specification was
+                                    //   computed, not written; LATE, set on every redeclaration when
+                                    //   sema resolves `ExcSpec::Deferred` (implicit or defaulted
+                                    //   special member, defaulted comparison); WP-2505, below)
                                     //   (`virtual` is semantic: written or overriding; `virtual_written`
                                     //   is the specifier, which the dump prints. LATE bits, set after
                                     //   the body or at `}`: trivial, has_contracts, is_coroutine,
                                     //   escalated, deleted)
     templ: TemplLink,               // §8.2
 }
+```
+
+A function's exception specification lives on its type
+(`FunctionProto`'s `ExcSpec`). Once a deferred one is resolved
+([except.spec]/7-8: an implicitly declared or explicitly defaulted
+special member without a written specification, a defaulted comparison)
+the type holds the result, the same type a written specification gives;
+so `S() noexcept(false) = default;` and `S() = default;` computed to be
+potentially-throwing have one type. `Ast::exception_spec_computed(f)`
+tells them apart for tooling clients (WP-2505): true while the type
+still defers to `f`'s entity (`ExcSpec::Deferred(first(f))`) or after
+sema resolved it (`FnSpec::exc_spec_computed`), false for a written
+specification on a defaulted function, and false for a specialization
+whose written specification waits for instantiation (deferred to its
+pattern). A member's written *noexcept-specifier* parsed late in the
+complete-class context also defers to the member until it is parsed.
+PCH snapshots carry it with `FnSpec` (no schema change, so no
+`FORMAT_VERSION` bump: a snapshot of another kiln build is replayed
+anyway, spec/pch.md "Format versioning"); module images carry it as
+bit 25 of the function specifier bits (`IMAGE_VERSION` 83). Pinned by `crates/kiln_driver/tests/front_end.rs`
+`exception_spec_computed_vs_written`.
+
+```rust
 struct VarData {                    // 24 bytes
     redecl: Redecl,
     init: Option<ExprId>,
@@ -649,6 +680,10 @@ field's default member initializer in the same map (WP-1177), which
 `Ast::default_init_expr` returns in place of the field's. `ExprArena::clone_with_children(e, lists, kids)`
 copies one node with new children (same kind, type, flags and cold
 payloads) for the structural kinds that rewrite needs, `None` otherwise.
+A `LambdaExpr` copy gets a new `LambdaData` side record holding the new
+capture initializers and shares the closure type, call operator and body
+(WP-2507): the copy is the same lambda-expression, so it has the same
+closure type.
 
 Builtin *functions* (`__builtin_memcpy`, `__builtin_is_constant_evaluated`,
 `__builtin_is_within_lifetime`, `__builtin_constant_p`, ...) are ordinary
@@ -1069,7 +1104,9 @@ unqualified lookup (spec/sema-templates.md §3.5 "Operators"). The set is
   shares the set of its pattern.
 - Query `Ast::dependent_oper_candidates(e) -> Option<&[OperCandidate]>`;
   `OperLookups::set_of(e)` gives the interned id (equal ids are equal
-  sets).
+  sets), `OperLookups::span(id) -> SetSpan { start, len }` where its
+  candidates are in the candidate array (public, WP-2477, for tooling
+  clients that keep sets by position).
 - Written by sema at the expression (`note_dependent_oper`,
   spec/sema-overload.md §2.6) and by the module-image importer, which
   carries the set with the expression (`COLD_OPER`, spec/modules.md
@@ -3692,6 +3729,21 @@ Three padding bytes remain. 44 bytes for the row plus 4 bytes of index
 per declaration up to the last one with a row, and 8 more per later row
 of a declaration written more than once under one `DeclId` (§19.1).
 
+**Written attributes** (WP-2541). An explicit instantiation of a
+function, variable or class declares nothing (the specialization's
+`SpecKind` stands for it), and sema merges its decl-specifier
+attributes onto the specialization, whose attribute list then holds
+them by the location of their names only (spec/sema.md "Explicit
+instantiation attributes"). So the row of an explicit instantiation
+also records every attribute written on it, merged or dropped (one
+after the declarator, one an error drops), in source order, as a
+`WrittenAttr`: its `AttrKind`, its `AttrSyntax`, and its `span` from its
+name (a scoped one's scope) to the end of its last token (the `)` of
+its arguments). `DeclExtents::row_attrs(d, n)` gives those of `d`'s
+`n`th row (`rows_of` order); other rows have none. 16 bytes each (with
+the row index); the dump appends ` attr=<Kind>@<range>` (clang's
+attribute class name without `Attr`) to the row.
+
 ### 19.3 First and last tokens
 
 The first token is that of the outermost construct the declaration
@@ -3775,14 +3827,16 @@ struct Q<int> {};`, WP-2470). The `Friend` has its own row either way.
   and unit-tested.
 - **PCH.** The table is written into snapshots (§17; FORMAT_VERSION
   129; 146 since WP-2091, which adds the module and import declarations'
-  rows; 152 since WP-2470, which adds the later rows of §19.1), with its
+  rows; 152 since WP-2470, which adds the later rows of §19.1; 157 since
+  WP-2541, which adds the written attributes of §19.2), with its
   on bit; the consumer then sets that bit from its own
   options. `-fkiln-decl-extents` is part of the PCH identity (a producer
   and a consumer must agree); `-fkiln-dump-decl-extents` is not, and
   makes the producer take two passes.
 - **Module images** (spec/modules.md §11.11; IMAGE_VERSION 62, 79
   since WP-2091, 81 since WP-2470, which carries every row of a
-  declaration written more than once). A module unit parsed with the
+  declaration written more than once, 84 since WP-2541, which carries
+  the rows' written attributes of §19.2). A module unit parsed with the
   table on carries a row
   per record that has one and per parameter of a function record,
   located in the image's location space; an importer whose table is on
@@ -3998,7 +4052,18 @@ sequence, the one `TypeContext::profile` interns. A typed walk of
 those words (which of them are canonical type, nested-name-specifier,
 argument-list, template-name and declaration ids) is not public yet.
 
-### 20.5 Stability
+### 20.5 Printed names: diagnostic, dump, key (WP-2477, WP-2545)
+
+A client that keys anything on a printed type name uses the key printer,
+`kiln_ast::dump::AstNames::for_keys(ast, sources).type_key(q)`: two
+different types never print alike there. The diagnostic printer
+(`DiagNames`, clang's text) and the dump printer (`AstNames`, the AST
+dump's and debug information's text) follow clang, which prints, for
+example, `S<(int *)nullptr>` and `S<(char *)nullptr>` both as
+`S<nullptr>`, and a `Local` class of `f()` and one of `g()` both as
+`Local`. spec/types.md §12.1 states which printer prints what.
+
+### 20.6 Stability
 
 Every value in these tables (a row's roles, an enum maximum, a field's
 bits, a named constant, a descriptor) is stable within a snapshot
@@ -4059,6 +4124,18 @@ This section is the promise kiln makes, and where it makes none.
   a `CXXParenListInitExpr` begins with (`Sema::keep_paren_list_begin`).
   Sema's `init::Designator::Field` keeps its `.`, which changes the PCH
   snapshot schema (no node or image change).
+- WP-2460..WP-2464 close the shapes WP-2350 left, in the same two maps
+  (no node, image or snapshot change): a `CXXDependentScopeMemberExpr`
+  with no object is an implicit `this->name` (a dependent
+  conversion-function-id `operator T*()`, a member named by a dependent
+  using-declarator), begun at its name or recorded qualifier and ended
+  at its recorded last token; the overload set `&B::f` is turned into
+  (`member_overload_as_lookup`) and the pointer to member it resolves to
+  keep the qualifier's begin, as does a reference to a static member
+  template's specialization through an implicit `this` (`s<0>`,
+  `B::s<1>`); an array `new`'s parenthesized aggregate initialization
+  keeps its `(`; and `&this->sf<int>`, resolved to the specialization,
+  keeps the template-id's `>`.
 
 ### 21.2 Decisions
 
@@ -4081,7 +4158,22 @@ This section is the promise kiln makes, and where it makes none.
 - **Calls without parentheses**: a user-defined literal (`12_k`,
   `"ab" "cd"_sv`) is its literal, through the last piece of a
   concatenation; an implicit conversion function call (`int i = s;`)
-  is its object.
+  is its object. `Ast::begin_loc` and `Ast::end_loc` agree (WP-2543,
+  clang `UserDefinedLiteral::getBeginLoc`/`getEndLoc`, the same in
+  clang 19 and 22): the call (`Ast::is_udl_call`) begins at the literal
+  token's start, not at its callee, so an expression it begins
+  (`12_k + 1`) begins there too; it ends at the literal, a concatenated
+  string at its last piece. The callee (`DeclRefExpr` of
+  `operator""_k`) keeps its own location, the ud-suffix, as clang's.
+- **Split `>`** (WP-2542): a template-id closed by the first `>` of a
+  `>>`, `>=` or `>>=` ([temp.names]/4; `>>>` lexes as `>>` then `>`)
+  ends at that one character. The parser records each such `>` (the
+  first character, and the second of a `>>` whose rest is a `>`) in
+  `Ast::split_greaters`, the set sema's `token_end` reads; the client
+  extents measure their last token with `kiln_lex::token_range_split`
+  over it (spec/lex.md "End of a token"). The set is part of the AST's
+  PCH snapshot and of a module image (spec/modules.md §11.11, `splits`
+  section), so a unit built from either measures the same ends.
 - **Brace elision**: a list whose braces were elided begins at its first
   written initializer and ends at its last; one a designator opens
   (`.a.y = 3`'s list of `a`) begins inside the designator, at a part
@@ -4093,8 +4185,9 @@ This section is the promise kiln makes, and where it makes none.
   from its `(` (`S s(1, 2)`, `S(1, 2)`, `new S(1, 2)`, `m(1, 2)` in a
   mem-initializer) or, made by a cast, from the cast's first token
   (`static_cast<S>(1)`, `(S)1`), as clang's `getBeginLoc`, to its stored
-  end (the `)`; a C-style cast's operand). One whose begin was not
-  recorded is `None`.
+  end (the `)`; a C-style cast's operand); an array `new`'s
+  (`new int[2](1, 2)`, `new int[](1, 2, 3)`, `new R[2][2]({R(4)})`) from
+  its `(`. One whose begin was not recorded is `None`.
 - **Substituted template arguments**: a `SubstNonTypeTemplateParmExpr`
   (the value of a non-type template argument in an instantiated
   member's initializer) is the one token of the parameter's name it
@@ -4107,7 +4200,18 @@ This section is the promise kiln makes, and where it makes none.
   the member's name; with a qualifier (`B::x`, `T::x` naming a member of
   a dependent base) at the qualifier, whose begin the parser records; a
   qualified access or `DeclRefExpr` whose begin was not recorded is
-  `None`.
+  `None`. A dependent member access kiln builds with no object at all is
+  such an access too: a dependent conversion-function-id (`operator T*()`,
+  ending at the conversion-type-id's last token) and a member named by a
+  dependent using-declarator (`using T::f;` then `f()`: the
+  declarator's qualifier is not written at the use, so it begins at the
+  name, as clang's `UnresolvedMemberExpr`).
+- **Node kinds may differ, extents may not.** Kiln's tree need not have
+  clang's node kinds, only its extents: `&this->sf<int>` (a static
+  member function template's specialization) is a resolved `MemberExpr`
+  in kiln also in a template, where clang keeps an
+  `UnresolvedMemberExpr`; both begin at `this` and end at the `>`
+  (`tests/extents/kinds.txt` maps the kinds).
 - First token: the first operand for binary, conditional, subscript,
   call, member-call, postfix and overloaded non-prefix operators, and
   the pattern of a pack expansion or a pack index; the
@@ -4145,7 +4249,8 @@ Two reasons recur, named here once:
 - **(W) a wrapper of a `None`**: an implicit wrapper (21.2) whose written
   node has none.
 
-The counts are stage 1's at WP-2350 (`None` / all nodes of the kind);
+The counts are stage 1's at WP-2350 (`None` / all nodes of the kind;
+`CXXDependentScopeMemberExpr` at WP-2460);
 the baseline, not this table, is the gate.
 
 | Kind | `None` | Reasons |
@@ -4158,12 +4263,11 @@ the baseline, not this table, is the gate.
 | `CXXBoolLiteralExpr`, `CXXNullPtrLiteralExpr`, `GNUNullExpr`, `FloatingLiteral`, `IntegerLiteral`, `StringLiteral` | 417/1912, 1/561, 1/54, 152/1029, 9938/39112, 344/2919 | M |
 | `CXXConstructExpr` | 3862/6314 | M; a default construction (`S s;`, an element or member with no initializer): nothing written |
 | `CXXDefaultArgExpr`, `CXXDefaultInitExpr` | 352/352, 522/522 | nothing written: the parameter's or member's default |
-| `CXXDependentScopeMemberExpr` | 54/512 | M; a member named by a dependent using-declarator (`using T::f;` then `f()`: the qualifier is the declarator's, not written at the name); an implicit `this->operator T` (a conversion-function-id naming a dependent type) |
+| `CXXDependentScopeMemberExpr` | 38/531 | M |
 | `CXXFoldExpr` | 5/151 | the fold of a constrained pack (`C... Ts`, 21.2): no parentheses written |
 | `CXXFunctionalCastExpr`, `CXXUnresolvedConstructExpr`, `CXXStaticCastExpr`, `CXXNoexceptExpr`, `CXXThrowExpr`, `LambdaExpr`, `OffsetOfExpr`, `TypeTraitExpr`, `UnaryExprOrTypeTraitExpr`, `CompoundAssignOperator` | 2492/5382, 94/496, 105/624, 29/171, 16/229, 45/970, 12/85, 68/1760, 141/1855, 256/1150 | M (`CXXStaticCastExpr`: one in an implicit member's body) |
-| `CXXMemberCallExpr`, `CallExpr`, `MemberExpr`, `DeclRefExpr` | 2710/4809, 1472/12766, 4351/12292, 6272/45728 | M; the calls and names a coroutine, a range-`for`, a structured binding or a defaulted function makes (promise, awaiter, `begin`/`end`, `get`); the `operator()` a lambda call names; a conversion function's implicit call; a qualified name of a member without an object (`&B::f`, a static `B::s<0>` through an implicit `this`): its qualifier begin is not recorded |
+| `CXXMemberCallExpr`, `CallExpr`, `MemberExpr`, `DeclRefExpr` | 2710/4809, 1472/12766, 4351/12292, 6272/45728 | M; the calls and names a coroutine, a range-`for`, a structured binding or a defaulted function makes (promise, awaiter, `begin`/`end`, `get`); the `operator()` a lambda call names; a conversion function's implicit call |
 | `CXXOperatorCallExpr` | 73/1197 | M; a range-`for`'s `++__begin`/`*__begin` and a defaulted comparison's operations on class iterators and members |
-| `CXXParenListInitExpr` | 3/71 | the parenthesized aggregate initialization of an array `new` (`new int[](1, 2, 3)`) or of an element of a nested array (`R[2][2]({R(4)})`): the parentheses are not kept |
 | `CXXStdInitializerListExpr` | 2/71 | W (a list sema builds) |
 | `CXXThisExpr` | 2517/2921 | an implicit `this`; M |
 | `CoawaitExpr` | 48/58 | an implicit `co_await` (an initial or final suspend point) |

@@ -1050,7 +1050,24 @@ fn clang_node(
         }
         clang::CLoc::Macro { .. } => {}
     }
+    // A split `>` (clang `Preprocessor::SplitToken`, the first `>` of a
+    // `>>`, `>=` or `>>=` that ends a template argument list): a
+    // one-character token spelled in the scratch space and expanded at
+    // the written token, which ends one character in (WP-2542).
+    let split = match e {
+        clang::CLoc::Macro { spelling: Some(s), expansion: Some(x), .. }
+            if dump_files[s.file as usize] == "<scratch space>"
+                && s.tok_len == 1
+                && x.tok_len > 1 =>
+        {
+            let name = file(names, x.file);
+            let text = texts.get(&names.root, &name);
+            (text.get(x.offset as usize) == Some(&b'>')).then_some((x.file, vec![x.offset + 1]))
+        }
+        _ => None,
+    };
     let ends = match e {
+        _ if split.is_some() => split,
         clang::CLoc::File(e) => Some((e.file, vec![e.offset + e.tok_len])),
         clang::CLoc::Macro { expansion: Some(x), .. } => {
             let name = file(names, x.file);

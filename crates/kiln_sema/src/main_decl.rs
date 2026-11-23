@@ -161,11 +161,15 @@ impl Sema<'_, '_> {
     /// translation unit: `main` is not overloaded ([basic.start.main]/3),
     /// so a declaration with another signature redeclares it (clang's
     /// `IsOverload` treats `main` as never overloaded; the merge then
-    /// reports conflicting types).
+    /// reports conflicting types). Not a friend declared in a templated
+    /// class: it declares `main` only once the class is instantiated
+    /// ([temp.friend]/1, `is_dependent_friend_fn`; WP-2540).
     pub(crate) fn main_overload_prev(&self, name: Symbol) -> Option<DeclId> {
         let found = self.ast.lookup_local(self.ast.tu, DeclName::ident(name));
         let p = found.iter().find(|&x| {
-            self.kind_of(x) == DeclKind::Function && !self.ast.decls.get(x).has(DeclFlags::INVALID)
+            self.kind_of(x) == DeclKind::Function
+                && !self.ast.decls.get(x).has(DeclFlags::INVALID)
+                && !self.is_dependent_friend_fn(x)
         })?;
         Some(self.ast.first(p))
     }

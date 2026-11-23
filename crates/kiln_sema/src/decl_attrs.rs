@@ -478,6 +478,64 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// clang `ActOnExplicitInstantiation` (`ProcessDeclAttributeList` on
+    /// the specialization; WP-2541): the decl-specifier attributes of an
+    /// explicit instantiation of a function, variable or static data
+    /// member `spec` are merged onto it, which has no declaration of the
+    /// explicit instantiation to carry them (spec/sema.md "Explicit
+    /// instantiation attributes"). `visibility` / `type_visibility` merge
+    /// as [`Sema::explicit_inst_visibility_attrs`]; the others pass their
+    /// subject checks (not the "after definition" check: clang adds them
+    /// to the instantiated definition) and join `spec`'s attributes unless
+    /// it has the same one already, so `weak` makes an explicit
+    /// instantiation definition `weak` and an `extern template`
+    /// declaration `extern_weak`, and `deprecated` warns at the uses.
+    /// Annotations are [`Sema::explicit_inst_annotations`]' own.
+    pub(crate) fn explicit_inst_attrs(&mut self, spec: DeclId, attrs: &[AttrId]) {
+        let is_vis = |k: AttrKind| k == AttrKind::VISIBILITY || k == AttrKind::TYPE_VISIBILITY;
+        let vis: Vec<AttrId> =
+            attrs.iter().copied().filter(|&a| is_vis(self.ast.attrs.get(a).kind)).collect();
+        self.explicit_inst_visibility_attrs(spec, &vis);
+        let mut rest: Vec<AttrId> = attrs
+            .iter()
+            .copied()
+            .filter(|&a| {
+                let k = self.ast.attrs.get(a).kind;
+                !is_vis(k) && k != AttrKind::ANNOTATION
+            })
+            .collect();
+        if rest.is_empty() {
+            return;
+        }
+        self.check_weak_attrs(spec, &mut rest);
+        let kind = self.ast.decls.get(spec).kind();
+        rest.retain(|&a| {
+            let node = *self.ast.attrs.get(a);
+            self.check_decl_attr(spec, kind, node)
+        });
+        self.ast.attrs.mark_checked(&rest);
+        let old: Vec<AttrId> = self.ast.lists.iter(self.ast.attrs.of_decl(spec)).collect();
+        rest.retain(|&a| {
+            let n = *self.ast.attrs.get(a);
+            !old.iter().any(|&o| {
+                let o = *self.ast.attrs.get(o);
+                o.kind == n.kind && o.a == n.a && o.b == n.b
+            })
+        });
+        if rest.is_empty() {
+            return;
+        }
+        if old.is_empty() {
+            self.builder().append_attrs(spec, &rest);
+            return;
+        }
+        let mut keep = old;
+        keep.extend(rest);
+        // `spec` already has an attribute list (and `HAS_ATTRS`).
+        let list = self.ast.lists.push(&keep);
+        let _ = self.ast.attrs.decl_attrs.refine(spec, list);
+    }
+
     /// Checks attributes against the declaration `d` they appertain to
     /// ([dcl.attr]), dropping (and reporting) those that cannot apply to
     /// it: `alignas` ([`Sema::check_alignas_subject`]), the statement

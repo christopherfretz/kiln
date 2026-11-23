@@ -29,6 +29,7 @@ use crate::conv::bases::{BaseSearch, ambiguous_paths_string, find_base};
 use crate::declspec::ParamInfo;
 use crate::init::Initializer;
 use crate::lookup::LookupKind;
+use crate::scope::ScopeKind;
 
 /// Whether a declaration of kind `k` names an entity a lambda can
 /// capture ([expr.prim.lambda.capture]/4: a local entity, [basic.pre]/9):
@@ -210,6 +211,20 @@ impl Sema<'_, '_> {
         false
     }
 
+    /// Whether `d` is declared in a block scope opened inside the
+    /// innermost class scope, that of class `c` (a statement expression
+    /// in one of its default member initializers or default arguments).
+    fn local_of_open_block_in(&self, d: DeclId, c: DeclId) -> bool {
+        let mut found = false;
+        for s in self.scopes.iter().rev() {
+            if s.kind == ScopeKind::Record {
+                return found && s.entity.is_some_and(|e| self.ast.first(e) == self.ast.first(c));
+            }
+            found |= s.is_local() && s.locals.iter().any(|l| l.1 == d);
+        }
+        false
+    }
+
     pub(crate) fn may_need_capture(&self, d: DeclId) -> bool {
         is_capturable_kind(self.kind_of(d))
             && (self.ast.decls.get(d).ctx() != Some(self.ctx)
@@ -314,6 +329,14 @@ impl Sema<'_, '_> {
             // rule: `enum { Z = sizeof(int[m]) }` is only not a constant.
             let tag_scope =
                 !self.is_c() && matches!(self.kind_of(c), DeclKind::CXXRecord | DeclKind::Enum);
+            // A local of a statement expression in a default member
+            // initializer or default argument of the local class `c`
+            // ([`Sema::block_decl_ctx`]): named in the same initializer,
+            // it is the variable's own block (WP-2474).
+            if tag_scope && self.local_of_open_block_in(d, c) {
+                start = owner;
+                break;
+            }
             // A reference from outside any function nested in the
             // variable's (a default argument, an instantiated exception
             // specification) has nothing to capture in.

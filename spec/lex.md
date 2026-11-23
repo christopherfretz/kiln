@@ -71,6 +71,9 @@ pub fn dump(sm, &LexOptions, &[Token]) -> String; pub fn dump_source(text, LexOp
 pub fn token_end(sm, &Interner, loc: Loc, LexOptions) -> Option<Loc>;  // see "End of a token"
 pub fn token_range(sm, &Interner, first: Loc, last: Loc, LexOptions)
     -> Option<(FileId, u32, u32)>;                                   // see "Token ranges"
+pub fn token_end_split(sm, &Interner, loc, LexOptions, &HashSet<Loc, S>) -> Option<Loc>;
+pub fn token_range_split(sm, &Interner, first, last, LexOptions, &HashSet<Loc, S>)
+    -> Option<(FileId, u32, u32)>;                                   // split `>` (WP-2542)
 ```
 `Punct` covers every [lex.operators] token plus `^^`, `[:`, `:]` (C++26
 with `LexOptions::reflection`, P2996). `Punct::as_str()` is the primary spelling, `name()` clang's kind name.
@@ -99,6 +102,13 @@ continued over a `\`-newline ends after its last spliced character):
   `SourceManager::file_loc_at_macro_end(token_end(..))`.
 - Invalid and unknown locations: `None`. Identifiers are interned into
   `interner`; lexer diagnostics are dropped.
+- **A split `>`** (WP-2542): the lexer cannot know that the parser took
+  the first `>` of a `>>`, `>=` or `>>=` as the end of a template
+  argument list ([temp.names]/4). `token_end_split(.., split_greaters)`
+  takes the set the parser recorded (`Ast::split_greaters`, spec/ast.md
+  §21.2): a `loc` in it whose spelled character is `>` ends one byte
+  later, in `loc`'s own entry; any other `loc` is `token_end`.
+  `token_range_split` is `token_range` with that end.
 Sema's own `token_end` (spec/sema.md §7.10.1) is a cheaper measure of the
 tokens it holds and stays separate. Tests: `tests/token_end.rs`, and
 `kiln_pp` `tests/editable_range.rs` (every token of preprocessed
