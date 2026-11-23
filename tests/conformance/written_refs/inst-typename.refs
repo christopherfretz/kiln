@@ -1,4 +1,4 @@
-13:19-13:20  type  'U' -> U@12:19 in=Alloc::rebind@12:29
+13:19-13:20  type  'U' -> U@12:19 in=Alloc::rebind::other@13:11
 16:29-16:30  type  'U' -> U@16:19 in=Alloc::make@16:31
 15:45-15:46  expr  'I' -> I@15:17 in=Alloc::get@15:24
 16:47-16:48  type  'U' -> U@16:19 in=Alloc::make@16:31

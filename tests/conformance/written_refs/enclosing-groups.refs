@@ -1,0 +1,26 @@
+15:1-15:4  nns  'lib' -> lib@10:11 in=first@15:12 shared=second@15:19
+15:6-15:11  type  'Shape' -> lib::Shape@11:8 q=15:1 in=first@15:12 shared=second@15:19
+16:7-16:10  nns  'lib' -> lib@10:11 in=ptr@16:29 shared=value@16:34
+16:16-16:19  nns  'lib' -> lib@10:11 in=ptr@16:29 shared=value@16:34
+16:21-16:26  type  'Shape' -> lib::Shape@11:8 q=16:16 in=ptr@16:29 shared=value@16:34
+16:12-16:15  template  'Box' -> lib::Box@12:27 q=16:7 in=ptr@16:29 shared=value@16:34
+17:9-17:12  nns  'lib' -> lib@10:11 in=T1@17:20 shared=T2@17:24
+17:14-17:19  type  'Shape' -> lib::Shape@11:8 q=17:9 in=T1@17:20 shared=T2@17:24
+18:1-18:4  nns  'lib' -> lib@10:11 in=make@18:12 shared=made@18:20
+18:6-18:11  type  'Shape' -> lib::Shape@11:8 q=18:1 in=make@18:12 shared=made@18:20
+19:1-19:4  nns  'lib' -> lib@10:11 in=alone@19:12
+19:6-19:11  type  'Shape' -> lib::Shape@11:8 q=19:1 in=alone@19:12
+20:15-20:18  nns  'lib' -> lib@10:11 in=Pair::a@20:26
+20:20-20:25  type  'Shape' -> lib::Shape@11:8 q=20:15 in=Pair::a@20:26
+23:3-23:6  nns  'lib' -> lib@10:11 in=Members::left@23:14 shared=Members::right@23:20
+23:8-23:13  type  'Shape' -> lib::Shape@11:8 q=23:3 in=Members::left@23:14 shared=Members::right@23:20
+24:3-24:6  nns  'lib' -> lib@10:11 in=Members::one@24:17
+24:8-24:11  template  'Box' -> lib::Box@12:27 q=24:3 in=Members::one@24:17
+28:3-28:6  nns  'lib' -> lib@10:11 in=x@28:14 shared=y@28:17
+28:8-28:13  type  'Shape' -> lib::Shape@11:8 q=28:3 in=x@28:14 shared=y@28:17
+28:21-28:22  expr  'x' -> x@28:14 in=y@28:17
+29:17-29:21  type  'Pair' -> Pair@20:8 in=(anonymous)@29:8
+30:9-30:10  expr  'a' -> a@29:9 in=local@27:5
+31:9-31:10  expr  'b' -> b@29:12 in=local@27:5
+32:10-32:11  expr  'y' -> y@28:17 in=local@27:5
+32:12-32:13  member  'w' -> lib::Shape::w@11:20 in=local@27:5

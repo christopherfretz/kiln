@@ -31,7 +31,6 @@ use crate::decl::{is_deduction_guide, is_untyped_special};
 use crate::fp_pragma::FpAt;
 use crate::keywords::Kw;
 use crate::parser::{Parser, quote};
-use kiln_sema::templ::auto::AutoGroup;
 
 /// Saved tokens and the location of the `Eof` sentinel that ends their
 /// replay.
@@ -1891,7 +1890,7 @@ impl Parser<'_, '_> {
         let mut base_ty: Option<QualType> = None;
         let mut restrict_error = None;
         let mut first = true;
-        let mut group = AutoGroup::default();
+        let mut group = self.s.group_after_specifiers(self.member_ref_mark);
         let mut ext_decls = Vec::new();
         loop {
             let mut d = Declarator::new(DeclaratorContext::Member, self.loc());

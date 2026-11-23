@@ -1048,3 +1048,80 @@ fn dependent_operator_entries_through_the_api() {
         }
     });
 }
+
+/// The kinds of the declarations that hold the entries naming `S` (the
+/// first record), in recording order.
+fn s_holders(ast: &kiln_ast::Ast) -> Vec<kiln_ast::decl::DeclKind> {
+    let t = &ast.written_refs;
+    let s = t.iter().find(|(_, r)| r.role == RefRole::Type).and_then(|(_, r)| r.entity);
+    t.iter()
+        .filter(|(_, r)| r.role == RefRole::Type && r.entity == s)
+        .map(|(_, r)| ast.decls.get(r.enclosing.expect("enclosed")).kind())
+        .collect()
+}
+
+/// spec/ast.md §18.3 (WP-3143): an alias, an enumerator, a template's head
+/// and a `static_assert` hold the names written in them, as a typedef
+/// does; `enclosed_by` finds them there.
+#[test]
+fn declarations_without_a_declarator_hold_their_names() {
+    use kiln_ast::decl::DeclKind as K;
+    const SRC: &str = "struct S {};\n\
+                       using A = S;\n\
+                       typedef S T;\n\
+                       enum E { e = sizeof(S) };\n\
+                       template <class U = S> void t() {}\n\
+                       struct C { using I = S; };\n\
+                       static_assert(sizeof(S) == 1);\n";
+    with_ast(SRC, |ast, _| {
+        assert_eq!(
+            s_holders(ast),
+            [K::TypeAlias, K::Typedef, K::EnumConstant, K::Function, K::TypeAlias, K::StaticAssert]
+        );
+        let t = &ast.written_refs;
+        let sa = t.iter().last().and_then(|(_, r)| r.enclosing).expect("the static_assert");
+        assert_eq!(t.enclosed_by(sa).count(), 1);
+        // The template's head and its body share one holder: the function.
+        let f = t.iter().find(|(_, r)| ast.decls.get(r.enclosing.unwrap()).kind() == K::Function);
+        assert!(f.is_some());
+    });
+}
+
+/// spec/ast.md §18.3.1 (WP-3144): a shared decl-specifier-seq is held by
+/// its declarator group: `REF_GROUP` and `holders` give every declaration,
+/// `enclosing` the first; a group of one and a structured binding have
+/// one holder.
+#[test]
+fn a_declarator_group_holds_its_specifier() {
+    use kiln_ast::written_refs::REF_GROUP;
+    const SRC: &str = "struct S { int w; };\n\
+                       S a, b;\n\
+                       struct C { S m, n, o; };\n\
+                       typedef S T1, T2;\n\
+                       S f(), v;\n\
+                       S one;\n\
+                       S arr[2];\n\
+                       auto [x] = S{1};\n";
+    with_ast(SRC, |ast, _| {
+        let t = &ast.written_refs;
+        let s = t.iter().find(|(_, r)| r.role == RefRole::Type).and_then(|(_, r)| r.entity);
+        let sizes: Vec<usize> = t
+            .iter()
+            .filter(|(_, r)| r.role == RefRole::Type && r.entity == s)
+            .map(|(id, r)| {
+                let h = t.holders(id);
+                assert_eq!(h.first().copied(), r.enclosing, "the first holder is `enclosing`");
+                assert_eq!(r.flags & REF_GROUP != 0, h.len() > 1);
+                if h.len() > 1 {
+                    assert_eq!(t.group(h[0]), Some(h));
+                }
+                h.len()
+            })
+            .collect();
+        // `S a, b`, `S m, n, o`, `typedef S T1, T2`, `S f(), v`, `S one`,
+        // `S arr[2]`, then the binding's `S{1}`.
+        assert_eq!(sizes[..6], [2, 3, 2, 2, 1, 1]);
+        assert!(sizes[6..].iter().all(|&n| n == 1), "{sizes:?}");
+        assert_eq!(t.groups().count(), 4);
+    });
+}

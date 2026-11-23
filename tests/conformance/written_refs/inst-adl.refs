@@ -21,15 +21,15 @@
 36:3-36:11  expr  'exchange' -> exchange<int>@16:25 found=exchange@16:25 in=run@34:6 adl-ns=
 36:12-36:13  expr  'i' -> i@35:7 in=run@34:6
 36:15-36:16  expr  'j' -> j@35:14 in=run@34:6
-37:3-37:6  nns  'lib' -> lib@20:11 in=x@37:13
-37:8-37:12  type  'Item' -> lib::Item@21:8 q=37:3 in=x@37:13
+37:3-37:6  nns  'lib' -> lib@20:11 in=x@37:13 shared=y@37:16
+37:8-37:12  type  'Item' -> lib::Item@21:8 q=37:3 in=x@37:13 shared=y@37:16
 38:3-38:11  expr  'exchange' -> exchange<lib::Item>@16:25 found=exchange@16:25 in=run@34:6 adl-ns=lib@20:11 adl-cls=lib::Item@21:8
 38:12-38:13  expr  'x' -> x@37:13 in=run@34:6
 38:15-38:16  expr  'y' -> y@37:16 in=run@34:6
-39:3-39:8  nns  'other' -> other@27:11 in=s@39:27
-39:16-39:19  nns  'lib' -> lib@20:11 in=s@39:27
-39:21-39:25  type  'Item' -> lib::Item@21:8 q=39:16 in=s@39:27
-39:10-39:15  template  'Thing' -> other::Thing@28:27 q=39:3 in=s@39:27
+39:3-39:8  nns  'other' -> other@27:11 in=s@39:27 shared=t@39:30
+39:16-39:19  nns  'lib' -> lib@20:11 in=s@39:27 shared=t@39:30
+39:21-39:25  type  'Item' -> lib::Item@21:8 q=39:16 in=s@39:27 shared=t@39:30
+39:10-39:15  template  'Thing' -> other::Thing@28:27 q=39:3 in=s@39:27 shared=t@39:30
 40:3-40:11  expr  'exchange' -> exchange<other::Thing<lib::Item>>@16:25 found=exchange@16:25 in=run@34:6 adl-ns=other@27:11,lib@20:11 adl-cls=other::Thing@28:27,lib::Item@21:8
 40:12-40:13  expr  's' -> s@39:27 in=run@34:6
 40:15-40:16  expr  't' -> t@39:30 in=run@34:6

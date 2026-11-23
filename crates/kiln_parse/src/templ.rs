@@ -311,8 +311,13 @@ impl Parser<'_, '_> {
         if delays {
             self.template_delay_level = Some(level);
         }
+        self.templated_decl = None;
         self.parse_templated_declaration(ctx, head, loc);
-        self.s.claim_template_head(wmark); // its requires-clause (spec/ast.md §5.9)
+        // The templated declaration claims the head's names (spec/ast.md
+        // §18.3) and its requires-clause's closures (§5.9). An enclosing
+        // head (`template<class T> template<class U>`) sees the same
+        // declaration.
+        self.s.claim_template_head(wmark, self.templated_decl);
         if delays {
             self.template_delay_level = None;
             self.s.end_delayed_access_to(level, None);
@@ -577,7 +582,8 @@ impl Parser<'_, '_> {
         if ctx == DeclaratorContext::Member {
             self.parse_member_declaration();
         } else {
-            self.parse_simple_declaration(DeclaratorContext::File, true);
+            let ds = self.parse_simple_declaration(DeclaratorContext::File, true);
+            self.templated_decl = ds.last().copied();
         }
         self.template_decl_kind = None;
     }

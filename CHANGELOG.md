@@ -10,6 +10,15 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- The declarator group of a shared decl-specifier in the written-reference
+  table (WP-3144, spec/ast.md §18.3.1): in `S a, b;` the entry of `S` is
+  still enclosed by `a`, now with the flag `REF_GROUP` (32), and
+  `WrittenRefs::holders(id)` gives every declaration of the group
+  (`group(first)`, `groups()`); member declarator lists, `typedef` lists
+  and a function and a variable in one group are covered, a group of
+  one and a structured binding declaration have no mark. The dump prints
+  `shared=` after `in=`. PCH snapshots (format 170) and module images
+  (version 93) carry the groups.
 - The mem-initializers of a constructor defined in a template on the
   `Ast` (WP-3026, spec/ast.md §8.6): `Ast::pattern_mem_inits(ctor)` gives
   the `:`, a `failed` flag and, per mem-initializer in written order, the
@@ -1165,6 +1174,14 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- The written-reference table's `enclosing` of the names in an
+  alias-declaration, an enumerator, a template-head (default template
+  arguments, parameter types, the requires-clause) and a `static_assert`
+  (WP-3143, spec/ast.md §18.3): they are held by the alias, the
+  enumerator, the templated declaration (also for a partial
+  specialization and an out-of-line member of a class template) and the
+  `static_assert` declaration (dumped `static_assert@L:C`), not by the
+  lexical context.
 - Using-declarations: a class's record of the shadows its using-declarators
   introduce and of which are hidden ([namespace.udecl]/4, /14;
   `DeclArena::hidden_shadow`, spec/ast.md §4.2) no longer depends on

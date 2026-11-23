@@ -1,11 +1,11 @@
 8:43-8:44  type  'T' -> T@8:17 in=Small@8:28
 10:41-10:42  type  'T' -> T@10:17 in=n::Big@10:28
 10:35-10:40  concept  'Small' -> Small@8:28 in=n::Big@10:28
-12:15-12:20  concept  'Small' -> Small@8:28 in=(tu)
-13:15-13:16  nns  'n' -> n@9:11 in=(tu)
-13:18-13:21  concept  'Big' -> n::Big@10:28 q=13:15 in=(tu)
-16:18-16:19  type  'T' -> T@15:17 in=(tu)
-16:12-16:17  concept  'Small' -> Small@8:28 in=(tu)
+12:15-12:20  concept  'Small' -> Small@8:28 in=static_assert@12:1
+13:15-13:16  nns  'n' -> n@9:11 in=static_assert@13:1
+13:18-13:21  concept  'Big' -> n::Big@10:28 q=13:15 in=static_assert@13:1
+16:18-16:19  type  'T' -> T@15:17 in=narrow@17:5
+16:12-16:17  concept  'Small' -> Small@8:28 in=narrow@17:5
 17:12-17:13  type  'T' -> T@15:17 in=t@17:14
 17:30-17:31  expr  't' -> t@17:14 in=narrow@17:5
 19:62-19:63  nns  'n' -> n@9:11 in=both@19:35

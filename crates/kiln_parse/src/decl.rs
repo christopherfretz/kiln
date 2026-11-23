@@ -13,7 +13,6 @@ use kiln_ast::{AttrId, DeclId, ExprId, QualType};
 use kiln_diag::{DiagId, FixIt};
 use kiln_lex::{Punct, Std, TokFlags, TokKind};
 use kiln_sema::declspec::SpecError;
-use kiln_sema::templ::auto::AutoGroup;
 use kiln_sema::{
     BindingId, Chunk, DeclSpec, Declarator, DeclaratorContext, Decomposition, DefaultArg,
     Designator, InitItem, InitList, InitValue, Initializer, NameClass, NullSpec, ParamInfo, Sign,
@@ -743,9 +742,9 @@ impl Parser<'_, '_> {
                 Some(self.s.act_on_alias_decl(name, nl, ty, &attrs, own, tl, loc))
             };
             if let Some(d) = d {
-                // Closures in the type-id belong to the alias (spec/ast.md
-                // §5.9); its names are not claimed yet (§18.3).
-                self.s.claim_alias_closures(wmark, d);
+                // The alias claims the names and closures of its type-id
+                // (spec/ast.md §5.9, §18.3).
+                self.s.claim_written_refs(wmark, Some(d));
                 self.s.note_alias_decl_loc(d, loc);
                 self.ext_name_span(d, Loc::INVALID, Span::new(nl, n_hi));
             }
@@ -962,6 +961,9 @@ impl Parser<'_, '_> {
             self.skip_to_semi();
             return None;
         };
+        // The assertion claims the names of its condition and message
+        // (spec/ast.md §18.3).
+        let wmark = self.s.written_ref_mark();
         let Some(cond) = self.parse_constant_expr() else {
             self.skip_until(&[Punct::RParen], false, true);
             self.skip_to_semi();
@@ -1015,6 +1017,7 @@ impl Parser<'_, '_> {
         }
         self.expect_closing(Punct::RParen, Punct::LParen, open);
         let d = self.s.act_on_static_assert(cond, msg, loc);
+        self.s.claim_written_names(wmark, Some(d));
         self.expect_semi_after("static_assert");
         Some(d)
     }
@@ -3420,6 +3423,9 @@ impl Parser<'_, '_> {
             let loc = self.loc();
             self.bump();
             let name_hi = self.prev_end();
+            // The enumerator claims the names of its attributes and value
+            // (spec/ast.md §18.3).
+            let wmark = self.s.written_ref_mark();
             let mut attrs = Vec::new();
             self.parse_attributes(&mut attrs);
             let mut init = None;
@@ -3430,6 +3436,9 @@ impl Parser<'_, '_> {
                 }
             }
             let en = self.s.act_on_enumerator(name, loc, init, &attrs);
+            if en != self.s.ast.tu {
+                self.s.claim_written_names(wmark, Some(en));
+            }
             // An enumerator-definition, before its `,` (spec/ast.md §19.3).
             if self.ext_on() {
                 self.ext_name_span(en, Loc::INVALID, Span::new(loc, name_hi));
@@ -5633,7 +5642,7 @@ impl Parser<'_, '_> {
         }
         let mut base_ty: Option<QualType> = None;
         // [dcl.spec.auto.general]/3, /8: checked at the end of the group.
-        let mut group = AutoGroup::default();
+        let mut group = self.s.group_after_specifiers(wmark);
         // [dcl.pre]/6 (clang's `BuildDeclaratorGroup`): a structured
         // binding declaration is alone in its group.
         let mut first_decomp: Option<(Loc, Option<DeclId>)> = None;

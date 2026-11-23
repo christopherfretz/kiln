@@ -1,0 +1,15 @@
+enclosing_mod.cppm:7:15-7:17  type  'Pt' -> shapes::Pt@enclosing_mod.cppm:6:8 in=shapes::Alias@enclosing_mod.cppm:7:7
+enclosing_mod.cppm:8:28-8:30  type  'Pt' -> shapes::Pt@enclosing_mod.cppm:6:8 in=shapes::small@enclosing_mod.cppm:8:13
+enclosing_mod.cppm:9:21-9:23  type  'Pt' -> shapes::Pt@enclosing_mod.cppm:6:8 in=shapes::make@enclosing_mod.cppm:9:27
+enclosing_mod.cppm:9:25-9:26  type  'T' -> T@enclosing_mod.cppm:9:17 in=shapes::make@enclosing_mod.cppm:9:27
+enclosing_mod.cppm:9:43-9:44  type  'T' -> T@enclosing_mod.cppm:9:17 in=shapes::make@enclosing_mod.cppm:9:27
+enclosing_mod.cppm:10:22-10:24  type  'Pt' -> shapes::Pt@enclosing_mod.cppm:6:8 in=static_assert@enclosing_mod.cppm:10:1
+enclosing_mod.cppm:11:1-11:3  type  'Pt' -> shapes::Pt@enclosing_mod.cppm:6:8 in=shapes::first@enclosing_mod.cppm:11:4 shared=shapes::second@enclosing_mod.cppm:11:11
+enclosing_mod.cppm:12:15-12:17  type  'Pt' -> shapes::Pt@enclosing_mod.cppm:6:8 in=shapes::Pair::a@enclosing_mod.cppm:12:18 shared=shapes::Pair::b@enclosing_mod.cppm:12:21
+enclosing_mod.cppm:13:9-13:11  type  'Pt' -> shapes::Pt@enclosing_mod.cppm:6:8 in=shapes::T1@enclosing_mod.cppm:13:12 shared=shapes::T2@enclosing_mod.cppm:13:16
+12:20-12:26  nns  'shapes' -> shapes@enclosing_mod.cppm:5:18 in=use@12:5
+12:28-12:32  expr  'make' -> shapes::make<Pt>@enclosing_mod.cppm:9:27 found=shapes::make@enclosing_mod.cppm:9:27 q=12:20 in=use@12:5
+12:35-12:36  member  'x' -> shapes::Pt::x@enclosing_mod.cppm:6:17 in=use@12:5
+12:39-12:45  nns  'shapes' -> shapes@enclosing_mod.cppm:5:18 in=use@12:5
+12:47-12:53  expr  'second' -> shapes::second@enclosing_mod.cppm:11:11 q=12:39 in=use@12:5
+12:54-12:55  member  'y' -> shapes::Pt::y@enclosing_mod.cppm:6:20 in=use@12:5

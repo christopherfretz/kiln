@@ -1,0 +1,14 @@
+11:27-11:30  nns  'lib' -> lib@6:11 in=red@11:14
+11:32-11:37  type  'Shape' -> lib::Shape@7:8 q=11:27 in=red@11:14
+11:48-11:51  nns  'lib' -> lib@6:11 in=green@11:40
+11:53-11:57  expr  'base' -> lib::base@8:15 q=11:48 in=green@11:40
+12:15-12:18  nns  'lib' -> lib@6:11 in=anon@12:8
+12:20-12:24  expr  'base' -> lib::base@8:15 q=12:15 in=anon@12:8
+13:50-13:53  nns  'lib' -> lib@6:11 in=Scoped::first@13:27
+13:55-13:59  expr  'base' -> lib::base@8:15 q=13:50 in=Scoped::first@13:27
+16:30-16:33  nns  'lib' -> lib@6:11 in=Holder::small@16:15
+16:35-16:40  nns  'Shape' -> lib::Shape@7:8 q=16:30 in=Holder::small@16:15
+16:42-16:43  expr  'w' -> lib::Shape::w@7:20 q=16:35 in=Holder::small@16:15
+20:32-20:33  type  'T' -> T@19:17 in=Table::entries@20:15
+20:37-20:40  nns  'lib' -> lib@6:11 in=Table::entries@20:15
+20:42-20:46  expr  'base' -> lib::base@8:15 q=20:37 in=Table::entries@20:15

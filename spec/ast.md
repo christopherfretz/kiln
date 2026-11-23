@@ -1003,8 +1003,9 @@ Tests: `tests/conformance/support.srcloc/string-identity*.cpp`,
   closure whose owner existed at the mark and is not a function whose
   body holds it, and the parser's claims skip the closures substitution
   created meanwhile (an instantiation the declaration's text triggered).
-  Template parameters, template heads and alias declarations claim
-  closures only (not written references). Carried by PCH snapshots
+  Template parameters claim closures only (not written references);
+  template heads and alias declarations claim their names too, and
+  enumerators and `static_assert`s claim names only (§18.3, WP-3143). Carried by PCH snapshots
   (the cold maps are snapshot state; FORMAT_VERSION 124) and module
   images (a lambda record's `owner` word, spec/modules.md; IMAGE_VERSION
   58). Tests: `crates/kiln_parse/tests/closure_owner.rs`.
@@ -2121,7 +2122,7 @@ field `Ast::written_refs`. Built in stages:
 | `enclosing` | `Option<DeclId>` (4) | the innermost declaration whose source extent contains the name's first token (§18.3); `None` only when the table was filled without a TU |
 | `qualifier` | `RefQualifier` (4) | for a name written after `::`: the entry of the component immediately to its left, `GLOBAL` for a leading `::`, or `SPECIFIER` after a `decltype(...)::` or splice specifier, which has no entry (§18.11.2, WP-2828); `NONE` for an unqualified name |
 | `role` | `RefRole` (1) | the syntactic role (§18.4) |
-| `flags` | `u8` (1) | `DEPENDENT` (a dependent name in a template pattern: no entity until instantiation), `UNRESOLVED` (lookup or overload resolution failed), `MEMBER` (a member or member template name written after `.` or `->`, §18.7), `REWRITTEN` (8: an operator entry whose function a rewritten comparison candidate selected, [over.match.oper]/3.4), `REVERSED` (16: the reversed synthesized candidate, always with `REWRITTEN`) (§18.13.3) |
+| `flags` | `u8` (1) | `DEPENDENT` (a dependent name in a template pattern: no entity until instantiation), `UNRESOLVED` (lookup or overload resolution failed), `MEMBER` (a member or member template name written after `.` or `->`, §18.7), `REWRITTEN` (8: an operator entry whose function a rewritten comparison candidate selected, [over.match.oper]/3.4), `REVERSED` (16: the reversed synthesized candidate, always with `REWRITTEN`) (§18.13.3), `GROUP` (32: a name of a decl-specifier-seq a declarator group shares, §18.3.1) |
 | `how` | `RefLookup` (1) | how lookup found the name (§18.7, WP-2130) |
 
 **Failed lookup and dependence (WP-2291).** `UNRESOLVED` and
@@ -2176,12 +2177,39 @@ name is `name_lo(id)` (§18.11.1).
 
 ### 18.3 `enclosing`
 
-Stored, not derived from ranges. The rule: the innermost declaration
-whose source extent contains the name's first token — the particular
+Stored, not derived from ranges. **The rule**: a name is held by the
+innermost declaration whose text contains it — the particular
 redeclaration (a reopened namespace, the definition of a function, the
-class being defined). For a name inside a declaration (its type, its
-initializer, its default argument, its declarator-id qualifier) that is
-the declaration being declared.
+class being defined). A name inside a declaration (its type, its
+initializer or value, its default argument, its declarator-id
+qualifier, its attributes) is held by the declaration being declared,
+whether that declaration has a name or not; a name in no declaration
+is held by the lexical context (the namespace, class or function whose
+body holds it). The holder is what a tooling client takes as "what an
+edit of this name changes": the unit to check again. The cases
+(WP-3143 completed the rule for the last five):
+
+| declaration | holds the names of |
+|---|---|
+| a declarator of a simple declaration or a member declaration (a variable, a function declaration, a field, a `typedef` name) | its declarator and initializer, bit-field width or `= 0`; the decl-specifier-seq when it is the group's first (§18.3.1) |
+| a function definition | its decl-specifiers, declarator and body (outside the declarations nested in it) |
+| a function parameter | its type and default argument (also late-parsed): so in `typedef void F(S);` the unnamed parameter holds `S`, as in a function declaration |
+| a field with a default member initializer | the initializer, also late-parsed |
+| a concept definition | its constraint-expression |
+| an alias-declaration (an alias template's pattern) | its type-id |
+| an enumerator | its attributes and its value |
+| a `static_assert` | its condition and message: the `StaticAssert` declaration (a `DeclId` without a name; the dump prints `static_assert@<line>:<col>` of its keyword) |
+| a template | its template-head (each template parameter's type and default argument, the requires-clause): held by the templated declaration, the same declaration that holds the rest of the template's names (a function template's function, a class template's class, an alias template's alias, a variable template's variable); where no template owns the head's parameter list (a class or variable template partial specialization, an out-of-line member of a class template), the declaration the head's declaration declared; an enclosing head (`template<class T> template<class U>`) is held by the same declaration |
+| stage 3: a using-declarator, a namespace alias, a tag declared by a class-, enum- or elaborated-type-specifier | its qualifier and name (the target of an alias); a tag its class-head-name and qualifier, an explicit or partial class specialization's template name |
+
+Not holders: a template parameter (its names are the template's: an
+edit of them changes the template's signature, and the parameter is no
+unit of its own), a requires-expression's parameter scope (its names
+are held by the context around it), a friend's tag names (held by the
+class granting friendship), a using-directive (it declares no named
+entity) and an explicit instantiation of a function or variable (it
+declares nothing; its names are held by the context its qualifier
+enters).
 
 Mechanism: an entry is recorded with sema's current lexical context
 (`Sema::ctx`: the namespace, class or function whose body is being
@@ -2192,29 +2220,56 @@ count, decl count) at the declaration's start and calls
 again after the initializer). A claim sets `enclosing = d` on entries
 after the mark whose current `enclosing` was created before the mark,
 so a declaration nested inside (a lambda, a local class, a parameter)
-keeps its own entries: the innermost claim wins. Claimers in stage 1:
-simple declarations (each declarator), function definitions, member
-declarators, function parameters (their default arguments included,
-also when late-parsed), late-parsed default member initializers and
-concept definitions (their constraint-expression). A requires-expression's
-parameter scope is skipped: its names are enclosed by the context
-around it. Other declarations (template parameters and a template
-head's requires-clause, enumerators, alias and `static_assert`
-declarations, structured bindings, condition variables) leave their
-names enclosed by the lexical context; WP-1980 adds them. Claimers
-added in stage 3: using-declarations (each using-declarator claims its
-qualifier and name), namespace alias definitions (the target and its
-qualifier), a tag that a class-specifier, enum-specifier or
-elaborated-type-specifier declares (its class-head-name and qualifier;
-an explicit or partial class specialization's template name), and the
-declarators of stage 1 also claim their `redecl`, `spec-target` and
-`elaborated` entries. A friend's tag names are not claimed: they stay
-enclosed by the class granting friendship. A using-directive declares
-no named entity, so its names stay enclosed by the context around it.
-The same marks and claims decide closure owners (§5.9, WP-2023): every
-claim also claims the closures created since its mark, and template
-parameters, template heads and alias declarations claim closures (not
-yet names).
+keeps its own entries: the innermost claim wins. The declarators of
+stage 1 also claim their `redecl`, `spec-target` and `elaborated`
+entries. A template head's mark is taken at `template`; when the
+templated declaration is parsed, `claim_template_head(mark, parsed)`
+gives the head's remaining entries to the templated declaration (the
+pattern of the template whose parameter list the head is, else
+`parsed`, the last declaration the head's simple-declaration declared).
+An enumerator and a `static_assert` claim with `claim_written_names`,
+names only: their closures keep the lexical context (§5.9). The same
+marks and claims decide closure owners otherwise (§5.9, WP-2023):
+every other claim also claims the closures created since its mark,
+and template parameters claim closures (not names).
+
+#### 18.3.1 Declarator groups (WP-3144)
+
+In `S a, b;` the decl-specifier-seq is written once and belongs to each
+declarator ([dcl.decl.general]/3: each init-declarator is as if it were
+in a declaration by itself), so a rename of `S` changes `b` too. The
+one entry of `S` is held by the group's first declaration (`enclosing
+= a`, as every reader has always seen it) and has the flag `REF_GROUP`
+(32); the group's declarations, in order, are in a cold side table
+keyed by the first: `group(first) -> Option<&[DeclId]>`, `holders(id)
+-> &[DeclId]` (the group for a `REF_GROUP` entry, else `enclosing`
+alone), `groups()` (every group, by first declaration). Which entries
+are shared: those recorded in the decl-specifier-seq and the leading
+attributes (before the first declarator) that the first declaration
+holds after its claim. A name in a class or enumeration the specifier
+defines, or in a lambda in it, keeps its innermost holder and is not
+shared. A group has a row only when an entry is shared; a declarator
+whose declaration failed is not in it. The cases: a member declarator
+list (`struct C { S a, b; };`, `C::a` and `C::b`), a `typedef` list
+(`typedef S T1, T2;`), a function and a variable (`S f(), v;`: `f` and
+`v`); a structured binding declaration is one declaration whose
+bindings are no declarator group (no flag); a group of one has no flag
+and no row. Set by `Sema::act_on_end_group`, from the entry range the
+parser gives `group_after_specifiers` after the decl-specifier-seq
+(`WrittenRefs::share_group`); a truncation drops the rows whose first
+declaration was made after its mark.
+
+Rationale: `enclosing` stays one 4-byte field (the entry stays 28
+bytes; the flag takes a free bit), so a reader that wants one holder is
+unchanged and one that wants every holder tests one bit. The list costs
+8 bytes per group and 4 per declaration, only for groups that share a
+name: nothing for the single-declarator declarations that are nearly
+all of them. A list per entry would repeat the group for every name of
+the specifier (`std::map<K, V> a, b;` has four), and a mark without the
+list would leave the client to rebuild the group from source or from
+the declaration-extent table, another opt-in table (§19.5). Carried:
+the snapshot section's `groups` and `group_decls` (§18.10.1) and the
+module image `refs` section's trailing groups (§18.10.2).
 
 ### 18.4 Roles
 
@@ -2612,7 +2667,7 @@ stage 1.
 prints, after diagnostics' end of the TU, one line per entry:
 
 ```
-<line>:<col>-<line>:<col>  <role>  '<spelling>' -> <entity> [found=<decl>] [q=<line>:<col>|q=::[<line>:<col>]|q=specifier[:<line>:<col>]] [tilde=<line>:<col>] [close=<line>:<col>] [args=<line>:<col>-<line>:<col>] [in=<enclosing>] [dep] [rewritten] [reversed] [exp=<line>:<col>] [how=<how>] [udir=<ns>@<line>:<col>] [adl-ns=<ns>,...] [adl-cls=<class>,...] [adl-enum=<enum>,...]
+<line>:<col>-<line>:<col>  <role>  '<spelling>' -> <entity> [found=<decl>] [q=<line>:<col>|q=::[<line>:<col>]|q=specifier[:<line>:<col>]] [tilde=<line>:<col>] [close=<line>:<col>] [args=<line>:<col>-<line>:<col>] [in=<enclosing>] [shared=<decl>,...] [dep] [rewritten] [reversed] [exp=<line>:<col>] [how=<how>] [udir=<ns>@<line>:<col>] [adl-ns=<ns>,...] [adl-cls=<class>,...] [adl-enum=<enum>,...]
 ```
 
 Positions are the spelling locations of `lo` and `hi` (the end column
@@ -2629,7 +2684,10 @@ the first token of a `decltype(...)::` or splice specifier (WP-2828),
 and `tilde=` gives the `~` of a destructor name; `close=` the `]` or `)`
 of a subscript or call operator entry, and `rewritten` and `reversed`
 its flags (§18.13); `args=` the `<` and `>` of a friend function
-template specialization's template argument list (§18.11.2). A
+template specialization's template argument list (§18.11.2);
+`shared=` the rest of the declarator group that holds a `GROUP` entry
+with `in=` (§18.3.1). A `static_assert` prints `static_assert@` and its
+keyword's position. A
 ud-suffix's position is a column inside its
 literal token. `exp=` is the outermost expansion point of a name written in
 a macro. The harness directive `written-refs: <golden>`
@@ -3462,7 +3520,8 @@ names to be carried.
   the directive cache; the deferred designators; the per-specialization
   rows, dropped rows included so every `SpecRefId` stays; the pattern
   nodes and their candidates' using-directives (§18.9.1); the unrecorded rows (§18.10.3); the leads (§18.11.2); the found sets, their
-  elements and the (entry, set) rows (§18.12.6). Maps are written as their
+  elements and the (entry, set) rows (§18.12.6); the declarator groups of
+  the shared entries (`groups`, `group_decls`, §18.3.1, WP-3144). Maps are written as their
   entries sorted by key, so the bytes do not depend on hashing.
   **Rebuilt** on read: the set index, the found-set index and the row
   de-duplication index, from the sets and the live rows. **Transient**: the scratch of one
@@ -3471,7 +3530,8 @@ names to be carried.
 - **Validated** on read (an `Invalid` error, never a panic): every
   entry, row and set id in range, every qualifier before the entry it
   qualifies, the leads sorted and each `::` on a globally qualified
-  entry, no set interned twice, no live row kept twice, and the
+  entry, the groups sorted by first declaration, of two or more each,
+  and every `GROUP` entry's `enclosing` a group's first, no set interned twice, no live row kept twice, and the
   section's typed ids within the restored AST's arenas
   (`Ast::check_ids`).
 - **Restored, recording on.** The restored table continues the

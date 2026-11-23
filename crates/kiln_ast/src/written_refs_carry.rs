@@ -14,6 +14,7 @@
 //! | `unrecorded` | state |
 //! | `leads` | state: the leading `::` and `~` tokens (WP-2326), the closing `]`/`)` of an `operator` entry (WP-2820) and a friend specialization's `<` and `>` (WP-3008) |
 //! | `found_rows`, `found_sets`, `found_decls` | state: the found sets of the dependent entries (§18.12, WP-2472) |
+//! | `groups`, `group_decls` | state: the declarator groups that share an entry (§18.3.1, WP-3144) |
 //! | `adl_index`, `spec_seen`, `found_index` | rebuilt from `adl_sets`, the live rows of `specs` and `found_sets` |
 //! | `inst_target`, `spec_pending`, `spec_last`, `spec_key`, `colons` | transient: scratch of one declaration or one instantiation, empty at rest |
 //! | `on` | the restoring compilation's own option |
@@ -24,9 +25,9 @@ use kiln_snap::{Reader, SnapError, Writer};
 use kiln_source::Loc;
 
 use super::{
-    AdlSet, AdlSetId, FoundDecl, FoundKey, FoundSetId, FoundSetRec, PatternNode, QualLink,
-    RefExtra, RefLead, RefRole, SPEC_DEAD, SpecRef, Unrecorded, WrittenRef, WrittenRefId,
-    WrittenRefs,
+    AdlSet, AdlSetId, DeclGroupRec, FoundDecl, FoundKey, FoundSetId, FoundSetRec, PatternNode,
+    QualLink, REF_GROUP, RefExtra, RefLead, RefRole, SPEC_DEAD, SpecRef, Unrecorded, WrittenRef,
+    WrittenRefId, WrittenRefs,
 };
 use crate::Ast;
 use crate::ids::{DeclId, ExprId};
@@ -49,6 +50,8 @@ pub struct WrittenRefsSection {
     found_rows: Vec<(WrittenRefId, FoundSetId)>,
     found_sets: Vec<FoundSetRec>,
     found_decls: Vec<FoundDecl>,
+    groups: Vec<DeclGroupRec>,
+    group_decls: Vec<DeclId>,
 }
 
 /// The schema hash of the section's payload, which `Sema`'s snapshot root
@@ -59,6 +62,25 @@ fn sorted<K: Ord + Copy, V: Copy>(m: &HashMap<K, V>) -> Vec<(K, V)> {
     let mut v: Vec<(K, V)> = m.iter().map(|(&k, &v)| (k, v)).collect();
     v.sort_unstable_by_key(|&(k, _)| k);
     v
+}
+
+/// The declarator groups of a section (§18.3.1): by first declaration,
+/// once each, two or more declarations each, every shared entry's
+/// `enclosing` a group's first declaration.
+fn groups_ok(s: &WrittenRefsSection) -> bool {
+    let run = |g: &DeclGroupRec| {
+        let lo = g.start as usize;
+        s.group_decls.get(lo..lo.saturating_add(g.len as usize)).filter(|r| r.len() >= 2)
+    };
+    let Some(firsts) = s.groups.iter().map(|g| run(g).map(|r| r[0])).collect::<Option<Vec<_>>>()
+    else {
+        return false;
+    };
+    firsts.windows(2).all(|w| w[0] < w[1])
+        && s.entries
+            .iter()
+            .filter(|r| r.flags & REF_GROUP != 0)
+            .all(|r| r.enclosing.is_some_and(|d| firsts.binary_search(&d).is_ok()))
 }
 
 impl WrittenRefs {
@@ -78,6 +100,8 @@ impl WrittenRefs {
             found_rows: self.found_rows.clone(),
             found_sets: self.found_sets.clone(),
             found_decls: self.found_decls.clone(),
+            groups: self.groups.clone(),
+            group_decls: self.group_decls.clone(),
         }
     }
 
@@ -151,6 +175,11 @@ impl WrittenRefs {
                 return Err("a found set interned twice");
             }
         }
+        if !groups_ok(&s) {
+            return Err(
+                "a declarator group out of order, of one, past its declarations, or a shared entry without its group",
+            );
+        }
         let mut spec_seen = HashMap::new();
         for (i, r) in s.specs.iter().enumerate() {
             if r.flags & SPEC_DEAD == 0 && spec_seen.insert(*r, i as u32).is_some() {
@@ -183,6 +212,8 @@ impl WrittenRefs {
             unrecorded: s.unrecorded,
             leads: s.leads,
             colons: Vec::new(),
+            groups: s.groups,
+            group_decls: s.group_decls,
         })
     }
 }
@@ -348,6 +379,37 @@ mod tests {
         section.found_sets.pop();
         section.found_sets[0].len = 2;
         assert!(WrittenRefs::from_section(section, true).is_err(), "a set past its elements");
+    }
+
+    /// spec/ast.md §18.3.1 (WP-3144): the declarator groups round trip;
+    /// a group of one, groups out of order and a shared entry without its
+    /// group are rejected.
+    #[test]
+    fn groups_round_trip_and_are_validated() {
+        // A new AST has one declaration in range: the group repeats it.
+        let tu = DeclId::new(ast_tu_index());
+        let mut ast = new_ast();
+        ast.written_refs.set_on(true);
+        let e = WrittenRef { enclosing: Some(tu), ..entry(RefQualifier::NONE) };
+        let id = ast.written_refs.push(e).unwrap();
+        ast.written_refs.share_group((0, 1), &[tu, tu]);
+        assert_eq!(ast.written_refs.get(id).flags, REF_GROUP);
+        let bytes = put(&ast);
+        let mut back = new_ast();
+        let mut rd = Reader::new(&bytes);
+        back.get_written_refs(&mut rd, true, 0).expect("read");
+        assert_eq!(back.written_refs.holders(id), &[tu, tu]);
+        assert_eq!(back.written_refs.group(tu), Some(&[tu, tu][..]));
+        let section = ast.written_refs.section();
+        let mut one = section.clone();
+        one.groups[0].len = 1;
+        assert!(WrittenRefs::from_section(one, true).is_err(), "a group of one");
+        let mut twice = section.clone();
+        twice.groups.push(twice.groups[0]);
+        assert!(WrittenRefs::from_section(twice, true).is_err(), "groups out of order");
+        let mut none = section;
+        none.groups.clear();
+        assert!(WrittenRefs::from_section(none, true).is_err(), "a shared entry alone");
     }
 
     #[test]
