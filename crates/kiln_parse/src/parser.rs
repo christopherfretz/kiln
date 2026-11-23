@@ -321,8 +321,10 @@ struct DecltypeScope {
     loc: Loc,
     /// The written-reference link the scope leaves for the name after
     /// it (spec/ast.md §18.4): its last component's entry for a
-    /// qualifier parsed ahead ([`Parser::annotate_template_scope`]),
-    /// none after `decltype(e)::`.
+    /// qualifier parsed ahead ([`Parser::annotate_template_scope`]) and
+    /// the pack's for a pack-index-specifier, the specifier's first
+    /// token after `decltype(e)::` or a splice
+    /// ([`kiln_ast::written_refs::WrittenRefs::specifier_link`], WP-2828).
     link: RefQualifier,
 }
 
@@ -1925,13 +1927,9 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                 return false;
             }
             let qual = ty.and_then(|t| self.s.act_on_nested_name_decltype(t, loc));
-            self.decltype_scope = Some(DecltypeScope {
-                level: self.replay.len(),
-                pos: self.pos,
-                qual,
-                loc,
-                link: RefQualifier::NONE,
-            });
+            let link = self.s.ast.written_refs.specifier_link(loc);
+            self.decltype_scope =
+                Some(DecltypeScope { level: self.replay.len(), pos: self.pos, qual, loc, link });
             return true;
         }
         if self.at_splice() {
@@ -1940,19 +1938,16 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                 return false;
             }
             let qual = e.and_then(|e| self.s.act_on_nested_name_splice(e, loc));
-            self.decltype_scope = Some(DecltypeScope {
-                level: self.replay.len(),
-                pos: self.pos,
-                qual,
-                loc,
-                link: RefQualifier::NONE,
-            });
+            let link = self.s.ast.written_refs.specifier_link(loc);
+            self.decltype_scope =
+                Some(DecltypeScope { level: self.replay.len(), pos: self.pos, qual, loc, link });
             return true;
         }
         let (ty, link) = if self.ident().is_some() {
             self.parse_pack_index_scope(loc)
         } else {
-            (self.parse_decltype_specifier().1, RefQualifier::NONE)
+            let ty = self.parse_decltype_specifier().1;
+            (ty, self.s.ast.written_refs.specifier_link(loc))
         };
         if !self.at(Punct::ColonColon) {
             return false;
@@ -1992,16 +1987,13 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         Some(e)
     }
 
-    /// Records `qual` (made from the tokens before the current `::`) as
-    /// the pending first component of the nested-name-specifier there.
+    /// Records `qual` (made from the tokens before the current `::`, a
+    /// splice specifier whose first token is at `loc`) as the pending
+    /// first component of the nested-name-specifier there.
     pub(crate) fn set_decltype_scope(&mut self, qual: Option<(DeclId, NnsId)>, loc: Loc) {
-        self.decltype_scope = Some(DecltypeScope {
-            level: self.replay.len(),
-            pos: self.pos,
-            qual,
-            loc,
-            link: RefQualifier::NONE,
-        });
+        let link = self.s.ast.written_refs.specifier_link(loc);
+        self.decltype_scope =
+            Some(DecltypeScope { level: self.replay.len(), pos: self.pos, qual, loc, link });
     }
 
     /// At a `T ... [ expression ] ::` ([`Parser::pack_index_scope_end`]),

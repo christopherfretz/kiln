@@ -46,9 +46,10 @@ impl WrittenRefId {
 
 /// The tokens of an entry's written name outside its `range`
 /// (spec/ast.md §18.11.2, WP-2326): the leading `::` of a name whose
-/// qualifier is [`RefQualifier::GLOBAL`] and the `~` of a destructor
-/// name, each `Loc::INVALID` when absent. Kept only for the entries that
-/// have one, sorted by entry.
+/// qualifier is [`RefQualifier::GLOBAL`], the `~` of a destructor name,
+/// and the first token of the specifier before a name whose qualifier is
+/// [`RefQualifier::SPECIFIER`] (WP-2828), each `Loc::INVALID` when
+/// absent. Kept only for the entries that have one, sorted by entry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, kiln_snap::Snap)]
 pub struct RefLead {
     /// The entry.
@@ -57,6 +58,10 @@ pub struct RefLead {
     pub colon: Loc,
     /// The `~` before a destructor's class name.
     pub tilde: Loc,
+    /// The first token of the `decltype(...)::` or splice
+    /// (`[: r :]::`, `template [: r :]<...>::`) specifier the name
+    /// follows: the `decltype` keyword, the `[:`, the `template`.
+    pub spec: Loc,
 }
 
 /// The syntactic role of a written name (spec/ast.md §18.4). The full
@@ -150,7 +155,8 @@ impl RefRole {
 }
 
 /// The `qualifier` link of an entry: none, the global scope (a leading
-/// `::`), or the entry of the component to the name's left.
+/// `::`), a specifier with no entry (`decltype(e)::`, a splice), or the
+/// entry of the component to the name's left.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, kiln_snap::Snap)]
 pub struct RefQualifier(u32);
 
@@ -161,15 +167,23 @@ pub enum QualLink {
     None,
     /// A name after a leading `::`.
     Global,
+    /// A name after a `decltype(...)::` or splice-specifier `[: r :]::`
+    /// (`template [: r :]<...>::`), which has no entry of its own (its
+    /// operand's names have theirs); [`WrittenRefs::specifier_lo`] is
+    /// its first token (spec/ast.md §18.11.2, WP-2828).
+    Specifier,
     /// A name after the component recorded as this entry.
     Entry(WrittenRefId),
 }
 
-/// The bit of a [`RefQualifier`] for a leading `::`: set in
-/// [`RefQualifier::GLOBAL`] and in the links [`WrittenRefs::global_link`]
-/// hands the parser, whose low bits number the `::` token (an entry id is
-/// below it).
+/// The bit of a [`RefQualifier`] for a link with no component entry: set
+/// in [`RefQualifier::GLOBAL`], [`RefQualifier::SPECIFIER`] and in the
+/// links [`WrittenRefs::global_link`] and
+/// [`WrittenRefs::specifier_link`] hand the parser, whose low bits
+/// number the token (an entry id is below it).
 const GLOBAL_BIT: u32 = 1 << 31;
+/// With [`GLOBAL_BIT`]: the link of a specifier, not of a `::`.
+const SPEC_BIT: u32 = 1 << 30;
 
 /// How far back [`WrittenRefs::repoint`] looks for its entry.
 pub const REPOINT_WINDOW: usize = 4096;
@@ -179,6 +193,8 @@ impl RefQualifier {
     pub const NONE: RefQualifier = RefQualifier(0);
     /// A name after a leading `::`.
     pub const GLOBAL: RefQualifier = RefQualifier(u32::MAX);
+    /// A name after a `decltype(...)::` or splice specifier (no entry).
+    pub const SPECIFIER: RefQualifier = RefQualifier(u32::MAX - 1);
 
     /// A name after the component recorded as `id`.
     pub const fn entry(id: WrittenRefId) -> RefQualifier {
@@ -189,16 +205,21 @@ impl RefQualifier {
     pub fn link(self) -> QualLink {
         match self.0 {
             0 => QualLink::None,
+            u32::MAX => QualLink::Global,
+            n if n & (GLOBAL_BIT | SPEC_BIT) == GLOBAL_BIT | SPEC_BIT => QualLink::Specifier,
             n if n & GLOBAL_BIT != 0 => QualLink::Global,
             n => QualLink::Entry(WrittenRefId(NonZeroU32::new(n).expect("n is not 0"))),
         }
     }
 
-    /// The `::` token a link from [`WrittenRefs::global_link`] stands for
-    /// (its index in the table's list of them).
+    /// The token a link from [`WrittenRefs::global_link`] or
+    /// [`WrittenRefs::specifier_link`] stands for (its index in the
+    /// table's list of them).
     fn colon(self) -> Option<usize> {
-        (self.0 & GLOBAL_BIT != 0 && self != RefQualifier::GLOBAL)
-            .then_some((self.0 & !GLOBAL_BIT) as usize)
+        (self.0 & GLOBAL_BIT != 0
+            && self != RefQualifier::GLOBAL
+            && self != RefQualifier::SPECIFIER)
+            .then_some((self.0 & !(GLOBAL_BIT | SPEC_BIT)) as usize)
     }
 }
 
@@ -715,19 +736,25 @@ impl WrittenRefs {
 
     /// Appends `r`; `None` (and nothing recorded) when off. A qualifier
     /// from [`global_link`](Self::global_link) is stored as
-    /// [`RefQualifier::GLOBAL`], with its `::` as the entry's lead.
+    /// [`RefQualifier::GLOBAL`], with its `::` as the entry's lead, one
+    /// from [`specifier_link`](Self::specifier_link) as
+    /// [`RefQualifier::SPECIFIER`], with the specifier's first token.
     pub fn push(&mut self, mut r: WrittenRef) -> Option<WrittenRefId> {
         if !self.on {
             return None;
         }
-        let colon = r.qualifier.colon().and_then(|k| self.colons.get(k).copied());
-        if r.qualifier.link() == QualLink::Global {
-            r.qualifier = RefQualifier::GLOBAL;
+        let tok = r.qualifier.colon().and_then(|k| self.colons.get(k).copied());
+        let spec = r.qualifier.link() == QualLink::Specifier;
+        match r.qualifier.link() {
+            QualLink::Global => r.qualifier = RefQualifier::GLOBAL,
+            QualLink::Specifier => r.qualifier = RefQualifier::SPECIFIER,
+            QualLink::None | QualLink::Entry(_) => {}
         }
         self.entries.push(r);
         let id = WrittenRefId::from_index(self.entries.len() - 1);
-        if let Some(c) = colon {
-            self.leads.push(RefLead { entry: id, colon: c, tilde: Loc::INVALID });
+        if let Some(c) = tok {
+            let (colon, spec) = if spec { (Loc::INVALID, c) } else { (c, Loc::INVALID) };
+            self.leads.push(RefLead { entry: id, colon, tilde: Loc::INVALID, spec });
         }
         Some(id)
     }
@@ -738,11 +765,25 @@ impl WrittenRefs {
     /// [`RefQualifier::GLOBAL`].
     pub fn global_link(&mut self, colon: Loc) -> RefQualifier {
         let k = self.colons.len() as u32;
-        if !self.on || k >= GLOBAL_BIT - 1 {
+        if !self.on || k >= SPEC_BIT {
             return RefQualifier::GLOBAL;
         }
         self.colons.push(colon);
         RefQualifier(GLOBAL_BIT | k)
+    }
+
+    /// The qualifier link of a `decltype(...)::` or splice specifier
+    /// whose first token is `first` (spec/ast.md §18.11.2, WP-2828): an
+    /// entry made with it (the component after the specifier) has
+    /// [`RefQualifier::SPECIFIER`] and [`specifier_lo`](Self::specifier_lo)
+    /// `first`. Off, plain [`RefQualifier::SPECIFIER`].
+    pub fn specifier_link(&mut self, first: Loc) -> RefQualifier {
+        let k = self.colons.len() as u32;
+        if !self.on || k >= SPEC_BIT - 2 {
+            return RefQualifier::SPECIFIER;
+        }
+        self.colons.push(first);
+        RefQualifier(GLOBAL_BIT | SPEC_BIT | k)
     }
 
     /// Notes that entry `id` names a destructor whose `~` is at `tilde`
@@ -755,21 +796,33 @@ impl WrittenRefs {
     /// [`RefQualifier::GLOBAL`]) and the `~` of entry `id`, each when
     /// given (a carried table's, §18.10).
     pub fn set_lead(&mut self, id: WrittenRefId, colon: Option<Loc>, tilde: Option<Loc>) {
-        let at = match self.leads.last() {
-            Some(l) if l.entry < id => self.leads.len(),
-            _ => self.leads.partition_point(|l| l.entry < id),
-        };
-        if self.leads.get(at).is_none_or(|l| l.entry != id) {
-            let l = RefLead { entry: id, colon: Loc::INVALID, tilde: Loc::INVALID };
-            self.leads.insert(at, l);
-        }
-        let l = &mut self.leads[at];
+        let l = self.lead_mut(id);
         if let Some(c) = colon {
             l.colon = c;
         }
         if let Some(t) = tilde {
             l.tilde = t;
         }
+    }
+
+    /// Sets the specifier's first token of entry `id`, whose qualifier
+    /// is [`RefQualifier::SPECIFIER`] (a carried table's, §18.10).
+    pub fn set_specifier_lo(&mut self, id: WrittenRefId, first: Loc) {
+        self.lead_mut(id).spec = first;
+    }
+
+    /// The row of entry `id`, inserted in order when it has none.
+    fn lead_mut(&mut self, id: WrittenRefId) -> &mut RefLead {
+        let at = match self.leads.last() {
+            Some(l) if l.entry < id => self.leads.len(),
+            _ => self.leads.partition_point(|l| l.entry < id),
+        };
+        if self.leads.get(at).is_none_or(|l| l.entry != id) {
+            let l =
+                RefLead { entry: id, colon: Loc::INVALID, tilde: Loc::INVALID, spec: Loc::INVALID };
+            self.leads.insert(at, l);
+        }
+        &mut self.leads[at]
     }
 
     /// The leading tokens of entry `id` outside its range, when it has
@@ -797,6 +850,15 @@ impl WrittenRefs {
         self.lead(id).map(|l| l.tilde).filter(|l| l.is_valid())
     }
 
+    /// The first token of the `decltype(...)::` or splice specifier
+    /// before entry `id`, whose qualifier is [`RefQualifier::SPECIFIER`]:
+    /// the `decltype` keyword, the `[:` or the `template` of
+    /// `template [: r :]<...>::` (`None` for any other entry, and for
+    /// one whose token was not recorded).
+    pub fn specifier_lo(&self, id: WrittenRefId) -> Option<Loc> {
+        self.lead(id).map(|l| l.spec).filter(|l| l.is_valid())
+    }
+
     /// Where the name of entry `id` begins as an expression stores it:
     /// the `~` of a destructor name, else `range.lo`. The location of a
     /// `DeclRefExpr` or `MemberExpr` built from an id-expression or a
@@ -806,9 +868,10 @@ impl WrittenRefs {
     }
 
     /// Where the qualified name ending in entry `id` begins: the leading
-    /// `::`, else the first component's `range.lo` (the start of `id`'s
-    /// own name, [`name_lo`](Self::name_lo), when it is unqualified). A
-    /// `decltype(...)::` component has no entry and is not included.
+    /// `::`, the first token of a `decltype(...)::` or splice specifier
+    /// ([`specifier_lo`](Self::specifier_lo)), else the first component's
+    /// `range.lo` (the start of `id`'s own name, [`name_lo`](Self::name_lo),
+    /// when it is unqualified).
     pub fn qualified_lo(&self, id: WrittenRefId) -> Loc {
         let mut cur = id;
         // Each qualifier precedes its entry: the walk ends.
@@ -817,6 +880,7 @@ impl WrittenRefs {
         }
         match self.get(cur).qualifier.link() {
             QualLink::Global => self.global_colon(cur).unwrap_or(self.get(cur).range.lo),
+            QualLink::Specifier => self.specifier_lo(cur).unwrap_or(self.get(cur).range.lo),
             _ if cur == id => self.name_lo(id),
             _ => self.get(cur).range.lo,
         }
@@ -1545,6 +1609,13 @@ impl WrittenRefs {
                     out.push_str(&pos(c));
                 }
             }
+            QualLink::Specifier => {
+                out.push_str(" q=specifier");
+                if let Some(c) = self.specifier_lo(id) {
+                    out.push(':');
+                    out.push_str(&pos(c));
+                }
+            }
             QualLink::Entry(q) => {
                 out.push_str(" q=");
                 out.push_str(&pos(self.get(q).range.lo));
@@ -1989,6 +2060,42 @@ mod tests {
         assert_eq!(t.leads().len(), 2);
         assert_eq!(t.tilde(dtor), None);
         assert_eq!(size_of::<WrittenRef>(), 28);
+    }
+
+    /// WP-2828 (spec/ast.md §18.11.2): `decltype(s)::N::k`, the entry
+    /// after the specifier is qualified by it and keeps its first token.
+    #[test]
+    fn a_specifier_qualifier_keeps_its_first_token() {
+        let mut t = WrittenRefs::default();
+        // Off: the plain specifier link, nothing kept.
+        assert_eq!(t.specifier_link(Loc::from_raw(3)), RefQualifier::SPECIFIER);
+        assert!(t.colons.is_empty());
+        t.set_on(true);
+        let link = t.specifier_link(Loc::from_raw(10));
+        assert_eq!(link.link(), QualLink::Specifier);
+        // A `::` link handed out after it keeps its own kind.
+        assert_eq!(t.global_link(Loc::from_raw(40)).link(), QualLink::Global);
+        let en = t.push(at(22, link)).unwrap();
+        let ek = t.push(at(25, RefQualifier::entry(en))).unwrap();
+        assert_eq!(t.get(en).qualifier, RefQualifier::SPECIFIER);
+        let named = WrittenRef { entity: Some(DeclId::new(1)), ..*t.get(en) };
+        assert_eq!(named.default_how(), RefLookup::Qualified);
+        assert_eq!(t.specifier_lo(en), Some(Loc::from_raw(10)));
+        assert_eq!(t.global_colon(en), None);
+        assert_eq!(t.specifier_lo(ek), None);
+        assert_eq!(t.qualified_lo(ek), Loc::from_raw(10));
+        assert_eq!(t.qualified_lo(en), Loc::from_raw(10));
+        assert_eq!(t.name_lo(en), Loc::from_raw(22));
+        // A SPECIFIER link of no recorded token (a carried table's), then
+        // the token set from the carriage.
+        let ec = t.push(at(30, RefQualifier::SPECIFIER)).unwrap();
+        assert_eq!(t.qualified_lo(ec), Loc::from_raw(30));
+        t.set_specifier_lo(ec, Loc::from_raw(28));
+        assert_eq!(t.qualified_lo(ec), Loc::from_raw(28));
+        let entries: Vec<_> = t.leads().iter().map(|l| l.entry).collect();
+        assert_eq!(entries, [en, ec]);
+        assert_eq!(RefQualifier::GLOBAL.link(), QualLink::Global);
+        assert_eq!(RefQualifier::SPECIFIER.link(), QualLink::Specifier);
     }
 
     #[test]

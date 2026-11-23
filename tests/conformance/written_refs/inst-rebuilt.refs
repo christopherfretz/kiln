@@ -35,12 +35,12 @@
 25:22-25:23  expr  'w' -> (lambda at tests/conformance/written_refs/inst-rebuilt.cpp:21:12)::w@23:31 in=lam(const type-parameter-0-0 &)::(lambda)::operator()@21:12
 25:33-25:34  expr  'r' -> (lambda at tests/conformance/written_refs/inst-rebuilt.cpp:21:12)::r@24:36 in=lam(const type-parameter-0-0 &)::(lambda)::operator()@21:12
 28:23-28:24  expr  'x' -> x@27:20 in=(lambda at tests/conformance/written_refs/inst-rebuilt.cpp:27:12)::y@28:32
-28:27-28:31  type  'type' -> (dependent) in=(lambda at tests/conformance/written_refs/inst-rebuilt.cpp:27:12)::y@28:32
+28:27-28:31  type  'type' -> (dependent) q=specifier:28:14 in=(lambda at tests/conformance/written_refs/inst-rebuilt.cpp:27:12)::y@28:32
 28:27-28:31  type  'type' -> A::type@11:18 spec=lam(const A &)::(lambda)::operator()<A>@27:12
 28:27-28:31  type  'type' -> B::type@12:18 spec=lam(const A &)::(lambda)::operator()<B>@27:12
 29:23-29:24  expr  'x' -> x@27:20 in=(lambda at tests/conformance/written_refs/inst-rebuilt.cpp:27:12)::z@29:46
 29:43-29:44  type  'T' -> T@20:17 in=(lambda at tests/conformance/written_refs/inst-rebuilt.cpp:27:12)::z@29:46
-29:36-29:42  template  'rebind' -> (dependent) in=(lambda at tests/conformance/written_refs/inst-rebuilt.cpp:27:12)::z@29:46
+29:36-29:42  template  'rebind' -> (dependent) q=specifier:29:14 in=(lambda at tests/conformance/written_refs/inst-rebuilt.cpp:27:12)::z@29:46
 29:36-29:42  template  'rebind' -> A::rebind@11:55 spec=lam(const A &)::(lambda)::operator()<A>@27:12
 29:36-29:42  template  'rebind' -> B::rebind@12:56 spec=lam(const A &)::(lambda)::operator()<B>@27:12
 30:18-30:19  expr  'y' -> (lambda at tests/conformance/written_refs/inst-rebuilt.cpp:27:12)::y@28:32 in=lam(const type-parameter-0-0 &)::(lambda)::operator()@27:12

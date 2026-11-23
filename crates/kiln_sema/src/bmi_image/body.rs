@@ -570,7 +570,9 @@ fn expr_shape(k: ExprKind, bits: u8) -> [Slot; 2] {
         X::StringLiteral => [f(F::Str), Z],
         X::CXXBoolLiteralExpr => [f(F::Bool), Z],
         X::DeclRefExpr => [f(F::D(Dc::Value)), Sd(Side::DeclRef)],
-        X::PredefinedExpr | X::OpaqueValueExpr | X::CXXThrowExpr => [f(F::OE), Z],
+        X::OpaqueValueExpr | X::CXXThrowExpr => [f(F::OE), Z],
+        // The named function (WP-2823): the enclosing context.
+        X::PredefinedExpr => [f(F::OE), f(F::OD(Dc::Ctx))],
         X::BinaryOperator | X::ArraySubscriptExpr | X::ArrayInitLoopExpr => [f(F::E), f(F::E)],
         X::CompoundAssignOperator => [f(F::E), Sd(Side::CompoundAssign)],
         X::ConditionalOperator | X::ChooseExpr => [f(F::E), Sd(Side::Arms)],

@@ -510,7 +510,7 @@ pub static EXPR_ROLES: [ExprRoles; ExprKind::IntegerPackExpr as usize + 1] = {
             &[bit("ARROW", 4), bit("SPLICED", 5), bit("HAD_MULTIPLE_CANDIDATES", 6)],
         ),
         ex(X::CXXThisExpr, Z, Z, B, &[]),
-        ex(X::PredefinedExpr, OE, Z, en("expr::PredefinedKind", 2), &[]),
+        ex(X::PredefinedExpr, OE, OD, en("expr::PredefinedKind", 2), &[]),
         ex(X::SourceLocExpr, D, Z, en("expr::SourceLocKind", 5), &[]),
         ex(X::UnresolvedLookupExpr, Role::DeclName, DL, Role::Bits(&[bit("adl", 0)]), &[]),
         ex(X::UnresolvedMemberExpr, Z, Z, Z, &[]),

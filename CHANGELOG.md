@@ -32,6 +32,23 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   stringized into the literal, any piece of a concatenated string
   included. `-fdump-ast` appends ` from <name>` to such a literal. Off
   by default and free when off.
+- `ExprArena::predefined_function` (WP-2823, spec/ast.md §16): a
+  `PredefinedExpr` (`__func__`, `__FUNCTION__`, `__PRETTY_FUNCTION__`)
+  records the function it names, as clang's `getPredefinedExprDecl`
+  finds it: a lambda's call operator, the constructor of a member
+  initializer, a coroutine, the pattern's function in a template and the
+  specialization in an instantiation; `None` at namespace scope, in a
+  default argument, a default member initializer or a requires-clause
+  (where clang warns). Always on, in a word the node already had; module
+  image version 87, PCH snapshot format 161.
+- Written references (WP-2828, spec/ast.md §18.11.2): the name after a
+  `decltype(...)::` or splice specifier (`[: r :]::`,
+  `template [: r :]<A>::`, `typename [: r :]<A>::`) has the qualifier
+  `RefQualifier::SPECIFIER` (it was `NONE`) and the specifier's first
+  token as `WrittenRefs::specifier_lo`, so `qualified_lo` gives where
+  `decltype(s)::m` begins; the dump prints `q=specifier:L:C`. Expression
+  extents already began such a name at its specifier, as clang does; a
+  test pins it.
 - `Ast::exception_spec_computed` (WP-2505, spec/ast.md §4.2): a tooling
   client tells an explicitly defaulted function's written exception
   specification (`S() noexcept(false) = default;`) from one computed

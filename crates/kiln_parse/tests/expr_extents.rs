@@ -708,3 +708,58 @@ fn rebuilt_names_lists_and_member_variable_templates_have_their_text() {
         has("MemberExpr", "p->twice<2>");
     }
 }
+
+/// A name after a `decltype(...)::` or splice specifier
+/// ([dcl.type.decltype], [expr.prim.id.qual]/1, [temp.names]/3).
+const SPECIFIERS: &str = r"
+struct S {
+  static int m;
+  static int f() { return 1; }
+  struct N { static int k; };
+};
+template <class T> struct X { static int v; };
+template <class T> int X<T>::v = 0;
+S s;
+int y = decltype(s)::m;
+int z = decltype(s)::N::k;
+int (*pf)() = &decltype(s)::f;
+int c = decltype(s)::f();
+template <class T> int g(T t) { return decltype(t)::m; }
+int u = g(s);
+int a = [:^^S:]::m;
+int b = template [:^^X:]<int>::v;
+";
+
+/// WP-2828 (spec/ast.md §21.1): the specifier begins the qualified name,
+/// as clang's `getBeginLoc` (19 and 22) begins `decltype(s)::m` at the
+/// `decltype`; a splice's begins at its `[:`, or at the `template` of a
+/// splice-specialization-specifier.
+#[test]
+fn a_specifier_begins_the_name_it_qualifies() {
+    let sm = SourceManager::new();
+    let file = sm.add_virtual("t.cpp", SPECIFIERS.to_owned()).expect("location space");
+    let interner = Arc::new(Interner::new());
+    let engine = DiagEngine::new(&sm, &DiagOptions::default(), MemorySink::new());
+    let opts = ParseOptions { reflection: true, ..ParseOptions::default() };
+    let target = Target::for_arch(Arch::X86_64);
+    let tu = parse_tu(&sm, &interner, file, &engine, target, &opts, ConstexprLimits::default());
+    assert_eq!(engine.error_count(), 0, "the source has errors");
+    drop(engine);
+    let p = Parsed { sm, interner, tu };
+    let (some, _) = extents(&p);
+    let has = |kind: &str, text: &str| {
+        assert!(
+            some.iter().any(|(k, t)| k == kind && t == text),
+            "no {kind} `{text}` among {:?}",
+            some.iter().filter(|(k, _)| k == kind).collect::<Vec<_>>()
+        );
+    };
+    has("DeclRefExpr", "decltype(s)::m");
+    has("DeclRefExpr", "decltype(s)::N::k");
+    has("DeclRefExpr", "decltype(s)::f");
+    has("UnaryOperator", "&decltype(s)::f");
+    has("CallExpr", "decltype(s)::f()");
+    has("DependentScopeDeclRefExpr", "decltype(t)::m");
+    has("DeclRefExpr", "[:^^S:]::m");
+    has("DeclRefExpr", "template [:^^X:]<int>::v");
+}

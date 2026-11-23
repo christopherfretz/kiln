@@ -33,19 +33,22 @@ use kiln_source::{FileId, Loc, Span};
 
 /// A qualifier word: a leading `::`.
 const Q_GLOBAL: u32 = NONE - 1;
+/// A qualifier word: a `decltype(...)::` or splice specifier (WP-2828).
+const Q_SPEC: u32 = NONE - 2;
 
 /// The fixed size of an entry, a row and a node (for `count`).
 const ENTRY_BYTES: usize = 8 * 4 + 3;
 const SPEC_BYTES: usize = 6 * 4 + 2;
 const UDIR_BYTES: usize = 3 * 4;
 const NODE_BYTES: usize = 1 + 2 * 4;
-const LEAD_BYTES: usize = 3 * 4;
+const LEAD_BYTES: usize = 4 * 4;
 const FOUND_SET_BYTES: usize = 2 + 4;
 const FOUND_ROW_BYTES: usize = 2 * 4;
 
 /// One entry: `lo, hi, entity, found, enclosing, qualifier, udir, adl`
-/// (declaration words, the qualifier an earlier entry's index or
-/// [`Q_GLOBAL`], the set an index into `sets`; [`NONE`] for none), then
+/// (declaration words, the qualifier an earlier entry's index,
+/// [`Q_GLOBAL`] or [`Q_SPEC`], the set an index into `sets`; [`NONE`] for
+/// none), then
 /// role, flags and `how`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) struct EntryRec {
@@ -87,8 +90,9 @@ pub(super) enum NodeRec {
 /// A recorded table: argument-dependent sets (namespace and class
 /// counts, then the declaration words), entries, rows, nodes, and the
 /// using-directives of the dependent entries' ordinary lookups (`entry,
-/// declaration, directive`), the entries' leading `::` and `~`
-/// tokens (`entry, colon, tilde`, locations or [`NONE`]; WP-2326), the
+/// declaration, directive`), the entries' leading `::`, `~` and
+/// specifier tokens (`entry, colon, tilde, spec`, locations or [`NONE`];
+/// WP-2326, WP-2828), the
 /// found sets (`how`, flags, `decl, found` word pairs) and the dependent
 /// entries' rows (`entry, set`; WP-2472).
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
@@ -98,7 +102,7 @@ pub(super) struct RefsRec {
     specs: Vec<SpecRec>,
     nodes: Vec<NodeRec>,
     udirs: Vec<[u32; 3]>,
-    leads: Vec<[u32; 3]>,
+    leads: Vec<[u32; 4]>,
     found_sets: Vec<FoundRec>,
     found_rows: Vec<[u32; 2]>,
 }
@@ -193,6 +197,7 @@ impl Writer<'_, '_, '_> {
             let qual = match r.qualifier.link() {
                 QualLink::None => NONE,
                 QualLink::Global => Q_GLOBAL,
+                QualLink::Specifier => Q_SPEC,
                 QualLink::Entry(q) => match map[q.index()] {
                     NONE => return Err("a written name qualified by a name of the preamble"),
                     w => w,
@@ -250,7 +255,8 @@ impl Writer<'_, '_, '_> {
         for l in t.leads() {
             let entry = map[l.entry.index()];
             if entry != NONE {
-                out.leads.push([entry, self.ref_loc(l.colon)?, self.ref_loc(l.tilde)?]);
+                let (colon, tilde) = (self.ref_loc(l.colon)?, self.ref_loc(l.tilde)?);
+                out.leads.push([entry, colon, tilde, self.ref_loc(l.spec)?]);
             }
         }
         self.img.refs = Refs::Table(out);
@@ -471,7 +477,7 @@ pub(super) fn decode_refs(r: &mut Rd, want: bool) -> Res<Refs> {
         t.udirs.push([r.u32()?, r.u32()?, r.u32()?]);
     }
     for _ in 0..r.count(LEAD_BYTES)? {
-        t.leads.push([r.u32()?, r.u32()?, r.u32()?]);
+        t.leads.push([r.u32()?, r.u32()?, r.u32()?, r.u32()?]);
     }
     for _ in 0..r.count(FOUND_SET_BYTES)? {
         let (how, flags) = (r.u8()?, r.u8()?);
@@ -514,7 +520,7 @@ pub(super) fn validate_refs(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Res<
             && d_ok(enclosing)
             && d_ok(udir)
             && (adl == NONE || adl < ns)
-            && (qual == NONE || qual == Q_GLOBAL || (qual as usize) < i)
+            && (qual == NONE || qual == Q_GLOBAL || qual == Q_SPEC || (qual as usize) < i)
             && RefRole::from_u8(e.role).is_some()
             && RefLookup::from_u8(e.how).is_some()
     });
@@ -536,10 +542,14 @@ pub(super) fn validate_refs(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Res<
         NodeRec::Decl { entry, decl } => entry < ne && word_ok(decl),
     });
     let ok_udirs = t.udirs.iter().all(|&[entry, d, u]| entry < ne && word_ok(d) && word_ok(u));
-    // By entry, once each; a `::` only on an entry after a leading `::`.
+    // By entry, once each; a `::` only on an entry after a leading `::`,
+    // a specifier's token only on an entry after a specifier.
     let ok_leads = t.leads.windows(2).all(|w| w[0][0] < w[1][0])
-        && t.leads.iter().all(|&[entry, colon, _]| {
-            entry < ne && (colon == NONE || t.entries[entry as usize].words[5] == Q_GLOBAL)
+        && t.leads.iter().all(|&[entry, colon, _, spec]| {
+            entry < ne && {
+                let qual = t.entries[entry as usize].words[5];
+                (colon == NONE || qual == Q_GLOBAL) && (spec == NONE || qual == Q_SPEC)
+            }
         });
     // Found sets of known kinds over records; rows by entry, once each.
     let nf = t.found_sets.len() as u32;
@@ -569,7 +579,7 @@ pub(super) fn refs_offsets(img: &Image, offs: &mut Vec<u32>) {
         }
     }
     for l in &t.leads {
-        offs.extend([l[1], l[2]].into_iter().filter(|&o| o != NONE));
+        offs.extend([l[1], l[2], l[3]].into_iter().filter(|&o| o != NONE));
     }
 }
 
@@ -622,6 +632,7 @@ impl Sema<'_, '_> {
             let qualifier = match qual {
                 NONE => RefQualifier::NONE,
                 Q_GLOBAL => RefQualifier::GLOBAL,
+                Q_SPEC => RefQualifier::SPECIFIER,
                 q => RefQualifier::entry(pushed[q as usize]),
             };
             let r = WrittenRef {
@@ -681,11 +692,22 @@ impl Sema<'_, '_> {
                 self.ast.written_refs.note_pattern_udir(pushed[entry as usize], d, u);
             }
         }
-        for &[entry, colon, tilde] in &t.leads {
-            let some = |o: u32| (o != NONE).then(|| loc(o));
-            self.ast.written_refs.set_lead(pushed[entry as usize], some(colon), some(tilde));
-        }
+        self.image_leads(t, &pushed, &loc);
         self.image_found(t, &pushed, &dec);
+    }
+
+    /// The tokens of the unit's entries outside their ranges (spec/ast.md
+    /// §18.11.2): a leading `::`, a destructor's `~`, a specifier's first
+    /// token.
+    fn image_leads(&mut self, t: &RefsRec, pushed: &[WrittenRefId], loc: &dyn Fn(u32) -> Loc) {
+        for &[entry, colon, tilde, spec] in &t.leads {
+            let some = |o: u32| (o != NONE).then(|| loc(o));
+            let id = pushed[entry as usize];
+            self.ast.written_refs.set_lead(id, some(colon), some(tilde));
+            if let Some(s) = some(spec) {
+                self.ast.written_refs.set_specifier_lo(id, s);
+            }
+        }
     }
 
     /// The found sets of the unit's dependent entries (spec/ast.md
@@ -738,6 +760,8 @@ mod tests {
             entries: vec![
                 entry([0, 1, 1, NONE, LEX_TU, NONE, NONE, NONE], RefRole::Nns),
                 entry([2, 3, PARAM, NONE, 7, 0, NONE, 0], RefRole::Expr),
+                // `decltype(e)::m` (WP-2828): its specifier's first token.
+                entry([2, 3, 1, NONE, LEX_TU, Q_SPEC, NONE, NONE], RefRole::Expr),
             ],
             specs: vec![SpecRec { words: [1, 7, 1, NONE, NONE, NONE], flags: 0, how: 1 }],
             nodes: vec![
@@ -746,7 +770,7 @@ mod tests {
                 NodeRec::Decl { entry: 1, decl: 1 },
             ],
             udirs: vec![[1, 1, 0]],
-            leads: vec![[1, NONE, 4]],
+            leads: vec![[1, NONE, 4, NONE], [2, NONE, NONE, 0]],
             found_sets: vec![FoundRec { how: 1, flags: 1, decls: vec![[1, 1], [0, 1]] }],
             found_rows: vec![[1, 0]],
         });
@@ -782,7 +806,7 @@ mod tests {
     #[test]
     fn written_refs_section_is_validated() {
         type Corrupt = (&'static str, fn(&mut RefsRec));
-        let corrupt: [Corrupt; 20] = [
+        let corrupt: [Corrupt; 21] = [
             ("qualifier after its entry", |t| t.entries[0].words[5] = 0),
             ("unknown role", |t| t.entries[0].role = 99),
             ("unknown lookup", |t| t.entries[1].how = 99),
@@ -790,17 +814,18 @@ mod tests {
             ("parameter past the parameters", |t| t.entries[1].words[2] = PARAM | 0x3e8),
             ("set past the sets", |t| t.entries[1].words[7] = 1),
             ("set counts past its list", |t| t.sets[0].0 = 2),
-            ("row of no entry", |t| t.specs[0].words[0] = 2),
+            ("row of no entry", |t| t.specs[0].words[0] = 3),
             ("row of no specialization", |t| t.specs[0].words[1] = NONE),
             ("node past the expressions", |t| t.nodes[0] = NodeRec::Expr { entry: 1, expr: 9999 }),
             ("row directive past the records", |t| t.specs[0].words[5] = 1000),
-            ("directive of no entry", |t| t.udirs[0][0] = 2),
+            ("directive of no entry", |t| t.udirs[0][0] = 3),
             ("using node past the records", |t| {
                 t.nodes[2] = NodeRec::Decl { entry: 1, decl: 1000 }
             }),
-            ("lead of no entry", |t| t.leads[0][0] = 2),
+            ("lead of no entry", |t| t.leads[1][0] = 3),
             ("a `::` on an entry without one", |t| t.leads[0][1] = 4),
-            ("leads out of order", |t| t.leads.insert(0, [1, NONE, 4])),
+            ("a specifier on an entry without one", |t| t.leads[0][3] = 4),
+            ("leads out of order", |t| t.leads.insert(0, [1, NONE, 4, NONE])),
             ("found set of an unknown lookup", |t| t.found_sets[0].how = 99),
             ("found declaration past the records", |t| t.found_sets[0].decls[0][1] = 1000),
             ("found row of no set", |t| t.found_rows[0][1] = 1),

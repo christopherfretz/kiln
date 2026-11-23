@@ -1,0 +1,10 @@
+17:16-17:17  type  'T' -> T@15:17 in=X@15:27
+19:26-19:27  type  'T' -> T@19:17 in=X::v@19:30
+19:24-19:25  nns  'X' -> X@15:27 in=X::v@19:30
+19:30-19:31  redecl  'v' -> X::v@16:14 q=19:24 in=X::v@19:30
+20:13-20:14  type  'S' -> S@11:8 in=a@20:5
+20:18-20:19  expr  'm' -> S::m@12:14 q=specifier:20:9 in=a@20:5
+21:5-21:6  type  'S' -> S@11:8 in=b@21:15
+21:10-21:14  type  'type' -> S::type@13:9 q=specifier:21:1 in=b@21:15
+22:32-22:33  expr  'v' -> X<int>::v@16:14 q=specifier:22:9 in=c@22:5
+23:25-23:29  type  'type' -> X<long>::type@17:9 q=specifier:23:10 in=e@23:30
