@@ -36,7 +36,8 @@
 //! | `frames`, `markers`, `pending`, `include_depth` | transient, at rest | no file open, nothing queued |
 //! | `if_ndef`, `disable_expand`, `in_args`, `arg_preexpand`, `parsing_if`, `va_scope`, `in_directive`, `dir_eod`, `quiet_lex` | transient, at rest | no directive, argument or `#if` being read |
 //! | `name_gate` | at rest | must be off (`-fkiln-bmi-image` is not supported with snapshots) |
-//! | `record`, `rec_cur`, `rec_builtin`, `rec_pragma`, `rec_inc`, `rec_import_at`, `rec_hu` | not carried | the preprocessing record is the consumer's (spec/pp.md "Preprocessing record"); a restore marks it `RESTORED` |
+//! | `record` | carried apart | not a field of this root: the driver writes it after every root ([`Preprocessor::snap_put_record`], spec/pp.md "Preprocessing record", stage 4) when the producer recorded; a restore marks the consumer's record `RESTORED` until [`Preprocessor::snap_restore_record`] replaces it |
+//! | `rec_cur`, `rec_builtin`, `rec_pragma`, `rec_inc`, `rec_import_at`, `rec_hu` | transient, at rest | the row being built: none between files |
 
 use kiln_source::fx::{FxHashMap, FxHashSet};
 use std::collections::{HashMap, HashSet};
@@ -443,19 +444,7 @@ impl Preprocessor<'_, '_> {
         let nfile = self.sm.file_count();
         let file = |f: &FileId| f.index() < nfile;
         let def_ok = |k: Option<&Symbol>, m: &MacroDef| {
-            k.is_none_or(|k| *k == m.name)
-                && sym(&m.name)
-                && m.params.iter().all(sym)
-                && m.rel.len() == m.body.len()
-                && m.body.iter().all(|t| match t.tok.kind {
-                    TokKind::Identifier(s) => sym(&s),
-                    _ => true,
-                })
-                && m.enabled.get()
-                && (m.function_like || m.params.is_empty())
-                && (!m.variadic || (m.function_like && !m.params.is_empty()))
-                && (!m.named_variadic || m.variadic)
-                && (m.body.is_empty() || self.body_spelled(m))
+            k.is_none_or(|k| *k == m.name) && self.def_consistent(m)
         };
         if !d.macros.map.iter().all(|(k, m)| def_ok(Some(k), m)) {
             return Err("a macro definition is inconsistent");
@@ -482,6 +471,27 @@ impl Preprocessor<'_, '_> {
             return Err("a live attribute macro out of range");
         }
         Ok(())
+    }
+
+    /// A decoded macro definition is consistent: its symbols interned, its
+    /// tables of one length, not being expanded, and its replacement list
+    /// spelled where its locations say ([`Self::body_spelled`]); also used
+    /// for the definitions of a carried preprocessing record.
+    pub(crate) fn def_consistent(&self, m: &MacroDef) -> bool {
+        let nsym = self.interner.len();
+        let sym = |s: &Symbol| (s.index() as usize) < nsym;
+        sym(&m.name)
+            && m.params.iter().all(sym)
+            && m.rel.len() == m.body.len()
+            && m.body.iter().all(|t| match t.tok.kind {
+                TokKind::Identifier(s) => sym(&s),
+                _ => true,
+            })
+            && m.enabled.get()
+            && (m.function_like || m.params.is_empty())
+            && (!m.variadic || (m.function_like && !m.params.is_empty()))
+            && (!m.named_variadic || m.variadic)
+            && (m.body.is_empty() || self.body_spelled(m))
     }
 
     /// A replacement list's locations, as the expansion code uses them

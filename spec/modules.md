@@ -4606,6 +4606,26 @@ parameters) has the golden of `module-bodies-replay.cpp`, both compared
 unordered (spec/harness.md; the `--bmi-image` lane builds the replay
 test's modules as images as well).
 
+**Preprocessing record (WP-2113).** An image carries no
+preprocessing record, and IMAGE_VERSION is unchanged. An importer that
+records (spec/pp.md "Preprocessing record", stage 4) does not
+preprocess an image's purview: it records the import as an
+`ImageUnit` (the module, the import's module name, the image's file
+table), answers every location of the image's declarations, all in
+those files, with `IncContext::Imported` (`Origin::Imported` at a macro
+location), and sets `IMPORTED`; the preamble it replays is recorded as
+source. What stays imported is the purview's own preprocessing (its
+definitions, expansions, conditionals and inclusions): a client joins
+the record of the module interface's compile, recorded with the same
+`file:offset` keys. A per-image record would cost every image about
+130 bytes per expansion of its interface whether or not any importer
+records, for rows of a preprocessing the importer never does; the
+`ImageUnit` answer leaves no imported location without an origin or an
+explicit "not recorded". A module whose capsule is replayed (no image,
+or an image that falls back) is recorded as source. Header units have
+no image; their exported macros keep the unit's keys (§11.13 "Header
+units").
+
 **Written references (WP-1934).** When the module unit is compiled
 with the written-reference table on (`-fkiln-written-refs` or
 `-fkiln-dump-written-refs`, spec/ast.md §18.10.2), the last section,
@@ -6398,7 +6418,10 @@ decodes the block.
 record with the unit's file as entry 0, read back and materialized,
 and the importer sees the materialized definitions (`end_unit`,
 `unit_round_trip`); a unit the record cannot carry keeps its in-process
-definitions. `ModuleOptions::no_unit_record` turns the round trip off.
+definitions. `ModuleOptions::no_unit_record` turns the round trip off. A recording importer's preprocessing record keeps
+each materialized definition as an alias of the one it saw made in the
+unit, so the exports keep the unit's keys (spec/pp.md "Preprocessing
+record", stage 4; WP-2113).
 The header-unit tests (`tests/conformance/module.import/`,
 `header-unit*.cpp`) pass with it on.
 

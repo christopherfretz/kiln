@@ -557,7 +557,7 @@ impl CodegenJob<'_> {
         // WP-1557: read from the macro table at the end of the TU.
         let mason_meta = crate::mason_meta::options(a, &job.std, &pp);
         let pp_record = if a.dump_pp_record {
-            pp.record().map(|r| r.dump(sm, pp.interner(), &[]))
+            pp.record().map(|r| r.dump_with(sm, pp.interner(), &[], a.pp_record_dump_options()))
         } else {
             None
         };

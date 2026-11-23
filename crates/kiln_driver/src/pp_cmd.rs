@@ -1127,7 +1127,12 @@ impl Job<'_> {
                 }
             }
             if let Some(r) = pp.record() {
-                result.output.push_str(&r.dump(sm, interner, &toks));
+                result.output.push_str(&r.dump_with(
+                    sm,
+                    interner,
+                    &toks,
+                    a.pp_record_dump_options(),
+                ));
             }
         } else {
             let opts = PrintOptions {

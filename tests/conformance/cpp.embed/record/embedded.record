@@ -1,2 +1,2 @@
-inc embedded.cpp:367 embed "Inputs/two.bin" name embedded.cpp:374..embedded.cpp:390 embedded
+inc embedded.cpp:393 embed "Inputs/two.bin" name embedded.cpp:400..embedded.cpp:416 embedded file two.bin
 record complete

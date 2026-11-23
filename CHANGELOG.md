@@ -44,6 +44,18 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   literals are documented misses (WP-2360, WP-2361; spec/ast.md,
   spec/abi.md "Definition hash").
 
+- The preprocessing record is carried in PCH snapshots and named by
+  module imports (stage 4, WP-2113, WP-2260, WP-2300, WP-2301; spec/pp.md
+  "Preprocessing record"): a PCH built with `-fkiln-pp-record` carries its
+  header's record, and a recording consumer's record is that of the same
+  compile with the header as `-include` (a PCH built without it leaves the
+  record `restored`, with a `-v` note); a header unit's exported macros
+  keep the unit's keys, so its import is complete; an import built from a
+  module image is an `image` entry whose locations answer `Imported`. An
+  `#embed` row records the resource read and its `--embed-dir` index, and
+  `-fkiln-dump-pp-record=source-order` prints a condition's reads in
+  source order. Off, a snapshot has no byte of the record (PCH
+  `FORMAT_VERSION` 150).
 - The written-reference table's stage-4 gaps are closed (WP-2220..WP-2224,
   WP-2170; spec/ast.md §18.8, §18.9): per-specialization entries name the
   using-directive their lookup went through (`SpecRef::udir`), re-find
@@ -758,6 +770,9 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   with the note "a host call cannot be evaluated here: this expression
   is evaluated when the code is instantiated, not when it runs", and
   every run that reaches the work fails identically.
+- The decoded preprocessor-state record `kiln_pp::state::PpRecord` is
+  renamed `kiln_pp::state::StateRecord` (WP-2114), so it no longer
+  shares its name with the preprocessing record `kiln_pp::PpRecord`.
 - `EntryError::NotConsteval` is renamed `EntryError::NotConstexpr`
   (WP-2072): it is now returned only for a function that is neither
   `constexpr` nor `consteval`.

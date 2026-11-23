@@ -20,17 +20,21 @@ use kiln_lex::{Interner, Symbol};
 use kiln_source::fx::FxHashMap;
 use kiln_source::{ExpansionKind, FileId, Loc, SourceManager, Span};
 
+use kiln_snap::Snap;
+
 use crate::macros::MacroDef;
 
+mod carry;
 mod stage3;
+pub use carry::RecordCarry;
 pub use stage3::{Made, Query, Read, ReadKind, StackEvent, StackKind};
 
 /// A definition's index in [`PpRecord::defs`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Snap)]
 pub struct DefIx(u32);
 
 /// An expansion's index in [`PpRecord::exps`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Snap)]
 pub struct ExpIx(u32);
 
 impl DefIx {
@@ -61,7 +65,7 @@ const NONE: u32 = u32::MAX;
 const IX_MASK: u32 = 0x0FFF_FFFF;
 
 /// Where a definition came from.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Snap)]
 pub enum DefSource {
     /// A `#define` in a file.
     File,
@@ -78,7 +82,7 @@ pub enum DefSource {
 }
 
 /// How a definition stopped being in effect (the latest event).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Snap)]
 pub enum DefEnd {
     /// Still in effect (or made current again by `pop_macro`).
     Live,
@@ -92,7 +96,7 @@ pub enum DefEnd {
 }
 
 /// One definition.
-#[derive(Debug)]
+#[derive(Debug, Snap)]
 pub struct Definition {
     /// The definition.
     pub def: Rc<MacroDef>,
@@ -110,7 +114,7 @@ pub struct Definition {
 }
 
 /// Flags of one expansion.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Snap)]
 pub struct ExpFlags(u8);
 
 impl ExpFlags {
@@ -143,7 +147,7 @@ impl ExpFlags {
 }
 
 /// One expansion (24 bytes).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Snap)]
 pub struct Expansion {
     /// The definition expanded.
     pub def: DefIx,
@@ -164,7 +168,7 @@ pub struct Expansion {
 /// One argument row: its token locations start at `tok_start` in
 /// `arg_toks`; `hi` is the end of its last token, or the `,`/`)` that
 /// ended it when it is empty.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Snap)]
 struct ArgRow {
     tok_start: u32,
     hi: Loc,
@@ -181,7 +185,7 @@ pub struct Arg<'a> {
 }
 
 /// One `#undef` or `-U`.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Snap)]
 pub struct Undef {
     /// The directive's `#`.
     pub hash: Loc,
@@ -196,12 +200,12 @@ pub struct Undef {
 }
 
 /// A conditional directive's index in [`PpRecord::conds`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Snap)]
 pub struct CondIx(u32);
 
 /// An inclusion directive's index in [`PpRecord::incs`]; an entered one
 /// also names its instance (the include context of what lies in it).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Snap)]
 pub struct IncIx(u32);
 
 impl CondIx {
@@ -330,7 +334,7 @@ impl CondOutcome {
 const TOP_BIT: u32 = 1 << 31;
 
 /// One conditional directive (20 bytes).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Snap)]
 pub struct Conditional {
     /// The directive's `#`: its key.
     pub hash: Loc,
@@ -400,7 +404,7 @@ impl Conditional {
 }
 
 /// The kind of an inclusion directive.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Snap)]
 pub enum IncKind {
     /// `#include`.
     Include,
@@ -431,7 +435,7 @@ impl IncKind {
 }
 
 /// What became of an inclusion directive.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Snap)]
 pub enum IncOutcome {
     /// The file was entered; `base` is the location of its byte 0 in this
     /// inclusion (the instance's range).
@@ -484,7 +488,7 @@ impl IncOutcome {
 }
 
 /// One inclusion directive.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Snap)]
 pub struct Inclusion {
     /// The directive's `#` (the first token, `import` or `export`, of a
     /// header-unit import): its key.
@@ -502,7 +506,8 @@ pub struct Inclusion {
     /// The file found (see spec/pp.md for which outcomes have one).
     pub file: Option<FileId>,
     /// The search-path index it was found at (`None`: relative to the
-    /// includer, or an absolute name, or no file).
+    /// includer, or an absolute name, or no file). For an `#embed`, the
+    /// index in the `--embed-dir` list.
     pub lookup: Option<u32>,
     /// The directive's kind.
     pub kind: IncKind,
@@ -552,10 +557,34 @@ pub enum IncContext {
     /// The inclusion (instance) whose range holds it: an `Entered` row,
     /// or an `Imported` one whose module file's copy was replayed.
     Inclusion(IncIx),
+    /// A location of a declaration imported from a module image: the
+    /// buffer is one of [`PpRecord::images`]`[image]`'s files, which this
+    /// translation unit did not preprocess (not recorded,
+    /// [`RecordFlags::IMPORTED`]).
+    Imported {
+        /// The index in [`PpRecord::images`].
+        image: u32,
+    },
     /// A location the record did not see entered: invalid, unknown, or in
     /// a buffer lexed in its own range that is not the main file (a
-    /// restored prefix, a scratch buffer).
+    /// scratch buffer, a named module's replayed unit).
     Unknown,
+}
+
+/// An import whose unit was built from its module file's declaration
+/// image (spec/pp.md "Preprocessing record", stage 4): its purview was not
+/// preprocessed here, so the record has no rows for it; a location in one
+/// of its `files` answers [`Origin::Imported`] (a macro location) or
+/// [`IncContext::Imported`].
+#[derive(Clone, Debug, PartialEq, Eq, Snap)]
+pub struct ImageUnit {
+    /// The module (`M`, `M:P`).
+    pub module: Box<str>,
+    /// The module name of the import.
+    pub at: Loc,
+    /// The buffers the image's locations are in (its file table, the
+    /// unit's main file first).
+    pub files: Box<[FileId]>,
 }
 
 /// What made a token spelled in scratch space.
@@ -655,6 +684,14 @@ pub enum Origin {
         /// the replacement list.
         body: Option<(u32, u32)>,
     },
+    /// A macro location of a declaration imported from a module image,
+    /// whose expansion location is in one of
+    /// [`PpRecord::images`]`[image]`'s files: made when the module was
+    /// compiled, not here (not recorded, [`RecordFlags::IMPORTED`]).
+    Imported {
+        /// The index in [`PpRecord::images`].
+        image: u32,
+    },
     /// A macro location the record did not see made.
     Unknown,
 }
@@ -682,14 +719,16 @@ pub enum ParamUse {
 }
 
 /// Gaps in what the record covers.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Snap)]
 pub struct RecordFlags(u8);
 
 impl RecordFlags {
     /// A PCH snapshot or a preprocessor-state record was installed, or a
     /// definition was met that the record did not see made.
     pub const RESTORED: RecordFlags = RecordFlags(1);
-    /// A header unit's macros came from a module file or an image.
+    /// A named module's unit was built from its declaration image (its
+    /// purview was not preprocessed here, [`PpRecord::images`]), or a
+    /// header unit's macros were met that the record did not see made.
     pub const IMPORTED: RecordFlags = RecordFlags(2);
     /// Location space ran out: an expansion or an inclusion has no
     /// locations of its own.
@@ -719,7 +758,7 @@ impl RecordFlags {
 }
 
 /// The preprocessing record of one translation unit.
-#[derive(Debug)]
+#[derive(Debug, Snap)]
 pub struct PpRecord {
     defs: Vec<Definition>,
     exps: Vec<Expansion>,
@@ -731,10 +770,20 @@ pub struct PpRecord {
     entries: Vec<(Loc, u32)>,
     undefs: Vec<Undef>,
     /// `Rc::as_ptr` of every recorded definition (the record keeps each
-    /// alive, so an address is never reused while it is a key).
+    /// alive, so an address is never reused while it is a key), and of
+    /// every alias. Rebuilt after a snapshot restore.
+    #[snap(skip)]
     by_ptr: FxHashMap<usize, DefIx>,
+    /// A header unit's exported definitions as its importers see them
+    /// (they went through the preprocessor-state record, spec/modules.md
+    /// §11.13 "Header units"), each with the definition recorded in the
+    /// unit: kept alive here, keyed in `by_ptr`.
+    aliases: Vec<(Rc<MacroDef>, DefIx)>,
+    /// The imports whose unit was built from a declaration image.
+    images: Vec<ImageUnit>,
     flags: std::cell::Cell<RecordFlags>,
     /// Parameter locations of the `#define` being read.
+    #[snap(skip)]
     pub(crate) pending_params: Vec<Loc>,
     /// The end of the `#define` being read (its line's newline).
     pub(crate) pending_end: Loc,
@@ -748,6 +797,9 @@ pub struct PpRecord {
     /// base.
     inc_bases: Vec<(Loc, u32)>,
     onces: Vec<Loc>,
+    /// The resource of each `Embedded` row that has one, by `IncIx`
+    /// ([`PpRecord::resource`]); sorted.
+    resources: Vec<(u32, Box<str>)>,
     /// The main file (its own range is the root context).
     pub(crate) main_file: Option<FileId>,
     /// Stage 3: made-token operands, condition reads, queries, push/pop
@@ -775,6 +827,8 @@ impl PpRecord {
             entries: Vec::new(),
             undefs: Vec::new(),
             by_ptr: FxHashMap::default(),
+            aliases: Vec::new(),
+            images: Vec::new(),
             flags: std::cell::Cell::new(RecordFlags::empty()),
             pending_params: Vec::new(),
             pending_end: Loc::INVALID,
@@ -784,6 +838,7 @@ impl PpRecord {
             incs: Vec::new(),
             inc_bases: Vec::new(),
             onces: Vec::new(),
+            resources: Vec::new(),
             main_file: None,
             s3: stage3::Stage3::default(),
         }
@@ -1225,6 +1280,21 @@ impl PpRecord {
         &self.incs[i.index()]
     }
 
+    /// An `Embedded` row's resource: the path it was read from as the
+    /// resolver spelled it (`None` for every other row, and for an
+    /// `#embed` replayed from a module file, which logs the bytes alone).
+    pub fn resource(&self, i: IncIx) -> Option<&str> {
+        let at = self.resources.binary_search_by_key(&i.0, |r| r.0).ok()?;
+        Some(&self.resources[at].1)
+    }
+
+    /// Row `i`'s resource ([`Self::resource`]).
+    pub(crate) fn set_resource(&mut self, i: u32, path: &str) {
+        if (i as usize) < self.incs.len() && self.resources.last().is_none_or(|r| r.0 < i) {
+            self.resources.push((i, path.into()));
+        }
+    }
+
     /// The `#` of every `#pragma once` that took effect (the expansion
     /// location of a `_Pragma("once")`), in order.
     pub fn onces(&self) -> &[Loc] {
@@ -1248,9 +1318,24 @@ impl PpRecord {
             IncContext::Main
         } else if sm.is_virtual(f) && sm.file_name(f) == "<built-in>" {
             IncContext::Builtin
+        } else if let Some(image) = self.image_of_file(f) {
+            IncContext::Imported { image }
         } else {
             IncContext::Unknown
         }
+    }
+
+    /// The imports whose unit was built from a declaration image, in
+    /// order (spec/pp.md "Preprocessing record", stage 4).
+    pub fn images(&self) -> &[ImageUnit] {
+        &self.images
+    }
+
+    /// The image (the last one, if several share the buffer) whose file
+    /// table holds `f`.
+    fn image_of_file(&self, f: FileId) -> Option<u32> {
+        let i = self.images.iter().rposition(|m| m.files.contains(&f))?;
+        u32::try_from(i).ok()
     }
 
     /// The include chain of instance `i`: `i`, its parent, and so on out
@@ -1292,6 +1377,19 @@ impl PpRecord {
             + self.conds.capacity() * size_of::<Conditional>()
             + self.incs.capacity() * size_of::<Inclusion>()
             + self.incs.iter().map(|x| x.written.len()).sum::<usize>()
+            + self
+                .resources
+                .iter()
+                .map(|r| size_of::<(u32, Box<str>)>() + r.1.len())
+                .sum::<usize>()
+            + self.aliases.capacity() * size_of::<(Rc<MacroDef>, DefIx)>()
+            + self
+                .images
+                .iter()
+                .map(|m| {
+                    size_of::<ImageUnit>() + m.module.len() + m.files.len() * size_of::<FileId>()
+                })
+                .sum::<usize>()
             + self.inc_bases.capacity() * size_of::<(Loc, u32)>()
             + self.onces.capacity() * size_of::<Loc>()
             + self.s3.bytes();
@@ -1353,6 +1451,20 @@ impl PpRecord {
 
     /// Where the token at `loc` came from. O(log n).
     pub fn origin(&self, sm: &SourceManager, loc: Loc) -> Origin {
+        match self.origin_seen(sm, loc) {
+            Origin::Unknown if !self.images.is_empty() => {
+                let at = sm.expansion_loc(loc);
+                match sm.offset_of(at).and_then(|(f, _)| self.image_of_file(f)) {
+                    Some(image) => Origin::Imported { image },
+                    None => Origin::Unknown,
+                }
+            }
+            o => o,
+        }
+    }
+
+    /// [`Self::origin`] from the tables alone.
+    fn origin_seen(&self, sm: &SourceManager, loc: Loc) -> Origin {
         if !sm.is_macro_loc(loc) {
             return Origin::File(loc);
         }
@@ -1420,7 +1532,19 @@ impl PpRecord {
         interner: &Interner,
         tokens: &[(Loc, String)],
     ) -> String {
-        let d = Dumper::new(self, sm, interner);
+        self.dump_with(sm, interner, tokens, DumpOptions::default())
+    }
+
+    /// [`Self::dump`] with `opts`.
+    pub fn dump_with(
+        &self,
+        sm: &SourceManager,
+        interner: &Interner,
+        tokens: &[(Loc, String)],
+        opts: DumpOptions,
+    ) -> String {
+        let mut d = Dumper::new(self, sm, interner);
+        d.opts = opts;
         let mut out = String::new();
         for (loc, sp) in tokens {
             if sm.is_macro_loc(*loc) {
@@ -1432,8 +1556,21 @@ impl PpRecord {
     }
 }
 
+/// How [`PpRecord::dump_with`] prints (the default is [`PpRecord::dump`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DumpOptions {
+    /// A condition's reads in source order: by the place in the
+    /// directive's line each is at (its file location, through every
+    /// expansion), entry order among reads at one place. By default they
+    /// are in entry order, where an `expanded` read of a builtin
+    /// (`__has_include(M)`) follows those of the macros its operand
+    /// expanded (`-fkiln-dump-pp-record=source-order`).
+    pub reads_in_source_order: bool,
+}
+
 /// Keys and formatting for [`PpRecord::dump`].
 struct Dumper<'r, 's> {
+    opts: DumpOptions,
     r: &'r PpRecord,
     sm: &'s SourceManager,
     interner: &'s Interner,
@@ -1463,6 +1600,7 @@ impl<'r, 's> Dumper<'r, 's> {
             })
             .collect();
         let mut dumper = Dumper {
+            opts: DumpOptions::default(),
             r,
             sm,
             interner,
@@ -1574,6 +1712,11 @@ impl<'r, 's> Dumper<'r, 's> {
                     }
                     return s;
                 }
+                Origin::Imported { image } => {
+                    let m = self.r.images.get(image as usize).map_or("", |m| &*m.module);
+                    let _ = write!(s, "imported:{m}");
+                    return s;
+                }
                 Origin::Unknown => {
                     s.push('?');
                     return s;
@@ -1607,6 +1750,7 @@ impl<'r, 's> Dumper<'r, 's> {
         self.write_incs(out);
         self.write_conds(out);
         self.write_onces(out);
+        self.write_images(out);
         self.write_gaps(out);
     }
 
@@ -1657,8 +1801,8 @@ impl<'r, 's> Dumper<'r, 's> {
                 let _ = write!(out, " name {}..{}", self.loc(x.name.lo), self.loc(x.name.hi));
             }
             let _ = write!(out, " {}", x.outcome.name());
-            if let Some(f) = x.file {
-                let n = self.sm.file_name(f);
+            let res = r.resource(IncIx(i as u32));
+            if let Some(n) = x.file.map(|f| self.sm.file_name(f)).or(res) {
                 let _ = write!(out, " file {}", n.rsplit(['/', '\\']).next().unwrap_or(n));
             }
             if let Some(d) = x.lookup {
@@ -1722,6 +1866,24 @@ impl<'r, 's> Dumper<'r, 's> {
         for &at in &self.r.onces {
             let _ = write!(out, "once {}", self.file_loc(at));
             self.ctx(out, at);
+            out.push('\n');
+        }
+    }
+
+    /// `image <import> <module> files <main file>[ +<n>]`: an import built
+    /// from its declaration image, and its buffers (the unit's main file
+    /// and how many more).
+    fn write_images(&self, out: &mut String) {
+        for m in &self.r.images {
+            let _ = write!(out, "image {} {}", self.file_loc(m.at), m.module);
+            if let Some(&f) = m.files.first() {
+                let n = self.sm.file_name(f);
+                let _ = write!(out, " files {}", n.rsplit(['/', '\\']).next().unwrap_or(n));
+            }
+            if m.files.len() > 1 {
+                let _ = write!(out, " +{}", m.files.len() - 1);
+            }
+            self.ctx(out, m.at);
             out.push('\n');
         }
     }
@@ -1934,6 +2096,30 @@ mod tests {
     };
     use kiln_source::Loc;
     use std::mem::size_of;
+
+    /// Stage 4 (spec/pp.md "Preprocessing record"): every location of a
+    /// module image's files, file or macro, answers `Imported`; a file
+    /// the image does not list stays `Unknown`.
+    #[test]
+    fn image_locations_answer_imported() {
+        use super::{IncContext, Origin, PpRecord, RecordFlags};
+        use kiln_source::{ExpansionKind, SourceManager, Span};
+        let sm = SourceManager::new();
+        let interner = kiln_lex::Interner::new();
+        let m = sm.add_virtual("m.cppm", "export module M;\nexport int n = X;\n".into()).unwrap();
+        let other = sm.add_virtual("o.h", "int o;\n".into()).unwrap();
+        let mut r = PpRecord::new(interner.intern("__VA_OPT__"));
+        assert!(r.is_complete());
+        r.image("M", sm.loc(other, 0), &[m]);
+        assert!(r.gaps().contains(RecordFlags::IMPORTED));
+        let at = sm.loc(m, 30);
+        let name = Span::new(at, sm.loc(m, 31));
+        let mac = sm.add_expansion(sm.loc(m, 0), 1, name, ExpansionKind::Macro { name }).unwrap();
+        assert_eq!(r.inclusion_of(&sm, at), IncContext::Imported { image: 0 });
+        assert_eq!(r.origin(&sm, mac), Origin::Imported { image: 0 });
+        assert_eq!(r.inclusion_of(&sm, sm.loc(other, 2)), IncContext::Unknown);
+        assert_eq!(r.images()[0].module.as_ref(), "M");
+    }
 
     /// The per-entry costs spec/pp.md "Preprocessing record" states.
     #[test]

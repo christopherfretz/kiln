@@ -319,6 +319,10 @@ impl SyntaxJob<'_> {
         engine.snap_put(&mut w)?;
         p.pp.snap_put(&mut w)?;
         p.sema.snap_put(&mut w)?;
+        // Last, and only when the prefix was recorded (spec/pp.md
+        // "Preprocessing record", stage 4): with recording off the
+        // snapshot has no byte of it.
+        p.pp.snap_put_record(&mut w);
         let bytes = w.into_bytes();
         if crate::pch_snapshot::timing() {
             eprintln!(
@@ -665,7 +669,7 @@ impl SyntaxJob<'_> {
             h.see(&unit, &mut pp);
         }
         let pp_record = if a.dump_pp_record {
-            pp.record().map(|r| r.dump(sm, pp.interner(), &[]))
+            pp.record().map(|r| r.dump_with(sm, pp.interner(), &[], a.pp_record_dump_options()))
         } else {
             None
         };

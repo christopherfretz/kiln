@@ -7,6 +7,7 @@ use std::fmt::Write as _;
 use std::rc::Rc;
 
 use kiln_lex::Symbol;
+use kiln_snap::Snap;
 use kiln_source::{FileId, Loc, SourceManager, Span};
 
 use super::{
@@ -66,7 +67,7 @@ pub enum ReadKind {
 }
 
 /// One read of an evaluated condition (16 bytes).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Snap)]
 pub struct Read {
     /// `Tested` and `Left`: the identifier token read (a macro location
     /// when it came from a macro body or argument). `Expanded`: the
@@ -128,7 +129,7 @@ pub struct Query<'r> {
 }
 
 /// One query row (32 bytes).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Snap)]
 pub(super) struct QueryRow {
     exp: u32,
     value: u32,
@@ -168,7 +169,7 @@ pub enum StackKind {
 }
 
 /// One `push_macro` or `pop_macro` (20 bytes).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Snap)]
 pub struct StackEvent {
     /// The directive's `#`, or the `_Pragma` token (then `exp()` is its
     /// expansion, whose key is the event's key).
@@ -211,7 +212,7 @@ impl StackEvent {
 }
 
 /// The reads of the condition being evaluated.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, Snap)]
 pub(super) struct ReadState {
     /// A condition is being evaluated: reads are logged.
     active: bool,
@@ -226,13 +227,14 @@ pub(super) struct ReadState {
 }
 
 /// The stage-3 tables of a [`PpRecord`].
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Snap)]
 pub(super) struct Stage3 {
     /// Base of each made entry with operands, with its start in `ops`
     /// (`TOP`: invalid paste, `VA_OPT`); sorted by base.
     made: Vec<(Loc, u32)>,
     ops: Vec<Loc>,
     /// The operands of the paste or `#__VA_OPT__` being made.
+    #[snap(skip)]
     pub(super) pending_ops: Vec<Loc>,
     reads: Vec<Read>,
     /// `(CondIx, start in reads | TOP for partial)`, in `CondIx` order.
@@ -240,6 +242,7 @@ pub(super) struct Stage3 {
     read: ReadState,
     queries: Vec<QueryRow>,
     query_text: String,
+    #[snap(skip)]
     query: Option<PendingQuery>,
     stack: Vec<StackEvent>,
     /// Per conditional row: the `CondIx` of the directive whose group
@@ -247,10 +250,80 @@ pub(super) struct Stage3 {
     enclosing: Vec<u32>,
     /// `(group start, CondIx)` sorted by start, built on demand for
     /// `conds.len()` rows.
+    #[snap(skip)]
     cond_index: std::cell::RefCell<(usize, Vec<(Loc, u32)>)>,
 }
 
+/// `NONE`, or an index below `n`.
+fn def_or(v: u32, n: usize) -> bool {
+    v == NONE || (v as usize) < n
+}
+
 impl Stage3 {
+    /// The stage-3 part of a decoded record's check (stage 4,
+    /// [`crate::Preprocessor::snap_restore_record`]), for a record with
+    /// `nd` definitions, `ne` expansions and `nc` conditional rows.
+    pub(super) fn check(
+        &self,
+        nd: usize,
+        ne: usize,
+        nc: usize,
+        sym: &dyn Fn(Symbol) -> bool,
+        file: &dyn Fn(FileId) -> bool,
+    ) -> Result<(), &'static str> {
+        let def = |d: u32| d == NONE || (d as usize) < nd;
+        let ops_in_order =
+            self.made.windows(2).all(|w| w[0].0 < w[1].0 && w[0].1 & START <= w[1].1 & START);
+        if !ops_in_order
+            || self.made.last().is_some_and(|m| (m.1 & START) as usize > self.ops.len())
+        {
+            return Err("the made rows are not sorted or their operands out of range");
+        }
+        for r in &self.reads {
+            let exp = match r.bits & READ_KIND {
+                READ_EXPANDED => ((r.bits & IX_MASK) as usize) < ne,
+                READ_LEFT | READ_TESTED => true,
+                _ => false,
+            };
+            if !exp || !def(r.def) || !sym(r.name) {
+                return Err("a condition read out of range");
+            }
+        }
+        let done = self.read.done as usize;
+        let reads_in_order =
+            self.cond_reads.windows(2).all(|w| w[0].0 < w[1].0 && w[0].1 & !TOP <= w[1].1 & !TOP);
+        let last_in = self.cond_reads.last().is_none_or(|l| (l.1 & !TOP) as usize <= done);
+        let rows_in = self.cond_reads.iter().all(|&(c, _)| (c as usize) < nc);
+        let state = !self.read.active && !self.read.pending && done == self.reads.len();
+        if !reads_in_order || !last_in || !rows_in || !state || self.read.next_exp as usize > ne {
+            return Err("the condition reads are not in order or not at rest");
+        }
+        let mut text = 0usize;
+        for q in &self.queries {
+            let t = q.text as usize;
+            let spelled = self.query_text.get(text..t).is_some();
+            if (q.exp as usize) >= ne || !spelled || q.file.is_some_and(|f| !file(f)) {
+                return Err("a query row out of range");
+            }
+            text = t;
+        }
+        for e in &self.stack {
+            let x = e.exp & IX_MASK;
+            if !sym(e.name)
+                || !def(e.def)
+                || !def(e.replaced)
+                || (x != IX_MASK && x as usize >= ne)
+                || e.exp >> 30 > 2
+            {
+                return Err("a push/pop event out of range");
+            }
+        }
+        if self.enclosing.len() > nc || !self.enclosing.iter().all(|&c| def_or(c, nc)) {
+            return Err("the conditional nesting out of range");
+        }
+        Ok(())
+    }
+
     pub(super) fn bytes(&self) -> usize {
         use std::mem::size_of;
         self.made.capacity() * size_of::<(Loc, u32)>()
@@ -798,7 +871,11 @@ impl Dumper<'_, '_> {
     pub(super) fn write_reads(&self, out: &mut String, c: CondIx) {
         let r = self.r;
         let key = self.file_loc(r.cond(c).hash);
-        for rd in r.reads(c) {
+        let mut reads: Vec<&Read> = r.reads(c).iter().collect();
+        if self.opts.reads_in_source_order {
+            reads.sort_by_key(|rd| self.sm.offset_of(self.sm.expansion_loc(rd.at)));
+        }
+        for rd in reads {
             let name = self.interner.as_str(rd.name);
             let (k, exp) = match rd.kind() {
                 ReadKind::Tested => ("tested", None),

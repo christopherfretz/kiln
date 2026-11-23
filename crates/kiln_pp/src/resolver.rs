@@ -339,20 +339,23 @@ impl<F: HeaderFs> HeaderSearch<F> {
         &mut self,
         sm: &SourceManager,
         req: &EmbedRequest,
-    ) -> Option<(String, Vec<u8>)> {
+    ) -> Option<(String, Vec<u8>, Option<u32>)> {
         let name = req.name.as_str();
         if name.starts_with('/') {
-            return self.fs.read(name).map(|b| (name.to_owned(), b));
+            return self.fs.read(name).map(|b| (name.to_owned(), b, None));
         }
-        let mut tries: Vec<String> = Vec::new();
+        // Each try with its `--embed-dir` index (`None`: not a directory
+        // of the list).
+        let mut tries: Vec<(String, Option<u32>)> = Vec::new();
         if !req.angled {
             if let Some(f) = req.includer {
-                tries.push(join_path(parent_dir(sm.file_name(f)), name));
+                tries.push((join_path(parent_dir(sm.file_name(f)), name), None));
             }
-            tries.push(name.to_owned());
+            tries.push((name.to_owned(), None));
         }
-        tries.extend(self.embed_dirs.iter().map(|d| join_path(d, name)));
-        tries.into_iter().find_map(|p| self.fs.read(&p).map(|b| (p, b)))
+        let dirs = self.embed_dirs.iter().enumerate();
+        tries.extend(dirs.map(|(i, d)| (join_path(d, name), u32::try_from(i).ok())));
+        tries.into_iter().find_map(|(p, i)| self.fs.read(&p).map(|b| (p, b, i)))
     }
 }
 
@@ -430,7 +433,7 @@ impl<F: HeaderFs> IncludeResolver for HeaderSearch<F> {
     fn resolve_embed(&mut self, sm: &SourceManager, req: &EmbedRequest) -> Option<EmbedData> {
         let found = self.lookup_embed(sm, req);
         self.record_embed(sm, req, found.as_ref().map(|f| f.0.as_str()));
-        let (path, all) = found?;
+        let (path, all, lookup) = found?;
         if let Some(o) = self.observer.as_mut() {
             o(sm, SearchEvent::Embed { path: &path, query_only: req.query_only, bytes: &all });
         }
@@ -439,7 +442,7 @@ impl<F: HeaderFs> IncludeResolver for HeaderSearch<F> {
         let len = req
             .limit
             .map_or(rest.len(), |l| usize::try_from(l).unwrap_or(usize::MAX).min(rest.len()));
-        Some(EmbedData { bytes: rest[..len].to_vec() })
+        Some(EmbedData { bytes: rest[..len].to_vec(), path: Some(path), lookup })
     }
 
     fn take_lookup_log(&mut self) -> Option<LookupLog> {

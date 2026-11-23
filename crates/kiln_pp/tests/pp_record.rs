@@ -19,10 +19,11 @@ use kiln_lex::{Interner, Std, TokKind};
 use kiln_pp::state::PpState;
 use kiln_pp::{
     ClangFeatures, CondIx, CondKind, CondOutcome, DefSource, DirGroup, ExpFlags, ExpIx,
-    HeaderSearch, IncContext, IncKind, IncOutcome, MadeKind, MemoryResolver, Origin, ParamUse,
-    PpOptions, PpRecord, Preprocessor, PrintOptions, ReadKind, RealFs, SearchDirSpec, SearchList,
-    StackEvent, StackKind,
+    HeaderSearch, IncContext, IncKind, IncOutcome, IncludeResolver, MadeKind, MemoryResolver,
+    ModuleOptions, Origin, ParamUse, PpOptions, PpRecord, Preprocessor, PrintOptions, ReadKind,
+    RealFs, RecordCarry, SearchDirSpec, SearchList, StackEvent, StackKind,
 };
+use kiln_snap::{Reader, Writer, from_bytes, to_bytes};
 use kiln_source::{Loc, SourceManager};
 use std::collections::HashSet;
 use std::fmt::Write as _;
@@ -643,6 +644,7 @@ fn check_complete(sm: &SourceManager, rec: &PpRecord, toks: &[Loc]) -> Coverage 
                 Origin::Arg { from, .. } if sm.is_macro_loc(from) => l = from,
                 Origin::Arg { .. } | Origin::Body { .. } | Origin::File(_) => break false,
                 Origin::Unknown => panic!("a token the record did not see made"),
+                Origin::Imported { .. } => panic!("a token of an image in a recorded unit"),
             }
         };
         if scratch {
@@ -1027,4 +1029,382 @@ fn real_tu_from_env() {
         }
     }
     host_tu(&format!("#include \"{file}\"\n"), &dirs, &defines);
+}
+
+// ---- stage 4: carriage in a snapshot ----
+
+/// How a carriage test configures each preprocessor (the producer, the
+/// consumer, the producer going on): the same, as a consumer's command
+/// line repeats the producer's.
+struct Setup {
+    predefines: String,
+    resolver: Box<dyn Fn() -> Box<dyn IncludeResolver>>,
+    triple: Option<&'static str>,
+    /// `import std;` from this directory's `std.cppm`.
+    std_dir: Option<std::path::PathBuf>,
+}
+
+impl Setup {
+    fn memory(r: MemoryResolver) -> Setup {
+        Setup {
+            predefines: PREDEFINES.to_owned(),
+            resolver: Box::new(move || Box::new(r.clone())),
+            triple: None,
+            std_dir: None,
+        }
+    }
+
+    /// The host's headers: `dirs` first, then the C library and resource
+    /// directories of the libstdc++ search list (`libcxx`: without its
+    /// C++ directories); `None` without them.
+    fn host(dirs: &[&str], libcxx: bool) -> Option<Setup> {
+        let (triple, list, pre) = host_search()?;
+        let mut all: Vec<SearchDirSpec> =
+            dirs.iter().map(|d| SearchDirSpec::new((*d).to_owned(), DirGroup::System)).collect();
+        all.extend(list.into_iter().filter(|d| !libcxx || !d.path.contains("/c++/")));
+        Some(Setup {
+            predefines: pre,
+            resolver: Box::new(move || {
+                let mut fs = RealFs::new();
+                let list = SearchList::build(&all, true, &mut fs);
+                Box::new(HeaderSearch::new(fs, list))
+            }),
+            triple: Some(triple),
+            std_dir: None,
+        })
+    }
+
+    fn preprocessor<'a, 'd>(
+        &self,
+        sm: &'a SourceManager,
+        engine: &'d DiagEngine<'a>,
+        interner: &'a Interner,
+        on: bool,
+    ) -> Preprocessor<'a, 'd> {
+        let mut o = PpOptions::new(Std::Cxx26);
+        o.predefines.clone_from(&self.predefines);
+        o.reproducible_time = Some(("Jan  1 2000".to_owned(), "00:00:00".to_owned()));
+        o.main_is_header = true;
+        o.pp_record = on;
+        if let Some(d) = &self.std_dir {
+            o.modules =
+                Some(ModuleOptions { std_dir: Some(d.clone()), ..ModuleOptions::default() });
+        }
+        let mut pp = Preprocessor::new(sm, engine, interner, o);
+        pp.set_include_resolver((self.resolver)());
+        if let Some(t) = self.triple {
+            pp.set_feature_queries(Box::new(ClangFeatures::new(t, Std::Cxx26, &[]).unwrap()));
+        }
+        pp
+    }
+}
+
+/// Every token's location to the end of the main file.
+fn all_locs(pp: &mut Preprocessor<'_, '_>) -> Vec<Loc> {
+    let mut v = Vec::new();
+    loop {
+        let t = pp.next();
+        if t.kind == TokKind::Eof {
+            return v;
+        }
+        v.push(t.span.lo);
+    }
+}
+
+/// The producer's snapshot of `prefix` (read as its main file, recording
+/// `on`): the interner, the source manager, the engine, and the
+/// preprocessor followed by its record (spec/pp.md "Preprocessing
+/// record", stage 4), with the length of the preprocessor's part.
+struct Carried {
+    bytes: [Vec<u8>; 4],
+    pp_len: usize,
+}
+
+/// What [`carry`] measured.
+#[derive(Debug)]
+struct CarryRun {
+    cov: Coverage,
+    bytes: usize,
+    record_snap: usize,
+    tokens: usize,
+}
+
+/// spec/pp.md "Preprocessing record", stage 4: `prefix` read as a
+/// producer's main file, snapshotted with its record, and `main` read
+/// after it two ways, by the producer going on (as if the prefix had been
+/// read here) and by a fresh front end restored from the snapshot. The
+/// two records are equal byte for byte in their encoding (every table,
+/// index for index and `Loc` for `Loc`, the restore laying the prefix out
+/// as the producer did) and in their dump, and the restored one passes the
+/// completeness checks over the prefix's tokens and the main file's.
+fn carry(s: &Setup, prefix: &str, main: &str) -> CarryRun {
+    let interner = Interner::new();
+    let sm = SourceManager::new();
+    let engine = DiagEngine::new(&sm, &DiagOptions::default(), MemorySink::new());
+    let mut pp = s.preprocessor(&sm, &engine, &interner, true);
+    let pf = sm.add_virtual("prefix.h", prefix.to_owned()).unwrap();
+    pp.enter_main_file(pf);
+    let mut toks = all_locs(&mut pp);
+    pp.end_main_file().unwrap();
+    let snap = snapshot_with_record(&interner, &sm, &engine, &pp);
+
+    let interner2: Interner = from_bytes(&snap.bytes[0]).unwrap();
+    let sm2: SourceManager = from_bytes(&snap.bytes[1]).unwrap();
+    let mut engine2 = DiagEngine::new(&sm2, &DiagOptions::default(), MemorySink::new());
+    engine2.snap_restore(&mut Reader::new(&snap.bytes[2])).unwrap();
+    let mut pp2 = s.preprocessor(&sm2, &engine2, &interner2, true);
+    let mut r = Reader::new(&snap.bytes[3]);
+    pp2.snap_restore(&mut r).unwrap();
+    assert_eq!(pp2.snap_restore_record(&mut r).unwrap(), RecordCarry::Restored);
+    r.finish().unwrap();
+
+    let m1 = sm.add_virtual("t.cpp", main.to_owned()).unwrap();
+    let m2 = sm2.add_virtual("t.cpp", main.to_owned()).unwrap();
+    assert_eq!(m1, m2);
+    pp.enter_next_main_file(m1).unwrap();
+    pp2.enter_next_main_file(m2).unwrap();
+    let main_toks = all_locs(&mut pp);
+    assert_eq!(all_locs(&mut pp2), main_toks, "the restored front end read other tokens");
+    toks.extend(main_toks);
+    let (a, b) = (pp.record().unwrap(), pp2.record().unwrap());
+    assert!(a.is_complete() && b.is_complete());
+    assert!(to_bytes(a) == to_bytes(b), "the restored record differs from the original");
+    assert_eq!(a.dump(&sm, &interner, &[]), b.dump(&sm2, &interner2, &[]));
+    let cov = check_complete(&sm2, b, &toks);
+    let record_snap = snap.bytes[3].len() - snap.pp_len;
+    CarryRun { cov, bytes: b.bytes(), record_snap, tokens: toks.len() }
+}
+
+fn snapshot_with_record(
+    interner: &Interner,
+    sm: &SourceManager,
+    engine: &DiagEngine<'_>,
+    pp: &Preprocessor<'_, '_>,
+) -> Carried {
+    let mut we = Writer::new();
+    engine.snap_put(&mut we).unwrap();
+    let mut w = Writer::new();
+    pp.snap_put(&mut w).unwrap();
+    let pp_len = w.position();
+    pp.snap_put_record(&mut w);
+    Carried { bytes: [to_bytes(interner), to_bytes(sm), we.into_bytes(), w.into_bytes()], pp_len }
+}
+
+/// A prefix with every stage's tables, and a main file that goes on from
+/// it: expansions of the prefix's macros, conditions reading the prefix's
+/// macros, an `#undef` and a pop of a name the prefix pushed. (No
+/// lookup of a prefix header: a [`MemoryResolver`] makes a new buffer per
+/// lookup, so the restored one would not find the same file; the host
+/// runs below look up real files again.)
+const CARRY_PREFIX: &str = "#include \"g.h\"\n#include \"h.h\"\n#pragma push_macro(\"CAT\")\n";
+const CARRY_MAIN: &str = "\
+#ifndef G_H
+#error the prefix's guard
+#endif
+int CAT(m, n) = F(1);
+#if defined(CAT) && !__has_include(<none.h>)
+const char *t = S(x y);
+#endif
+#undef CAT
+#pragma pop_macro(\"CAT\")
+int CAT(o, p);
+";
+
+/// [cpp.include]/2, [cpp.replace]: the record goes on from a restored
+/// snapshot exactly as the producer's goes on from its prefix.
+#[test]
+fn carried_record_goes_on_as_the_original() {
+    let s = Setup::memory(stage3_headers());
+    let prefix = format!("{CARRY_PREFIX}{STAGE3}{USES}");
+    let run = carry(&s, &prefix, CARRY_MAIN);
+    assert!(run.cov.made_tokens > 6 && run.cov.evaluated > 8, "{run:?}");
+    assert!(run.record_snap > 0 && run.bytes > run.record_snap / 4 && run.tokens > 100);
+}
+
+/// Recording off writes nothing; a snapshot without the record leaves a
+/// recording consumer's record `restored`; a consumer that does not
+/// record skips the record's bytes.
+#[test]
+fn carriage_on_and_off() {
+    let s = Setup::memory(stage3_headers());
+    let prefix = format!("{CARRY_PREFIX}{USES}");
+    let produce = |on: bool| {
+        let interner = Interner::new();
+        let sm = SourceManager::new();
+        let engine = DiagEngine::new(&sm, &DiagOptions::default(), MemorySink::new());
+        let mut pp = s.preprocessor(&sm, &engine, &interner, on);
+        pp.enter_main_file(sm.add_virtual("prefix.h", prefix.clone()).unwrap());
+        all_locs(&mut pp);
+        pp.end_main_file().unwrap();
+        snapshot_with_record(&interner, &sm, &engine, &pp)
+    };
+    let off = produce(false);
+    assert_eq!(off.pp_len, off.bytes[3].len(), "recording off wrote a record");
+    let on = produce(true);
+    assert_eq!(on.bytes[3][..on.pp_len], off.bytes[3][..], "the preprocessor's part differs");
+    let consume = |snap: &Carried, on: bool| {
+        let interner: Interner = from_bytes(&snap.bytes[0]).unwrap();
+        let sm: SourceManager = from_bytes(&snap.bytes[1]).unwrap();
+        let engine = DiagEngine::new(&sm, &DiagOptions::default(), MemorySink::new());
+        let mut pp = s.preprocessor(&sm, &engine, &interner, on);
+        let mut r = Reader::new(&snap.bytes[3]);
+        pp.snap_restore(&mut r).unwrap();
+        let carry = pp.snap_restore_record(&mut r).unwrap();
+        r.finish().unwrap();
+        pp.enter_next_main_file(sm.add_virtual("t.cpp", CARRY_MAIN.to_owned()).unwrap()).unwrap();
+        all_locs(&mut pp);
+        let dump = pp.record().map(|rec| rec.dump(&sm, &interner, &[]));
+        (carry, dump)
+    };
+    let (c, dump) = consume(&off, true);
+    assert_eq!(c, RecordCarry::NotCarried);
+    assert!(dump.unwrap().ends_with("record incomplete: restored\n"));
+    assert_eq!(consume(&on, false), (RecordCarry::Off, None));
+    assert_eq!(consume(&off, false), (RecordCarry::Off, None));
+    let (c, dump) = consume(&on, true);
+    assert_eq!(c, RecordCarry::Restored);
+    assert!(dump.unwrap().ends_with("record complete\n"));
+}
+
+/// A damaged record is refused with an error, never a panic: cut short
+/// throughout and in its last 64 bytes, and with bytes changed throughout (a record that still
+/// decodes and passes the checks is then read and dumped).
+#[test]
+fn damaged_record_refused() {
+    let s = Setup::memory(stage3_headers());
+    let prefix = format!("{CARRY_PREFIX}{STAGE3}");
+    let interner = Interner::new();
+    let sm = SourceManager::new();
+    let engine = DiagEngine::new(&sm, &DiagOptions::default(), MemorySink::new());
+    let mut pp = s.preprocessor(&sm, &engine, &interner, true);
+    pp.enter_main_file(sm.add_virtual("prefix.h", prefix).unwrap());
+    all_locs(&mut pp);
+    pp.end_main_file().unwrap();
+    let snap = snapshot_with_record(&interner, &sm, &engine, &pp);
+    let interner2: Interner = from_bytes(&snap.bytes[0]).unwrap();
+    let sm2: SourceManager = from_bytes(&snap.bytes[1]).unwrap();
+    let main = sm2.add_virtual("t.cpp", CARRY_MAIN.to_owned()).unwrap();
+    let engine2 = DiagEngine::new(&sm2, &DiagOptions::default(), MemorySink::new());
+    let full = &snap.bytes[3];
+    let n = full.len() - snap.pp_len;
+    let (mut refused, mut taken) = (0, 0);
+    let mut try_one = |bytes: &[u8]| {
+        let mut pp2 = s.preprocessor(&sm2, &engine2, &interner2, true);
+        let mut r = Reader::new(bytes);
+        pp2.snap_restore(&mut r).unwrap();
+        if pp2.snap_restore_record(&mut r).and_then(|c| r.finish().map(|()| c)).is_err() {
+            refused += 1;
+        } else {
+            taken += 1;
+            pp2.enter_next_main_file(main).unwrap();
+            all_locs(&mut pp2);
+            let rec = pp2.record().unwrap();
+            let _ = rec.dump(&sm2, &interner2, &[]);
+        }
+    };
+    let step = (n / 400).max(1);
+    let cuts = (1..n).step_by(step).chain(n.saturating_sub(64).max(1)..n);
+    let ncuts = cuts.clone().count();
+    for cut in cuts {
+        try_one(&full[..snap.pp_len + cut]);
+    }
+    for at in (snap.pp_len..full.len()).step_by(step) {
+        for x in [0x01u8, 0x80, 0xff] {
+            let mut b = full.clone();
+            b[at] ^= x;
+            try_one(&b);
+        }
+    }
+    assert!(refused >= ncuts, "{refused} refused, {taken} taken");
+    println!("{n} bytes of record: {refused} damaged copies refused, {taken} read");
+}
+
+/// The libc++ headers a translation unit can include in C++26 (the
+/// standard library headers of `dir`, without the ones C++20 removed or
+/// deprecated to an error).
+fn libcxx_headers(dir: &str) -> Option<String> {
+    let removed = ["ccomplex", "ciso646", "cstdalign", "cstdbool", "ctgmath"];
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|n| !n.contains('.') && !n.starts_with('_') && !removed.contains(&n.as_str()))
+        .collect();
+    names.sort();
+    (names.len() > 80).then(|| {
+        names.iter().fold(String::new(), |mut s, n| {
+            let _ = writeln!(s, "#include <{n}>");
+            s
+        })
+    })
+}
+
+/// The host's libc++ directory, if any.
+fn libcxx_dir() -> Option<&'static str> {
+    ["/usr/lib/llvm-19/include/c++/v1", "/usr/include/c++/v1"]
+        .into_iter()
+        .find(|d| std::path::Path::new(d).join("vector").is_file())
+}
+
+const HOST_MAIN: &str = "\
+#include <vector>
+#if defined(__cplusplus) && __has_include(<map>)
+#include <map>
+#endif
+std::vector<int> v;
+";
+
+/// Stage 4 on real headers: a prefix of `<bits/stdc++.h>` carried in a
+/// snapshot (skipped without libstdc++ headers).
+#[test]
+fn carried_libstdcxx() {
+    let Some(s) = Setup::host(&[], false) else { return };
+    let t = Instant::now();
+    let run = carry(&s, "#include <bits/stdc++.h>\n", HOST_MAIN);
+    println!("{run:?}, {:?}", t.elapsed());
+    assert!(run.cov.evaluated > 1000 && run.cov.reads > 1000, "{run:?}");
+}
+
+/// Stage 4 on every libc++ header (skipped without libc++ headers).
+#[test]
+fn carried_libcxx() {
+    let Some(dir) = libcxx_dir() else {
+        println!("skipped: no libc++ headers on this host");
+        return;
+    };
+    let Some(s) = Setup::host(&[dir], true) else { return };
+    let prefix = libcxx_headers(dir).unwrap();
+    let t = Instant::now();
+    let run = carry(&s, &prefix, HOST_MAIN);
+    println!("{run:?}, {:?}", t.elapsed());
+    assert!(run.cov.evaluated > 1000 && run.cov.reads > 1000, "{run:?}");
+}
+
+/// The completeness checks through `import std;` (libc++'s `std.cppm`,
+/// built in process and recorded as source; skipped without it).
+#[test]
+fn import_std_complete() {
+    let Some(dir) = libcxx_dir() else { return };
+    let std_dir = std::path::Path::new(dir).join("../../../share/libc++/v1");
+    if !std_dir.join("std.cppm").is_file() {
+        println!("skipped: no std.cppm on this host");
+        return;
+    }
+    let Some(mut s) = Setup::host(&[dir], true) else { return };
+    s.std_dir = Some(std_dir);
+    let interner = Interner::new();
+    let sm = SourceManager::new();
+    let engine = DiagEngine::new(&sm, &DiagOptions::default(), MemorySink::new());
+    let mut pp = s.preprocessor(&sm, &engine, &interner, true);
+    let t = Instant::now();
+    pp.enter_main_file(
+        sm.add_virtual("t.cpp", "import std;\nstd::vector<int> v;\n".to_owned()).unwrap(),
+    );
+    let toks = all_locs(&mut pp);
+    let rec = pp.record().unwrap();
+    assert!(rec.is_complete(), "{}", rec.dump(&sm, &interner, &[]).lines().last().unwrap_or(""));
+    let cov = check_complete(&sm, rec, &toks);
+    println!("{} tokens, {cov:?}, record {} B, {:?}", toks.len(), rec.bytes(), t.elapsed());
+    assert!(cov.evaluated > 1000 && cov.reads > 1000, "{cov:?}");
 }

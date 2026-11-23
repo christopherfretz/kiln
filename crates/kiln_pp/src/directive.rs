@@ -2329,7 +2329,10 @@ impl Preprocessor<'_, '_> {
             self.emit(Diag::new(DiagId::pp_file_not_found, ft.tok.span).arg(&req.name));
             return;
         };
-        self.rec_inc_outcome(ri, IncOutcome::Embedded, None, None);
+        self.rec_inc_outcome(ri, IncOutcome::Embedded, None, data.lookup);
+        if let (Some(r), Some(p)) = (self.record.as_deref_mut(), data.path.as_deref()) {
+            r.set_resource(ri, p);
+        }
         self.finish_directive();
         let mut toks = self.take_buf();
         if data.bytes.is_empty() {
