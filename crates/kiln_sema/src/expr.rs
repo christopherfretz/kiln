@@ -2323,7 +2323,9 @@ impl Sema<'_, '_> {
             // A dependent using-declarator beside the class's own
             // overloads (`using T::f; int f(char);`): one overload set,
             // resolved at instantiation, like a lone one (below).
-            return self.builder().dependent_member(None, true, name, false, nns, None, loc);
+            let e = self.builder().dependent_member(None, true, name, false, nns, None, loc);
+            self.set_overload_begin(e, begin, loc);
+            return e;
         }
         // clang `LookupResult::resolveKind`: an invalid function template
         // (one declared with a parameter type that names no type) is
@@ -2478,8 +2480,11 @@ impl Sema<'_, '_> {
             // A member named by a dependent using-declarator: an implicit
             // `this->name` (or `Class::name`) resolved at instantiation
             // (clang's UnresolvedLookupExpr over the
-            // UnresolvedUsingValueDecl).
-            return self.builder().dependent_member(None, true, name, false, nns, None, loc);
+            // UnresolvedUsingValueDecl). It begins at the written name
+            // or its qualifier (spec/ast.md §21).
+            let e = self.builder().dependent_member(None, true, name, false, nns, None, loc);
+            self.set_overload_begin(e, begin, loc);
+            return e;
         }
         if let Some(naming) = found.naming {
             // [class.access.base]/5: the object is `*this` for an implicit
@@ -3791,6 +3796,9 @@ impl Sema<'_, '_> {
                 let at = self.ast.exprs.get(x).loc();
                 self.resolve_written_ref(x, d, Some(f));
                 let r = self.finish_member_winner(&m, d, f, at);
+                // `&this->sf<int>` ends at the template-id's `>`
+                // (spec/ast.md §21).
+                self.keep_template_id_end(x, r);
                 let r = self.rebuild_parens(e, r);
                 return self.address_of(r, loc);
             }

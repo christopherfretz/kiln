@@ -214,6 +214,7 @@ unit tests/conformance/basic.scope.block/shadowing.cpp cd2de783bc0d1c01
 unit tests/conformance/basic.scope.param/param-in-declarator.cpp 3af560a29aef05fb
 unit tests/conformance/basic.scope.param/trailing-requires-params.cpp 15aa71ed592bcdd4 CXXThisExpr=3/3 DeclRefExpr=3/22 ImplicitCastExpr=3/27
 unit tests/conformance/basic.scope.pdecl/elaborated-type-in-requires-expression.cpp 88dcfbf4e53670bd
+unit tests/conformance/basic.scope.pdecl/elaborated-type-local-class-member-refs.cpp b93efbbfb0b349bb CXXConstructExpr=2/2
 unit tests/conformance/basic.scope.pdecl/template-param-own-default.cpp 91db8447b747a715
 unit tests/conformance/basic.scope.scope/explicit-object-overloads.cpp 21ad0d88e6bcdb50
 unit tests/conformance/basic.scope.scope/p2169-placeholder-cxx23.cpp 0b06a8c2d68c8b7b DeclRefExpr=1/9 ImplicitCastExpr=1/5
@@ -223,6 +224,7 @@ unit tests/conformance/basic.start.dynamic/init-priority-run.cpp ac01cc1666a2864
 unit tests/conformance/basic.start.dynamic/order-run.cpp e5fb2726401098c0 CXXThisExpr=8/8 ImplicitCastExpr=2/42
 unit tests/conformance/basic.start.main/exit-status.cpp ad8920201da8680f
 unit tests/conformance/basic.start.main/freestanding-main.cpp fb1ef316d41b1531
+unit tests/conformance/basic.start.main/friend-main-in-class-template.cpp f6f6360b6a9359ec
 unit tests/conformance/basic.start.main/implicit-return.cpp dcf8ea656d180239
 unit tests/conformance/basic.start.main/main-c-linkage-ok.cpp 88fd60dc5ec96284
 unit tests/conformance/basic.start.main/main-const-argv-ok.cpp c464dfabc92e7c68
@@ -368,6 +370,7 @@ unit tests/conformance/class.friend/friend-special-member-template-run.cpp da9e1
 unit tests/conformance/class.friend/friend-template-signature-private-access-run.cpp ea1000ae1aaab057 CXXConstructExpr=3/3 CXXDefaultArgExpr=1/1
 unit tests/conformance/class.friend/friend-then-elaborated-member.cpp 9d08cc6db5ebf2f4 CXXConstructExpr=3/4
 unit tests/conformance/class.friend/friends.cpp 1a398ac579922331
+unit tests/conformance/class.friend/global-alloc-qualified-friend.cpp f7bc3465b34d870c
 unit tests/conformance/class.friend/hidden-friend-inline-ns.cpp 7bc2790d5d249576 DeclRefExpr=3/15 ImplicitCastExpr=3/8
 unit tests/conformance/class.friend/local-friend-access-run.cpp 74e492b9752f1d55 CXXConstructExpr=1/1 DeclRefExpr=1/10 ImplicitCastExpr=1/10
 unit tests/conformance/class.friend/nested-befriends-enclosing-template.cpp a2a315b0ab5a001e CXXConstructExpr=5/6 DeclRefExpr=1/17 ImplicitCastExpr=1/11 MaterializeTemporaryExpr=3/6
@@ -396,7 +399,7 @@ unit tests/conformance/class.mem/nsdmi-template-comma.cpp e12ad612edd4b13b CXXDe
 unit tests/conformance/class.mem/out-of-line.cpp 0f0869e2d0f3ebda CXXConstructExpr=1/1 CXXThisExpr=6/6
 unit tests/conformance/class.mem/soa-table.cpp 2eef549005e8111f CXXConstructExpr=1/1 CXXThisExpr=32/32 ImplicitValueInitExpr=4/4
 unit tests/conformance/class.member.lookup/shadow-field.cpp 0b2f0299a80e53e8 CXXConstructExpr=2/2
-unit tests/conformance/class.mfct.non.static/dependent-base-implicit-member.cpp 0d22720a76414db4 CXXConstructExpr=1/1 CXXThisExpr=5/7 DeclRefExpr=1/10
+unit tests/conformance/class.mfct.non.static/dependent-base-implicit-member.cpp 0d22720a76414db4 CXXConstructExpr=1/1 CXXThisExpr=5/7
 unit tests/conformance/class.mi/virtual-base-conversion-fold-run.cpp 182d40bd8521bd83 CXXThisExpr=1/3 DeclRefExpr=1/9 ImplicitCastExpr=2/10 MemberExpr=1/2
 unit tests/conformance/class.mi/virtual-base-run.cpp 07b5d5e3d4f46995 CXXConstructExpr=9/13 CXXDefaultInitExpr=4/4 CXXThisExpr=9/9 ImplicitCastExpr=2/56
 unit tests/conformance/class.mi/virtual-base-subobject-alignment-run.cpp ee9f9914ac6a9350 CXXConstructExpr=2/2
@@ -645,6 +648,7 @@ unit tests/conformance/cpp.predefined/constexpr-feature-macros-cxx23.cpp e30a78b
 unit tests/conformance/cpp.predefined/p1467-macros-libcxx.cpp 3c37324cf007e746
 unit tests/conformance/cpp.predefined/p2493-probe.cpp 8f41a63d66134811
 unit tests/conformance/cpp.predefined/template-parameters-macro-cxx23.cpp 7429327157dbc7e8
+unit tests/conformance/cpp.predefined/timestamp-file-time.cpp a2b2e324edad7abd
 unit tests/conformance/cpp.predefined/wp-preprocessor-args.cpp 1117616b8c2288ec
 unit tests/conformance/cpp.replace/gnu-comma-paste-location.cpp 60e5bfd77d8d0323 DeclRefExpr=3/3 ImplicitCastExpr=3/3
 unit tests/conformance/cpp.replace/record/builtins.cpp 1e5d4da431e5f47a
@@ -809,6 +813,12 @@ unit tests/conformance/dcl.attr.noreturn/missing-noreturn.cpp 0f63b275aa7758f7
 unit tests/conformance/dcl.attr.noreturn/redecl-and-member-calls.cpp 9ecd9ac621e6b773
 unit tests/conformance/dcl.attr.nouniqueaddr/overlapping-member-constant-ir.cpp 1b243feb299a6c00 CXXConstructExpr=11/13
 unit tests/conformance/dcl.attr.nouniqueaddr/overlapping-member-constant-run.cpp 703fd1b8cdd4214b CXXConstructExpr=6/7 CXXDefaultInitExpr=1/1
+unit tests/conformance/dcl.attr.param/aligned-param-ir.cpp 6796759c00066c36
+unit tests/conformance/dcl.attr.param/block-scope-ir.cpp 2d2cdb050e2979d5
+unit tests/conformance/dcl.attr.param/instantiate-ir.cpp 894e637a10ad0a53 DeclRefExpr=1/32 ImplicitCastExpr=1/18
+unit tests/conformance/dcl.attr.param/maybe-undef-ir.cpp 08a3fdee71c82100
+unit tests/conformance/dcl.attr.param/merge-ir.cpp b410795e247c3fbe
+unit tests/conformance/dcl.attr.param/pass-object-size-order-ir.cpp 76417a90a25cf888
 unit tests/conformance/dcl.attr.unknown/claimed-retain-and-sanitizer-attributes-are-known.cpp 5edf17edf0271c7a
 unit tests/conformance/dcl.attr.unknown/has-attribute-truthful.cpp 5135606b471166b6
 unit tests/conformance/dcl.attr.unknown/unknown-attribute.cpp e6f0ac09e66bf73e
@@ -940,6 +950,7 @@ unit tests/conformance/dcl.init.aggr/designated-in-template.cpp 8b6dfc9ab3e33320
 unit tests/conformance/dcl.init.aggr/designated-update-ast.cpp b4e6a7df21128f17 DesignatedInitUpdateExpr=12/12 ImplicitValueInitExpr=14/14 InitListExpr=22/39 NoInitExpr=17/17
 unit tests/conformance/dcl.init.aggr/designated-update-run.cpp 71812c7a7bcc9575 DesignatedInitUpdateExpr=7/7 ImplicitValueInitExpr=5/5 InitListExpr=11/25 NoInitExpr=9/9
 unit tests/conformance/dcl.init.aggr/n3653-probe.cpp b55ed1ea24f09957 CXXDefaultInitExpr=5/5 CXXThisExpr=2/2
+unit tests/conformance/dcl.init.aggr/nested-designated-in-template-run.cpp 32d8a11bbf9df514
 unit tests/conformance/dcl.init.aggr/p0017-probe.cpp b730b3a678cfb97c ImplicitValueInitExpr=3/3 InitListExpr=3/10
 unit tests/conformance/dcl.init.aggr/p3106-probe.cpp 41308378595baca6
 unit tests/conformance/dcl.init.aggr/reference-member-init.cpp 0b78a93d84be792d CXXDefaultInitExpr=2/2 ImplicitValueInitExpr=2/2
@@ -1017,7 +1028,7 @@ unit tests/conformance/dcl.spec.auto/discarded-return-not-deduced-run.cpp b94ed3
 unit tests/conformance/dcl.spec.auto/gnu-auto-type-deduction.cpp 3d9439eb2fef43ff BinaryOperator=1/2 CXXConstructExpr=1/1 DeclRefExpr=4/9 ImplicitCastExpr=3/5 UnaryOperator=2/3
 unit tests/conformance/dcl.spec.auto/init-list.cpp 21096354fecca6c0 CXXThisExpr=4/4
 unit tests/conformance/dcl.spec.auto/member-pointer-placeholder-run.cpp f9a6e29cf988ef76 CXXConstructExpr=3/3 CXXThisExpr=1/2
-unit tests/conformance/dcl.spec.auto/member-template-id-single-static-specialization-run.cpp 0bd97a07b53b86cc CXXConstructExpr=1/1 MemberExpr=1/6 UnaryOperator=1/1
+unit tests/conformance/dcl.spec.auto/member-template-id-single-static-specialization-run.cpp 0bd97a07b53b86cc CXXConstructExpr=1/1
 unit tests/conformance/dcl.spec.auto/nested-return-placeholder-run.cpp 16e55ed87922cbd2 DeclRefExpr=1/27 ImplicitCastExpr=1/28
 unit tests/conformance/dcl.spec.auto/p5-auto-allowed.cpp b457b3788e27d083 ArrayInitIndexExpr=1/1 ArrayInitLoopExpr=1/1 ArraySubscriptExpr=3/3 BinaryOperator=1/1 CXXConstructExpr=1/1 ConceptSpecializationExpr=1/1 DeclRefExpr=4/18 ImplicitCastExpr=6/15 OpaqueValueExpr=1/1 UnaryOperator=2/2
 unit tests/conformance/dcl.spec.auto/placeholder-in-array-declarator.cpp 2ac6f5e1c9afbab1 BinaryOperator=1/1 CXXConstructExpr=1/1 DeclRefExpr=4/19 ImplicitCastExpr=3/6 ImplicitValueInitExpr=1/1 UnaryOperator=2/9
@@ -1082,6 +1093,7 @@ unit tests/conformance/decl_extents/groups.cpp c9274c652797d158 CXXConstructExpr
 unit tests/conformance/decl_extents/macros.cpp 8b9d93de817524e0 IntegerLiteral=1/1
 unit tests/conformance/decl_extents/names.cpp bfa5f91bbf892c90
 unit tests/conformance/decl_extents/namespaces.cpp 4e3bc72d6c974388
+unit tests/conformance/decl_extents/redecls.cpp 0689ad4bdd31b6f7 DeclRefExpr=3/15 ImplicitCastExpr=3/12
 unit tests/conformance/decl_extents/templates.cpp e6f8189d9f944d40
 unit tests/conformance/decl_extents/tentative.cpp 6216b8b3fe3468df CXXConstructExpr=1/2 CXXThisExpr=1/1
 unit tests/conformance/depr.comma.subscript/comma-index-cxx17.cpp 555263daeaea7c8c DeclRefExpr=1/4 ImplicitCastExpr=1/6
@@ -1302,7 +1314,7 @@ unit tests/conformance/expr.const/p0859-probe.cpp c46e8cf18f9a0760
 unit tests/conformance/expr.const/p2738-void-cast-pre26-static-init.cpp feb7abd9e657305d
 unit tests/conformance/expr.const/p2738-void-cast-static-init-cxx26.cpp 5da991314f330b47
 unit tests/conformance/expr.const/p4143-constant-evaluation-run.cpp 607c004a1ea1b81d
-unit tests/conformance/expr.const/paren-init-multidim.cpp 0974a51cde6118dd CXXConstructExpr=5/9 CXXDefaultInitExpr=1/1 CXXParenListInitExpr=1/4 ImplicitValueInitExpr=2/2 InitListExpr=1/8
+unit tests/conformance/expr.const/paren-init-multidim.cpp 0974a51cde6118dd CXXConstructExpr=5/9 CXXDefaultInitExpr=1/1 ImplicitValueInitExpr=2/2 InitListExpr=1/8
 unit tests/conformance/expr.const/ref-member-past-end-ok.cpp 99582b948ffe6045 CXXConstructExpr=1/2 DeclRefExpr=1/37 ImplicitCastExpr=1/37
 unit tests/conformance/expr.const/references.cpp 991aee070b218a3c
 unit tests/conformance/expr.const/register-locals/cases-oven.cpp 176b4aeaf149d5a7 ArraySubscriptExpr=28/28 BinaryOperator=757/814 CStyleCastExpr=148/148 CXXBoolLiteralExpr=208/212 CXXDefaultArgExpr=26/26 CXXDependentScopeMemberExpr=18/18 CXXFunctionalCastExpr=97/97 CXXStaticCastExpr=52/54 CXXThisExpr=54/54 CXXThrowExpr=8/8 CXXUnresolvedConstructExpr=47/47 CallExpr=389/426 ConditionalOperator=77/78 ConstantExpr=2/4 DeclRefExpr=636/787 DependentScopeDeclRefExpr=17/17 ExprWithCleanups=5/5 FloatingLiteral=76/76 ImplicitCastExpr=1033/1168 ImplicitValueInitExpr=11/11 InitListExpr=16/16 IntegerLiteral=714/796 LambdaExpr=6/9 ParenExpr=633/634 StringLiteral=8/8 TypeTraitExpr=34/34 UnaryExprOrTypeTraitExpr=44/46 UnaryOperator=253/263 UnresolvedLookupExpr=119/119
@@ -1351,10 +1363,10 @@ unit tests/conformance/expr.mul/division-by-zero.cpp f12fe4a6960df346
 unit tests/conformance/expr.mul/division-remainder.cpp 9248e87d9f99ed1a
 unit tests/conformance/expr.new/aligned-new-macros.cpp 43038ec6fcda681c
 unit tests/conformance/expr.new/array-new-nonconstant-bound-assigned-run.cpp 6d49265e4877fce4 CXXConstructExpr=2/2 ImplicitValueInitExpr=1/1
-unit tests/conformance/expr.new/array-new-nonconstant-bound-overflow-check.cpp a2813cc5fccbf6df CXXConstructExpr=13/17 CXXDefaultInitExpr=2/2 CXXParenListInitExpr=1/1 DeclRefExpr=2/45 ImplicitCastExpr=1/38 ImplicitValueInitExpr=2/2
+unit tests/conformance/expr.new/array-new-nonconstant-bound-overflow-check.cpp a2813cc5fccbf6df CXXConstructExpr=13/17 CXXDefaultInitExpr=2/2 DeclRefExpr=2/45 ImplicitCastExpr=1/38 ImplicitValueInitExpr=2/2
 unit tests/conformance/expr.new/array-new-string-literal-constexpr.cpp a4e4e1a9dee3310a IntegerLiteral=1/22
 unit tests/conformance/expr.new/array-size-conversion-cxx98.cpp e8941d1420615b48 MemberExpr=3/3
-unit tests/conformance/expr.new/array-size-unknown-init-ok.cpp 319aa47c16265b46 CXXParenListInitExpr=1/1 ImplicitValueInitExpr=6/6 IntegerLiteral=6/24
+unit tests/conformance/expr.new/array-size-unknown-init-ok.cpp 319aa47c16265b46 ImplicitValueInitExpr=6/6 IntegerLiteral=6/24
 unit tests/conformance/expr.new/churn-list.cpp b0f9c06b6622ca0b
 unit tests/conformance/expr.new/churn-mixed.cpp 7d29c9c4697eda1d ImplicitValueInitExpr=2/2
 unit tests/conformance/expr.new/churn-string.cpp 1d3e8db6891d5db8 ImplicitValueInitExpr=1/1
@@ -1370,6 +1382,7 @@ unit tests/conformance/expr.new/dangling-new-expression.cpp 89a98826ae5fb779 CXX
 unit tests/conformance/expr.new/dependent-operands.cpp fd098d53e3613918
 unit tests/conformance/expr.new/new-array-bit-int-wide-size.cpp 1c3e92dfe7c04b5d
 unit tests/conformance/expr.new/new-auto-pointer.cpp 745d52829cba3acf
+unit tests/conformance/expr.new/paren-array-init-extents.cpp 5308034b8915b399 CXXConstructExpr=1/1 ImplicitValueInitExpr=3/3 InitListExpr=1/2 IntegerLiteral=1/16
 unit tests/conformance/expr.new/paren-array-init-ok-cxx11.cpp 2258c72bb71e48d1 CXXConstructExpr=1/1 ImplicitValueInitExpr=5/5 IntegerLiteral=2/17
 unit tests/conformance/expr.new/paren-array-init-ok-cxx17.cpp d7ae447ba23c0e1b CXXConstructExpr=1/1 ImplicitValueInitExpr=5/5 IntegerLiteral=2/17
 unit tests/conformance/expr.new/run-array-cookie.cpp 3883cd35f05a2e54 CXXConstructExpr=4/4 CXXThisExpr=3/3
@@ -1510,6 +1523,7 @@ unit tests/conformance/expr.ref/static-member-call-default-args.cpp 5ce4b74dc8b7
 unit tests/conformance/expr.ref/static-member-call-format.cpp d3a7f50a6002d99f
 unit tests/conformance/expr.ref/static-member-constexpr.cpp 0c2ec26be4bd2e16 CXXConstructExpr=1/1
 unit tests/conformance/expr.ref/template-nondependent-destructor-access.cpp 40dc616efd2b6cbb CXXConstructExpr=4/4
+unit tests/conformance/expr.ref/this-static-member-template-address-extents.cpp 9fcbad42b90b0057
 unit tests/conformance/expr.reinterpret.cast/run-lvalue-to-own-type-reference.cpp e84c8d7d0a022f75
 unit tests/conformance/expr.reinterpret.cast/run-nullptr-to-integral.cpp 447ebdb37e957d11
 unit tests/conformance/expr.reinterpret.cast/run-reference-cast-loaded-as-target-type.cpp 5535824026935be1 CXXThisExpr=2/2 DeclRefExpr=1/38 ImplicitCastExpr=1/68
@@ -1566,6 +1580,7 @@ unit tests/conformance/expr.unary.op/member-pointer-to-specialization-member.cpp
 unit tests/conformance/expr.unary.op/null-dereference-indirection.cpp 1a30807241ad574d
 unit tests/conformance/expr.unary.op/p3-qualified-member-pointer-dependent-type.cpp 8923bf963472a55c DeclRefExpr=3/18
 unit tests/conformance/expr.unary.op/pointer-bool-conversion.cpp ca0b3960975036e8 DeclRefExpr=1/32 ImplicitCastExpr=2/52 ImplicitValueInitExpr=2/2
+unit tests/conformance/expr.unary.op/qualified-member-overload-address-extents.cpp c522c3ef85d31c35
 unit tests/conformance/expr.yield/yield_value.cpp f405b5ee0fbf8cb7 CXXConstructExpr=2/7 CXXDefaultInitExpr=2/2 CXXMemberCallExpr=28/37 CXXThisExpr=24/26 CallExpr=16/36 CoawaitExpr=2/2 DeclRefExpr=26/68 ExprWithCleanups=7/14 ImplicitCastExpr=34/103 MaterializeTemporaryExpr=10/12 MemberExpr=30/71 OpaqueValueExpr=5/5
 unit tests/conformance/ext.arm.sme/ir-sme-arm-new-definition-only.cpp 30c3eaaa73b38e8b
 unit tests/conformance/ext.arm.sme/ir-sme-attributes.cpp 32e3f3a62db04426 DeclRefExpr=1/12 ImplicitCastExpr=1/11
@@ -1767,11 +1782,12 @@ unit tests/conformance/namespace.udecl/block-scope-using-literal-operator.cpp 9e
 unit tests/conformance/namespace.udecl/block-scope-using-operator.cpp c263dcfe24a2634b DeclRefExpr=7/29 ImplicitCastExpr=7/26
 unit tests/conformance/namespace.udecl/class-scope-member-conflict-ok.cpp 1d5a601868a7d329
 unit tests/conformance/namespace.udecl/class-scope-own-enumerator-accepted.cpp 24415d0cba0d8ce2
-unit tests/conformance/namespace.udecl/dependent-block-using.cpp 9428078cb9175d83 CXXDependentScopeMemberExpr=2/2
+unit tests/conformance/namespace.udecl/dependent-block-using.cpp 9428078cb9175d83
 unit tests/conformance/namespace.udecl/dependent-member-using-overloads-run.cpp c9ca0bfcec058fd7 CXXConstructExpr=1/1 CXXDefaultArgExpr=1/1
-unit tests/conformance/namespace.udecl/dependent-member-using.cpp 18a588011bc7684c BinaryOperator=9/19 CXXDependentScopeMemberExpr=11/11 CallExpr=7/8
+unit tests/conformance/namespace.udecl/dependent-member-using.cpp 18a588011bc7684c
 unit tests/conformance/namespace.udecl/dependent-then-nondependent-same-name-run.cpp b7eaed76e250731c CXXConstructExpr=3/3 CXXDefaultArgExpr=1/1
 unit tests/conformance/namespace.udecl/dependent-using-distinct-ok.cpp e0c6e0f36a0c0384 CXXConstructExpr=2/2
+unit tests/conformance/namespace.udecl/dependent-using-member-extents.cpp 3878083bd0280564
 unit tests/conformance/namespace.udecl/function-template-overloads.cpp aebeee386ae2c0e3 CXXThisExpr=2/2
 unit tests/conformance/namespace.udecl/hidden-friend-overloads-using-target.cpp ea87fe6cd9af0135 CXXConstructExpr=4/4
 unit tests/conformance/namespace.udecl/hide-constrained-member-template.cpp 383db744f6820d5b CXXConstructExpr=2/2 ConceptSpecializationExpr=2/10
@@ -1847,7 +1863,7 @@ unit tests/conformance/over.match.ctor/unrelated-class-uses-conversion-template-
 unit tests/conformance/over.match.funcs/object.cpp 2b7e06c3030d3f73
 unit tests/conformance/over.match.funcs/template-id-implicit-object-const-only.cpp 07dd00140c4af230 CXXThisExpr=2/2 ImplicitCastExpr=2/2
 unit tests/conformance/over.match.funcs/template-id-implicit-object-tuple.cpp 58bf6c44b81aa19c CXXConstructExpr=1/1 CXXThisExpr=2/2
-unit tests/conformance/over.match.funcs/template-id-implicit-object.cpp 91cc473029ad7f7a CXXConstructExpr=3/3 CXXThisExpr=18/21 CallExpr=1/11 DeclRefExpr=2/39 ImplicitCastExpr=13/42
+unit tests/conformance/over.match.funcs/template-id-implicit-object.cpp 91cc473029ad7f7a CXXConstructExpr=3/3 CXXThisExpr=18/21 DeclRefExpr=1/39 ImplicitCastExpr=12/42
 unit tests/conformance/over.match.list/phases.cpp 6c4be9fed0fba0f2 CXXConstructExpr=5/5
 unit tests/conformance/over.match.oper/enum-operands.cpp 9b5fdf11dfa04789 DeclRefExpr=2/18 ImplicitCastExpr=2/19
 unit tests/conformance/over.match.oper/incomplete-class-operand.cpp 4f6b78ea31bf12f0 DeclRefExpr=1/4 ImplicitCastExpr=1/3
@@ -1863,7 +1879,7 @@ unit tests/conformance/over.oper/constexpr-operators.cpp ba66350c5786e3cf CXXThi
 unit tests/conformance/over.oper/run-operators.cpp cbdbecf241672ea7 CXXConstructExpr=1/2 CXXThisExpr=11/12 DeclRefExpr=9/39 ImplicitCastExpr=9/50
 unit tests/conformance/over.oper/static-and-subscript-cxx23-accepted.cpp c79ef9da3440c5fd DeclRefExpr=4/10 ImplicitCastExpr=4/11
 unit tests/conformance/over.oper/static-call.cpp 9b6cdb0e6bec6a0a CXXConstructExpr=1/1 DeclRefExpr=4/9 ImplicitCastExpr=4/7
-unit tests/conformance/over.over/address.cpp 16cfb8b5eeb19f2e DeclRefExpr=2/12
+unit tests/conformance/over.over/address.cpp 16cfb8b5eeb19f2e
 unit tests/conformance/over.over/dependent-scope-template-id.cpp 94a19af3dd1c7157
 unit tests/conformance/over.over/implicit-member-static-target.cpp 603689b7f09eb96c CXXConstructExpr=2/3 CXXThisExpr=1/5
 unit tests/conformance/over.over/p1-no-target-for-increment-accepted.cpp 1c524efa13df76bc
@@ -1899,6 +1915,7 @@ unit tests/conformance/stmt.goto/goto-cleanups-run.cpp d79bad55f197caa5 CXXConst
 unit tests/conformance/stmt.goto/goto-in-template-run.cpp fdd9bbf476e1f4f8 CXXThisExpr=1/1
 unit tests/conformance/stmt.goto/goto-loop.cpp ce077deef35b4420
 unit tests/conformance/stmt.goto/labels-goto.cpp 178c0c037cbbfb4f
+unit tests/conformance/stmt.goto/many-labels-run.cpp e6fb299791294c57 BinaryOperator=128/129 CompoundAssignOperator=64/65 DeclRefExpr=128/138 ImplicitCastExpr=64/74 IntegerLiteral=256/264
 unit tests/conformance/stmt.if.consteval/always-inline-run.cpp 5f8886b9dc5538b0
 unit tests/conformance/stmt.if.consteval/char-traits-length-O2-run.cpp 859d81e8f1f66fa6 ImplicitValueInitExpr=2/2
 unit tests/conformance/stmt.if.consteval/char-traits-length-run.cpp 0c53c3589f61a29f ImplicitValueInitExpr=2/2
@@ -1960,6 +1977,7 @@ unit tests/conformance/stmt.switch/class-condition-run.cpp 59b8aa6dbe7ecf3b CXXT
 unit tests/conformance/stmt.switch/dependent-condition.cpp 201b84b877bcb818
 unit tests/conformance/stmt.switch/fallthrough-default.cpp 40a24be163f6f1f3
 unit tests/conformance/stmt.switch/likely-case-labels-run.cpp bdda6305b5516b18
+unit tests/conformance/stmt.switch/many-cases-run.cpp 8ab1804ac5a50110 BinaryOperator=192/201 ConstantExpr=192/192 ImplicitCastExpr=128/155 IntegerLiteral=512/529
 unit tests/conformance/stmt.switch/nested-labels-steps.cpp 6814486890cbdd09
 unit tests/conformance/stmt.switch/nested-labels.cpp bb262a37229f9705 CXXThisExpr=1/1
 unit tests/conformance/stmt.switch/run-gnu-case-range.cpp b126e9e2cae88e63 CXXConstructExpr=2/2
@@ -2105,6 +2123,7 @@ unit tests/conformance/temp.dep.constexpr/sizeof-type-operand-instantiation-depe
 unit tests/conformance/temp.dep.constexpr/typedef-const-static-member.cpp 1a8521e254a9d1c6
 unit tests/conformance/temp.dep.constexpr/value-dependent-conditions-not-folded.cpp c347219b8bbc9c36
 unit tests/conformance/temp.dep.expr/direct-init-from-dependent-functional-cast-explicit-ctor.cpp 3bbc5276a66e5c81 CXXConstructExpr=1/4
+unit tests/conformance/temp.dep.expr/implicit-this-dependent-conversion-extents.cpp db6c714a701a090f CXXThisExpr=2/2
 unit tests/conformance/temp.dep.expr/instantiation-dependent-arguments.cpp 430b7a2a032db92d CXXConstructExpr=1/1
 unit tests/conformance/temp.dep.expr/member-template-current-inst-object.cpp 8f03e1810a4a7b83 CXXConstructExpr=1/2 CXXThisExpr=2/8 DeclRefExpr=2/25
 unit tests/conformance/temp.dep.expr/member-template-overload-dependent-context.cpp 981ccbe0167b9700 CXXConstructExpr=2/2
@@ -2182,7 +2201,9 @@ unit tests/conformance/temp.friend/friend-template-defined-in-class-template.cpp
 unit tests/conformance/temp.friend/friend-template-noexcept-incomplete-class.cpp 03ea9b05d8464e17 CXXConstructExpr=4/4 ConceptSpecializationExpr=1/1
 unit tests/conformance/temp.friend/friend-template-template-param-specialization.cpp cebe093e01522de0 CXXConstructExpr=1/1
 unit tests/conformance/temp.friend/friend-templates.cpp a81cfea144d7e357 CXXConstructExpr=1/4
+unit tests/conformance/temp.friend/global-alloc-friend-in-template.cpp a9223f06b9b32c4f CXXConstructExpr=2/2
 unit tests/conformance/temp.friend/injected-functional-cast.cpp a8eadc5e61f14177 CXXThisExpr=4/4 DeclRefExpr=4/12 ImplicitCastExpr=4/17
+unit tests/conformance/temp.friend/ir-global-alloc-friend-in-template.cpp 0ef1d75149ac1ed4 CXXConstructExpr=2/2
 unit tests/conformance/temp.friend/libstdcxx-friend-elaborated-dependent-qualifier.cpp bc7b11c41ffce881 CXXConstructExpr=1/1
 unit tests/conformance/temp.friend/libstdcxx-qualified-friend-in-class-template.cpp d7d7a7a222cb9a47
 unit tests/conformance/temp.friend/member-of-specialization-friend-run.cpp fddfd4e0719c9e24
@@ -2263,7 +2284,7 @@ unit tests/conformance/temp.mem.class/out-of-line-member-class-template.cpp 7223
 unit tests/conformance/temp.mem.class/out-of-line-member-class.cpp 99637ad9ddcda763 CXXConstructExpr=1/2 CXXThisExpr=1/1 MemberExpr=1/2
 unit tests/conformance/temp.mem.class/partial-spec-member-class.cpp 031149341bdb34dd CXXConstructExpr=2/2
 unit tests/conformance/temp.mem.enum/out-of-line-member-enum.cpp bf40b821372d68e6
-unit tests/conformance/temp.mem/conversion-template-dependent-ordering.cpp 28ae8e7d85646ca1 CXXDependentScopeMemberExpr=1/3 CallExpr=1/3 MemberExpr=1/5
+unit tests/conformance/temp.mem/conversion-template-dependent-ordering.cpp 28ae8e7d85646ca1 MemberExpr=1/5
 unit tests/conformance/temp.mem/libstdcxx-out-of-line-current-inst-return-args.cpp 0907b24029a6a922 CXXConstructExpr=1/1 ImplicitValueInitExpr=3/3
 unit tests/conformance/temp.mem/libstdcxx-out-of-line-current-inst-return.cpp fefad6a6293b3ada CXXConstructExpr=1/1
 unit tests/conformance/temp.mem/libstdcxx-out-of-line-friend-of-partial-spec.cpp c2e745df93885774 CXXConstructExpr=3/3 DeclRefExpr=2/9 ImplicitCastExpr=2/5
@@ -2284,7 +2305,7 @@ unit tests/conformance/temp.names/missing-template-arg-list-after-template-kw-wn
 unit tests/conformance/temp.names/n1757-functional-cast-argument.cpp 17fd3ff67addc51d
 unit tests/conformance/temp.names/n1757-probe.cpp 8b23be98137cfbed CXXConstructExpr=2/2
 unit tests/conformance/temp.names/operator-call-template-member-run.cpp 913eacffd2dc8a52 CXXThisExpr=4/5 DeclRefExpr=1/8 ImplicitCastExpr=1/10
-unit tests/conformance/temp.names/operator-template-id.cpp a3b42ac455ccd97d CXXConstructExpr=1/5 CXXThisExpr=4/5 DeclRefExpr=2/28
+unit tests/conformance/temp.names/operator-template-id.cpp a3b42ac455ccd97d CXXConstructExpr=1/5 CXXThisExpr=4/5 DeclRefExpr=1/28
 unit tests/conformance/temp.names/p0846-probe.cpp 2d811ad3081b7c1c
 unit tests/conformance/temp.names/p7-member-template-current-instantiation-run.cpp 23a7c9c11d236dc9 CXXConstructExpr=1/2 CXXThisExpr=1/9
 unit tests/conformance/temp.names/template-kw-member-qualified-id.cpp b923f0ea98fe5ebd CXXConstructExpr=2/4
@@ -2775,6 +2796,16 @@ unit tests/conformance/written_refs/elaborated.cpp d9aa5485b22a33fd
 unit tests/conformance/written_refs/enclosing.cpp 4b8198576d3d8714 CXXConstructExpr=2/2 CXXDefaultArgExpr=6/6 CXXThisExpr=2/2 DeclRefExpr=1/19 ImplicitCastExpr=1/20
 unit tests/conformance/written_refs/example.cpp 24ca474c08347e01
 unit tests/conformance/written_refs/expr-names.cpp 0b91282d1e4bb358 DeclRefExpr=1/29 ImplicitCastExpr=1/29
+unit tests/conformance/written_refs/found-closed.cpp ec85e87bf17ea5d9
+unit tests/conformance/written_refs/found-hidden-friend.cpp fd24df72461961b5
+unit tests/conformance/written_refs/found-later-overload.cpp f06b12b3bf5cdb0c
+unit tests/conformance/written_refs/found-none.cpp 2063a4a8456a579d
+unit tests/conformance/written_refs/found-one.cpp 8d6877f7f74b7ae9
+unit tests/conformance/written_refs/found-operator.cpp 902f3ab259107cc0
+unit tests/conformance/written_refs/found-several.cpp a20e7668f0821a94
+unit tests/conformance/written_refs/found-template-id.cpp 49330fa345614017
+unit tests/conformance/written_refs/found-this-base.cpp 0323bd15fdc8f82a CXXConstructExpr=1/1 CXXThisExpr=2/4
+unit tests/conformance/written_refs/found-this.cpp e624bca2445af52f CXXThisExpr=3/6
 unit tests/conformance/written_refs/global-colons.cpp ba351245c7f987ec
 unit tests/conformance/written_refs/guides.cpp bbe2d3e5090e2a03 CXXConstructExpr=1/1
 unit tests/conformance/written_refs/inst-adl.cpp a51006cdcc87f9cf CXXConstructExpr=4/4
@@ -2795,13 +2826,14 @@ unit tests/conformance/written_refs/inst-this-base.cpp 20d0835bd8faf3b1 CXXThisE
 unit tests/conformance/written_refs/inst-two-entities.cpp c2de8ebeff514451
 unit tests/conformance/written_refs/inst-typename.cpp ec154fa09ea66c59
 unit tests/conformance/written_refs/inst-udir.cpp 90614148280120c0
-unit tests/conformance/written_refs/inst-using.cpp 2777051ea1389003 CXXConstructExpr=1/3 CXXDependentScopeMemberExpr=2/2 CallExpr=2/2 DeclRefExpr=1/4 ImplicitCastExpr=1/10 InitListExpr=2/4
+unit tests/conformance/written_refs/inst-using.cpp 2777051ea1389003 CXXConstructExpr=1/3 DeclRefExpr=1/4 ImplicitCastExpr=1/10 InitListExpr=2/4
 unit tests/conformance/written_refs/inst-var-template.cpp eca356b86c5de033
 unit tests/conformance/written_refs/join.cpp dd9d93f81b3e31b0 CXXThisExpr=2/3
 unit tests/conformance/written_refs/macros.cpp c5d916ac6ca31344 BinaryOperator=2/4 DeclRefExpr=3/12 ImplicitCastExpr=3/10
 unit tests/conformance/written_refs/mem-inits.cpp 6e4579407569af2c ImplicitValueInitExpr=1/1
 unit tests/conformance/written_refs/member-names.cpp fe7dd8fec650942f CXXThisExpr=3/3
-unit tests/conformance/written_refs/overloads.cpp abeb163ed60d6987 DeclRefExpr=2/23 ImplicitCastExpr=1/17
+unit tests/conformance/written_refs/offsetof.cpp 6761c52442f79b51
+unit tests/conformance/written_refs/overloads.cpp abeb163ed60d6987 DeclRefExpr=1/23 ImplicitCastExpr=1/17
 unit tests/conformance/written_refs/provenance-adl.cpp e7328d461a324079 CXXThisExpr=1/1 DeclRefExpr=1/28 ImplicitCastExpr=1/24
 unit tests/conformance/written_refs/provenance-how.cpp 8a55332856323c1d CXXConstructExpr=1/4 CXXThisExpr=3/3 DeclRefExpr=2/11 ImplicitCastExpr=4/19
 unit tests/conformance/written_refs/provenance-udir.cpp 2013e969f7ffc492

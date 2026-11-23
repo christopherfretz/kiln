@@ -354,3 +354,69 @@ fn recorded_ends_and_begins_have_their_text() {
     // the four casts.
     assert_eq!(parens, 9, "{some:?}");
 }
+
+/// The five shapes WP-2350 left without a begin or an end (WP-2460..
+/// WP-2464): an implicit `this->operator T*`, a member named by a
+/// dependent using-declarator, `&B::f` of an overloaded member and a
+/// static member template's specialization through an implicit `this`, an
+/// array `new`'s parenthesized aggregate initialization, and
+/// `&this->sf<int>`.
+const LEFT: &str = r"
+template <class T> struct C {
+  operator T*() const;
+  T* g() const { return operator T*(); }
+};
+template <class T> struct U : T {
+  using T::f;
+  int h() { return f(); }
+};
+struct B {
+  int f();
+  int f(int);
+  template <int N> static int s(int);
+  template <int N> int s(long);
+};
+struct D : B {
+  int h() { int (B::*q)() = &B::f; return s<0>(0) + B::s<1>(0) + (this->*q)(); }
+};
+struct S { template <class V> static int sf(); };
+template <class T> struct X : S { auto g() { return &this->sf<int>; } };
+struct Y : S { auto g() { return &this->sf<int>; } };
+struct R { int v; };
+int *pn() { return new int[2](1, 2); }
+int *pu() { return new int[](1, 2, 3); }
+R (*pr())[2] { return new R[2][2]({R(4)}); }
+";
+
+#[test]
+fn the_left_shapes_have_their_text() {
+    let p = parse_src(LEFT);
+    let (some, _) = extents(&p);
+    let count =
+        |kind: &str, text: &str| some.iter().filter(|(k, t)| k == kind && t == text).count();
+    let has = |kind: &str, text: &str| {
+        assert!(
+            count(kind, text) > 0,
+            "no {kind} `{text}` among {:?}",
+            some.iter().filter(|(k, _)| k == kind).collect::<Vec<_>>()
+        );
+    };
+    // WP-2460: the conversion-type-id's last token ends the name.
+    has("CXXDependentScopeMemberExpr", "operator T*");
+    has("CallExpr", "operator T*()");
+    // WP-2461: the written name begins it.
+    has("CXXDependentScopeMemberExpr", "f");
+    has("CallExpr", "f()");
+    // WP-2462: the qualifier begins the reference, `&` the address-of.
+    has("DeclRefExpr", "B::f");
+    has("UnaryOperator", "&B::f");
+    has("DeclRefExpr", "s<0>");
+    has("DeclRefExpr", "B::s<1>");
+    // WP-2463: an array `new`'s list begins at its `(`.
+    has("CXXParenListInitExpr", "(1, 2)");
+    has("CXXParenListInitExpr", "(1, 2, 3)");
+    has("CXXParenListInitExpr", "({R(4)})");
+    // WP-2464: `this` begins the access, the `>` ends it.
+    assert_eq!(count("MemberExpr", "this->sf<int>"), 2, "{some:?}");
+    assert_eq!(count("UnaryOperator", "&this->sf<int>"), 2, "{some:?}");
+}

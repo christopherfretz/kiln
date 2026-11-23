@@ -2167,7 +2167,9 @@ impl Sema<'_, '_> {
                         return self.new_paren_string_init(t, v, l, r, at, unbounded);
                     }
                     if !v.is_empty() {
-                        return self.new_paren_array_init(elem, t, &v, first, at, r);
+                        // It begins at its `(` (spec/ast.md §21).
+                        let init = self.new_paren_array_init(elem, t, &v, first, at, r);
+                        return init.map(|(e, n)| (e.map(|e| self.keep_paren_list_begin(e, l)), n));
                     }
                     return match self.new_class_default(elem, t, true, at) {
                         Some(Ok(e)) => Ok((Some(e), None)),

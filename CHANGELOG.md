@@ -1021,6 +1021,16 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   and shares the closure type, call operator and body; it returned
   `None`, so a rebuilt expression holding a lambda was not copied.
 
+- Five expression shapes that had no written extent for tooling clients
+  now have clang's (WP-2460..WP-2464, spec/ast.md §21): an implicit
+  `this->operator T*` in a class template ends at the conversion type's
+  last token; a member named by a dependent using-declarator (`using
+  T::f;` then `f()`) begins at its name; `&B::f` of an overloaded member
+  and a static member template's specialization through an implicit
+  `this` (`s<0>`, `B::s<1>`) begin at the qualifier; an array `new`'s
+  parenthesized initialization (`new int[2](1, 2)`) begins at its `(`;
+  and `&this->sf<int>` ends at its `>`. `cargo xtask extents` compares
+  them all with clang 19. No node, image or snapshot change.
 - Parameter attributes follow clang across declarations and templates
   (WP-2476): a redeclaration's parameter inherits the previous
   declaration's `nonnull`, `annotate`, `carries_dependency` and Swift ABI

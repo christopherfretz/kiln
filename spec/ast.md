@@ -4107,6 +4107,18 @@ This section is the promise kiln makes, and where it makes none.
   a `CXXParenListInitExpr` begins with (`Sema::keep_paren_list_begin`).
   Sema's `init::Designator::Field` keeps its `.`, which changes the PCH
   snapshot schema (no node or image change).
+- WP-2460..WP-2464 close the shapes WP-2350 left, in the same two maps
+  (no node, image or snapshot change): a `CXXDependentScopeMemberExpr`
+  with no object is an implicit `this->name` (a dependent
+  conversion-function-id `operator T*()`, a member named by a dependent
+  using-declarator), begun at its name or recorded qualifier and ended
+  at its recorded last token; the overload set `&B::f` is turned into
+  (`member_overload_as_lookup`) and the pointer to member it resolves to
+  keep the qualifier's begin, as does a reference to a static member
+  template's specialization through an implicit `this` (`s<0>`,
+  `B::s<1>`); an array `new`'s parenthesized aggregate initialization
+  keeps its `(`; and `&this->sf<int>`, resolved to the specialization,
+  keeps the template-id's `>`.
 
 ### 21.2 Decisions
 
@@ -4141,8 +4153,9 @@ This section is the promise kiln makes, and where it makes none.
   from its `(` (`S s(1, 2)`, `S(1, 2)`, `new S(1, 2)`, `m(1, 2)` in a
   mem-initializer) or, made by a cast, from the cast's first token
   (`static_cast<S>(1)`, `(S)1`), as clang's `getBeginLoc`, to its stored
-  end (the `)`; a C-style cast's operand). One whose begin was not
-  recorded is `None`.
+  end (the `)`; a C-style cast's operand); an array `new`'s
+  (`new int[2](1, 2)`, `new int[](1, 2, 3)`, `new R[2][2]({R(4)})`) from
+  its `(`. One whose begin was not recorded is `None`.
 - **Substituted template arguments**: a `SubstNonTypeTemplateParmExpr`
   (the value of a non-type template argument in an instantiated
   member's initializer) is the one token of the parameter's name it
@@ -4155,7 +4168,18 @@ This section is the promise kiln makes, and where it makes none.
   the member's name; with a qualifier (`B::x`, `T::x` naming a member of
   a dependent base) at the qualifier, whose begin the parser records; a
   qualified access or `DeclRefExpr` whose begin was not recorded is
-  `None`.
+  `None`. A dependent member access kiln builds with no object at all is
+  such an access too: a dependent conversion-function-id (`operator T*()`,
+  ending at the conversion-type-id's last token) and a member named by a
+  dependent using-declarator (`using T::f;` then `f()`: the
+  declarator's qualifier is not written at the use, so it begins at the
+  name, as clang's `UnresolvedMemberExpr`).
+- **Node kinds may differ, extents may not.** Kiln's tree need not have
+  clang's node kinds, only its extents: `&this->sf<int>` (a static
+  member function template's specialization) is a resolved `MemberExpr`
+  in kiln also in a template, where clang keeps an
+  `UnresolvedMemberExpr`; both begin at `this` and end at the `>`
+  (`tests/extents/kinds.txt` maps the kinds).
 - First token: the first operand for binary, conditional, subscript,
   call, member-call, postfix and overloaded non-prefix operators, and
   the pattern of a pack expansion or a pack index; the
@@ -4193,7 +4217,8 @@ Two reasons recur, named here once:
 - **(W) a wrapper of a `None`**: an implicit wrapper (21.2) whose written
   node has none.
 
-The counts are stage 1's at WP-2350 (`None` / all nodes of the kind);
+The counts are stage 1's at WP-2350 (`None` / all nodes of the kind;
+`CXXDependentScopeMemberExpr` at WP-2460);
 the baseline, not this table, is the gate.
 
 | Kind | `None` | Reasons |
@@ -4206,12 +4231,11 @@ the baseline, not this table, is the gate.
 | `CXXBoolLiteralExpr`, `CXXNullPtrLiteralExpr`, `GNUNullExpr`, `FloatingLiteral`, `IntegerLiteral`, `StringLiteral` | 417/1912, 1/561, 1/54, 152/1029, 9938/39112, 344/2919 | M |
 | `CXXConstructExpr` | 3862/6314 | M; a default construction (`S s;`, an element or member with no initializer): nothing written |
 | `CXXDefaultArgExpr`, `CXXDefaultInitExpr` | 352/352, 522/522 | nothing written: the parameter's or member's default |
-| `CXXDependentScopeMemberExpr` | 54/512 | M; a member named by a dependent using-declarator (`using T::f;` then `f()`: the qualifier is the declarator's, not written at the name); an implicit `this->operator T` (a conversion-function-id naming a dependent type) |
+| `CXXDependentScopeMemberExpr` | 38/531 | M |
 | `CXXFoldExpr` | 5/151 | the fold of a constrained pack (`C... Ts`, 21.2): no parentheses written |
 | `CXXFunctionalCastExpr`, `CXXUnresolvedConstructExpr`, `CXXStaticCastExpr`, `CXXNoexceptExpr`, `CXXThrowExpr`, `LambdaExpr`, `OffsetOfExpr`, `TypeTraitExpr`, `UnaryExprOrTypeTraitExpr`, `CompoundAssignOperator` | 2492/5382, 94/496, 105/624, 29/171, 16/229, 45/970, 12/85, 68/1760, 141/1855, 256/1150 | M (`CXXStaticCastExpr`: one in an implicit member's body) |
-| `CXXMemberCallExpr`, `CallExpr`, `MemberExpr`, `DeclRefExpr` | 2710/4809, 1472/12766, 4351/12292, 6272/45728 | M; the calls and names a coroutine, a range-`for`, a structured binding or a defaulted function makes (promise, awaiter, `begin`/`end`, `get`); the `operator()` a lambda call names; a conversion function's implicit call; a qualified name of a member without an object (`&B::f`, a static `B::s<0>` through an implicit `this`): its qualifier begin is not recorded |
+| `CXXMemberCallExpr`, `CallExpr`, `MemberExpr`, `DeclRefExpr` | 2710/4809, 1472/12766, 4351/12292, 6272/45728 | M; the calls and names a coroutine, a range-`for`, a structured binding or a defaulted function makes (promise, awaiter, `begin`/`end`, `get`); the `operator()` a lambda call names; a conversion function's implicit call |
 | `CXXOperatorCallExpr` | 73/1197 | M; a range-`for`'s `++__begin`/`*__begin` and a defaulted comparison's operations on class iterators and members |
-| `CXXParenListInitExpr` | 3/71 | the parenthesized aggregate initialization of an array `new` (`new int[](1, 2, 3)`) or of an element of a nested array (`R[2][2]({R(4)})`): the parentheses are not kept |
 | `CXXStdInitializerListExpr` | 2/71 | W (a list sema builds) |
 | `CXXThisExpr` | 2517/2921 | an implicit `this`; M |
 | `CoawaitExpr` | 48/58 | an implicit `co_await` (an initial or final suspend point) |

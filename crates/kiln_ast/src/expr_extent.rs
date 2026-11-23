@@ -247,10 +247,18 @@ impl<'a> WrittenExtents<'a> {
                     self.exprs.first_child(e, &self.lists)?
                 }
                 ExprKind::MemberExpr | ExprKind::CXXDependentScopeMemberExpr => {
-                    let base = self.exprs.first_child(e, &self.lists)?;
-                    if self.written_node(base).is_some() {
+                    // A dependent member access with no object is an
+                    // implicit `this->name`: a dependent
+                    // conversion-function-id (`operator T*()`) or a member
+                    // named by a dependent using-declarator (`using
+                    // T::f;` then `f()`), as clang's implicit `this`.
+                    let base = self.exprs.first_child(e, &self.lists);
+                    let written = base.filter(|&b| self.written_node(b).is_some());
+                    if let Some(base) = written {
                         base
-                    } else if !self.is_implicit_this(base) {
+                    } else if base.map_or(n.kind() != ExprKind::CXXDependentScopeMemberExpr, |b| {
+                        !self.is_implicit_this(b)
+                    }) {
                         // A base the compiler made (an awaiter, a
                         // structured binding's object): nothing written.
                         return None;
