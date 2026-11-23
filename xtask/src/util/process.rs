@@ -1202,7 +1202,18 @@ mod tests {
         (0..8).for_each(&one);
         let (fds, threads) = fds_and_threads();
         (0..RUNS).for_each(&one);
-        let (fds_after, threads_after) = fds_and_threads();
+        // A joined reader thread can still be listed in /proc/self/task for
+        // a moment while the kernel reaps it: wait (bounded) for the counts
+        // to settle; a leak stays and still fails.
+        let mut after = fds_and_threads();
+        for _ in 0..100 {
+            if after == (fds, threads) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+            after = fds_and_threads();
+        }
+        let (fds_after, threads_after) = after;
         assert_eq!(fds_after, fds, "descriptors before and after {RUNS} runs");
         assert_eq!(threads_after, threads, "threads before and after {RUNS} runs");
         std::fs::remove_dir_all(&dir).unwrap();
