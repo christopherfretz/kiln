@@ -10,6 +10,14 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- `Ast::exception_spec_computed` (WP-2505, spec/ast.md §4.2): a tooling
+  client tells an explicitly defaulted function's written exception
+  specification (`S() noexcept(false) = default;`) from one computed
+  from its subobjects, which has the same type once resolved; the new
+  `FnSpec::exc_spec_computed` bit is set on every redeclaration when sema
+  resolves a deferred specification, and PCH snapshots and module images
+  (`IMAGE_VERSION` 83) carry it.
+
 - Native stack sizing for evaluation-session workers (WP-2500,
   spec/eval-session.md §9 "Limits that bound the native depth"): every
   kiln limit that bounds how deep a run's semantic work recurses on the
@@ -994,6 +1002,25 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   explicit instantiation whose class-key does not match the template is
   a tag mismatch, and `union w;` after `struct w;` redeclares the same
   class rather than making `w` ambiguous.
+- A statement expression in a default member initializer or a default
+  argument of a local class (WP-2474, spec/sema.md §5.8): its locals and
+  local classes belong to the enclosing function (clang's mangling,
+  `_ZZ1fvE1s`), and the statement expression may use them, capture
+  them in a lambda (`[&]` is a local lambda there) and declare
+  `static` ones; they were rejected as references to a local of the
+  enclosing function. A namespace-scope class's default member
+  initializer keeps clang's `statement expression not allowed at file
+  scope`.
+- An elaborated-type-specifier in a local class member function's
+  parameter list (`void g(struct Q *);`) declares `Q` in the enclosing
+  block scope (WP-2506, [basic.scope.pdecl]/7.2), so the later
+  block-scope definition redeclares it: one redeclaration chain, and
+  `a.g(&q)` type-checks.
+- `clone_with_children` copies a `LambdaExpr` (WP-2507, spec/ast.md):
+  the copy gets its own lambda record (a new capture-initializer list)
+  and shares the closure type, call operator and body; it returned
+  `None`, so a rebuilt expression holding a lambda was not copied.
+
 - Parameter attributes follow clang across declarations and templates
   (WP-2476): a redeclaration's parameter inherits the previous
   declaration's `nonnull`, `annotate`, `carries_dependency` and Swift ABI

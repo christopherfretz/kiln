@@ -699,7 +699,7 @@ pub enum Defaulted {
 /// deleted(1) explicit(1) trivial(1) immediate_escalating(1)
 /// has_contracts(1) is_coroutine(1) escalated(1) variadic(1) override(1)
 /// final(1) explicit_object(1) virtual_written(1) storage_inherited(1)
-/// not_selected(1)`.
+/// not_selected(1) return_deduced(1) exc_spec_computed(1)`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug, kiln_snap::Snap)]
 pub struct FnSpec(u32);
 
@@ -784,7 +784,9 @@ impl FnSpec {
     /// known only at `= default` after the declarator, [dcl.fct.def.default],
     /// [dcl.constexpr]/7; WP-289: `not_selected`, known only at the
     /// class's `}`, [class.dtor]/4; WP-389: `return_deduced`, known only
-    /// at the first `return`, [dcl.spec.auto.general]/3). The two fields are OR-ed in, so sema
+    /// at the first `return`, [dcl.spec.auto.general]/3; WP-2505:
+    /// `exc_spec_computed`, known when the deferred exception
+    /// specification is resolved, [except.spec]/7-8). The two fields are OR-ed in, so sema
     /// sets them only from [`Defaulted::No`] / [`ConstexprKind::None`].
     pub const LATE: FnSpec = FnSpec(
         (1 << 3)
@@ -796,7 +798,8 @@ impl FnSpec {
             | (1 << 15)
             | (1 << 16)
             | (1 << 23)
-            | (1 << 24),
+            | (1 << 24)
+            | (1 << 25),
     );
 }
 
@@ -857,6 +860,17 @@ bit_accessors!(FnSpec:
     /// return type is deduced (WP-389; clang looks only at the type as
     /// written for the linkage, `getLVForNamespaceScopeDecl`).
     return_deduced / with_return_deduced = 24;
+    /// The exception specification on the function's type was computed,
+    /// not written: it was deferred to the function (`ExcSpec::Deferred`:
+    /// an implicitly declared special member, one explicitly defaulted on
+    /// its first declaration with no *noexcept-specifier*, a destructor
+    /// declared without one, a defaulted comparison or an inheriting
+    /// constructor; [except.spec]/7-8, [dcl.fct.def.default]/2,
+    /// [class.compare.default]) and sema has since resolved it to
+    /// `noexcept` or `noexcept(false)`. A written specification, even on
+    /// a defaulted function (`S() noexcept(false) = default;`), never
+    /// sets it. [`crate::Ast::exception_spec_computed`] (WP-2505).
+    exc_spec_computed / with_exc_spec_computed = 25;
 );
 
 /// Hot payload of function kinds (24 bytes, spec/ast.md §4.2).

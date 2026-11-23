@@ -2479,6 +2479,16 @@ argument deduction not allowed in function prototype"); the ids
     a class template redeclaration is, and a later definition joins
     that chain. An enumeration redeclaration creates no decl. Test:
     class.name/redeclaration-ast.cpp.
+  - A reference that declares a new class ([basic.scope.pdecl]/7.2)
+    declares it in the smallest enclosing namespace or block scope,
+    skipping class and prototype scopes (`tag_decl_context`). From a
+    local class's member declaration (`void g(struct Q *);`,
+    `struct Q *p;`) that is the block scope enclosing the class: the
+    class's semantic and lexical context is the function, its name is
+    entered in that block (`push_local_block`, past the class scope),
+    and a later `struct Q { ... };` in the block redeclares it (one
+    redeclaration chain, so `a.g(&q)` with `Q q;` type-checks; WP-2506,
+    `basic.scope.pdecl/elaborated-type-local-class-member-{run,refs}.cpp`).
   - A definition checks for redefinition and kind mismatch. A
     redefinition ([basic.def.odr]/1) is diagnosed once and recovered
     from as clang's `ActOnTag` does (it makes the new tag anonymous and
@@ -7853,6 +7863,29 @@ for them.
     destroyed at the end of the enclosing full-expression, after the
     temporaries of its own last statement (WP-1458,
     `ext.gnu.stmt.expr/result-destroyed-after-own-temporaries-run.cpp`).
+  - In a default member initializer or a member function's default
+    argument of a local class (or a class nested in one), the
+    statement expression is in a function body. Its compound statement
+    is a block scope whose context is still the class (`Sema::ctx`,
+    so access, `this` and lookup are the class's), but the
+    declarations in it are block-scope declarations of the function
+    enclosing the class (`Sema::block_decl_ctx`, used by
+    `decl_contexts`): neither members of the class nor in its lookup
+    table, a variable is a local (a `static` one mangles as a static
+    local of the function, `_ZZ1fvE1s`, as in clang), and a lambda in
+    that block may have a capture-default. Naming such a local from
+    the same initializer, directly or through a lambda, is no
+    reference to a local of an enclosing function (`capture_chain`
+    stops at the class scope when the variable is in a block opened
+    inside it). The initializer is evaluated in each constructor that
+    uses it, the locals in that constructor's frame. Clang (19 and 22)
+    gives the locals the function as their context too but then
+    reports every use from a constructor as a reference to a local of
+    the enclosing function (and declares them static data members when
+    it instantiates the class); kiln accepts those programs (WP-2474,
+    `class.local/stmt-expr-local-in-default-{arg,member-init}-run.cpp`;
+    a class that is not local still gets the file-scope error,
+    `ext.gnu.stmt.expr/default-member-init-namespace-class.cpp`).
   - Dependence (clang `computeDependence(StmtExpr*, TemplateDepth)`):
     the type's dependence, plus the result expression's, plus value-
     and instantiation-dependence whenever it appears in a dependent

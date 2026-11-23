@@ -2547,7 +2547,10 @@ impl ExprArena {
     /// lifetime-extending context). `None` for a kind it does not copy,
     /// or when `kids` does not match `e`'s children. A copied
     /// `MaterializeTemporaryExpr` keeps `e`'s storage: callers copy
-    /// only full-expression ones.
+    /// only full-expression ones. A copied `LambdaExpr` gets a side record
+    /// of its own holding the new capture initializers and shares the
+    /// closure type, call operator and body (a copy evaluates the same
+    /// lambda-expression, so its type is the same closure type).
     pub fn clone_with_children(
         &mut self,
         e: ExprId,
@@ -2639,6 +2642,16 @@ impl ExprArena {
                 c.b = self.push_init_list(extra);
             }
             ExprKind::CXXDefaultArgExpr | ExprKind::CXXDefaultInitExpr => {}
+            // The children are the capture initializers: the copy gets
+            // its own side record holding them, and shares the closure
+            // type, the call operator and the body (WP-2507).
+            ExprKind::LambdaExpr => {
+                let mut data = self.lambdas.get(LambdaId::new(n.a)).clone();
+                if data.inits.is_some() {
+                    data.inits = Some(lists.push(kids));
+                }
+                c.a = self.lambdas.push(data).raw();
+            }
             _ => return None,
         }
         let id = self.push(c);

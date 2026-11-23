@@ -309,12 +309,39 @@ struct FunctionData {               // 24 bytes
                                     //   return_deduced(1, bit 24: the return type was deduced from
                                     //   a placeholder, so the declared type is not the type as
                                     //   written; LATE; read by the linkage computation, WP-389)
+                                    //   exc_spec_computed(1, bit 25: the exception specification was
+                                    //   computed, not written; LATE, set on every redeclaration when
+                                    //   sema resolves `ExcSpec::Deferred` (implicit or defaulted
+                                    //   special member, defaulted comparison); WP-2505, below)
                                     //   (`virtual` is semantic: written or overriding; `virtual_written`
                                     //   is the specifier, which the dump prints. LATE bits, set after
                                     //   the body or at `}`: trivial, has_contracts, is_coroutine,
                                     //   escalated, deleted)
     templ: TemplLink,               // §8.2
 }
+```
+
+A function's exception specification lives on its type
+(`FunctionProto`'s `ExcSpec`). Once a deferred one is resolved
+([except.spec]/7-8: an implicitly declared or explicitly defaulted
+special member without a written specification, a defaulted comparison)
+the type holds the result, the same type a written specification gives;
+so `S() noexcept(false) = default;` and `S() = default;` computed to be
+potentially-throwing have one type. `Ast::exception_spec_computed(f)`
+tells them apart for tooling clients (WP-2505): true while the type
+still defers to `f`'s entity (`ExcSpec::Deferred(first(f))`) or after
+sema resolved it (`FnSpec::exc_spec_computed`), false for a written
+specification on a defaulted function, and false for a specialization
+whose written specification waits for instantiation (deferred to its
+pattern). A member's written *noexcept-specifier* parsed late in the
+complete-class context also defers to the member until it is parsed.
+PCH snapshots carry it with `FnSpec` (no schema change, so no
+`FORMAT_VERSION` bump: a snapshot of another kiln build is replayed
+anyway, spec/pch.md "Format versioning"); module images carry it as
+bit 25 of the function specifier bits (`IMAGE_VERSION` 83). Pinned by `crates/kiln_driver/tests/front_end.rs`
+`exception_spec_computed_vs_written`.
+
+```rust
 struct VarData {                    // 24 bytes
     redecl: Redecl,
     init: Option<ExprId>,
@@ -653,6 +680,10 @@ field's default member initializer in the same map (WP-1177), which
 `Ast::default_init_expr` returns in place of the field's. `ExprArena::clone_with_children(e, lists, kids)`
 copies one node with new children (same kind, type, flags and cold
 payloads) for the structural kinds that rewrite needs, `None` otherwise.
+A `LambdaExpr` copy gets a new `LambdaData` side record holding the new
+capture initializers and shares the closure type, call operator and body
+(WP-2507): the copy is the same lambda-expression, so it has the same
+closure type.
 
 Builtin *functions* (`__builtin_memcpy`, `__builtin_is_constant_evaluated`,
 `__builtin_is_within_lifetime`, `__builtin_constant_p`, ...) are ordinary

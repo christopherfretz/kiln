@@ -102,7 +102,7 @@ pub(crate) use locs::Locs;
 use locs::{FileRec, LocTable, SlocRec};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 82;
+pub(crate) const IMAGE_VERSION: u32 = 83;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -906,9 +906,9 @@ const DEF_BITS: u64 = {
 /// Function specifier bits carried: storage, inline (written and
 /// implicit), `constexpr`/`consteval`, explicitly defaulted, deleted,
 /// `explicit`, trivial, immediate-escalating, escalated, `...`, inherited
-/// storage, not selected ([special]/6, WP-1109), deduced return type;
-/// since WP-1120 virtual (semantic and written), pure, `override` and
-/// `final`. Anything else (implicitly defaulted, coroutine, contracts,
+/// storage, not selected ([special]/6, WP-1109), deduced return type,
+/// computed exception specification (WP-2505); since WP-1120 virtual
+/// (semantic and written), pure, `override` and `final`. Anything else (implicitly defaulted, coroutine, contracts,
 /// explicit object parameter, ...) is not carried yet.
 fn fn_spec(bits: u32) -> Option<FnSpec> {
     let storage = match bits & 3 {
@@ -945,7 +945,8 @@ fn fn_spec(bits: u32) -> Option<FnSpec> {
         .with_virtual_written(bit(21))
         .with_storage_inherited(bit(22))
         .with_not_selected(bit(23))
-        .with_return_deduced(bit(24));
+        .with_return_deduced(bit(24))
+        .with_exc_spec_computed(bit(25));
     (spec.bits() == bits).then_some(spec)
 }
 
@@ -7312,6 +7313,10 @@ mod tests {
         };
         let spec = FnSpec::new().with_not_selected(true);
         assert_eq!(fn_spec(spec.bits()), Some(spec));
+        // A computed exception specification (WP-2505).
+        let computed = FnSpec::new().with_exc_spec_computed(true);
+        assert_eq!(fn_spec(computed.bits()), Some(computed));
+        assert_eq!(fn_spec(1 << 26), None, "an uncarried bit");
         let mut img = class_sample();
         set_bits(&mut img, nontrivial | B::TRIVIAL_DEFAULT_CTOR.bits());
         if let Payload::Function { spec: s, .. } = &mut img.decls[13].payload {

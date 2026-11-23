@@ -3223,10 +3223,37 @@ impl Sema<'_, '_> {
 
     /// The context a declarator declares into, and its lexical context.
     pub(crate) fn decl_contexts(&self, d: &Declarator) -> (DeclId, DeclId) {
-        match d.qualifier {
-            Some(q) => (q, self.ctx),
-            None => (self.ctx, self.ctx),
+        if let Some(q) = d.qualifier {
+            (q, self.ctx)
+        } else {
+            let c = self.block_decl_ctx();
+            (c, c)
         }
+    }
+
+    /// The context an unqualified declaration in the current scope
+    /// belongs to: [`Sema::ctx`], except in a block scope whose context
+    /// is still a class, the compound statement of a GNU statement
+    /// expression in a default member initializer or a member function's
+    /// default argument (`struct L { int m = ({ int t = 2; t; }); };` in
+    /// a function body; spec/sema.md §5.8). Such a declaration is a
+    /// local of the function enclosing the class, as in clang (whose
+    /// `CurContext` there is that function: a `static` local mangles as
+    /// one of it), not a member of the class (WP-2474).
+    pub(crate) fn block_decl_ctx(&self) -> DeclId {
+        let in_block = self
+            .scopes
+            .iter()
+            .rev()
+            .find(|s| !s.is_transparent())
+            .is_some_and(|s| matches!(s.kind, ScopeKind::Block | ScopeKind::Control));
+        if in_block
+            && self.kind_of(self.ctx).payload() == kiln_ast::decl::PayloadClass::Record
+            && let Some(f) = self.enclosing_function(self.ctx)
+        {
+            return f;
+        }
+        self.ctx
     }
 
     /// The declarations of `name` a declaration may redeclare (redeclaration
@@ -10818,13 +10845,22 @@ impl Sema<'_, '_> {
             self.builder().unregister_name(t.unwrap_or(d));
             return d;
         }
+        // [basic.scope.pdecl]/7: an elaborated-type-specifier in a local
+        // class's member declaration (`void g(struct Q *);`) declares
+        // `Q` in the smallest enclosing block scope, that of the class
+        // (WP-2506): a later `struct Q { ... };` there redeclares it.
+        let block_home = !self.is_c() && self.kind_of(ctx).is_function();
         if let Some((n, _)) = name
-            && (self.in_local_scope() || self.c_hoisted_to_block(ctx))
+            && (self.in_local_scope() || self.c_hoisted_to_block(ctx) || block_home)
             && qualifier.is_none()
             && (!conflict || conflict_visible)
             && !proto_tag
         {
-            self.push_local(n, d);
+            if self.in_local_scope() {
+                self.push_local(n, d);
+            } else {
+                self.push_local_block(n, d);
+            }
         }
         if let Some((n, _)) = name
             && qualifier.is_none()

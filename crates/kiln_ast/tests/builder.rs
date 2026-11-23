@@ -887,3 +887,42 @@ fn gcc_type_class() {
         assert_eq!(ast.gcc_type_class(q), want, "{q:?}");
     }
 }
+
+/// [expr.prim.lambda.closure], [expr.prim.lambda.capture]/15: a
+/// `LambdaExpr`'s children are its capture initializers.
+/// `clone_with_children` copies one with new initializers into a side
+/// record of its own, sharing the closure type and the body; the
+/// original keeps its initializers (WP-2507).
+#[test]
+fn clone_lambda_expr_expr_prim_lambda_closure() {
+    use kiln_ast::lambda::LambdaData;
+    let mut ast = new_ast();
+    let tu = ast.tu;
+    let closure = ast.builder().closure_record(DeclHead::new(tu, DeclName::EMPTY, L), false);
+    let ty = ast.decls.get(closure).ty().expect("a closure has a type");
+    let (a, b) = (lit(&mut ast, 1), lit(&mut ast, 2));
+    let inits = ast.builder().list(&[a]);
+    let mut data = LambdaData::new(closure, L);
+    data.inits = Some(inits);
+    let id = ast.exprs.lambdas.push(data);
+    let e = ast.builder().lambda_expr(id, ty, false, L, L);
+    assert_eq!(ast.exprs.children(e, &ast.lists), vec![a]);
+
+    let c = ast.exprs.clone_with_children(e, &mut ast.lists, &[b]).expect("a lambda is copied");
+    assert_ne!(c, e);
+    assert_eq!(ast.exprs.get(c).kind(), ExprKind::LambdaExpr);
+    assert_eq!(ast.exprs.get(c).ty(), ty);
+    assert_ne!(ast.exprs.lambda_id(c), id);
+    assert_eq!(ast.exprs.lambda(c).closure, closure);
+    assert_eq!(ast.exprs.children(c, &ast.lists), vec![b]);
+    assert_eq!(ast.exprs.children(e, &ast.lists), vec![a]);
+    // The children must match: one initializer, one child.
+    assert!(ast.exprs.clone_with_children(e, &mut ast.lists, &[]).is_none());
+
+    // A capture-less lambda (no initializer list) is copied too.
+    let id0 = ast.exprs.lambdas.push(LambdaData::new(closure, L));
+    let e0 = ast.builder().lambda_expr(id0, ty, false, L, L);
+    let c0 = ast.exprs.clone_with_children(e0, &mut ast.lists, &[]).expect("copied");
+    assert!(ast.exprs.lambda(c0).inits.is_none());
+    assert_eq!(ast.exprs.lambda(c0).closure, closure);
+}

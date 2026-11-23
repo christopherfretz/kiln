@@ -577,6 +577,12 @@ impl Sema<'_, '_> {
             let Some(ty) = self.ast.decls.get(d).ty() else { continue };
             let t = self.with_exc_spec(ty, spec);
             self.ast.decls.set_ty(d, t);
+            // Computed, not written (spec/ast.md §4.2; WP-2505).
+            if self.ast.decls.function(d).is_some() {
+                self.ast
+                    .decls
+                    .mark_function(d, kiln_ast::decl::FnSpec::new().with_exc_spec_computed(true));
+            }
         }
         nothrow
     }

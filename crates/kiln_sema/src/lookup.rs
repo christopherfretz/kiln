@@ -1383,6 +1383,20 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Adds the tag `d`, declared from a class scope nested in a block
+    /// (an elaborated-type-specifier in a local class's member
+    /// declaration; [basic.scope.pdecl]/7), to the innermost block or
+    /// function scope below that class scope, past a member function's
+    /// replayed parameter scope.
+    pub(crate) fn push_local_block(&mut self, name: Symbol, d: DeclId) {
+        let block = |s: &crate::scope::Scope| {
+            matches!(s.kind, ScopeKind::Block | ScopeKind::Control | ScopeKind::Function)
+        };
+        if let Some(i) = self.scopes.iter().rposition(block) {
+            self.scopes.scope_mut(i).locals.push((name, d, Ns::Tag));
+        }
+    }
+
     /// Adds a block-scope declaration of operator function `d` to the
     /// innermost local scope ([`crate::scope::Scope::local_ops`]).
     pub(crate) fn push_local_operator(

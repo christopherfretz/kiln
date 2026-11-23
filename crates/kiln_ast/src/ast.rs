@@ -748,6 +748,30 @@ impl Ast {
         self.first_slow(d)
     }
 
+    /// Whether function `f`'s exception specification is computed rather
+    /// than written ([except.spec]/7-8, [dcl.fct.def.default]; WP-2505):
+    /// its type still defers it to the function itself
+    /// (`ExcSpec::Deferred` naming `f`'s entity), or sema resolved it from
+    /// such a deferral ([`crate::decl::FnSpec::exc_spec_computed`]). So
+    /// `S() noexcept(false) = default;` (written) and `S() = default;`
+    /// resolved to `noexcept(false)` (computed) have the same type but
+    /// differ here. `false` for a non-function, and for a written
+    /// specification still to be instantiated from a template's pattern
+    /// (deferred to the pattern). While a class is being defined, a
+    /// member's written *noexcept-specifier* saved for the complete-class
+    /// context also defers to the member until it is parsed.
+    pub fn exception_spec_computed(&self, f: DeclId) -> bool {
+        let Some(fd) = self.decls.function(f) else { return false };
+        if fd.spec.exc_spec_computed() {
+            return true;
+        }
+        let Some(ty) = self.decls.get(f).ty() else { return false };
+        self.types.proto(ty).is_some_and(|p| match self.types.exc_spec(p) {
+            crate::types::ExcSpec::Deferred(d) => self.first(d) == self.first(f),
+            _ => false,
+        })
+    }
+
     /// [`Ast::first`] through the redeclaration group.
     fn first_slow(&self, d: DeclId) -> DeclId {
         match self.decls.redecl(d) {
