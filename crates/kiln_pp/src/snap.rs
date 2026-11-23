@@ -32,11 +32,11 @@
 //! | `syms`, `dirs` | rebuilt | by the consumer's [`Preprocessor::new`] from the restored interner (the same symbols) |
 //! | `date_time` | rebuilt | `__DATE__`/`__TIME__` of the consumer's compilation, on first use |
 //! | `module_lines` | rebuilt | by the next main file's entry |
-//! | `pool`, `arg_pool`, `paste_buf`, `dir_hash` | transient | recycled buffers and the last directive's `#`: reset |
+//! | `pool`, `arg_pool`, `paste_buf`, `dir_hash`, `dir_end` | transient | recycled buffers and the last directive's `#` and end: reset |
 //! | `frames`, `markers`, `pending`, `include_depth` | transient, at rest | no file open, nothing queued |
 //! | `if_ndef`, `disable_expand`, `in_args`, `arg_preexpand`, `parsing_if`, `va_scope`, `in_directive`, `dir_eod`, `quiet_lex` | transient, at rest | no directive, argument or `#if` being read |
 //! | `name_gate` | at rest | must be off (`-fkiln-bmi-image` is not supported with snapshots) |
-//! | `record`, `rec_cur`, `rec_builtin` | not carried | the preprocessing record is the consumer's (spec/pp.md "Preprocessing record"); a restore marks it `RESTORED` |
+//! | `record`, `rec_cur`, `rec_builtin`, `rec_inc`, `rec_import_at`, `rec_hu` | not carried | the preprocessing record is the consumer's (spec/pp.md "Preprocessing record"); a restore marks it `RESTORED` |
 
 use kiln_source::fx::{FxHashMap, FxHashSet};
 use std::collections::{HashMap, HashSet};
@@ -115,6 +115,9 @@ impl Preprocessor<'_, '_> {
                 self.sm.mark_include_guarded(f.file, h.into());
             }
             self.guards.insert(f.file, m);
+            if let Some(r) = self.record.as_deref_mut() {
+                r.set_guard(f.mi.the_cond);
+            }
         }
         Ok(())
     }
@@ -134,6 +137,9 @@ impl Preprocessor<'_, '_> {
             return Err(format!("Preprocessor.frames: {} open", self.frames.len()));
         }
         self.main_file = Some(file);
+        if let Some(r) = self.record.as_deref_mut() {
+            r.main_file = Some(file);
+        }
         self.push_file(file, None, None, None, false, false);
         self.diags.pragma_file_exit(self.sm.loc(file, 0));
         if self.modules.is_some() {
@@ -307,6 +313,10 @@ impl Preprocessor<'_, '_> {
             record: _,
             rec_cur: _,
             rec_builtin: _,
+            dir_end: _,
+            rec_inc: _,
+            rec_import_at: _,
+            rec_hu: _,
         } = self;
         macros.put(w);
         pushed.put(w);

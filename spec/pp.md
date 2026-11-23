@@ -900,11 +900,14 @@ spec/modules.md §11.13.
   the installed record on `-E`, `-dM -E` and diagnostics, including
   the whole pp torture corpus.
 
-### Preprocessing record (WP-2110)
+### Preprocessing record (WP-2110, WP-2111)
 
 `kiln_pp::record` keeps, on request, what macro expansion did, so that a
 tooling client can ask where any token location came from: which
-definition, which expansion, which argument and which body token. It is
+definition, which expansion, which argument and which body token; and
+what the conditional and inclusion directives did, so that it can tell
+which text was skipped, which file each instance of a header is, and in
+which include context a location lies. It is
 retained by the `Preprocessor` and read after (or during) preprocessing.
 It is not a callback: `macro_expands` fires before an expansion's entry
 exists, and `#pragma pop_macro` and a restored prefix fire nothing.
@@ -1003,6 +1006,125 @@ stored per token):
   `str(b0..b1)` for `#x`).
 - `Unknown`: a macro location the record did not see made (see Coverage).
 
+**Conditionals** (`conds()`, `cond(c)`, dense `CondIx`; stage 2). One
+row per conditional directive, in the order the directives are met:
+the ones in live text and the ones in skipped groups. A `Conditional`
+has `hash` (the `#`: the row's key), `cond` (the end of the directive
+name) and `end` (the end of the directive's logical line, below), and
+`kind()` (`If`, `Ifdef`, `Ifndef`, `Elif`, `Elifdef`, `Elifndef`,
+`Else`, `Endif`), `outcome()`, `opener()` (the conditional's `#if*`,
+itself for an opener, `None` for a stray `#elif`/`#else`/`#endif`),
+`next()` (the next directive of the same conditional), `is_guard()` and
+`is_unterminated()` (both on the opener). Outcomes:
+
+- `Taken`: the condition was evaluated true, or an `#else` whose group
+  is the one kept.
+- `NotTaken`: evaluated false (an erroneous condition too, as kiln
+  treats it), or an `#else` after a taken group.
+- `NotEvaluated`: an `#elif*` after a taken group; its condition was
+  never evaluated.
+- `Dead`: any directive of a conditional nested inside a skipped group.
+  Only its kind, ranges and links are known: its condition was never
+  tokenized or checked.
+- `Closes`: a live `#endif`.
+
+`directive(c)` is `hash..end`. `condition(c)` is `cond..end`: the rest of
+the logical line after the directive name, untrimmed, comments included
+(empty-ish for `#else`/`#endif`), defined the same way for live and dead
+rows. `group(sm, c)` is the group the directive controls: from its `end`
+to the `hash` of `next()`, or, with no `next()` (a conditional the file
+ends inside), to the end of the inclusion's range; `None` for an
+`#endif` and a stray directive. A directive's `end` is the end of its *logical* line: past
+line splices, and past a block comment that opens on the directive line
+and closes on a later one; it is where the directive's end-of-directive
+token is, the newline (or the end of the file). So the directives and
+groups of one conditional tile it: every byte from its opener's `#` to
+the end of its `#endif` line is in exactly one directive line or one
+group, live and dead rows alike, and nested groups nest, so every
+skipped byte lies in one innermost group. `conds_in(span)` lists the
+rows whose `#` lies in a span (a scan). Non-conditional directives in a
+skipped group are not recorded. When the file ends inside a conditional
+(the error `unterminated conditional directive`), each open opener,
+dead ones included, is flagged `UNTERMINATED` and its chain has no
+`#endif`.
+
+**Guards and `#pragma once`.** `is_guard()` marks the opener whose macro
+is kiln's controlling macro for the file (the multiple-include
+optimization, clang's controlling macro): a top-level `#ifndef X` or
+`#if !defined(X)` with nothing outside the conditional. It is what
+decides that a later `#include` is skipped (`SkippedGuard`, below), and
+nothing more: it does not say the file defines `X`. A client that wants
+"the header defines its own guard" lexes the condition range for `X`
+and looks for a stage-1 definition of `X` inside the group. The flag is
+set when the instance's file ends, which is when kiln decides; it is
+final once the instance has exited. Each instance has its own rows, so a
+header entered again (its guard undefined meanwhile) is flagged again.
+A guard kiln does not recognize (a token after the `#endif`, an `#else`,
+the main file unless it is a header being precompiled) leaves the opener unflagged; a second `#include` of that
+file is entered, and in that instance the `#ifndef` row is `NotTaken`
+with a group spanning the body, so a client can tell skipped text from
+text read and found empty. `onces()` lists the `#pragma once` (the `#`,
+or the expansion location of a `_Pragma("once")`) that took effect; the
+main file's, which kiln warns about and ignores, is not one.
+
+**Inclusions** (`incs()`, `inc(i)`, dense `IncIx`; stage 2). One row per
+`#include`, `#include_next`, `#import`, header-unit `import`, `#embed`
+and `-include`, in directive order, the ones not entered included. An
+`Inclusion` has `hash` (the `#`; the first token, `export` or `import`,
+of a header-unit import; the key), `end` (the end of its logical line;
+the end of the `;` for a header-unit import), `name` (the header name as
+written in the file: for a name produced by macros the invocation's
+file range, never a macro location; for a `-include`, its place in the
+predefines buffer), `written`
+(the name with its delimiters, after expansion: `<vector>`, `"x.h"`),
+`name_exp()` (the first expansion made while reading a macro-produced
+name: the stage-1 rows from it with `IN_DIRECTIVE` and a name inside
+`name`), `angled()`, `kind`, `source`, `file`, `lookup`, `outcome` and
+`parent()`. `kind` is the directive (`Include`, `IncludeNext`, `Import`,
+`HeaderImport`, `Embed`, `CommandLine` for a `-include`, an `#include`
+line of the predefines buffer), separate from
+`source` (stage 1's `DefSource`: `File`, or `CommandLine`/`Predefined`
+for a line of the predefines buffer). `file` is the `FileId` found and
+`lookup` the search-path index it was found at
+(`ResolvedInclude::lookup_index`; none when found relative to the
+includer); an `#include_next`'s start index is its includer's `lookup`,
+through `parent()`. `parent()` is the instance holding the directive
+(`None` in the main file and the predefines). Outcomes, and the fields
+they fill:
+
+| outcome | meaning | `file`, `lookup` | also |
+|---|---|---|---|
+| `Entered { base }` | the file was entered | yes | `base`: byte 0 of the instance's range |
+| `SkippedOnce` | `#pragma once`, or an earlier `#import` of the file | yes | |
+| `SkippedGuard { def }` | the file's guard macro was defined | yes | `def`: its definition current at the directive (`Restored` if it was not seen made) |
+| `DepthLimit` | the directive hit the nesting limit (an error) | yes | |
+| `AfterDepthLimit` | the limit was hit earlier and the file was entered before: not entered again (clang's include-cycle cut) | yes | |
+| `NotFound` | no file (an error) | none | |
+| `Malformed` | no usable header name, or a directive inside macro arguments: nothing was looked up | none | |
+| `Embedded` | an `#embed` whose resource was found | none (yet) | |
+| `Imported` | a header-unit import whose macros came from a module file, or from an earlier import of the unit | yes | an instance when kiln replays the module file's copy of the header |
+
+A header-unit import built from source here is `Entered`, its instance
+being the header buffer's own range. An `#include` of an importable
+header is whatever `#include` did with it. `__has_include` is not an
+inclusion.
+
+**Include contexts.** An instance is an `Entered` row (or a replayed
+`Imported` one): one range of the source manager. `inclusion_of(sm,
+loc) -> IncContext` is total: `Inclusion(i)`, the instance whose range
+holds the location; `Main`, the main file (the root of every chain);
+`Builtin`, the predefines buffer `<built-in>` (predefines, `-D`/`-U`,
+the `-include` lines); `Unknown`, anything else (an invalid location, a
+restored prefix, a scratch buffer). A macro location is resolved
+through `expansion_loc`, so an expansion's tokens are in the context of
+their outermost invocation; the caller does not have to. A definition
+is asked by its name, an expansion by its name, a conditional or an
+inclusion by its `#` (a binary search over the instances' bases;
+nothing is stored per stage-1 row). `context(i)` walks `parent()` out to
+the root; `instances_of(file)` lists a file's instances (a scan).
+`FileId` is "this file", `IncIx` "this instance of this file":
+`inc(i).file` gives the first from the second.
+
 **Keys and stability.** The record stores translation-unit-local `Loc`s
 and indices; it does not compute keys. These are stable: the same input
 with the same options gives the same record, index for index, and
@@ -1017,6 +1139,16 @@ A definition in a file is keyed by its name's position; a builtin by its
 name; a predefined or command-line one by (source, name, parameters and
 replacement text), never by an offset in `<built-in>`, which shifts
 when an unrelated `-D` changes. Macro locations are never part of a key.
+A conditional or an inclusion in a file is keyed by its `#`; a
+`-include` by its ordinal among the command-line inclusions, from 1
+(`command-line:<n>`). An include context's key is the chain of its
+inclusions' keys from the root (`context(i)`): unique in the
+translation unit, the same in every translation unit that reaches the
+header by the same directives, and changed only by an edit before one of
+those directives in one of the chain's files. A header entered twice
+has its rows twice, each instance's rows together and in directive
+order, at the same offsets in each instance's range; two runs of one
+input give equal `CondIx` and `IncIx`, as they do `DefIx` and `ExpIx`.
 
 **Dump.** `-fkiln-dump-pp-record` prints one line per entry, with keys as
 `file:offset` (the file's last path component), to standard output:
@@ -1026,8 +1158,19 @@ line per output token at a macro location comes first. Lines:
 `def <key> <name>[(<params>)] <source> [dir <#>..<end>] = <body>
 [ended ...]`, `param <def> <i> <name> <loc> uses <b3:plain|str|paste[/va-opt]>...`,
 `undef <key> <name> ends <def>|none`, `exp <key> <name> def <def>
-[parent <exp>] end <loc> [flags] [args <a0>...]` and a last line
-`record complete` or `record incomplete: <flags>`. Origins print as
+[parent <exp>] end <loc> [flags] [args <a0>...]`, then
+`inc <key> <kind> <written> [macro <exp>] [name <lo>..<hi>] <outcome>
+[file <name>] [dir <n>] [guard <def>] [ctx i<n>]`, `cond <key> <kind>
+<outcome> [guard] [unterminated] [open <key>|stray] cond <lo>..<hi>
+[group <lo>..<hi>]` and `once <key>`, and a last line `record complete`
+or `record incomplete: <flags>`. Instances are numbered `i1`, `i2`, ...
+in row order; the `inc` line that makes one says `ctx i<n>`, and every
+`def`, `undef`, `exp`, `inc`, `cond` and `once` line whose key lies in
+an instance ends with `in i<n>` (none in the main file). The `in` field
+is translation-unit local: a comparison across two main files drops it
+and compares the keys, or follows the chain through the `inc` lines.
+Conditionals in `<built-in>` are not printed; an `-include`'s written
+name is reduced to its last path component. Origins print as
 `<exp>:b<k>` (body token), `<exp>:a<k>@b<use>[<index>]<<from>` (argument,
 then the origin of `from`), `<exp>:<kind>(b<i>..b<j>)` (made) and `?`.
 Builtin, predefined, command-line and restored definitions are printed
@@ -1036,25 +1179,36 @@ of its own, which differ between `-fclang-compat=` versions). The harness direct
 `pp-record: <golden>` (spec/harness.md) runs `-E -fkiln-dump-pp-record`
 on the test and compares the output.
 
-**Coverage (stage 1).** Recorded: definitions with their history,
-parameter uses, expansions with argument spans, and the origin of every
-macro location made while recording. Gaps are never silent:
+**Coverage (stages 1 and 2).** Recorded: definitions with their history,
+parameter uses, expansions with argument spans, the origin of every
+macro location made while recording, every conditional directive (live
+and dead) with its outcome, ranges, links, guard flag and
+unterminated flag, the `#pragma once` that took effect, every inclusion
+directive with its outcome, and the include context of every location.
+Gaps are never silent:
 `gaps()` (`is_complete()`) has `RESTORED` when a PCH snapshot or a
 preprocessor-state record was installed, or a definition was met that
 the record did not see made (registered when first met, source
 `Restored`), `IMPORTED` when a header unit's macros came from a module
-file or image, and `LOC_SPACE_EXHAUSTED` when an expansion or an
+file or image (a header-unit import with outcome `Imported`), and
+`LOC_SPACE_EXHAUSTED` when an expansion or an
 inclusion could not get its own locations (two inclusions may then share
-`Loc`s). Not yet recorded: conditionals (outcome, group range, guard,
-once), inclusions and include contexts, the reads of a condition,
+`Loc`s, and `inclusion_of` cannot tell them apart). Under `RESTORED` the
+conditionals, inclusions and `#pragma once` of the restored prefix are
+absent too, and a skip (`SkippedGuard`, `SkippedOnce`) may come from a
+guard or once mark of the prefix. Not yet recorded: the reads of a
+condition (the macro names tested, the identifiers evaluated to 0),
 `__has_include` and feature-query values, `push_macro`/`pop_macro` as
-events, the operand list of a made token, and carriage of the record in
-PCH snapshots and module images (stages 2-4, WP-2111..WP-2113).
+events, the operand list of a made token (stage 3, WP-2112); the file
+and search index of an `#embed`; and carriage of the record in PCH
+snapshots and module images (stage 4, WP-2113).
 
 **Cost.** Per expansion 24 bytes, per argument 8, per argument token 4,
 per definition 32 plus the retained `MacroDef`, per parameter 4, per
-`#undef` 24, and 8 per source-manager macro entry (checked by a unit
-test in `record.rs`). `bytes()` is the total, including the definitions
+`#undef` 24, and 8 per source-manager macro entry; per conditional
+directive 20, per inclusion directive 72 plus its written name, per
+instance 8 and per `#pragma once` 4 (checked by a unit test in
+`record.rs`). `bytes()` is the total, including the definitions
 only the record keeps alive. Recording off allocates nothing.
 `-fkiln-memory-report` shows it as the `pp.record` row. Measured at
 WP-2110 (release build, median of 5): `<bits/stdc++.h>` makes 38,780
@@ -1062,13 +1216,22 @@ expansions and a 5.0 MB record (about 130 bytes per expansion, all
 tables and spare capacity included), peak RSS +3.9 MiB, `-E` time
 unchanged; clang's `SemaExpr.cpp` makes 131,035 expansions and a 17.4 MB
 record, +12.4 MiB. With recording off, time and peak RSS are within
-noise of the build without the record.
+noise of the build without the record. Measured at WP-2111 (release
+build, 14 runs each): `<bits/stdc++.h>` adds 115,915 conditional rows
+(42% of them dead) and 1,970 inclusion rows, and the record grows to
+7.8 MB; peak RSS is +6.2 MiB over recording off, and `-fsyntax-only`
+and `-E` times are within noise. With recording off, time and peak RSS
+are within noise of the build before stage 2.
 
 **Tests.** `crates/kiln_pp/tests/pp_record.rs` (the parameter-use
 classifier against real expansions, stability, `-E` identity with
-recording on and off, a header's keys equal under two main files, the
-gap flag of an installed state); the dump goldens under
-`tests/conformance/cpp.replace/record`.
+recording on and off, a header's keys equal under two main files with
+the `in` field dropped, the gap flag of an installed state, the tiling
+of every conditional, a header's rows per instance and equal across two
+runs, the include contexts); `crates/kiln_driver/tests/modules_bmi.rs`
+`pp_record_header_unit_import` (an `Imported` row and the gap); the
+dump goldens under `tests/conformance/cpp.replace/record`,
+`cpp.cond/record`, `cpp.include/record` and `cpp.embed/record`.
 
 ## Behavior (the standard is normative; clang 19 decides what it leaves open)
 

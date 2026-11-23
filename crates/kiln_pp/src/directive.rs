@@ -14,6 +14,7 @@ use crate::cond::{IfContext, IfEvaluator};
 use crate::include::{EmbedRequest, IncludeKind, IncludeRequest, ResolvedInclude};
 use crate::macros::MacroDef;
 use crate::preprocessor::{Cond, Frame, Marker, Preprocessor};
+use crate::record::{CondKind, CondOutcome, DefSource, IncKind, IncOutcome};
 use crate::tok::{PpFlags, PpTok};
 
 /// The directive names the core dispatches on.
@@ -94,6 +95,20 @@ impl Dir {
     }
 }
 
+/// The preprocessing record's kind of the conditional directive `d`.
+fn cond_kind(d: Dir) -> CondKind {
+    match d {
+        Dir::If => CondKind::If,
+        Dir::Ifdef => CondKind::Ifdef,
+        Dir::Ifndef => CondKind::Ifndef,
+        Dir::Elif => CondKind::Elif,
+        Dir::Elifdef => CondKind::Elifdef,
+        Dir::Elifndef => CondKind::Elifndef,
+        Dir::Else => CondKind::Else,
+        _ => CondKind::Endif,
+    }
+}
+
 impl<'a> Preprocessor<'a, '_> {
     /// The directive name of identifier token `t`, if it is one.
     pub(crate) fn dir_of(&self, t: &PpTok) -> Option<Dir> {
@@ -128,6 +143,18 @@ impl<'a> Preprocessor<'a, '_> {
                         .arg(self.interner.as_str(mname)),
                 );
                 self.finish_directive();
+                if self.record.is_some() && dir != Some(Dir::Pragma) {
+                    let kind = match dir {
+                        Some(Dir::IncludeNext) => IncKind::IncludeNext,
+                        Some(Dir::Import) => IncKind::Import,
+                        Some(Dir::Embed) => IncKind::Embed,
+                        _ => IncKind::Include,
+                    };
+                    let at = Span::empty(name.tok.span.hi);
+                    let parent = self.cur_file_ref().map_or(u32::MAX, |f| f.rec_inc);
+                    self.rec_inc_row(kind, self.dir_hash, at, None, u32::MAX, parent);
+                    self.rec_inc_end();
+                }
                 return;
             }
             self.emit(Diag::new(DiagId::pp_embedded_directive_ext, name.tok.span));
@@ -167,6 +194,100 @@ impl<'a> Preprocessor<'a, '_> {
             },
         }
         self.finish_directive();
+        if self.rec_inc != u32::MAX {
+            self.rec_inc_end();
+        }
+    }
+
+    /// While recording: the inclusion row of the directive being read ends
+    /// where it finished.
+    fn rec_inc_end(&mut self) {
+        let i = std::mem::replace(&mut self.rec_inc, u32::MAX);
+        let end = self.dir_end;
+        if let Some(r) = self.record.as_deref_mut() {
+            r.set_inc_end(i, end);
+        }
+    }
+
+    /// While recording: the file range of a header name at `span` (a
+    /// macro-expanded name: its invocation).
+    fn rec_file_span(&self, span: Span) -> Span {
+        if self.sm.is_macro_loc(span.lo) { self.sm.expansion_span(span.lo) } else { span }
+    }
+
+    /// While recording: the row of the inclusion directive being read
+    /// (`#` at `hash`), named at `name` (a file range) as `written`
+    /// (`None`: malformed). `name_exp` is the first expansion entered
+    /// while reading the name, `parent` the includer's instance. The
+    /// predefines' `#include` lines are `-include`s. Its end is set when
+    /// the directive finishes (a header-unit import's by
+    /// `module_directive`).
+    fn rec_inc_row(
+        &mut self,
+        kind: IncKind,
+        hash: Loc,
+        name: Span,
+        written: Option<&str>,
+        name_exp: u32,
+        parent: u32,
+    ) -> u32 {
+        if self.record.is_none() {
+            return u32::MAX;
+        }
+        let source = self.rec_source(hash);
+        let kind = if source != DefSource::File && kind == IncKind::Include {
+            IncKind::CommandLine
+        } else {
+            kind
+        };
+        let Some(r) = self.record.as_deref_mut() else { return u32::MAX };
+        let i = r.inclusion(kind, source, hash, name, written.unwrap_or(""), name_exp, parent);
+        if kind == IncKind::HeaderImport {
+            self.rec_hu = i;
+        } else {
+            self.rec_inc = i;
+        }
+        i
+    }
+
+    /// While recording: what became of inclusion row `i`.
+    pub(crate) fn rec_inc_outcome(
+        &mut self,
+        i: u32,
+        outcome: IncOutcome,
+        file: Option<FileId>,
+        lookup: Option<u32>,
+    ) {
+        if let Some(r) = self.record.as_deref_mut() {
+            r.set_inc_outcome(i, outcome, file, lookup);
+        }
+    }
+
+    /// While recording: the expansion count, and the instance holding the
+    /// directive being read (for [`Self::rec_inc_row`]).
+    pub(crate) fn rec_inc_start(&self) -> (u32, u32) {
+        match self.record.as_deref() {
+            Some(r) => (r.exp_count(), self.cur_file_ref().map_or(u32::MAX, |f| f.rec_inc)),
+            None => (u32::MAX, u32::MAX),
+        }
+    }
+
+    /// While recording: the row of an inclusion directive whose header
+    /// name `ft` was read (`ok`: usable), `exp0` the expansion count before
+    /// it.
+    pub(crate) fn rec_inc_name(
+        &mut self,
+        kind: IncKind,
+        ft: &PpTok,
+        ok: bool,
+        start: (u32, u32),
+    ) -> u32 {
+        let Some(r) = self.record.as_deref() else { return u32::MAX };
+        let name_exp = if r.exp_count() > start.0 { start.0 } else { u32::MAX };
+        let name = self.rec_file_span(ft.tok.span);
+        let written = if ok { Some(self.spelling(&ft.tok).into_owned()) } else { None };
+        let hash = if kind == IncKind::HeaderImport { self.rec_import_at } else { self.dir_hash };
+        self.rec_inc_row(kind, hash, name, written.as_deref(), name_exp, start.1)
     }
 
     /// Whether the directive line `# name ...` of an assembler-with-cpp
@@ -378,8 +499,7 @@ impl<'a> Preprocessor<'a, '_> {
 
     /// Where the definition or `#undef` at `loc` came from (spec/pp.md
     /// "Preprocessing record").
-    fn rec_source(&self, loc: Loc) -> crate::record::DefSource {
-        use crate::record::DefSource;
+    fn rec_source(&self, loc: Loc) -> DefSource {
         let Some((f, off)) = self.sm.offset_of(loc) else { return DefSource::File };
         if self.sm.file_name(f) != "<built-in>" || !self.sm.is_virtual(f) {
             return DefSource::File;
@@ -974,14 +1094,44 @@ impl Preprocessor<'_, '_> {
     /// level of the file: `guard` is the controlling macro it may
     /// introduce (`#ifndef X` / `#if !defined(X)` with `X` undefined and
     /// no tokens before).
-    fn mi_enter(&mut self, guard: Option<Symbol>) {
+    /// `rec` is the opener's row in the preprocessing record.
+    fn mi_enter(&mut self, guard: Option<Symbol>, rec: u32) {
         if let Some(f) = self.cur_file()
             && f.conds.is_empty()
         {
             match guard {
-                Some(m) => f.mi.enter_ifndef(m),
+                Some(m) => f.mi.enter_ifndef(m, rec),
                 None => f.mi.invalidate(),
             }
+        }
+    }
+
+    /// While recording: the row of the conditional directive just finished
+    /// (its `#` at `hash`, its name `name`); `prev` is its conditional's
+    /// latest row (`u32::MAX` for an opener or a stray directive).
+    fn rec_cond(
+        &mut self,
+        kind: CondKind,
+        outcome: CondOutcome,
+        hash: Loc,
+        name: &PpTok,
+        prev: u32,
+    ) -> u32 {
+        let end = self.dir_end;
+        match self.record.as_deref_mut() {
+            Some(r) => r.push_cond(kind, outcome, hash, name.tok.span.hi, end, prev),
+            None => u32::MAX,
+        }
+    }
+
+    /// While recording: `rec` is now the innermost open conditional's
+    /// latest row.
+    fn rec_top_cond(&mut self, rec: u32) {
+        if self.record.is_some()
+            && let Some(f) = self.cur_file()
+            && let Some(c) = f.conds.last_mut()
+        {
+            c.rec = rec;
         }
     }
 
@@ -1002,24 +1152,29 @@ impl Preprocessor<'_, '_> {
     fn do_if(&mut self, name: PpTok, read_before: bool) {
         let v = self.eval_if();
         let ndef = self.if_ndef.take();
-        self.mi_enter(if v && !read_before { ndef } else { None });
+        let outcome = if v { CondOutcome::Taken } else { CondOutcome::NotTaken };
+        let rec = self.rec_cond(CondKind::If, outcome, self.dir_hash, &name, u32::MAX);
+        self.mi_enter(if v && !read_before { ndef } else { None }, rec);
         if v {
             self.push_cond(Cond {
                 span: name.tok.span,
                 found_non_skip: true,
                 found_else: false,
                 was_skipping: false,
+                rec,
             });
         } else {
-            self.skip_excluded(name.tok.span, false, false);
+            self.skip_excluded(name.tok.span, false, false, rec);
         }
     }
 
     /// `#ifdef` / `#ifndef`.
     fn do_ifdef(&mut self, name: PpTok, ndef: bool, read_before: bool) {
+        let kind = if ndef { CondKind::Ifndef } else { CondKind::Ifdef };
         let Some((s, _)) = self.read_macro_name(false) else {
-            self.mi_enter(None);
-            self.skip_excluded(name.tok.span, false, false);
+            let rec = self.rec_cond(kind, CondOutcome::NotTaken, self.dir_hash, &name, u32::MAX);
+            self.mi_enter(None, rec);
+            self.skip_excluded(name.tok.span, false, false, rec);
             return;
         };
         self.check_eod(if ndef { "ifndef" } else { "ifdef" }, false);
@@ -1030,15 +1185,18 @@ impl Preprocessor<'_, '_> {
             }
             None => false,
         };
-        self.mi_enter((ndef && !defined && !read_before).then_some(s));
+        let outcome = if defined == ndef { CondOutcome::NotTaken } else { CondOutcome::Taken };
+        let rec = self.rec_cond(kind, outcome, self.dir_hash, &name, u32::MAX);
+        self.mi_enter((ndef && !defined && !read_before).then_some(s), rec);
         if defined == ndef {
-            self.skip_excluded(name.tok.span, false, false);
+            self.skip_excluded(name.tok.span, false, false, rec);
         } else {
             self.push_cond(Cond {
                 span: name.tok.span,
                 found_non_skip: true,
                 found_else: false,
                 was_skipping: false,
+                rec,
             });
         }
     }
@@ -1061,7 +1219,11 @@ impl Preprocessor<'_, '_> {
         };
         self.elifdef_ext(&name, d);
         self.finish_directive();
-        let Some(c) = self.pop_cond() else {
+        let c = self.pop_cond();
+        let prev = c.map_or(u32::MAX, |c| c.rec);
+        let rec =
+            self.rec_cond(cond_kind(d), CondOutcome::NotEvaluated, self.dir_hash, &name, prev);
+        let Some(c) = c else {
             if d == Dir::Elif {
                 self.emit(Diag::new(DiagId::pp_elif_without_if, name.tok.span));
             } else {
@@ -1073,13 +1235,16 @@ impl Preprocessor<'_, '_> {
             self.emit(Diag::new(DiagId::pp_elif_after_else, name.tok.span).arg(n));
         }
         self.mi_exit(false);
-        self.skip_excluded(c.span, true, c.found_else);
+        self.skip_excluded(c.span, true, c.found_else, rec);
     }
 
     /// `#else` after an included group.
     fn do_else(&mut self, name: PpTok) {
         self.check_eod("else", false);
-        let Some(c) = self.pop_cond() else {
+        let c = self.pop_cond();
+        let prev = c.map_or(u32::MAX, |c| c.rec);
+        let rec = self.rec_cond(CondKind::Else, CondOutcome::NotTaken, self.dir_hash, &name, prev);
+        let Some(c) = c else {
             self.emit(Diag::new(DiagId::pp_else_without_if, name.tok.span));
             return;
         };
@@ -1087,17 +1252,54 @@ impl Preprocessor<'_, '_> {
             self.emit(Diag::new(DiagId::pp_else_after_else, name.tok.span));
         }
         self.mi_exit(false);
-        self.skip_excluded(c.span, true, true);
+        self.skip_excluded(c.span, true, true, rec);
     }
 
     /// `#endif`.
     fn do_endif(&mut self, name: PpTok) {
         self.check_eod("endif", false);
-        if self.pop_cond().is_none() {
+        let c = self.pop_cond();
+        let prev = c.map_or(u32::MAX, |c| c.rec);
+        self.rec_cond(CondKind::Endif, CondOutcome::Closes, self.dir_hash, &name, prev);
+        if c.is_none() {
             self.emit(Diag::new(DiagId::pp_endif_without_if, name.tok.span));
         } else {
             self.mi_exit(true);
         }
+    }
+
+    /// An `#else` met while skipping: whether its group is entered (`None`:
+    /// no open conditional).
+    fn skipped_else(&mut self, name: &PpTok, hash: Loc) -> Option<bool> {
+        let c = self.cur_file().and_then(|f| f.conds.last().copied())?;
+        if c.found_else {
+            self.emit(Diag::new(DiagId::pp_else_after_else, name.tok.span));
+        }
+        let enter = !c.was_skipping && !c.found_non_skip;
+        if let Some(f) = self.cur_file()
+            && let Some(c) = f.conds.last_mut()
+        {
+            c.found_else = true;
+            c.found_non_skip |= enter;
+        }
+        if enter {
+            self.quiet_lex = false;
+            self.check_eod("else", false);
+        } else {
+            self.finish_directive();
+        }
+        if self.record.is_some() {
+            let outcome = if c.was_skipping {
+                CondOutcome::Dead
+            } else if enter {
+                CondOutcome::Taken
+            } else {
+                CondOutcome::NotTaken
+            };
+            let rec = self.rec_cond(CondKind::Else, outcome, hash, name, c.rec);
+            self.rec_top_cond(rec);
+        }
+        Some(enter)
     }
 
     /// Skips a group that is not included, up to the directive that ends
@@ -1105,9 +1307,23 @@ impl Preprocessor<'_, '_> {
     /// without diagnostics or macro lookups; nested conditionals are
     /// tracked; `#elif` conditions are evaluated only when they could
     /// select a group.
-    pub(crate) fn skip_excluded(&mut self, if_span: Span, found_non_skip: bool, found_else: bool) {
+    /// `rec` is the preprocessing record's row of the directive that
+    /// starts skipping.
+    pub(crate) fn skip_excluded(
+        &mut self,
+        if_span: Span,
+        found_non_skip: bool,
+        found_else: bool,
+        rec: u32,
+    ) {
         crate::profile::time!(t_skip_ns);
-        self.push_cond(Cond { span: if_span, found_non_skip, found_else, was_skipping: false });
+        self.push_cond(Cond {
+            span: if_span,
+            found_non_skip,
+            found_else,
+            was_skipping: false,
+            rec,
+        });
         // clang reports the range from the `#` of the directive that
         // started skipping (`HashTokenLoc`).
         let start = if self.dir_hash.is_valid() { self.dir_hash } else { if_span.lo };
@@ -1142,51 +1358,39 @@ impl Preprocessor<'_, '_> {
                 self.finish_directive();
                 continue;
             };
+            let hash = t.span.lo;
             let done = match d {
                 Dir::If | Dir::Ifdef | Dir::Ifndef => {
                     self.finish_directive();
+                    let rec = self.rec_cond(cond_kind(d), CondOutcome::Dead, hash, &name, u32::MAX);
                     self.push_cond(Cond {
                         span: name.tok.span,
                         found_non_skip: false,
                         found_else: false,
                         was_skipping: true,
+                        rec,
                     });
                     false
                 }
                 Dir::Endif => {
                     let c = self.pop_cond();
+                    let prev = c.map_or(u32::MAX, |c| c.rec);
                     if c.is_some_and(|c| !c.was_skipping) {
                         self.quiet_lex = false;
                         self.check_eod("endif", false);
+                        self.rec_cond(CondKind::Endif, CondOutcome::Closes, hash, &name, prev);
                         true
                     } else {
                         self.finish_directive();
+                        self.rec_cond(CondKind::Endif, CondOutcome::Dead, hash, &name, prev);
                         false
                     }
                 }
                 Dir::Else => {
-                    let Some(c) = self.cur_file().and_then(|f| f.conds.last().copied()) else {
-                        break;
-                    };
-                    if c.found_else {
-                        self.emit(Diag::new(DiagId::pp_else_after_else, name.tok.span));
-                    }
-                    let enter = !c.was_skipping && !c.found_non_skip;
-                    if let Some(f) = self.cur_file()
-                        && let Some(c) = f.conds.last_mut()
-                    {
-                        c.found_else = true;
-                        c.found_non_skip |= enter;
-                    }
-                    if enter {
-                        self.quiet_lex = false;
-                        self.check_eod("else", false);
-                    } else {
-                        self.finish_directive();
-                    }
+                    let Some(enter) = self.skipped_else(&name, hash) else { break };
                     enter
                 }
-                Dir::Elif | Dir::Elifdef | Dir::Elifndef => self.skipped_elif(&name, d),
+                Dir::Elif | Dir::Elifdef | Dir::Elifndef => self.skipped_elif(&name, d, hash),
                 _ => {
                     self.finish_directive();
                     false
@@ -1202,12 +1406,31 @@ impl Preprocessor<'_, '_> {
     }
 
     /// `#elif*` inside a skipped group; true if its group is entered.
-    #[allow(clippy::many_single_char_names)]
-    fn skipped_elif(&mut self, name: &PpTok, d: Dir) -> bool {
+    fn skipped_elif(&mut self, name: &PpTok, d: Dir, hash: Loc) -> bool {
         let Some(c) = self.cur_file().and_then(|f| f.conds.last().copied()) else {
             self.finish_directive();
             return false;
         };
+        let enter = self.skipped_elif_eval(name, d, c);
+        if self.record.is_some() {
+            let outcome = if c.was_skipping {
+                CondOutcome::Dead
+            } else if c.found_non_skip {
+                CondOutcome::NotEvaluated
+            } else if enter {
+                CondOutcome::Taken
+            } else {
+                CondOutcome::NotTaken
+            };
+            let rec = self.rec_cond(cond_kind(d), outcome, hash, name, c.rec);
+            self.rec_top_cond(rec);
+        }
+        enter
+    }
+
+    /// [`Self::skipped_elif`] for the innermost open conditional `c`.
+    #[allow(clippy::many_single_char_names)]
+    fn skipped_elif_eval(&mut self, name: &PpTok, d: Dir, c: Cond) -> bool {
         let n = match d {
             Dir::Elifdef => "elifdef",
             Dir::Elifndef => "elifndef",
@@ -1335,6 +1558,13 @@ impl Preprocessor<'_, '_> {
         Some((sp[1..sp.len() - 1].to_string(), angled))
     }
 
+    /// [`Self::include_name`] would accept `t` (no diagnostic).
+    pub(crate) fn include_name_ok(&self, t: &Token) -> bool {
+        let sp = self.spelling(t);
+        let b = sp.as_bytes();
+        b.len() > 2 && matches!((b[0], b[b.len() - 1]), (b'<', b'>') | (b'"', b'"'))
+    }
+
     /// The physical file containing the current directive (`None` in the
     /// predefines buffer).
     pub(crate) fn includer(&self) -> Option<FileId> {
@@ -1423,10 +1653,10 @@ impl Preprocessor<'_, '_> {
         if self.state_hooks.is_some() && self.in_predefines() {
             self.state_point(name.tok.span.lo);
         }
-        let (dir, kind) = match d {
-            Dir::IncludeNext => ("include_next", IncludeKind::IncludeNext),
-            Dir::Import => ("import", IncludeKind::Import),
-            _ => ("include", IncludeKind::Include),
+        let (dir, kind, rk) = match d {
+            Dir::IncludeNext => ("include_next", IncludeKind::IncludeNext, IncKind::IncludeNext),
+            Dir::Import => ("import", IncludeKind::Import, IncKind::Import),
+            _ => ("include", IncludeKind::Include, IncKind::Include),
         };
         let mut lookup_from = None;
         match d {
@@ -1437,11 +1667,10 @@ impl Preprocessor<'_, '_> {
             }
             _ => {}
         }
-        let Ok(ft) = self.lex_header_name() else { return };
-        if ft.kind() != TokKind::HeaderName {
-            self.emit(Diag::new(DiagId::pp_include_expects_file, ft.tok.span));
-            return;
-        }
+        let start = self.rec_inc_start();
+        let Some(ft) = self.include_header_name(rk, start) else { return };
+        let ok = self.record.is_some() && self.include_name_ok(&ft.tok);
+        let ri = self.rec_inc_name(rk, &ft, ok, start);
         self.check_eod(dir, true);
         let Some((fname, angled)) = self.include_name(&ft.tok, ft.tok.span) else { return };
         let req = IncludeRequest {
@@ -1464,6 +1693,7 @@ impl Preprocessor<'_, '_> {
             });
         }
         let Some(r) = res else {
+            self.rec_inc_outcome(ri, IncOutcome::NotFound, None, None);
             // `-MG`: a generated header; the dependency callbacks saw it.
             if !self.opts.suppress_include_not_found {
                 let d = Diag::new(DiagId::pp_file_not_found, ft.tok.span).arg(&req.name);
@@ -1483,13 +1713,16 @@ impl Preprocessor<'_, '_> {
         // clang `IncludeLimitReached`: after the depth limit was hit (an
         // include cycle), a file already entered is not entered again.
         if self.include_limit_reached && self.entered.contains(&r.file) {
+            self.rec_inc_outcome(ri, IncOutcome::AfterDepthLimit, Some(r.file), r.lookup_index);
             return;
         }
         // The multiple-include optimization: re-including a guarded file
         // whose guard macro is defined has no effect.
-        if self.once_files.contains(&r.file)
-            || self.guards.get(&r.file).is_some_and(|&m| self.macros.is_defined(m))
-        {
+        let once = self.once_files.contains(&r.file);
+        if once || self.guards.get(&r.file).is_some_and(|&m| self.macros.is_defined(m)) {
+            if self.record.is_some() {
+                self.rec_skipped(ri, &r, once);
+            }
             self.callbacks.file_skipped(&r, system);
             return;
         }
@@ -1497,6 +1730,7 @@ impl Preprocessor<'_, '_> {
         if self.include_depth + 1 >= self.opts.max_include_depth {
             self.emit(Diag::new(DiagId::pp_include_nested_too_deeply, ft.tok.span));
             self.include_limit_reached = true;
+            self.rec_inc_outcome(ri, IncOutcome::DepthLimit, Some(r.file), r.lookup_index);
             return;
         }
         if d == Dir::Import {
@@ -1511,6 +1745,67 @@ impl Preprocessor<'_, '_> {
             system,
             extern_c,
         );
+        if ri != u32::MAX {
+            self.rec_entered(ri, r.file, r.lookup_index);
+        }
+    }
+
+    /// The header name of an `#include`-like directive (a `Malformed` row
+    /// when there is none); `start` is [`Self::rec_inc_start`].
+    fn include_header_name(&mut self, rk: IncKind, start: (u32, u32)) -> Option<PpTok> {
+        let ft = match self.lex_header_name() {
+            Ok(ft) => ft,
+            Err(t) => {
+                self.rec_inc_name(rk, &t, false, start);
+                return None;
+            }
+        };
+        if ft.kind() != TokKind::HeaderName {
+            self.emit(Diag::new(DiagId::pp_include_expects_file, ft.tok.span));
+            self.rec_inc_name(rk, &ft, false, start);
+            return None;
+        }
+        Some(ft)
+    }
+
+    /// While recording: inclusion row `i` was skipped, by `#pragma once`
+    /// (or `#import`) or by the guard of `r`'s file.
+    fn rec_skipped(&mut self, i: u32, r: &ResolvedInclude, once: bool) {
+        let guard = if once { None } else { self.guards.get(&r.file).copied() };
+        let def = guard.and_then(|m| self.macros.get_rc(m).cloned());
+        let outcome = match (&def, self.record.as_deref_mut()) {
+            (Some(def), Some(rec)) => IncOutcome::SkippedGuard { def: rec.lookup(def) },
+            _ => IncOutcome::SkippedOnce,
+        };
+        self.rec_inc_outcome(i, outcome, Some(r.file), r.lookup_index);
+    }
+
+    /// While recording: inclusion row `i` entered `file`, now the top
+    /// frame, which becomes its instance.
+    pub(crate) fn rec_entered(&mut self, i: u32, file: FileId, lookup: Option<u32>) {
+        let base = match self.frames.last_mut() {
+            Some(Frame::File(f)) if f.file == file => {
+                f.rec_inc = i;
+                f.base
+            }
+            _ => return,
+        };
+        self.rec_inc_outcome(i, IncOutcome::Entered { base }, Some(file), lookup);
+    }
+
+    /// The module file's copy of header-unit import `i`'s header, just
+    /// pushed, is replayed: it is the `Imported` row's instance.
+    pub(crate) fn rec_replayed(&mut self, i: u32) {
+        let base = match self.frames.last_mut() {
+            Some(Frame::File(f)) => {
+                f.rec_inc = i;
+                f.base
+            }
+            _ => return,
+        };
+        if let Some(r) = self.record.as_deref_mut() {
+            r.set_inc_base(i, base);
+        }
     }
 
     /// The `(` of `__has_include` / `__has_embed` and the header name after
@@ -1890,11 +2185,21 @@ impl Preprocessor<'_, '_> {
             Some(_) => DiagId::pp_embed_c23_ext,
         };
         self.emit(Diag::new(id, name.tok.span));
-        let Ok(ft) = self.lex_header_name() else { return };
+        let start = self.rec_inc_start();
+        let ft = match self.lex_header_name() {
+            Ok(ft) => ft,
+            Err(t) => {
+                self.rec_inc_name(IncKind::Embed, &t, false, start);
+                return;
+            }
+        };
         if ft.kind() != TokKind::HeaderName {
             self.emit(Diag::new(DiagId::pp_include_expects_file, ft.tok.span));
+            self.rec_inc_name(IncKind::Embed, &ft, false, start);
             return;
         }
+        let ok = self.record.is_some() && self.include_name_ok(&ft.tok);
+        let ri = self.rec_inc_name(IncKind::Embed, &ft, ok, start);
         let (params, _) = self.lex_embed_params(false);
         let Some(params) = params else { return };
         let Some((fname, angled)) = self.include_name(&ft.tok, ft.tok.span) else { return };
@@ -1908,9 +2213,11 @@ impl Preprocessor<'_, '_> {
             query_only: false,
         };
         let Some(data) = self.resolve_embed_req(&req) else {
+            self.rec_inc_outcome(ri, IncOutcome::NotFound, None, None);
             self.emit(Diag::new(DiagId::pp_file_not_found, ft.tok.span).arg(&req.name));
             return;
         };
+        self.rec_inc_outcome(ri, IncOutcome::Embedded, None, None);
         self.finish_directive();
         let mut toks = self.take_buf();
         if data.bytes.is_empty() {

@@ -418,6 +418,9 @@ impl Preprocessor<'_, '_> {
     /// queues its marker and performs the import.
     pub(crate) fn module_directive(&mut self, t: Token, export: bool, import: bool) {
         self.start_directive();
+        if self.record.is_some() {
+            self.rec_import_at = t.span.lo;
+        }
         let kw_span = if export { self.lex_unexpanded().tok.span } else { t.span };
         let kw = if import { "import" } else { "module" };
         let kind = self.read_directive_body(import, kw);
@@ -440,6 +443,20 @@ impl Preprocessor<'_, '_> {
             self.finish_directive();
         } else {
             self.end_directive_at_semi();
+        }
+        if self.rec_hu != u32::MAX {
+            // A header-unit import's row ends at its `;` (or its line's end).
+            let end = match (&d.kind, self.cur_file_ref()) {
+                (DirectiveKind::Invalid, _) | (_, None) => self.dir_end,
+                (_, Some(f)) => f.base.with_offset(f.lx.offset()),
+            };
+            let hu = std::mem::replace(&mut self.rec_hu, u32::MAX);
+            if let Some(r) = self.record.as_deref_mut() {
+                r.set_inc_end(hu, end);
+            }
+            if matches!(d.kind, DirectiveKind::Import { header: true, .. }) {
+                self.rec_hu = hu;
+            }
         }
         d.end = self.main_directive_end();
         let perform = match &d.kind {
@@ -681,11 +698,22 @@ impl Preprocessor<'_, '_> {
     /// `import <h>;` / `import "h";`: resolves the header like
     /// `#include`.
     fn read_header_import(&mut self) -> Option<DirectiveKind> {
-        let Ok(ft) = self.lex_header_name() else { return None };
+        use crate::record::{IncKind, IncOutcome};
+        let start = self.rec_inc_start();
+        let ft = match self.lex_header_name() {
+            Ok(ft) => ft,
+            Err(t) => {
+                self.rec_inc_name(IncKind::HeaderImport, &t, false, start);
+                return None;
+            }
+        };
         if ft.kind() != TokKind::HeaderName {
             self.emit(Diag::new(DiagId::pp_include_expects_file, ft.tok.span));
+            self.rec_inc_name(IncKind::HeaderImport, &ft, false, start);
             return None;
         }
+        let ok = self.record.is_some() && self.include_name_ok(&ft.tok);
+        let ri = self.rec_inc_name(IncKind::HeaderImport, &ft, ok, start);
         let (name, angled) = self.include_name(&ft.tok, ft.tok.span)?;
         let req = IncludeRequest {
             kind: IncludeKind::Include,
@@ -699,9 +727,11 @@ impl Preprocessor<'_, '_> {
         let res = self.resolve_include(&req);
         self.callbacks.inclusion_directive(&req, res.as_ref());
         let Some(r) = res else {
+            self.rec_inc_outcome(ri, IncOutcome::NotFound, None, None);
             self.emit(Diag::new(DiagId::pp_file_not_found, ft.tok.span).arg(&req.name));
             return None;
         };
+        self.rec_inc_outcome(ri, IncOutcome::Imported, Some(r.file), r.lookup_index);
         let display = self.spelling(&ft.tok).into_owned();
         let key = format!("\"{}", self.sm.file_name(r.file));
         if let Some(m) = &mut self.modules {
@@ -1234,6 +1264,9 @@ impl Preprocessor<'_, '_> {
             return false;
         };
         self.main_file = Some(file);
+        if let Some(r) = self.record.as_deref_mut() {
+            r.main_file = Some(file);
+        }
         self.push_file(file, None, None, None, false, false);
         if let Some(b) = builtin {
             self.push_file(b, None, None, None, false, false);
@@ -1424,6 +1457,9 @@ impl Preprocessor<'_, '_> {
 
     /// Imports the header unit `key` (resolved by `read_header_import`).
     fn import_header(&mut self, key: String, span: Span) {
+        // While recording: this import's row (outcome `Imported` unless the
+        // unit is read from source below).
+        let hu = std::mem::replace(&mut self.rec_hu, u32::MAX);
         let Some(&(file, system)) = self.modules.as_ref().and_then(|m| m.header_files.get(&key))
         else {
             return;
@@ -1451,6 +1487,9 @@ impl Preprocessor<'_, '_> {
                 module: &unit,
                 cache_inputs: None,
             });
+            if let Some(r) = &self.record {
+                r.set_flag(crate::record::RecordFlags::IMPORTED);
+            }
             let read = bmi::read_file(&self.sm.work_dir().join_str(&path));
             let Some(c) = self.load_capsule(&path, read, Some(&unit), span) else { return };
             if c.kind != UnitKind::HeaderUnit {
@@ -1461,10 +1500,14 @@ impl Preprocessor<'_, '_> {
                 self.emit(d);
                 return;
             }
+            self.rec_hu = hu;
             self.replay_capsule_unit(key, true, path, c, span);
+            self.rec_hu = u32::MAX;
             return;
         }
+        self.rec_hu = hu;
         self.begin_unit(key, true, file, system, span, None);
+        self.rec_hu = u32::MAX;
     }
 
     /// The header-unit module file of the header `file`, when one was
@@ -1557,6 +1600,19 @@ impl Preprocessor<'_, '_> {
         self.push_file(file, Some(span.lo), None, None, system, false);
         if let Some(Frame::File(f)) = self.frames.last_mut() {
             f.unit = Some(Box::new(save));
+        }
+        if header && self.rec_hu != u32::MAX {
+            let hu = std::mem::replace(&mut self.rec_hu, u32::MAX);
+            if replay.is_some() {
+                self.rec_replayed(hu);
+            } else {
+                let lookup = self
+                    .record
+                    .as_deref()
+                    .and_then(|r| r.incs().get(hu as usize))
+                    .and_then(|x| x.lookup);
+                self.rec_entered(hu, file, lookup);
+            }
         }
         if let Some(b) = builtin {
             self.push_file(b, None, None, None, false, false);

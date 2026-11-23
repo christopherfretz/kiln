@@ -1,0 +1,6 @@
+def a.h:8 B_H file dir a.h:0..a.h:11 = in i1
+inc not-a-guard.cpp:328 include "Inputs/a.h" name not-a-guard.cpp:337..not-a-guard.cpp:349 entered file a.h ctx i1
+inc not-a-guard.cpp:350 include "Inputs/b.h" name not-a-guard.cpp:359..not-a-guard.cpp:371 entered file b.h ctx i2
+cond b.h:0 ifndef not-taken cond b.h:7..b.h:11 group b.h:11..b.h:31 in i2
+cond b.h:31 endif closes open b.h:0 cond b.h:37..b.h:37 in i2
+record complete

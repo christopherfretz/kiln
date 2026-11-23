@@ -1,0 +1,16 @@
+tok direct ctx.h:15:b0
+tok wrapped ctx.h:15:b0
+def two-contexts.cpp:348 CTX file dir two-contexts.cpp:340..two-contexts.cpp:358 = direct ended undef two-contexts.cpp:383
+def wrap.h:8 CTX file dir wrap.h:0..wrap.h:19 = wrapped ended undef wrap.h:37 in i2
+undef two-contexts.cpp:383 CTX ends two-contexts.cpp:348
+undef wrap.h:37 CTX ends wrap.h:8 in i2
+exp ctx.h:15 CTX def two-contexts.cpp:348 end ctx.h:15 in i1
+exp ctx.h:15 CTX def wrap.h:8 end ctx.h:15 in i3
+inc two-contexts.cpp:359 include "Inputs/ctx.h" name two-contexts.cpp:368..two-contexts.cpp:382 entered file ctx.h ctx i1
+inc two-contexts.cpp:394 include "Inputs/wrap.h" name two-contexts.cpp:403..two-contexts.cpp:418 entered file wrap.h ctx i2
+inc wrap.h:20 include "ctx.h" name wrap.h:29..wrap.h:36 entered file ctx.h ctx i3 in i2
+cond ctx.h:0 ifdef taken cond ctx.h:6..ctx.h:10 group ctx.h:10..ctx.h:20 in i1
+cond ctx.h:20 endif closes open ctx.h:0 cond ctx.h:26..ctx.h:26 in i1
+cond ctx.h:0 ifdef taken cond ctx.h:6..ctx.h:10 group ctx.h:10..ctx.h:20 in i3
+cond ctx.h:20 endif closes open ctx.h:0 cond ctx.h:26..ctx.h:26 in i3
+record complete

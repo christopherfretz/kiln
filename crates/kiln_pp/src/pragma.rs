@@ -209,7 +209,7 @@ impl Preprocessor<'_, '_> {
         match name {
             Some("once") => {
                 self.pragma_eod("pragma once");
-                self.pragma_once(&first);
+                self.pragma_once(&first, start);
             }
             // Consumed without effect (`mark` is not even lexed by clang).
             Some("mark" | "region" | "endregion") => {}
@@ -351,14 +351,20 @@ impl Preprocessor<'_, '_> {
         }
     }
 
-    /// clang `HandlePragmaOnce`.
-    fn pragma_once(&mut self, t: &PpTok) {
+    /// clang `HandlePragmaOnce`; `start` is the `#` or `_Pragma`.
+    fn pragma_once(&mut self, t: &PpTok, start: Loc) {
         let Some(file) = self.cur_file_ref().map(|f| f.file) else { return };
         if Some(file) == self.main_file && !self.opts.main_is_header {
             self.emit(Diag::new(DiagId::pp_pragma_once_in_main, t.tok.span));
             return;
         }
         self.once_files.insert(file);
+        if self.record.is_some() {
+            let at = self.sm.expansion_loc(start);
+            if let Some(r) = self.record.as_deref_mut() {
+                r.once(at);
+            }
+        }
     }
 
     /// clang `HandlePragmaSystemHeader`: the rest of the current file is

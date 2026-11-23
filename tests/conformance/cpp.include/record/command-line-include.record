@@ -1,0 +1,6 @@
+tok 1 command-line-include.cpp:391:b0
+def pre.h:8 PRE file dir pre.h:0..pre.h:13 = 1 in i1
+exp command-line-include.cpp:391 PRE def pre.h:8 end command-line-include.cpp:391
+inc command-line:1 -include "pre.h" entered file pre.h ctx i1
+inc command-line-include.cpp:402 include "Inputs/x.h" name command-line-include.cpp:411..command-line-include.cpp:423 entered file x.h ctx i2
+record complete

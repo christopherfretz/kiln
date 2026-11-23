@@ -6,13 +6,19 @@
 //! their history), one row per expansion with its argument spans, and a
 //! side index of the source-manager entries made in macro expansion;
 //! [`PpRecord::origin`] reads a location's entry and finds it there.
+//!
+//! It also keeps one row per conditional directive (live and dead, with
+//! its outcome and its links to the rest of its conditional), one per
+//! inclusion directive (with its outcome and the instance it entered),
+//! and the `#pragma once` that took effect; [`PpRecord::inclusion_of`]
+//! gives a location's include context.
 
 use std::fmt::Write as _;
 use std::rc::Rc;
 
 use kiln_lex::{Interner, Symbol};
 use kiln_source::fx::FxHashMap;
-use kiln_source::{ExpansionKind, Loc, SourceManager, Span};
+use kiln_source::{ExpansionKind, FileId, Loc, SourceManager, Span};
 
 use crate::macros::MacroDef;
 
@@ -175,6 +181,369 @@ pub struct Undef {
     pub source: DefSource,
     /// The definition it ended, if the name was defined.
     pub ended: Option<DefIx>,
+}
+
+/// A conditional directive's index in [`PpRecord::conds`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct CondIx(u32);
+
+/// An inclusion directive's index in [`PpRecord::incs`]; an entered one
+/// also names its instance (the include context of what lies in it).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct IncIx(u32);
+
+impl CondIx {
+    /// The index.
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
+
+    /// The row at position `i` of [`PpRecord::conds`].
+    ///
+    /// # Panics
+    /// If `i` does not fit in a `u32`.
+    pub fn from_index(i: usize) -> CondIx {
+        CondIx(u32::try_from(i).expect("a row index"))
+    }
+}
+
+impl IncIx {
+    /// The index.
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
+
+    /// The row at position `i` of [`PpRecord::incs`].
+    ///
+    /// # Panics
+    /// If `i` does not fit in a `u32`.
+    pub fn from_index(i: usize) -> IncIx {
+        IncIx(u32::try_from(i).expect("a row index"))
+    }
+}
+
+/// The kind of a conditional directive.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CondKind {
+    /// `#if`.
+    If,
+    /// `#ifdef`.
+    Ifdef,
+    /// `#ifndef`.
+    Ifndef,
+    /// `#elif`.
+    Elif,
+    /// `#elifdef`.
+    Elifdef,
+    /// `#elifndef`.
+    Elifndef,
+    /// `#else`.
+    Else,
+    /// `#endif`.
+    Endif,
+}
+
+impl CondKind {
+    const ALL: [CondKind; 8] = [
+        CondKind::If,
+        CondKind::Ifdef,
+        CondKind::Ifndef,
+        CondKind::Elif,
+        CondKind::Elifdef,
+        CondKind::Elifndef,
+        CondKind::Else,
+        CondKind::Endif,
+    ];
+
+    /// `#if`, `#ifdef` or `#ifndef`: it opens a conditional.
+    pub const fn is_opener(self) -> bool {
+        matches!(self, CondKind::If | CondKind::Ifdef | CondKind::Ifndef)
+    }
+
+    /// The directive name.
+    pub const fn name(self) -> &'static str {
+        match self {
+            CondKind::If => "if",
+            CondKind::Ifdef => "ifdef",
+            CondKind::Ifndef => "ifndef",
+            CondKind::Elif => "elif",
+            CondKind::Elifdef => "elifdef",
+            CondKind::Elifndef => "elifndef",
+            CondKind::Else => "else",
+            CondKind::Endif => "endif",
+        }
+    }
+}
+
+/// What became of a conditional directive.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CondOutcome {
+    /// Its condition was evaluated true (`#else`: no sibling was taken):
+    /// its group was preprocessed.
+    Taken,
+    /// Its condition was evaluated false (or was erroneous), or an `#else`
+    /// whose sibling was taken: its group was skipped.
+    NotTaken,
+    /// An `#elif*` after a taken group: its condition was never evaluated.
+    NotEvaluated,
+    /// A directive of a conditional nested in a skipped group: nesting
+    /// only, nothing evaluated.
+    Dead,
+    /// A live `#endif`.
+    Closes,
+}
+
+impl CondOutcome {
+    const ALL: [CondOutcome; 5] = [
+        CondOutcome::Taken,
+        CondOutcome::NotTaken,
+        CondOutcome::NotEvaluated,
+        CondOutcome::Dead,
+        CondOutcome::Closes,
+    ];
+
+    fn name(self) -> &'static str {
+        match self {
+            CondOutcome::Taken => "taken",
+            CondOutcome::NotTaken => "not-taken",
+            CondOutcome::NotEvaluated => "not-evaluated",
+            CondOutcome::Dead => "dead",
+            CondOutcome::Closes => "closes",
+        }
+    }
+}
+
+/// The bit of [`Conditional::opener`] that marks an include guard, and of
+/// [`Conditional::next`] that marks an unterminated conditional.
+const TOP_BIT: u32 = 1 << 31;
+
+/// One conditional directive (20 bytes).
+#[derive(Clone, Copy, Debug)]
+pub struct Conditional {
+    /// The directive's `#`: its key.
+    pub hash: Loc,
+    /// The end of the directive name: the condition is `cond..end`.
+    pub cond: Loc,
+    /// The end of the directive's logical line: its newline (past line
+    /// splices and a block comment that continues on later lines), or the
+    /// end of the file.
+    pub end: Loc,
+    /// `CondIx` of the opener (`IX_MASK`: none), kind in bits 28..31,
+    /// `TOP_BIT`: an include guard kiln recognized.
+    opener: u32,
+    /// `CondIx` of the next directive of the conditional (`IX_MASK`: none
+    /// yet), outcome in bits 28..31, `TOP_BIT` (on an opener): the file
+    /// ended inside the conditional.
+    next: u32,
+}
+
+impl Conditional {
+    /// The directive's kind.
+    pub fn kind(&self) -> CondKind {
+        CondKind::ALL[((self.opener >> 28) & 7) as usize]
+    }
+
+    /// What became of it.
+    pub fn outcome(&self) -> CondOutcome {
+        CondOutcome::ALL.get(((self.next >> 28) & 7) as usize).copied().unwrap_or(CondOutcome::Dead)
+    }
+
+    /// The `#if`/`#ifdef`/`#ifndef` of its conditional (itself for an
+    /// opener; `None` for a stray `#elif`/`#else`/`#endif`).
+    pub fn opener(&self) -> Option<CondIx> {
+        let o = self.opener & IX_MASK;
+        (o != IX_MASK).then_some(CondIx(o))
+    }
+
+    /// The next `#elif*`/`#else`/`#endif` of its conditional (`None` for an
+    /// `#endif`, and for the last directive of a conditional the file
+    /// ended in, or that is still open).
+    pub fn next(&self) -> Option<CondIx> {
+        let n = self.next & IX_MASK;
+        (n != IX_MASK).then_some(CondIx(n))
+    }
+
+    /// On an opener: kiln recognized it as the file's include guard (its
+    /// controlling macro decides whether a later `#include` is skipped).
+    /// Final once the inclusion holding it has ended.
+    pub fn is_guard(&self) -> bool {
+        self.opener & TOP_BIT != 0
+    }
+
+    /// On an opener: the file ended inside the conditional (an error).
+    pub fn is_unterminated(&self) -> bool {
+        self.next & TOP_BIT != 0
+    }
+
+    /// From the `#` to the end of the directive's logical line.
+    pub fn directive(&self) -> Span {
+        Span::new(self.hash, self.end)
+    }
+
+    /// What follows the directive name to the end of the logical line,
+    /// untrimmed (comments included; empty for a bare `#else`).
+    pub fn condition(&self) -> Span {
+        Span::new(self.cond, self.end)
+    }
+}
+
+/// The kind of an inclusion directive.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IncKind {
+    /// `#include`.
+    Include,
+    /// `#include_next`.
+    IncludeNext,
+    /// `#import`.
+    Import,
+    /// A header-unit `import <h>;` / `import "h";`.
+    HeaderImport,
+    /// `#embed`.
+    Embed,
+    /// `-include`: an `#include` line of the command-line part of the
+    /// predefines buffer.
+    CommandLine,
+}
+
+impl IncKind {
+    fn name(self) -> &'static str {
+        match self {
+            IncKind::Include => "include",
+            IncKind::IncludeNext => "include_next",
+            IncKind::Import => "import",
+            IncKind::HeaderImport => "header-import",
+            IncKind::Embed => "embed",
+            IncKind::CommandLine => "-include",
+        }
+    }
+}
+
+/// What became of an inclusion directive.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IncOutcome {
+    /// The file was entered; `base` is the location of its byte 0 in this
+    /// inclusion (the instance's range).
+    Entered {
+        /// Byte 0 of the inclusion's range.
+        base: Loc,
+    },
+    /// Not entered: `#pragma once`, or an earlier `#import` of the file.
+    SkippedOnce,
+    /// Not entered: kiln recognized the file's include guard and its
+    /// controlling macro is defined, by `def`.
+    SkippedGuard {
+        /// The guard macro's definition current at the directive.
+        def: DefIx,
+    },
+    /// No file found (an error, or `-MG`).
+    NotFound,
+    /// Entering the file would pass the include depth limit (an error).
+    DepthLimit,
+    /// The depth limit was hit earlier and the file had already been
+    /// entered once: it is not entered again (clang's include-cycle cut).
+    AfterDepthLimit,
+    /// No usable header name: nothing was looked up (an error).
+    Malformed,
+    /// An `#embed` whose resource was found and embedded.
+    Embedded,
+    /// A header-unit import whose unit was not read from source here: its
+    /// macros came from a module file (the record is then incomplete,
+    /// [`RecordFlags::IMPORTED`]) or from an earlier import in this
+    /// translation unit. When kiln replays the copy of the header a module
+    /// file carries, that copy's range is this row's instance (its rows
+    /// have this context), not a range of `file`.
+    Imported,
+}
+
+impl IncOutcome {
+    fn name(self) -> &'static str {
+        match self {
+            IncOutcome::Entered { .. } => "entered",
+            IncOutcome::SkippedOnce => "skipped-once",
+            IncOutcome::SkippedGuard { .. } => "skipped-guard",
+            IncOutcome::NotFound => "not-found",
+            IncOutcome::DepthLimit => "depth-limit",
+            IncOutcome::AfterDepthLimit => "after-depth-limit",
+            IncOutcome::Malformed => "malformed",
+            IncOutcome::Embedded => "embedded",
+            IncOutcome::Imported => "imported",
+        }
+    }
+}
+
+/// One inclusion directive.
+#[derive(Clone, Debug)]
+pub struct Inclusion {
+    /// The directive's `#` (the first token, `import` or `export`, of a
+    /// header-unit import): its key.
+    pub hash: Loc,
+    /// The end of the directive's logical line (the end of the `;` of a
+    /// header-unit import).
+    pub end: Loc,
+    /// The header name as written in the file: for a name from a macro, the
+    /// invocation (the token `H` of `#include H`), never a macro location;
+    /// for a malformed directive, the token that ended it.
+    pub name: Span,
+    /// The name with its delimiters, after macro expansion (`<vector>`,
+    /// `"x.h"`); empty for a malformed directive.
+    pub written: Box<str>,
+    /// The file found (see spec/pp.md for which outcomes have one).
+    pub file: Option<FileId>,
+    /// The search-path index it was found at (`None`: relative to the
+    /// includer, or an absolute name, or no file).
+    pub lookup: Option<u32>,
+    /// The directive's kind.
+    pub kind: IncKind,
+    /// Where the directive is: `File`, `Predefined` or `CommandLine`.
+    pub source: DefSource,
+    /// What became of it.
+    pub outcome: IncOutcome,
+    /// The first expansion entered while reading the name (`NONE`).
+    name_exp: u32,
+    /// The entered inclusion holding the directive (`NONE`: the main
+    /// file, the predefines).
+    parent: u32,
+}
+
+impl Inclusion {
+    /// The entered inclusion whose range holds the directive (`None`: the
+    /// main file or the predefines buffer).
+    pub fn parent(&self) -> Option<IncIx> {
+        (self.parent != NONE).then_some(IncIx(self.parent))
+    }
+
+    /// The name came from a macro: the first expansion entered while it
+    /// was read (the name's expansions are the `IN_DIRECTIVE` rows from it
+    /// whose name lies in [`Inclusion::name`]).
+    pub fn name_exp(&self) -> Option<ExpIx> {
+        (self.name_exp != NONE).then_some(ExpIx(self.name_exp))
+    }
+
+    /// `<...>` (else `"..."`); `None` for a malformed directive.
+    pub fn angled(&self) -> Option<bool> {
+        match self.written.as_bytes().first() {
+            Some(b'<') => Some(true),
+            Some(b'"') => Some(false),
+            _ => None,
+        }
+    }
+}
+
+/// The include context of a location ([`PpRecord::inclusion_of`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IncContext {
+    /// The main file (the root of every chain).
+    Main,
+    /// The predefines buffer `<built-in>` (predefines, `-D`, `-U`, the
+    /// `-include` lines).
+    Builtin,
+    /// The inclusion (instance) whose range holds it: an `Entered` row,
+    /// or an `Imported` one whose module file's copy was replayed.
+    Inclusion(IncIx),
+    /// A location the record did not see entered: invalid, unknown, or in
+    /// a buffer lexed in its own range that is not the main file (a
+    /// restored prefix, a scratch buffer).
+    Unknown,
 }
 
 /// What made a token spelled in scratch space.
@@ -359,8 +728,21 @@ pub struct PpRecord {
     pub(crate) pending_end: Loc,
     /// The main predefines buffer and the offset where
     /// [`crate::PpOptions::defines`] start.
-    pub(crate) predef_tail: Option<(kiln_source::FileId, u32)>,
+    pub(crate) predef_tail: Option<(FileId, u32)>,
     va_opt: Symbol,
+    conds: Vec<Conditional>,
+    incs: Vec<Inclusion>,
+    /// Base of each entered inclusion's range with its `IncIx`; sorted by
+    /// base.
+    inc_bases: Vec<(Loc, u32)>,
+    onces: Vec<Loc>,
+    /// The main file (its own range is the root context).
+    pub(crate) main_file: Option<FileId>,
+}
+
+/// A conditional's kind and outcome bits.
+const fn cond_bits(kind: CondKind, outcome: CondOutcome) -> (u32, u32) {
+    ((kind as u32) << 28, (outcome as u32) << 28)
 }
 
 fn ptr(d: &Rc<MacroDef>) -> usize {
@@ -383,7 +765,151 @@ impl PpRecord {
             pending_end: Loc::INVALID,
             predef_tail: None,
             va_opt,
+            conds: Vec::new(),
+            incs: Vec::new(),
+            inc_bases: Vec::new(),
+            onces: Vec::new(),
+            main_file: None,
         }
+    }
+
+    /// A conditional directive; `prev` is the latest row of its
+    /// conditional (`NONE` for an opener, or a stray directive). Returns
+    /// its index (`NONE` once full).
+    pub(crate) fn push_cond(
+        &mut self,
+        kind: CondKind,
+        outcome: CondOutcome,
+        hash: Loc,
+        cond: Loc,
+        end: Loc,
+        prev: u32,
+    ) -> u32 {
+        let Ok(c) = u32::try_from(self.conds.len()) else { return NONE };
+        if c >= IX_MASK {
+            self.set_flag(RecordFlags::TRUNCATED);
+            return NONE;
+        }
+        let opener = if kind.is_opener() {
+            c
+        } else {
+            match self.conds.get_mut(prev as usize) {
+                Some(p) => {
+                    p.next = (p.next & !IX_MASK) | c;
+                    p.opener & IX_MASK
+                }
+                None => IX_MASK,
+            }
+        };
+        let (k, o) = cond_bits(kind, outcome);
+        self.conds.push(Conditional { hash, cond, end, opener: opener | k, next: IX_MASK | o });
+        c
+    }
+
+    /// The opener of row `c` is the include guard kiln recognized.
+    pub(crate) fn set_guard(&mut self, c: u32) {
+        if let Some(o) = self.conds.get(c as usize).map(|x| x.opener & IX_MASK)
+            && let Some(x) = self.conds.get_mut(o as usize)
+        {
+            x.opener |= TOP_BIT;
+        }
+    }
+
+    /// The file ended inside the conditional whose latest row is `c`.
+    pub(crate) fn set_unterminated(&mut self, c: u32) {
+        if let Some(o) = self.conds.get(c as usize).map(|x| x.opener & IX_MASK)
+            && let Some(x) = self.conds.get_mut(o as usize)
+        {
+            x.next |= TOP_BIT;
+        }
+    }
+
+    /// An inclusion directive; returns its index (`NONE` once full).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn inclusion(
+        &mut self,
+        kind: IncKind,
+        source: DefSource,
+        hash: Loc,
+        name: Span,
+        written: &str,
+        name_exp: u32,
+        parent: u32,
+    ) -> u32 {
+        let Ok(i) = u32::try_from(self.incs.len()) else { return NONE };
+        if i >= IX_MASK {
+            self.set_flag(RecordFlags::TRUNCATED);
+            return NONE;
+        }
+        let name_exp = if (name_exp as usize) < self.exps.len() { name_exp } else { NONE };
+        self.incs.push(Inclusion {
+            hash,
+            end: Loc::INVALID,
+            name,
+            written: written.into(),
+            file: None,
+            lookup: None,
+            kind,
+            source,
+            outcome: IncOutcome::Malformed,
+            name_exp,
+            parent,
+        });
+        i
+    }
+
+    /// The end of inclusion `i`'s directive.
+    pub(crate) fn set_inc_end(&mut self, i: u32, end: Loc) {
+        if let Some(x) = self.incs.get_mut(i as usize) {
+            x.end = end;
+        }
+    }
+
+    /// What became of inclusion `i`, with the file found and its
+    /// search-path index. An `Entered` one becomes an instance.
+    pub(crate) fn set_inc_outcome(
+        &mut self,
+        i: u32,
+        outcome: IncOutcome,
+        file: Option<FileId>,
+        lookup: Option<u32>,
+    ) {
+        let Some(x) = self.incs.get_mut(i as usize) else { return };
+        x.outcome = outcome;
+        x.file = file;
+        x.lookup = lookup;
+        if let IncOutcome::Entered { base } = outcome {
+            self.set_inc_base(i, base);
+        }
+    }
+
+    /// Inclusion `i`'s instance starts at `base` (an `Entered` row, or an
+    /// `Imported` one whose module file's copy of the header is replayed).
+    pub(crate) fn set_inc_base(&mut self, i: u32, base: Loc) {
+        // Bases are handed out in increasing order, except a buffer's own
+        // range (location space exhausted, a header unit).
+        let at = self.inc_bases.partition_point(|&(b, _)| b <= base);
+        self.inc_bases.insert(at, (base, i));
+    }
+
+    /// Whether row `i` has an instance (a range of its own).
+    fn has_instance(&self, i: u32) -> bool {
+        match self.incs.get(i as usize).map(|x| x.outcome) {
+            Some(IncOutcome::Entered { .. }) => true,
+            Some(IncOutcome::Imported) => self.inc_bases.iter().any(|&(_, j)| j == i),
+            _ => false,
+        }
+    }
+
+    /// The `#pragma once` (or `_Pragma("once")`) at `at` took effect.
+    pub(crate) fn once(&mut self, at: Loc) {
+        self.onces.push(at);
+    }
+
+    /// The number of expansions so far (where a directive's name
+    /// expansions start).
+    pub(crate) fn exp_count(&self) -> u32 {
+        u32::try_from(self.exps.len()).unwrap_or(NONE)
     }
 
     // ---- building (the preprocessor's hooks) ----
@@ -615,6 +1141,98 @@ impl PpRecord {
         &self.undefs
     }
 
+    /// Every conditional directive, in the order met (live and dead).
+    pub fn conds(&self) -> &[Conditional] {
+        &self.conds
+    }
+
+    /// Conditional directive `c`.
+    pub fn cond(&self, c: CondIx) -> &Conditional {
+        &self.conds[c.index()]
+    }
+
+    /// The group `c` controls: from the end of its line to the `#` of the
+    /// next directive of its conditional, or, when there is none yet, to
+    /// the end of the inclusion holding it (unterminated). `None` for an
+    /// `#endif` and a stray directive (no opener).
+    pub fn group(&self, sm: &SourceManager, c: CondIx) -> Option<Span> {
+        let x = &self.conds[c.index()];
+        if x.kind() == CondKind::Endif || x.opener().is_none() {
+            return None;
+        }
+        let hi = if let Some(n) = x.next() {
+            self.conds[n.index()].hash
+        } else {
+            let (f, off) = sm.offset_of(x.end)?;
+            let len = u32::try_from(sm.text(f).len()).ok()?;
+            x.end.with_offset(len.checked_sub(off)?)
+        };
+        Some(Span::new(x.end, hi))
+    }
+
+    /// The conditional directives whose `#` lies in the file range `span`
+    /// (a scan).
+    pub fn conds_in(&self, span: Span) -> impl Iterator<Item = CondIx> + '_ {
+        self.conds
+            .iter()
+            .enumerate()
+            .filter(move |(_, x)| span.lo <= x.hash && x.hash < span.hi)
+            .map(|(i, _)| CondIx(i as u32))
+    }
+
+    /// Every inclusion directive, in the order met.
+    pub fn incs(&self) -> &[Inclusion] {
+        &self.incs
+    }
+
+    /// Inclusion directive `i`.
+    pub fn inc(&self, i: IncIx) -> &Inclusion {
+        &self.incs[i.index()]
+    }
+
+    /// The `#` of every `#pragma once` that took effect (the expansion
+    /// location of a `_Pragma("once")`), in order.
+    pub fn onces(&self) -> &[Loc] {
+        &self.onces
+    }
+
+    /// The include context of `loc`: the entered inclusion whose range
+    /// holds it. A macro location is resolved through its expansion
+    /// location (the file position of the outermost invocation). O(log n).
+    pub fn inclusion_of(&self, sm: &SourceManager, loc: Loc) -> IncContext {
+        let l = sm.expansion_loc(loc);
+        let Some((f, off)) = sm.offset_of(l) else { return IncContext::Unknown };
+        let base = Loc::from_raw(l.to_raw() - off);
+        let at = self.inc_bases.partition_point(|&(b, _)| b < base);
+        if let Some(&(b, i)) = self.inc_bases.get(at)
+            && b == base
+        {
+            return IncContext::Inclusion(IncIx(i));
+        }
+        if self.main_file == Some(f) && sm.loc(f, 0) == base {
+            IncContext::Main
+        } else if sm.is_virtual(f) && sm.file_name(f) == "<built-in>" {
+            IncContext::Builtin
+        } else {
+            IncContext::Unknown
+        }
+    }
+
+    /// The include chain of instance `i`: `i`, its parent, and so on out
+    /// to the main file (or the predefines). Its cross-TU key is the
+    /// sequence of the rows' keys (spec/pp.md).
+    pub fn context(&self, i: IncIx) -> impl Iterator<Item = IncIx> + '_ {
+        // Parents come before their children, so the walk ends.
+        std::iter::successors(Some(i), move |p| self.incs[p.index()].parent())
+    }
+
+    /// The instances of `file`, in order (a scan).
+    pub fn instances_of(&self, file: FileId) -> impl Iterator<Item = IncIx> + '_ {
+        (0..self.incs.len() as u32)
+            .filter(move |&i| self.incs[i as usize].file == Some(file) && self.has_instance(i))
+            .map(IncIx)
+    }
+
     /// What the record does not cover (empty: complete).
     pub fn gaps(&self) -> RecordFlags {
         self.flags.get()
@@ -635,7 +1253,12 @@ impl PpRecord {
             + (self.arg_toks.capacity() + self.params.capacity()) * size_of::<Loc>()
             + self.entries.capacity() * size_of::<(Loc, u32)>()
             + self.undefs.capacity() * size_of::<Undef>()
-            + self.by_ptr.capacity() * (size_of::<(usize, DefIx)>() + 1);
+            + self.by_ptr.capacity() * (size_of::<(usize, DefIx)>() + 1)
+            + self.conds.capacity() * size_of::<Conditional>()
+            + self.incs.capacity() * size_of::<Inclusion>()
+            + self.incs.iter().map(|x| x.written.len()).sum::<usize>()
+            + self.inc_bases.capacity() * size_of::<(Loc, u32)>()
+            + self.onces.capacity() * size_of::<Loc>();
         for d in &self.defs {
             if Rc::strong_count(&d.def) == 1 {
                 let m = &d.def;
@@ -782,13 +1405,27 @@ struct Dumper<'r, 's> {
     exp_keys: Vec<String>,
     /// The source of each `#undef` by its `#`.
     undef_src: FxHashMap<Loc, DefSource>,
+    /// Each inclusion's instance number (from 1, in order; 0: not
+    /// entered), or for a `-include` line, its ordinal among them.
+    inst: Vec<u32>,
 }
 
 impl<'r, 's> Dumper<'r, 's> {
     fn new(r: &'r PpRecord, sm: &'s SourceManager, interner: &'s Interner) -> Self {
         let undef_src = r.undefs.iter().map(|u| (u.hash, u.source)).collect();
+        let mut n_inst = 0;
+        let inst = (0..r.incs.len() as u32)
+            .map(|i| {
+                if r.has_instance(i) {
+                    n_inst += 1;
+                    n_inst
+                } else {
+                    0
+                }
+            })
+            .collect();
         let mut dumper =
-            Dumper { r, sm, interner, exp_keys: Vec::with_capacity(r.exps.len()), undef_src };
+            Dumper { r, sm, interner, exp_keys: Vec::with_capacity(r.exps.len()), undef_src, inst };
         // The nearest ancestor (or self) whose name is in a file, and the
         // count of expansions keyed under each.
         let mut anchor: Vec<u32> = Vec::with_capacity(r.exps.len());
@@ -913,7 +1550,130 @@ impl<'r, 's> Dumper<'r, 's> {
         self.write_defs(out);
         self.write_undefs(out);
         self.write_exps(out);
+        self.write_incs(out);
+        self.write_conds(out);
+        self.write_onces(out);
         self.write_gaps(out);
+    }
+
+    /// ` in i<n>` when `loc` lies in an entered inclusion (nothing for the
+    /// main file and the predefines).
+    fn ctx(&self, out: &mut String, loc: Loc) {
+        if let IncContext::Inclusion(i) = self.r.inclusion_of(self.sm, loc)
+            && let Some(&n) = self.inst.get(i.index())
+            && n > 0
+        {
+            let _ = write!(out, " in i{n}");
+        }
+    }
+
+    /// The last path component of a header name with its delimiters.
+    fn short_name(w: &str) -> String {
+        let (open, inner, close) = match w.len() {
+            2.. => (&w[..1], &w[1..w.len() - 1], &w[w.len() - 1..]),
+            _ => return w.to_string(),
+        };
+        let inner = inner.rsplit(['/', '\\']).next().unwrap_or(inner);
+        format!("{open}{inner}{close}")
+    }
+
+    fn inc_key(&self, i: usize) -> String {
+        let x = &self.r.incs[i];
+        if x.source == DefSource::File {
+            return self.file_loc(x.hash);
+        }
+        let n = self.r.incs[..=i].iter().filter(|y| y.source == x.source).count();
+        match x.source {
+            DefSource::CommandLine => format!("command-line:{n}"),
+            _ => format!("predefined:{n}"),
+        }
+    }
+
+    fn write_incs(&self, out: &mut String) {
+        let r = self.r;
+        for (i, x) in r.incs.iter().enumerate() {
+            let in_file = x.source == DefSource::File;
+            let w = if in_file { x.written.to_string() } else { Self::short_name(&x.written) };
+            let w = if w.is_empty() { "-" } else { &w };
+            let _ = write!(out, "inc {} {} {w}", self.inc_key(i), x.kind.name());
+            if let Some(e) = x.name_exp() {
+                let _ = write!(out, " macro {}", self.exp_keys[e.index()]);
+            }
+            if in_file {
+                let _ = write!(out, " name {}..{}", self.loc(x.name.lo), self.loc(x.name.hi));
+            }
+            let _ = write!(out, " {}", x.outcome.name());
+            if let Some(f) = x.file {
+                let n = self.sm.file_name(f);
+                let _ = write!(out, " file {}", n.rsplit(['/', '\\']).next().unwrap_or(n));
+            }
+            if let Some(d) = x.lookup {
+                let _ = write!(out, " dir {d}");
+            }
+            if let IncOutcome::SkippedGuard { def } = x.outcome {
+                let _ = write!(out, " guard {}", self.def_key(def));
+            }
+            if let Some(&n) = self.inst.get(i)
+                && n > 0
+            {
+                let _ = write!(out, " ctx i{n}");
+            }
+            if in_file {
+                self.ctx(out, x.hash);
+            }
+            out.push('\n');
+        }
+    }
+
+    fn write_conds(&self, out: &mut String) {
+        let r = self.r;
+        for (i, x) in r.conds.iter().enumerate() {
+            // The predefines' own conditionals differ per clang version.
+            if self.rec_builtin(x.hash) {
+                continue;
+            }
+            let c = CondIx(i as u32);
+            let _ = write!(
+                out,
+                "cond {} {} {}",
+                self.file_loc(x.hash),
+                x.kind().name(),
+                x.outcome().name()
+            );
+            if x.is_guard() {
+                out.push_str(" guard");
+            }
+            if x.is_unterminated() {
+                out.push_str(" unterminated");
+            }
+            if !x.kind().is_opener() {
+                match x.opener() {
+                    Some(o) => {
+                        let _ = write!(out, " open {}", self.file_loc(r.conds[o.index()].hash));
+                    }
+                    None => out.push_str(" stray"),
+                }
+            }
+            let _ = write!(out, " cond {}..{}", self.file_loc(x.cond), self.file_loc(x.end));
+            if let Some(g) = r.group(self.sm, c) {
+                let _ = write!(out, " group {}..{}", self.file_loc(g.lo), self.file_loc(g.hi));
+            }
+            self.ctx(out, x.hash);
+            out.push('\n');
+        }
+    }
+
+    fn write_onces(&self, out: &mut String) {
+        for &at in &self.r.onces {
+            let _ = write!(out, "once {}", self.file_loc(at));
+            self.ctx(out, at);
+            out.push('\n');
+        }
+    }
+
+    /// `loc` is in the predefines buffer.
+    fn rec_builtin(&self, loc: Loc) -> bool {
+        self.r.inclusion_of(self.sm, loc) == IncContext::Builtin
     }
 
     fn write_defs(&self, out: &mut String) {
@@ -984,6 +1744,9 @@ impl<'r, 's> Dumper<'r, 's> {
                     let _ = write!(out, " ended popped {}", self.loc(at));
                 }
             }
+            if x.source == DefSource::File {
+                self.ctx(out, m.name_span.lo);
+            }
             out.push('\n');
             self.write_params(out, d);
         }
@@ -1026,6 +1789,9 @@ impl<'r, 's> Dumper<'r, 's> {
             match u.ended {
                 Some(d) => out.push_str(&self.def_key(d)),
                 None => out.push_str("none"),
+            }
+            if u.source == DefSource::File {
+                self.ctx(out, u.hash);
             }
             out.push('\n');
         }
@@ -1071,6 +1837,7 @@ impl<'r, 's> Dumper<'r, 's> {
                     out.push_str(" elided");
                 }
             }
+            self.ctx(out, x.name);
             out.push('\n');
         }
     }
@@ -1106,7 +1873,7 @@ impl<'r, 's> Dumper<'r, 's> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ArgRow, Definition, Expansion, Undef};
+    use super::{ArgRow, Conditional, Definition, Expansion, Inclusion, Undef};
     use kiln_source::Loc;
     use std::mem::size_of;
 
@@ -1119,5 +1886,7 @@ mod tests {
         assert_eq!(size_of::<Definition>(), 32);
         assert_eq!(size_of::<Undef>(), 24);
         assert_eq!(size_of::<(Loc, u32)>(), 8);
+        assert_eq!(size_of::<Conditional>(), 20);
+        assert_eq!(size_of::<Inclusion>(), 72);
     }
 }

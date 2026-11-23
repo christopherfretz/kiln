@@ -1,0 +1,7 @@
+def command-line:A A command-line = 1
+exp elif-not-evaluated.cpp:294 A def command-line:A end elif-not-evaluated.cpp:294 in-directive
+cond elif-not-evaluated.cpp:290 if taken cond elif-not-evaluated.cpp:293..elif-not-evaluated.cpp:295 group elif-not-evaluated.cpp:295..elif-not-evaluated.cpp:303
+cond elif-not-evaluated.cpp:303 elif not-evaluated open elif-not-evaluated.cpp:290 cond elif-not-evaluated.cpp:308..elif-not-evaluated.cpp:310 group elif-not-evaluated.cpp:310..elif-not-evaluated.cpp:318
+cond elif-not-evaluated.cpp:318 else not-taken open elif-not-evaluated.cpp:290 cond elif-not-evaluated.cpp:323..elif-not-evaluated.cpp:323 group elif-not-evaluated.cpp:323..elif-not-evaluated.cpp:331
+cond elif-not-evaluated.cpp:331 endif closes open elif-not-evaluated.cpp:290 cond elif-not-evaluated.cpp:337..elif-not-evaluated.cpp:337
+record complete

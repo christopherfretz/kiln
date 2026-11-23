@@ -8,14 +8,20 @@ tok : k.def:30:b2
 tok case k.def:37:b0
 tok Sub k.def:37:a0@b1[0]<k.def:39
 tok : k.def:37:b2
-def x-macro.cpp:435 K(n) file dir x-macro.cpp:427..x-macro.cpp:442 = n , ended undef k.def:44
-param x-macro.cpp:435 0 n x-macro.cpp:437 uses b0:plain
-def x-macro.cpp:507 K(n) file dir x-macro.cpp:499..x-macro.cpp:519 = case n : ended undef k.def:44
-param x-macro.cpp:507 0 n x-macro.cpp:509 uses b1:plain
-undef k.def:44 K ends x-macro.cpp:435
-undef k.def:44 K ends x-macro.cpp:507
-exp k.def:30 K def x-macro.cpp:435 end k.def:35 args a0=k.def:32..k.def:35/1
-exp k.def:37 K def x-macro.cpp:435 end k.def:42 args a0=k.def:39..k.def:42/1
-exp k.def:30 K def x-macro.cpp:507 end k.def:35 args a0=k.def:32..k.def:35/1
-exp k.def:37 K def x-macro.cpp:507 end k.def:42 args a0=k.def:39..k.def:42/1
+def x-macro.cpp:438 K(n) file dir x-macro.cpp:430..x-macro.cpp:445 = n , ended undef k.def:44
+param x-macro.cpp:438 0 n x-macro.cpp:440 uses b0:plain
+def x-macro.cpp:510 K(n) file dir x-macro.cpp:502..x-macro.cpp:522 = case n : ended undef k.def:44
+param x-macro.cpp:510 0 n x-macro.cpp:512 uses b1:plain
+undef k.def:44 K ends x-macro.cpp:438 in i1
+undef k.def:44 K ends x-macro.cpp:510 in i2
+exp k.def:30 K def x-macro.cpp:438 end k.def:35 args a0=k.def:32..k.def:35/1 in i1
+exp k.def:37 K def x-macro.cpp:438 end k.def:42 args a0=k.def:39..k.def:42/1 in i1
+exp k.def:30 K def x-macro.cpp:510 end k.def:35 args a0=k.def:32..k.def:35/1 in i2
+exp k.def:37 K def x-macro.cpp:510 end k.def:42 args a0=k.def:39..k.def:42/1 in i2
+inc x-macro.cpp:446 include "Inputs/k.def" name x-macro.cpp:455..x-macro.cpp:469 entered file k.def ctx i1
+inc x-macro.cpp:523 include "Inputs/k.def" name x-macro.cpp:532..x-macro.cpp:546 entered file k.def ctx i2
+cond k.def:0 ifndef not-taken cond k.def:7..k.def:9 group k.def:9..k.def:23 in i1
+cond k.def:23 endif closes open k.def:0 cond k.def:29..k.def:29 in i1
+cond k.def:0 ifndef not-taken cond k.def:7..k.def:9 group k.def:9..k.def:23 in i2
+cond k.def:23 endif closes open k.def:0 cond k.def:29..k.def:29 in i2
 record complete
