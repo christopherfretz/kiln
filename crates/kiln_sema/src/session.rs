@@ -211,6 +211,11 @@ pub(crate) struct Replay {
     windows: Vec<Window>,
     /// Diagnostics recorded (for [`KeptMemory::replay`]).
     count: usize,
+    /// The reflection intrinsics with a record (a call of another one
+    /// that reports nothing computes no key).
+    meta_ops: FxHashSet<MetaOp>,
+    /// Content words in the records' keys (for [`KeptMemory::replay`]).
+    key_words: usize,
 }
 
 /// A run's state on the bridge.
@@ -279,6 +284,12 @@ impl Bridge<'_, '_, '_> {
         let rp = &mut *run.replay;
         rp.count +=
             segs.iter().map(|s| if let Seg::Diags(v) = s { v.len() } else { 0 }).sum::<usize>();
+        if let Key::Meta(op, words) = &key {
+            rp.meta_ops.insert(*op);
+            if !rp.records.contains_key(&key) {
+                rp.key_words += words.len();
+            }
+        }
         rp.records.insert(key.clone(), segs);
         rp.done.insert(key.clone());
         if let Some(p) = rp.windows.last_mut() {
@@ -306,11 +317,35 @@ impl Bridge<'_, '_, '_> {
         oven: &mut Oven,
         f: impl FnOnce(&mut Self, &mut Oven) -> R,
     ) -> R {
+        self.tracked_by(None, |_, _| key, oven, f)
+    }
+
+    /// [`Bridge::tracked`] with the key computed after `f`, by `key`, and
+    /// only when it is needed: always, unless `op` is a reflection
+    /// intrinsic that reported nothing and has no record (no key of the
+    /// op can be known then).
+    pub(crate) fn tracked_by<R>(
+        &mut self,
+        op: Option<MetaOp>,
+        key: impl FnOnce(&mut Self, &mut Oven) -> Key,
+        oven: &mut Oven,
+        f: impl FnOnce(&mut Self, &mut Oven) -> R,
+    ) -> R {
         if self.run.is_none() {
             return f(self, oven);
         }
         let mark = self.window_begin();
         let r = f(self, oven);
+        let quiet = self.sema.diags.captured_len() <= mark;
+        if let (Some(op), true) = (op, quiet)
+            && let Some(run) = self.run.as_mut()
+            && !run.replay.meta_ops.contains(&op)
+        {
+            let w = run.replay.windows.pop();
+            debug_assert!(w.is_some_and(|w| w.from == mark), "session windows nest");
+            return r;
+        }
+        let key = key(self, oven);
         let known = self.run.as_ref().is_some_and(|run| run.replay.records.contains_key(&key));
         let impure = if known {
             if !self.window_end(key.clone(), mark) {
@@ -552,8 +587,8 @@ impl<'a, 'sm> EvalSession<'a, 'sm> {
             sema: self.sema.memory().reserved_bytes(),
             oven: oven.footprint() as u64,
             replay: (self.replay.count * size_of::<Diagnostic>()
-                + self.replay.records.capacity() * size_of::<(Key, Vec<Seg>)>())
-                as u64,
+                + self.replay.records.capacity() * size_of::<(Key, Vec<Seg>)>()
+                + self.replay.key_words * size_of::<u128>()) as u64,
             memo_entries: oven.memo_len(),
         }
     }

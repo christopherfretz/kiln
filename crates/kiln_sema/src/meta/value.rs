@@ -114,21 +114,21 @@ impl Sema<'_, '_> {
 
     /// The result type and first parameter type of intrinsic `f` (a
     /// function template specialization: its `T` substituted).
-    fn value_sig(&self, f: Option<DeclId>) -> Option<(QualType, Option<QualType>)> {
+    pub(super) fn value_sig(&self, f: Option<DeclId>) -> Option<(QualType, Option<QualType>)> {
         let q = self.ast.decls.get(f?).ty()?;
         let p = self.ast.types.proto(q)?;
         Some((p.ret(), self.ast.types.params(p).first().copied()))
     }
 
     /// `q` with a reference stripped, canonical and cv-unqualified.
-    fn referenced(&self, q: QualType) -> QualType {
+    pub(super) fn referenced(&self, q: QualType) -> QualType {
         let t = &self.ast.types;
         let c = t.canonical(q);
         let c = if t.is_reference(c) { t.pointee(c).unwrap_or(c) } else { c };
         t.canonical(c).without_quals()
     }
 
-    fn unqual(&self, q: QualType) -> QualType {
+    pub(super) fn unqual(&self, q: QualType) -> QualType {
         self.ast.types.canonical(q).without_quals()
     }
 
@@ -412,6 +412,24 @@ impl Sema<'_, '_> {
     ) -> Result<ReflectionId, MetaError> {
         let loc = ctx.loc;
         let e = self.unqual(oven.meta_elem(ctx));
+        if let Some(why) = self.elems_type_error(e, string) {
+            return fail(loc, why);
+        }
+        let m = oven.meta_elems_len(r, string, ctx)?;
+        if m == 0 && !string {
+            return self.reflect_empty_array(e, ctx, oven);
+        }
+        let arr = self.ast.types.constant_array(e, m + u64::from(string), None);
+        let cv = self.bridge(|b| oven.meta_freeze_elems(b, (r, m), arr, string, ctx))?;
+        self.check_tparg(cv, "an element", loc)?;
+        let p = self.object_ptr(arr, PtrBase::Const(cv), 0)?;
+        self.intern_reflection(Reflectee::Object(p), loc).map_err(MetaError::from)
+    }
+
+    /// Why element type `e` (cv-unqualified) cannot be
+    /// `reflect_constant_string`'s (`string`) or `reflect_constant_array`'s
+    /// (checked before any element is read).
+    pub(super) fn elems_type_error(&self, e: QualType, string: bool) -> Option<String> {
         if string {
             let char_like = matches!(
                 self.ast.types.builtin(e),
@@ -423,37 +441,19 @@ impl Sema<'_, '_> {
                         | BuiltinType::Char32
                 )
             );
-            if !char_like {
-                return fail(
-                    loc,
-                    format!("'{}' is not a character type of a string", self.ty_str(e)),
-                );
-            }
-        } else {
-            // An array element is reflect_constant_array of it: the
-            // structural requirement is on remove_all_extents_t<U>.
-            let mut t = e;
-            while self.ast.types.is_array(t) {
-                match self.ast.types.element(t) {
-                    Some(x) if self.ast.types.array_size(t).is_some() => t = x,
-                    _ => {
-                        return fail(loc, format!("'{}' is not a structural type", self.ty_str(e)));
-                    }
-                }
-            }
-            if !self.is_structural(t) {
-                return fail(loc, format!("'{}' is not a structural type", self.ty_str(t)));
+            return (!char_like)
+                .then(|| format!("'{}' is not a character type of a string", self.ty_str(e)));
+        }
+        // An array element is reflect_constant_array of it: the
+        // structural requirement is on remove_all_extents_t<U>.
+        let mut t = e;
+        while self.ast.types.is_array(t) {
+            match self.ast.types.element(t) {
+                Some(x) if self.ast.types.array_size(t).is_some() => t = x,
+                _ => return Some(format!("'{}' is not a structural type", self.ty_str(e))),
             }
         }
-        let m = oven.meta_elems_len(r, string, ctx)?;
-        if m == 0 && !string {
-            return self.reflect_empty_array(e, ctx, oven);
-        }
-        let arr = self.ast.types.constant_array(e, m + u64::from(string), None);
-        let cv = self.bridge(|b| oven.meta_freeze_elems(b, (r, m), arr, string, ctx))?;
-        self.check_tparg(cv, "an element", loc)?;
-        let p = self.object_ptr(arr, PtrBase::Const(cv), 0)?;
-        self.intern_reflection(Reflectee::Object(p), loc).map_err(MetaError::from)
+        (!self.is_structural(t)).then(|| format!("'{}' is not a structural type", self.ty_str(t)))
     }
 
     /// `reflect_constant_array` of an empty range of `T`s (P3491R3
@@ -504,6 +504,20 @@ impl Sema<'_, '_> {
         self.intern_reflection(Reflectee::Object(p), loc).map_err(MetaError::from)
     }
 
+    /// Marks the calls in progress impure when `d` is an automatic
+    /// variable (or a parameter): what `extract` or `constant_of` of it
+    /// gives depends on the running evaluation's frames (spec/oven.md
+    /// "Reflected locals"), not on the reflection alone, so no call
+    /// given the reflection as an argument is memoized (the memo key
+    /// holds the reflection's bits only).
+    pub(super) fn note_frame_read(&self, d: DeclId, oven: &mut Oven) {
+        let local = self.kind_of(d) == DeclKind::ParmVar
+            || (self.ast.decls.var(d).is_some() && !self.has_static_storage(d));
+        if local {
+            oven.mark_impure();
+        }
+    }
+
     /// `extract<T>(r)` ([meta.reflection.extract]), `t` being `T`.
     fn extract(
         &mut self,
@@ -514,6 +528,9 @@ impl Sema<'_, '_> {
     ) -> Result<MetaOut, MetaError> {
         let loc = ctx.loc;
         let tc = self.ast.types.canonical(t);
+        if let Reflectee::Decl(d) = self.ast.reflections.get(r) {
+            self.note_frame_read(d, oven);
+        }
         match self.ast.reflections.get(r) {
             Reflectee::Value(cv) => self.extract_value(r, cv, tc, loc),
             // An annotation's underlying constant ([meta.reflection.extract]

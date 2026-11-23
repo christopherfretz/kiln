@@ -5264,6 +5264,13 @@ a frame of the running evaluation, lasts ([meta.reflection.extract]):
   the evaluation that uses the reflection (GCC 16.1 caches such a call
   and accepts the escape). Only `extract`/`constant_of` of a local not
   found live scans the slots: nothing on the hot path.
+- The other direction (WP-2074): a call GIVEN the reflection of an
+  automatic variable or a parameter (`read(^^x)`) has only its bits as a
+  memo key, yet `extract` there reads `x`'s value at the call. So
+  `extract` and `constant_of` of an automatic variable or parameter mark
+  the calls in progress impure (`Oven::mark_impure` from sema): a later
+  call after `x` changed, or in a later run of an evaluation session,
+  reads it again.
 
 Nothing is added for a function that reflects no reference local: its
 scan leaves `refl_refs` empty, so its frames, registers and instructions

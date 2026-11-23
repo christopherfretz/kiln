@@ -204,9 +204,13 @@ impl SemaBridge for Bridge<'_, '_, '_> {
         // frames (`Sema::meta_call_notes`).
         let depth = self.sema.inst.stack.len();
         self.sema.inst.meta_calls.push((depth, oven.frame_mark()));
-        let key = || crate::session::Key::Meta(op, args.into());
+        // Keyed by the operands' content, read after the call (§7): an
+        // operand that is an address is an object of this run.
+        let key = |b: &mut Self, oven: &mut Oven| {
+            crate::session::Key::Meta(op, b.sema.meta_replay_key(op, args, ctx, oven))
+        };
         let r = if self.run.is_some() {
-            self.tracked(key(), oven, |b, oven| b.sema.meta(op, args, out, ctx, oven))
+            self.tracked_by(Some(op), key, oven, |b, oven| b.sema.meta(op, args, out, ctx, oven))
         } else {
             self.sema.meta(op, args, out, ctx, oven)
         };
