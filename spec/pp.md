@@ -222,7 +222,8 @@ search record what the PCH snapshot's lookup-tolerant search path needs
 `None`) and `Preprocessor::take_lookup_log` hand it over. A
 `LookupLog` holds a table of directory names and, in the order first
 seen, one `Lookup` per distinct key, and the search list the lookups
-used (`list`, `angled_start`):
+used (`list`, `angled_start`) and the `--embed-dir` list
+(`embed_dirs`, WP-2829):
 
 - the key: the name; the form (`Include` for `#include`, `#import`,
   `__has_include`, and an `_next` form that starts from the beginning;
@@ -233,8 +234,21 @@ used (`list`, `angled_start`):
 - the result (`Found`): `Missing`; `Includer` (found relative to the
   includer; it inherits the includer's characteristic, which an earlier
   lookup fixed); `Dir { dir, characteristic }` (found in that search
-  directory); `Embed { path }` (the path an `#embed` read); `Absolute`
+  directory); `Embed { path }` (an `#embed` resource read beside its
+  includer, in the working directory, or at an absolute name);
+  `EmbedDir { index }` (found in `embed_dirs[index]`, WP-2829); `Absolute`
   (found at an absolute name, below).
+
+`LookupLog::tried(lookup)` names the directories a lookup searched
+without finding its name, in order, up to its result (everything it
+would search when it found nothing), as derived from the key and the
+result: for an include form the includer's directory of a `"..."`
+lookup found elsewhere, then the search list from where the form starts
+up to the result; for an embed form (clang `LookupEmbedFile`) the
+includer's directory and `.` (the working directory, where the name is
+tried as written) for a `"..."` name, then `embed_dirs` up to the
+result. An absolute name tries none. `embed_dir_names()` is the
+`--embed-dir` list by name.
 
 A result is a function of the key, the search list (and the
 `--embed-dir` list) and the file system; the header's characteristic as
@@ -262,12 +276,13 @@ the overlay's view answers it (a created file found, a removed one
 missing).
 
 `LookupLog::check(list, embed_dirs, fs, known,
-trust)` repeats every lookup in order over another list and file
-system and returns the first whose result differs, named for `-v`.
-With `Trust::ProducerMisses { same_cwd }` a directory of the recorded
-list that the lookup searched before its result (and the includer's
-directory of a `"..."` lookup found elsewhere) is taken to miss again
-without a query; a relative one only when `same_cwd`. With
+trust)` repeats every lookup in order over another list (and the
+consumer's `--embed-dir` list; a consumer with the producer's command
+line passes `embed_dir_names()`) and file system and returns the first
+whose result differs, named for `-v`. With
+`Trust::ProducerMisses { same_cwd }` a directory `tried` names is taken
+to miss again without a query, for `#embed` as for `#include`; a
+relative one (`.` included) only when `same_cwd`. With
 `Trust::Nothing` every such directory is asked again (the listings
 keep it cheap). A log is a statement about one view of the file system
 (the disk plus the run's overlay, spec/source.md "Overlay"), and a run
@@ -1633,7 +1648,31 @@ dump goldens under `tests/conformance/cpp.replace/record`,
   - `# 1 "<command line>" 1`;
   - each `-D` (`X` -> `X 1`, `X=v` -> `X v`) and `-U`, in order;
   - the driver's `__GCC_HAVE_DWARF2_CFI_ASM`;
+  - each `-imacros <file>` as the two lines `#__include_macros "<file>"`
+    and `##` (clang `AddImplicitIncludeMacros`; below), all before the
+    `-include`s whatever the command-line order;
+  - the `-include-pch` lines (`PCH_LINE`), then each `-include <file>` as
+    `#include "<file>"` (in a `"..."` name `\` and `"` are escaped). clang
+    writes these after the `# 1 "<built-in>" 2` below, so its line
+    markers and diagnostics name them `<built-in>`, kiln's `<command
+    line>`;
   - `# 1 "<built-in>" 2`.
+
+  **`-imacros` (WP-2822).** `#__include_macros "<file>"` is clang's
+  `HandleIncludeMacrosDirective`: valid only in the predefines buffer
+  (elsewhere `pp_include_macros_out_of_predefines`, an error, and the line
+  is discarded), it includes the file as `#include "<file>"` does (header
+  search, the lookup log, dependency output, line markers and `#pragma
+  once` as for an `-include`) and then discards every token up to the
+  next `##`, the one the predefines put after it: the file's directives
+  (`#define`, `#include`, `#pragma` handled by the preprocessor) take
+  effect, its text never reaches the parser, and its macro expansions
+  still happen (`__COUNTER__` counts). `Preprocessor::next_item` does the
+  discarding: file-change markers are kept (`-E` marks the file), the
+  pragmas the parser would see are dropped (`parser_pragmas`), and `-E`
+  keeps them, as clang's printer writes a pragma when it reads it. A file
+  that is not found is the fatal `pp_file_not_found`; the `##` still
+  ends the discarding.
 
   Keeping kiln's own macros ahead of the first line marker gives the
   numbered part of `<built-in>` clang's line count. The

@@ -60,6 +60,7 @@ pp_ident_ext = Extension (0) "#ident is a language extension";
 pp_illegal_floating_literal = Error (0) "floating point literal in preprocessor expression";
 pp_import_ext = Extension (0) "#import is a language extension";
 pp_include_expects_file = Error (0) "expected \"FILENAME\" or <FILENAME>";
+pp_include_macros_out_of_predefines = Error (0) "the #__include_macros directive is only for internal use by -imacros";
 pp_include_nested_too_deeply = Error (0) "#include nested too deeply";
 pp_include_next_absolute_path = Warning [IncludeNextAbsPath] (0) "#include_next in file found relative to primary source file or found by absolute path; will search from start of include path";
 pp_include_next_ext = Extension [GnuIncludeNext] (0) "#include_next is a language extension";

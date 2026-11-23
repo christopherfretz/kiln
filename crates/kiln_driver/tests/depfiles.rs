@@ -361,3 +361,58 @@ fn module_imports_list_module_files_as_clang_does() {
     }
     std::fs::remove_dir_all(&root).unwrap();
 }
+
+/// `-imacros` files are entered like `-include`s, before them (clang
+/// `AddImplicitIncludeMacros`): the rule lists each, the headers it
+/// includes, then the `-include`s, in the order read, whatever the
+/// command-line order (WP-2822).
+#[test]
+fn imacros_are_dependencies() {
+    let d = setup("imacros");
+    std::fs::write(d.join("m1.h"), "#include \"nested.h\"\n#define M1 1\nint gone;\n").unwrap();
+    std::fs::write(d.join("nested.h"), "#define NESTED 3\n").unwrap();
+    std::fs::write(d.join("m2.h"), "#define M2 (M1 + 1)\n").unwrap();
+    std::fs::write(d.join("i.h"), "int inc = M2;\n").unwrap();
+    std::fs::write(d.join("u.cpp"), "int u = M1 + M2 + NESTED;\n").unwrap();
+    let args =
+        ["-fsyntax-only", "-MMD", "-include", "i.h", "-imacros", "m1.h", "-imacrosm2.h", "u.cpp"];
+    kiln(&d, &args);
+    let t = read(&d, "u.d");
+    assert_eq!(t, "u.o: u.cpp m1.h nested.h m2.h i.h\n");
+    same_as_clang(&d, &args, "u.d", &t);
+    let o = kiln(&d, &["-M", "--imacros=m2.h", "-imacros", "m1.h", "u.cpp"]);
+    assert_eq!(String::from_utf8_lossy(&o.stdout), "u.o: u.cpp m2.h m1.h nested.h\n");
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+/// WP-2822: a header found in an `-iwithprefix` directory is a system
+/// header (the `-idirafter` group), one found in an
+/// `-iwithprefixbefore` directory a user one (the `-I` group): `-MD`
+/// lists both, `-MMD` only the second, as clang.
+#[test]
+fn prefixed_dirs_are_dependencies() {
+    let d = setup("iprefix");
+    std::fs::create_dir_all(d.join("p/a")).unwrap();
+    std::fs::create_dir_all(d.join("p/b")).unwrap();
+    std::fs::write(d.join("p/a/a.h"), "int a;\n").unwrap();
+    std::fs::write(d.join("p/b/b.h"), "int b;\n").unwrap();
+    std::fs::write(d.join("u.cpp"), "#include <a.h>\n#include <b.h>\n").unwrap();
+    for (md, want) in [("-MD", "u.o: u.cpp p/a/a.h p/b/b.h\n"), ("-MMD", "u.o: u.cpp p/b/b.h\n")] {
+        let args = [
+            "-fsyntax-only",
+            md,
+            "-iprefix",
+            "p/",
+            "-iwithprefix",
+            "a",
+            "-iwithprefixbefore",
+            "b",
+            "u.cpp",
+        ];
+        kiln(&d, &args);
+        let t = read(&d, "u.d");
+        assert_eq!(t, want, "{md}");
+        same_as_clang(&d, &args, "u.d", &t);
+    }
+    std::fs::remove_dir_all(&d).unwrap();
+}

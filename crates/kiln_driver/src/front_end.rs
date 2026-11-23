@@ -60,7 +60,9 @@ pub struct FrontEndOptions {
     /// executable does (spec/driver.md "Response files"). `false`: the
     /// words are taken as given, an `@x` word is an ordinary word (an
     /// input named `@x`), so every option that reaches the driver is one
-    /// of the words the caller passed (WP-2411).
+    /// of the words the caller passed (WP-2411). A caller that reads the
+    /// files itself (from an edited tree, or to learn which it read)
+    /// expands them with [`crate::rsp::expand_with`] and turns this off.
     pub response_files: bool,
     /// Where the driver reads its environment variables (`KILN_*`,
     /// `PATH`, `SOURCE_DATE_EPOCH`, `HOME`, `XDG_CACHE_HOME`): the
@@ -301,6 +303,10 @@ pub enum FrontEndError {
     NotOneInput,
     /// The command line's action is not `-fsyntax-only`.
     NotSyntaxOnly,
+    /// An `@file` of the command line exists but cannot be read, or names
+    /// itself (`FrontEndOptions::response_files`; the driver prints this
+    /// text and exits with 1, as clang's).
+    ResponseFile(crate::rsp::RspError),
 }
 
 impl std::fmt::Display for FrontEndError {
@@ -310,6 +316,7 @@ impl std::fmt::Display for FrontEndError {
             FrontEndError::Thread(e) => write!(f, "cannot create the front-end thread: {e}"),
             FrontEndError::NotOneInput => f.write_str("the command line has not one source input"),
             FrontEndError::NotSyntaxOnly => f.write_str("the command line is not -fsyntax-only"),
+            FrontEndError::ResponseFile(e) => write!(f, "{e}"),
         }
     }
 }
@@ -326,6 +333,7 @@ impl std::error::Error for FrontEndError {}
 ///
 /// [`FrontEndError::NotSyntaxOnly`] / [`FrontEndError::NotOneInput`] for
 /// a command line that is not one `-fsyntax-only` job;
+/// [`FrontEndError::ResponseFile`] for an `@file` that cannot be read;
 /// [`FrontEndError::Panicked`] when the front end or `f` panicked;
 /// [`FrontEndError::Thread`] when `own_thread` could not start one. A
 /// command line the driver rejects is not an error: the report says so.
@@ -341,7 +349,7 @@ pub fn run_front_end<R: Send>(
 ) -> Result<FrontEndReport<R>, FrontEndError> {
     let base = options.base_work_dir();
     let command_line = if options.response_files {
-        crate::rsp::expand_in(command_line, &base)
+        crate::rsp::expand_checked(command_line, &base).map_err(FrontEndError::ResponseFile)?.words
     } else {
         command_line.to_vec()
     };

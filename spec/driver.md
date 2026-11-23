@@ -63,7 +63,9 @@ linker prints its version; Meson's linker probe, WP-920), and `-c
 | `-ansi`, `--ansi` | `-std=c89` for C, `-std=c++98` for C++; the last of it and `-std=` wins |
 | `-D`, `-U` | command-line macros, in order |
 | `-include <file>` (joined or separate) | `#include "<file>"` at the end of the predefines' `<command line>` section, after the `-D`/`-U` macros, in order (clang `AddImplicitInclude`); found from the working directory first, then the `"..."` search chain |
+| `-imacros <file>` (joined or separate; `--imacros <file>`, `--imacros<file>`, `--imacros=<file>`; `-imacros=f` names the file `=f`) | the file is read for its macros only: its directives run, its text is discarded (spec/pp.md "`-imacros`"). All `-imacros` come before all `-include`s, whatever the order, each as `#__include_macros "<file>"` and `##` in the predefines (clang `AddImplicitIncludeMacros`); found as an `-include` is; in the dependency output and the lookup log as an `-include` is. A PCH consumer with `-imacros` replays the PCH (the snapshot restore is refused quietly: the `-imacros` come before the PCH) |
 | `-I`, `-iquote`, `-isystem`, `-idirafter`, `-cxx-isystem` | user search directories; `-I=dir` is relative to the sysroot |
+| `-iprefix <p>`, `-iwithprefix <dir>`, `-iwithprefixbefore <dir>` (each joined or separate; `-iprefix=p` is the prefix `=p`); GCC's `--include-prefix`, `--include-with-prefix`, `--include-with-prefix-after`, `--include-with-prefix-before` (separate or `=`-joined) | `-iprefix` sets the prefix (initially empty) that each later `-iwithprefix`/`-iwithprefixbefore` joins onto its directory as written (no sysroot `=`). `-iwithprefix` adds `<p><dir>` to the `-idirafter` group (a system directory), after the system directories and before every `-idirafter` wherever written; `-iwithprefixbefore` adds it to the `-I` group, after every `-I` wherever written (clang `ParseHeaderSearchArgs`, whose loops add `-I`, then these in order, then `-idirafter`). `-MJ` writes the aliases as the option they stand for |
 | `-nostdinc`, `-nostdinc++`, `-nostdlibinc`, `-nobuiltininc` | drop toolchain directories (see "Toolchain") |
 | `--sysroot`, `-isysroot` | sysroot (`-isysroot` wins for headers) |
 | `-resource-dir <dir>` | the builtin headers are in `<dir>/include` |
@@ -253,13 +255,48 @@ before anything else is parsed (`rsp::expand`, both in `main` and in
 `run_as`; in the front-end library entry unless its `response_files`
 option is off, and never in an evaluation session's command line,
 WP-2411), as clang's driver (`ExpansionContext::expandResponseFiles`,
-GNU tokenizer): whitespace separates arguments, `'` and `"` quote (an
-empty pair is an empty argument), and a backslash takes the next
-character literally, also inside quotes. A nested `@file` is expanded
-in turn, relative to the current directory, up to 32 levels deep. An
-`@file` that cannot be read is left as written, so it is an input that
-does not exist. CMake's Makefile generator links through
-`@CMakeFiles/<target>.dir/objects1.rsp` when a target has many objects.
+GNU tokenizer, `RelativeNames` off): whitespace separates arguments, `'`
+and `"` quote (an empty pair is an empty argument), and a backslash
+takes the next character literally, also inside quotes. A nested
+`@file` is expanded in turn, relative to the current directory (not to
+the file naming it). An `@` alone is no response file. CMake's Makefile
+generator links through `@CMakeFiles/<target>.dir/objects1.rsp` when a
+target has many objects.
+
+What a file that cannot be read does is clang's (19 and 22 agree):
+
+- one that does not exist (`stat` fails with "no such file") is left as
+  written, so it is an input that does not exist (`no such file or
+  directory: '@x'`);
+- one that exists but cannot be read (a directory, no permission, a
+  path through a regular file) stops the driver: it prints `cannot not
+  open file '<path>': <reason>` (clang's wording, its typo included;
+  `<path>` the name joined onto the working directory, `<reason>`
+  `strerror`'s text: `Is a directory`, `Not a directory`) with no
+  prefix, and exits with 1;
+- one that names itself, directly or through other files, stops the
+  driver the same way with `recursive expansion of: '<path>'`, the path
+  of the `@file` that would be read again. Files are compared by path
+  (with `.` components dropped; clang compares file identities), and a
+  chain 512 files deep counts as recursive.
+
+The library API (WP-2826): `rsp::expand_with(argv, dir, read)` asks the
+hook `read` for each response file, its name joined onto `dir` (an
+empty `dir` joins nothing); the hook answers `RspFile::Bytes`,
+`RspFile::Missing` (left as written) or `RspFile::Unreadable(reason)`
+(the error above). It returns an `Expansion`: the words, and the
+response files read, in the order read (a nested one after the file
+naming it), as the paths the hook was asked for; or the `RspError`
+(`Unreadable { path, reason }`, `Recursive { path }`, whose text is
+clang's). `rsp::expand_checked(argv, work_dir)` is it over the host's
+file system, the working directory made absolute; `run_as` prints its
+error and exits with 1, and the front-end library entry returns
+`FrontEndError::ResponseFile`. `rsp::expand` and `rsp::expand_in` are
+the lenient wrappers (an error gives back the words unexpanded), for
+callers that report nothing (the crash reproducer, the scanner's
+compile commands, `main`'s stack-size probe, which `run_as` follows). A
+caller that supplies the files (an edited tree) expands with the hook
+and turns the library entry's `response_files` off.
 
 ### Codegen flags (WP-605)
 
@@ -1864,7 +1901,7 @@ Opened against it (a relative path joined, the path as written kept for
 every name): the main input and its existence check, a module-file
 input's magic; `-I`, `-iquote`, `-isystem`, `-idirafter`, `-I=` under a
 sysroot, `--embed-dir=` and every header-search query (`RealFs::in_dir`);
-`-include` (header search from `<built-in>`; kiln has no `-imacros`); `#include
+`-include` and `-imacros` (header search from `<built-in>`); `#include
 "..."` relative to the includer; `#embed` and `__has_embed`;
 `-fmodule-file=` (named and nameless), `-fprebuilt-module-path=`, a
 header unit's key, the module cache path (`-fmodules-cache-path=`, made
@@ -2627,8 +2664,11 @@ which build systems concatenate into `compile_commands.json`. `output` is
 left out under `-fsyntax-only`; a link names each source's temporary
 object; `--driver-mode=g++` only under `kiln++`. The command line is
 clang's rendering: without the inputs, `-o`, `-x`, `-MJ` and the other
-dependency options, a separately valued option as two strings (`-D`,
-`X=1`), `-target X` as `--target=X`. The file is truncated once per run
+dependency options, a joined or separately valued option as two
+strings (`-D`, `X=1`; `-I=inc` as `-I`, `=inc`), an `=`-joined one
+(`--sysroot=/s`, `-std=c++20`) as written, an alias as the option it
+stands for (`--imacros=f` as `-imacros`, `f`), `-target X` as
+`--target=X`. The file is truncated once per run
 and written whatever the jobs' outcome; `-###` writes none (clang's). A
 file that cannot be written is the driver error `compilation database
 '<file>' could not be opened: <reason>` (`drv_compilation_database`),

@@ -49,6 +49,27 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   `decltype(s)::m` begins; the dump prints `q=specifier:L:C`. Expression
   extents already began such a name at its specifier, as clang does; a
   test pins it.
+- `-imacros <file>` (WP-2822; also `--imacros`, `--imacros=`): the
+  file's directives run and its text is discarded, every `-imacros`
+  before every `-include`, as clang (`#__include_macros` in the
+  predefines; the directive elsewhere is an error); in the dependency
+  output and the lookup log. `-iprefix`, `-iwithprefix` and
+  `-iwithprefixbefore`, with GCC's `--include-prefix`,
+  `--include-with-prefix[-after|-before]` aliases, in clang's search
+  order (spec/driver.md "Options"). `-MJ` splits a joined value that
+  starts with `=` (`-I=inc` as `-I`, `=inc`), as clang.
+- Response files (WP-2826): `rsp::expand_with` reads each `@file`
+  through a caller's hook and reports the files read; one that exists
+  but cannot be read (`cannot not open file '<path>': <reason>`) or
+  that names itself (`recursive expansion of: '<path>'`) stops the
+  driver with exit 1, as clang, and is `FrontEndError::ResponseFile` in
+  the front-end library entry (spec/driver.md "Response files").
+- The lookup log (WP-2829) records the `--embed-dir` list and an
+  `#embed` found in one (`Found::EmbedDir`); `LookupLog::tried` names
+  the directories each lookup searched, and `check` trusts the
+  producer's misses for `#embed` as for `#include` (spec/pp.md "Lookup
+  log").
+
 - `Ast::exception_spec_computed` (WP-2505, spec/ast.md §4.2): a tooling
   client tells an explicitly defaulted function's written exception
   specification (`S() noexcept(false) = default;`) from one computed

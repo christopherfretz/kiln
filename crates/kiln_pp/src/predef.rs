@@ -60,6 +60,11 @@ pub struct PredefConfig {
     /// line's macros, in the `<command line>` section (clang
     /// `AddImplicitInclude`), so they are found from the working directory.
     pub implicit_includes: Vec<String>,
+    /// `-imacros <file>`s: `#__include_macros "<file>"` and a `##` line
+    /// each, before the `-include`s (clang `AddImplicitIncludeMacros`):
+    /// the file is entered and everything but its directives is
+    /// discarded up to the `##` (spec/pp.md "Predefines").
+    pub implicit_macro_includes: Vec<String>,
     /// `-include-pch` with its record installed (WP-1036): one
     /// [`PCH_LINE`] for each precompiled `-include` and the header, before
     /// the `-include`s, so that every later line is where replay has it.
@@ -182,6 +187,7 @@ impl PredefConfig {
             no_inline: false,
             gnu89_inline: None,
             implicit_includes: Vec::new(),
+            implicit_macro_includes: Vec::new(),
             pch_lines: 0,
             exceptions: cplusplus,
             rtti: cplusplus,
@@ -487,21 +493,31 @@ pub fn build_predefines(base: &str, cfg: &PredefConfig, cmdline: &[CmdMacro]) ->
     for (n, v) in &driver {
         let _ = writeln!(out, "#define {n} {v}");
     }
+    for f in &cfg.implicit_macro_includes {
+        out.push_str("#__include_macros \"");
+        push_escaped(&mut out, f);
+        out.push_str("\"\n##\n");
+    }
     for _ in 0..cfg.pch_lines {
         out.push_str(PCH_LINE);
     }
     for f in &cfg.implicit_includes {
         out.push_str("#include \"");
-        for c in f.chars() {
-            if matches!(c, '\\' | '"') {
-                out.push('\\');
-            }
-            out.push(c);
-        }
+        push_escaped(&mut out, f);
         out.push_str("\"\n");
     }
     out.push_str("# 1 \"<built-in>\" 2\n");
     out
+}
+
+/// `f` inside a `"..."` header name, `\\` and `"` escaped.
+fn push_escaped(out: &mut String, f: &str) {
+    for c in f.chars() {
+        if matches!(c, '\\' | '"') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
 }
 
 fn set(m: &mut BTreeMap<String, String>, n: &str, v: &str) {

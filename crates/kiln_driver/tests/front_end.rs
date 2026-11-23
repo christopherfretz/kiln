@@ -983,6 +983,22 @@ fn response_files_can_be_turned_off() {
     assert_eq!(r.value, Some(true));
 }
 
+/// WP-2826: a response file that cannot be read, or that names itself,
+/// is `FrontEndError::ResponseFile`, with clang's text; the names are
+/// joined onto the working directory.
+#[test]
+fn response_file_errors() {
+    let s = Scratch::new("rsp-err");
+    std::fs::create_dir_all(s.0.join("dir")).unwrap();
+    s.write("self.rsp", b"-fsyntax-only @self.rsp\n");
+    let r = run_front_end("kiln++", &argv(&["@dir"]), in_dir(&s.0), |_| ());
+    let Err(FrontEndError::ResponseFile(e)) = r else { panic!("{r:?}") };
+    assert_eq!(e.to_string(), format!("cannot not open file '{}': Is a directory", s.path("dir")));
+    let r = run_front_end("kiln++", &argv(&["@self.rsp"]), in_dir(&s.0), |_| ());
+    let Err(e @ FrontEndError::ResponseFile(_)) = r else { panic!("{r:?}") };
+    assert_eq!(e.to_string(), format!("recursive expansion of: '{}'", s.path("self.rsp")));
+}
+
 /// WP-2121: the executable's `-working-directory`: inputs, `-I`, `-o`
 /// and `-MF` resolve against it, the dependency file and the line
 /// markers keep the names as written, and nothing appears in the

@@ -121,7 +121,7 @@ impl<F: HeaderFs> HeaderSearch<F> {
     /// [`IncludeResolver::take_lookup_log`] hands over.
     pub fn record_lookups(&mut self) {
         let mut r = Recorder::default();
-        r.start(&self.list);
+        r.start(&self.list, &self.embed_dirs);
         self.recorder = Some(r);
     }
 
@@ -166,16 +166,26 @@ impl<F: HeaderFs> HeaderSearch<F> {
         });
     }
 
-    /// Records the embed lookup `req` and the path it read, if any (an
+    /// Records the embed lookup `req` and the path it read, if any, with
+    /// its position in the `--embed-dir` list when it was found there (an
     /// absolute name with no includer's directory: it is read as is).
-    fn record_embed(&mut self, sm: &SourceManager, req: &EmbedRequest, path: Option<&str>) {
+    fn record_embed(
+        &mut self,
+        sm: &SourceManager,
+        req: &EmbedRequest,
+        path: Option<(&str, Option<u32>)>,
+    ) {
         let Some(rec) = self.recorder.as_mut() else { return };
         let includer = if req.angled || req.name.starts_with('/') {
             None
         } else {
             req.includer.map(|f| rec.dir(parent_dir(sm.file_name(f))))
         };
-        let found = path.map_or(Found::Missing, |p| Found::Embed { path: p.to_owned() });
+        let found = match path {
+            None => Found::Missing,
+            Some((_, Some(index))) => Found::EmbedDir { index },
+            Some((p, None)) => Found::Embed { path: p.to_owned() },
+        };
         rec.add(Lookup {
             name: req.name.clone(),
             form: LookupForm::Embed,
@@ -441,7 +451,7 @@ impl<F: HeaderFs> IncludeResolver for HeaderSearch<F> {
 
     fn resolve_embed(&mut self, sm: &SourceManager, req: &EmbedRequest) -> Option<EmbedData> {
         let found = self.lookup_embed(sm, req);
-        self.record_embed(sm, req, found.as_ref().map(|f| f.0.as_str()));
+        self.record_embed(sm, req, found.as_ref().map(|f| (f.0.as_str(), f.2)));
         let (path, all, lookup) = found?;
         if let Some(o) = self.observer.as_mut() {
             o(sm, SearchEvent::Embed { path: &path, query_only: req.query_only, bytes: &all });

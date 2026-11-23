@@ -50,11 +50,18 @@ pub enum Found {
         /// Its characteristic.
         characteristic: Characteristic,
     },
-    /// An `#embed` resource read from `path` (for an absolute name, the
-    /// name itself).
+    /// An `#embed` resource read from `path`: relative to the includer's
+    /// directory, to the working directory (the name itself), or, for an
+    /// absolute name, the name itself.
     Embed {
         /// The path it was read from.
         path: String,
+    },
+    /// An `#embed` resource found in the `--embed-dir`
+    /// [`LookupLog::embed_dirs`]`[index]` (WP-2829).
+    EmbedDir {
+        /// Its position in [`LookupLog::embed_dirs`].
+        index: u32,
     },
     /// Found at the name as written: an absolute name, opened as is
     /// (WP-2620).
@@ -95,6 +102,10 @@ pub struct LookupLog {
     pub list: Vec<u32>,
     /// The position in [`LookupLog::list`] where `<...>` lookups start.
     pub angled_start: u32,
+    /// The producer's `--embed-dir` list, in order, as indices into
+    /// [`LookupLog::dirs`] (WP-2829): an `#embed` searches it after the
+    /// includer's and the working directory.
+    pub embed_dirs: Vec<u32>,
 }
 
 /// The recording side: the log and what deduplicates it.
@@ -117,10 +128,12 @@ impl Recorder {
         i
     }
 
-    /// Records the search list the lookups use.
-    pub(crate) fn start(&mut self, list: &SearchList) {
+    /// Records the search list and the `--embed-dir` list the lookups
+    /// use.
+    pub(crate) fn start(&mut self, list: &SearchList, embed_dirs: &[String]) {
         self.log.list = list.dirs().iter().map(|d| self.dir(&d.path)).collect();
         self.log.angled_start = u32::try_from(list.angled_start()).unwrap_or(u32::MAX);
+        self.log.embed_dirs = embed_dirs.iter().map(|d| self.dir(d)).collect();
     }
 
     /// Records `l` unless it was recorded before.
@@ -151,13 +164,17 @@ impl LookupLog {
             Found::Includer => l.includer.is_some_and(abs),
             Found::Dir { dir, .. } => abs(*dir),
             Found::Embed { path } => path.starts_with('/'),
+            Found::EmbedDir { index } => {
+                self.embed_dirs.get(*index as usize).is_some_and(|&d| abs(d))
+            }
         })
     }
 
     /// Checks a decoded log's indices (WP-1396, spec/snap.md "Threat
     /// model"): every directory index (a result's, an includer's, an
-    /// `after`, the list's) names one of [`LookupLog::dirs`], and
-    /// [`LookupLog::angled_start`] is within the list. A log read from a
+    /// `after`, the list's, the `--embed-dir` list's) names one of
+    /// [`LookupLog::dirs`], [`LookupLog::angled_start`] is within the
+    /// list, and an [`Found::EmbedDir`] within [`LookupLog::embed_dirs`]. A log read from a
     /// file that fails is refused before it is repeated.
     ///
     /// # Errors
@@ -173,6 +190,9 @@ impl LookupLog {
         };
         for &d in &self.list {
             bad("search list", d)?;
+        }
+        for &d in &self.embed_dirs {
+            bad("--embed-dir list", d)?;
         }
         if self.angled_start as usize > self.list.len() {
             return Err(format!(
@@ -191,8 +211,66 @@ impl LookupLog {
             if let Found::Dir { dir, .. } = l.found {
                 bad("result", dir)?;
             }
+            if let Found::EmbedDir { index } = l.found
+                && index as usize >= self.embed_dirs.len()
+            {
+                return Err(format!(
+                    "its lookup log names --embed-dir {index} of {}",
+                    self.embed_dirs.len()
+                ));
+            }
         }
         Ok(())
+    }
+
+    /// The directories the lookup `l` (one of [`LookupLog::lookups`])
+    /// searched without finding its name, in order, up to its result
+    /// (all it would search when it found nothing), as
+    /// [`LookupLog::dirs`] names them; `.` is the working directory (an
+    /// `#embed "..."` tries the name as written there, after the
+    /// includer's directory). An absolute name searches none.
+    #[must_use]
+    pub fn tried(&self, l: &Lookup) -> Vec<&str> {
+        if is_absolute(l) {
+            return Vec::new();
+        }
+        let includer = l.includer.map(|i| self.dir(i));
+        match l.form {
+            LookupForm::Include | LookupForm::Next => {
+                if l.found == Found::Includer {
+                    return Vec::new();
+                }
+                let producer: HashMap<u32, usize> =
+                    self.list.iter().enumerate().map(|(i, &d)| (d, i)).collect();
+                let relative = l.form == LookupForm::Include && !l.angled;
+                let first = includer.filter(|_| relative);
+                let list = self.searched(l, &producer).filter_map(|j| self.list.get(j));
+                first.into_iter().chain(list.map(|&d| self.dir(d))).collect()
+            }
+            LookupForm::Embed => {
+                let mut out = Vec::new();
+                if !l.angled {
+                    if let Some(i) = includer {
+                        if let Found::Embed { path } = &l.found
+                            && *path == join_path(i, &l.name)
+                        {
+                            return out;
+                        }
+                        out.push(i);
+                    }
+                    if matches!(l.found, Found::Embed { .. }) {
+                        return out;
+                    }
+                    out.push(".");
+                }
+                let end = match l.found {
+                    Found::EmbedDir { index } => index as usize,
+                    _ => self.embed_dirs.len(),
+                };
+                out.extend(self.embed_dirs.iter().take(end).map(|&d| self.dir(d)));
+                out
+            }
+        }
     }
 
     fn dir(&self, i: u32) -> &str {
@@ -206,6 +284,9 @@ impl LookupLog {
             Found::Includer => Res::Includer,
             Found::Dir { dir, characteristic } => Res::Dir(self.dir(*dir), *characteristic),
             Found::Embed { path } => Res::Embed(path),
+            Found::EmbedDir { index } => {
+                Res::EmbedDir(self.embed_dirs.get(*index as usize).map_or("", |&d| self.dir(d)))
+            }
             Found::Absolute => Res::Absolute,
         }
     }
@@ -215,7 +296,7 @@ impl LookupLog {
         match r {
             Res::Missing => None,
             Res::Includer => Some(join_path(l.includer.map_or(".", |i| self.dir(i)), &l.name)),
-            Res::Dir(d, _) => Some(join_path(d, &l.name)),
+            Res::Dir(d, _) | Res::EmbedDir(d) => Some(join_path(d, &l.name)),
             Res::Embed(path) => Some((*path).to_owned()),
             Res::Absolute => Some(l.name.clone()),
         }
@@ -231,13 +312,16 @@ impl LookupLog {
         }
     }
 
-    /// Repeats every lookup, in order, over `list` (and `embed_dirs`) and
-    /// `fs`, and names the first whose result differs from the recorded
-    /// one (spec/pch.md "Lookup-tolerant search path", spec/pp.md
-    /// "Lookup log"). `known(path)` says that a file is known to exist
-    /// (the PCH record's file list, just checked), so it is not asked
-    /// about. `trust` says which of the producer's misses are taken as
-    /// they were ([`Trust`]).
+    /// Repeats every lookup, in order, over `list` (and `embed_dirs`, the
+    /// consumer's `--embed-dir` list: [`LookupLog::embed_dir_names`] is
+    /// the producer's) and `fs`, and names the first whose result
+    /// differs from the recorded one (spec/pch.md "Lookup-tolerant search
+    /// path", spec/pp.md "Lookup log"). `known(path)` says that a file is
+    /// known to exist (the PCH record's file list, just checked), so it
+    /// is not asked about. `trust` says which of the producer's misses
+    /// are taken as they were ([`Trust`]), for `#embed` as for
+    /// `#include`: a directory [`LookupLog::tried`] names is not asked
+    /// again when trusted.
     ///
     /// # Errors
     /// The first lookup that finds something else, as `-v` names it.
@@ -347,7 +431,7 @@ impl LookupLog {
                     }
                 }
                 LookupForm::Embed => {
-                    self.embed(l, embed_dirs, &mut p)?;
+                    self.embed(l, embed_dirs, &mut p, &trusted)?;
                     continue;
                 }
             };
@@ -395,20 +479,40 @@ impl LookupLog {
     }
 
     /// Repeats the `#embed` lookup `l` over `embed_dirs` (an embed does
-    /// not use the search list).
-    fn embed(&self, l: &Lookup, embed_dirs: &[String], p: &mut Prober<'_>) -> Result<(), String> {
-        let mut tries = Vec::new();
+    /// not use the search list): the includer's directory, the working
+    /// directory, then `embed_dirs`, skipping a directory the producer
+    /// searched in vain ([`LookupLog::tried`]) when `trusted`.
+    fn embed(
+        &self,
+        l: &Lookup,
+        embed_dirs: &[String],
+        p: &mut Prober<'_>,
+        trusted: &dyn Fn(&str) -> bool,
+    ) -> Result<(), String> {
+        let missed: HashSet<&str> = self.tried(l).into_iter().filter(|d| trusted(d)).collect();
+        let mut tries: Vec<(&str, String)> = Vec::new();
         if !l.angled {
             if let Some(i) = l.includer {
-                tries.push(join_path(self.dir(i), &l.name));
+                tries.push((self.dir(i), join_path(self.dir(i), &l.name)));
             }
-            tries.push(l.name.clone());
+            tries.push((".", l.name.clone()));
         }
-        tries.extend(embed_dirs.iter().map(|d| join_path(d, &l.name)));
-        let found = tries.into_iter().find(|t| p.file(t));
-        let now = found.as_deref().map_or(Res::Missing, Res::Embed);
+        tries.extend(embed_dirs.iter().map(|d| (d.as_str(), join_path(d, &l.name))));
+        let found = tries.into_iter().find(|(d, t)| !missed.contains(d) && p.file(t));
+        let now = found.as_ref().map_or(Res::Missing, |(_, t)| Res::Embed(t));
         let was = self.result(&l.found);
-        if now == was { Ok(()) } else { Err(self.difference(l, &was, &now)) }
+        if self.path(l, &now) == self.path(l, &was) {
+            Ok(())
+        } else {
+            Err(self.difference(l, &was, &now))
+        }
+    }
+
+    /// The producer's `--embed-dir` list ([`LookupLog::embed_dirs`]) by
+    /// name, in order.
+    #[must_use]
+    pub fn embed_dir_names(&self) -> Vec<&str> {
+        self.embed_dirs.iter().map(|&d| self.dir(d)).collect()
     }
 
     /// The positions in the producer's list of the directories the
@@ -429,7 +533,9 @@ impl LookupLog {
                 Some(&j) => j,
                 None => return 0..0,
             },
-            Found::Includer | Found::Embed { .. } | Found::Absolute => return 0..0,
+            Found::Includer | Found::Embed { .. } | Found::EmbedDir { .. } | Found::Absolute => {
+                return 0..0;
+            }
         };
         start.min(end)..end
     }
@@ -489,6 +595,8 @@ enum Res<'a> {
     Includer,
     Dir(&'a str, Characteristic),
     Embed(&'a str),
+    /// Found in this `--embed-dir`.
+    EmbedDir(&'a str),
     Absolute,
 }
 
