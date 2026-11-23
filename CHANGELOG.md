@@ -19,6 +19,20 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   across a comment or line splice) and a destructor's `~` (`tilde`) are
   recorded at parse in a cold side table, carried by PCH snapshots and
   module images, and dumped as `q=::L:C` and `tilde=L:C`.
+- `__builtin_offsetof` keeps, for a non-dependent expression, its operand
+  type and its resolved designator (per component the member, the base
+  class stepped through, or the index position) in a cold row
+  (`ExprArena::offsetof_designator`; PCH format 148), so tooling clients
+  tell apart `offsetof(A, y)` and `offsetof(B, q)` at one offset. The ODR
+  definition hash moves to scheme `kiln-odr-2`: it hashes that
+  designator, a local class's tag, `#pragma pack` value and layout
+  attributes, a local enumeration's underlying type, a coroutine lambda's
+  wrapped body, a tuple-like structured binding's `get` call and a
+  local's `cleanup(f)`, each a pair of definitions that differ in meaning
+  and hashed alike before; `[[clang::musttail]]` and concatenated string
+  literals are documented misses (WP-2360, WP-2361; spec/ast.md,
+  spec/abi.md "Definition hash").
+
 - The written-reference table's stage-4 gaps are closed (WP-2220..WP-2224,
   WP-2170; spec/ast.md §18.8, §18.9): per-specialization entries name the
   using-directive their lookup went through (`SpecRef::udir`), re-find
@@ -832,6 +846,15 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   packagers").
 
 ### Fixed
+
+- A class template's friend function template definition with a default
+  template argument, instantiated after the template was declared at
+  namespace scope, is "default template argument not permitted on a
+  friend template" ([temp.param]/12), as clang; kiln accepted it. And
+  `va_arg` of a class that is not trivially copyable keeps its
+  `VAArgExpr` but marks it erroneous while `-Wnon-pod-varargs` is an
+  error, so a consumer walking the body sees it (WP-2362, WP-2363,
+  spec/sema.md §5.12).
 
 - An alias-declaration (or alias template) whose type-id is invalid
   declares nothing, as clang: later uses of its name are "unknown type

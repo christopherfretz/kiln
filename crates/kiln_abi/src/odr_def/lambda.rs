@@ -11,16 +11,19 @@
 //! (the call operator's locals; captured entities by capture position),
 //! the call operator's declarator (as for any function, `constexpr`
 //! never), `mutable`, a generic lambda's template parameters and
-//! requires-clause, and the body. The digest is memoized per closure: the
+//! requires-clause, and the call operator's body (a coroutine lambda's
+//! wrapped `CoroutineBodyStmt`, `kiln-odr-2`). The digest is memoized per closure: the
 //! row of the call operator (and of each specialization of a generic
 //! one) is a function of it.
 //!
 //! A local class or enumeration hashes where it is declared: its index,
-//! its bases and its members in declaration order, member functions'
+//! (`kiln-odr-2`) a class's union bit, `#pragma pack` value and layout
+//! attributes or an enumeration's underlying type, its bases and its
+//! members in declaration order, member functions'
 //! definitions inline (their parameters and locals share the enclosing
 //! numbering). Its member functions get no rows of their own.
 
-use kiln_ast::decl::{DeclFlags, DeclKind};
+use kiln_ast::decl::{DeclFlags, DeclKind, EnumData, TagKind};
 use kiln_ast::expr::ExprKind as K;
 use kiln_ast::ids::LambdaId;
 use kiln_ast::lambda::{CaptureKind, LambdaData};
@@ -106,7 +109,12 @@ impl<'a> DefHasher<'a> {
                 decl::declarator_as(self, op, true);
                 self.byte(u8::from(data.mutable));
                 self.generic_params(op);
-                self.stack.push(Work::OptStmt(data.body));
+                // The call operator's body: for a coroutine lambda, the
+                // `CoroutineBodyStmt` sema wrapped the written body in
+                // (`LambdaData::body` keeps the compound statement;
+                // `kiln-odr-2`, WP-2361).
+                let body = ast.decls.function(op).and_then(|f| f.body).or(data.body);
+                self.stack.push(Work::OptStmt(body));
                 self.run();
                 self.leave_scope();
             }
@@ -380,7 +388,9 @@ impl<'a> DefHasher<'a> {
     }
 
     /// A local class or enumeration's definition (from a declaration
-    /// statement): its index, kind, bases, then its members in
+    /// statement): its index, kind, then for a class its tag (`union` or
+    /// not), `#pragma pack` value and layout attributes and its bases, for
+    /// an enumeration its underlying type, then its members in
     /// declaration order, each with whatever its work pushes run before
     /// the next.
     pub(super) fn local_class(&mut self, d: DeclId) {
@@ -391,6 +401,29 @@ impl<'a> DefHasher<'a> {
         self.byte(n.kind() as u8);
         let base = self.stack.len();
         let floor = std::mem::replace(&mut self.floor, base);
+        // `kiln-odr-2` (WP-2361): what a local class's layout depends on
+        // besides its members (it has no kind 3 row: its type is TU-local),
+        // and a local enumeration's underlying type.
+        match n.kind() {
+            DeclKind::CXXRecord => {
+                let tag = ast.decls.record(d).map_or(TagKind::Struct, |r| r.tag);
+                // `class` and `struct` declare the same kind of class.
+                self.byte(u8::from(tag == TagKind::Union));
+                let pack = ast.decls.cold.record_pack.get(d).copied().unwrap_or(0);
+                self.u32(u32::from(pack));
+                self.layout_attrs(d);
+            }
+            DeclKind::Enum => match ast.decls.enumeration(d).and_then(|e| e.int_type) {
+                Some(t) => {
+                    let fixed =
+                        ast.decls.enumeration(d).is_some_and(|e| e.flags & EnumData::FIXED != 0);
+                    self.byte(u8::from(fixed));
+                    self.ty(t);
+                }
+                None => self.byte(T_NONE),
+            },
+            _ => {}
+        }
         if n.kind() == DeclKind::CXXRecord {
             let bases = ast.decls.bases(d, &ast.lists);
             let mark = self.out.len();
@@ -430,6 +463,7 @@ impl<'a> DefHasher<'a> {
                 }
                 let f = ast.decls.field(m);
                 self.u32(f.map_or(0, |f| f.flags));
+                self.layout_attrs(m);
                 self.stack.push(Work::OptExpr(f.and_then(|f| f.bit_width)));
                 self.stack.push(Work::OptExpr(f.and_then(|f| f.init)));
                 let base = self.stack.len() - 2;

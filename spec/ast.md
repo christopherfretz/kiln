@@ -531,9 +531,30 @@ struct ExprNode {        // 20 bytes
   | `CXXThrowExpr` | operand or none (rethrow) | | `throw_operand` |
   | `StmtExpr` | the `CompoundStmt` | | `stmt_expr_body` |
   | `AddrLabelExpr` (GNU `&&l`, WP-424) | the `LabelDecl` | `cold.end_loc` = the label name's location; a `void *` prvalue; instantiation-dependent in a template's body so each specialization rebuilds it for its own label (WP-444) | `addr_label` |
-  | `OffsetOfExpr` | `ListId` of the array index expressions | `b` = byte offset (`u32`); with cold `offsetof_layout` steps (an index that is not a constant, or an offset past `u32`) the value is their sum | `offsetof_value`, `offsetof_layout` |
+  | `OffsetOfExpr` | `ListId` of the array index expressions | `b` = byte offset (`u32`); with cold `offsetof_layout` steps (an index that is not a constant, or an offset past `u32`) the value is their sum; cold `offsetof_designator` (non-dependent) or `offsetof_pattern` (value-dependent) keeps the operand type and the designator | `offsetof_value`, `offsetof_layout`, `offsetof_indices`, `offsetof_designator`, `offsetof_pattern` |
   | `CompoundLiteralExpr` | the `InitListExpr` | | `compound_literal_init` |
   | `CXXScalarValueInitExpr` | none | | |
+- **`offsetof`'s designator** (WP-2360, for tooling clients). A
+  non-dependent `OffsetOfExpr` keeps, in the cold row
+  `ColdExprData::offsetof_designator` (`ExprArena::offsetof_designator`),
+  the operand type as written (a typedef stays the typedef) and the
+  designator as sema resolved it, as `OffsetofNode`s in clang's
+  `OffsetOfNode` order: a `Base { class }` (the base class's definition)
+  per base class subobject on the path to a member found in a base, then
+  a `Field { field, start, end }` per member (one per member of an
+  anonymous struct or union chain, outermost first, each at the written
+  name's range), and an `Index { position, start, end }` per subscript,
+  `position` being its index in the expression's index list
+  (`offsetof_indices`, its children). So `__builtin_offsetof(A, y)` and
+  `__builtin_offsetof(Bq, q)` over one layout, or a union's two members,
+  are different rows with one value. An instantiation's row is its own,
+  resolved for its arguments; the pattern, value-dependent, keeps the
+  written form in `offsetof_pattern` instead. Nothing in the compiler
+  reads the row (the value is `offsetof_value` or `offsetof_layout`'s);
+  it is snapshot state (PCH `FORMAT_VERSION` 148). Module images do not
+  carry an `OffsetOfExpr` (a body holding one falls back), so they need
+  nothing. Test: `crates/kiln_parse/tests/offsetof_designator.rs`,
+  `snap_tests::snapshot_round_trip_offsetof`.
 - Source ranges are computed (`begin(e)` walks to the leftmost child;
   kinds ending in a closing token store it in their side record or cold
   map); no stored ranges.

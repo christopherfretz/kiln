@@ -1123,6 +1123,7 @@ pub static COLD_MAPS: &[ColdMapRoles] = &[
         Role::Record("(QualType, Box<[OffsetofComponent]>)"),
     ),
     cold("ColdExprData", "offsetof_layout", E, Role::Record("Box<[OffsetofStep]>")),
+    cold("ColdExprData", "offsetof_designator", E, Role::Record("(QualType, Box<[OffsetofNode]>)")),
     cold("ColdExprData", "splice_args", E, Role::ArgList),
     cold("ColdExprData", "default_arg_rewritten", E, E),
     cold("ColdExprData", "fp_round", E, Role::Record("fp::FpRound")),

@@ -121,7 +121,8 @@ impl DefHasher<'_> {
                 self.stack.push(Work::Expr(op));
             }
             // The type, then the offset as computed (a layout difference
-            // is a kind 3 difference too) or its steps.
+            // is a kind 3 difference too) or its steps, then the operand
+            // type and the designator as resolved (`kiln-odr-2`).
             K::OffsetOfExpr => {
                 self.expr_tag(k);
                 self.ty(n.ty());
@@ -148,6 +149,7 @@ impl DefHasher<'_> {
                         }
                     }
                 }
+                self.offsetof_designator(e);
             }
             // A constraint outside a template is a constant: its value.
             K::ConceptSpecializationExpr | K::RequiresExpr => match x.satisfied(e) {
@@ -223,6 +225,42 @@ impl DefHasher<'_> {
                 }
             }
             _ => self.partial(Area::Misc, Site::Stmt(k)),
+        }
+    }
+}
+
+impl DefHasher<'_> {
+    /// The operand type and the resolved designator of a non-dependent
+    /// `OffsetOfExpr` (`kiln-odr-2`, WP-2360): `offsetof(A, y)` and
+    /// `offsetof(B, q)` name different entities even at one offset, as a
+    /// name is its entity everywhere else in the hash. Per node: a base
+    /// class (`0`, its type item), a member (`1`, the member item), an
+    /// index (`2`, its position; its value is in the offset or the
+    /// steps). `T_NONE` for a value-dependent one (its pattern holds no
+    /// resolved designator).
+    fn offsetof_designator(&mut self, e: ExprId) {
+        use kiln_ast::expr::OffsetofNode;
+        let Some((operand, nodes)) = self.ast.exprs.offsetof_designator(e) else {
+            return self.byte(super::T_NONE);
+        };
+        self.byte(1);
+        self.ty(operand);
+        self.count(nodes.len());
+        for &n in nodes {
+            match n {
+                OffsetofNode::Base { class } => {
+                    self.byte(0);
+                    self.owner_of(class);
+                }
+                OffsetofNode::Field { field, .. } => {
+                    self.byte(1);
+                    self.decl_ref(field);
+                }
+                OffsetofNode::Index { position, .. } => {
+                    self.byte(2);
+                    self.u32(position);
+                }
+            }
         }
     }
 }

@@ -4,7 +4,7 @@
 
 use kiln_ast::decl::{DeclKind, DefinitionBits};
 pub use kiln_ast::expr::OffsetofComponent;
-use kiln_ast::expr::{ExprKind, OffsetofStep, ValueCategory};
+use kiln_ast::expr::{ExprKind, OffsetofNode, OffsetofStep, ValueCategory};
 use kiln_ast::ids::RawId;
 use kiln_ast::names::DeclName;
 use kiln_ast::stmt::StmtKind;
@@ -32,6 +32,15 @@ pub struct StmtExprScope {
     odr: Vec<ExprId>,
     imm: crate::consteval::SavedImm,
     cleanup: crate::class::CleanupState,
+}
+
+/// What [`Sema::offsetof_steps`] builds for one `__builtin_offsetof`:
+/// the converted indices, the evaluation steps and the resolved
+/// designator (clang's `OffsetOfNode`s, WP-2360).
+struct OffsetofOut<'a> {
+    indices: &'a mut Vec<ExprId>,
+    steps: &'a mut Vec<OffsetofStep>,
+    nodes: &'a mut Vec<OffsetofNode>,
 }
 
 impl Sema<'_, '_> {
@@ -292,10 +301,13 @@ impl Sema<'_, '_> {
         }
         let mut indices = Vec::new();
         let mut steps = Vec::new();
+        let mut nodes = Vec::new();
         let mut invalid = false;
-        if !self.offsetof_steps(loc, ty, comps, &mut indices, &mut steps, &mut invalid) {
+        let mut out = OffsetofOut { indices: &mut indices, steps: &mut steps, nodes: &mut nodes };
+        if !self.offsetof_steps(loc, ty, comps, &mut out, &mut invalid) {
             return self.recover_err(&indices, loc);
         }
+        let designator = (ty, &nodes[..]);
         let st = self.size_type();
         // Every index a constant: the value is a constant, each index
         // taken at its true value (an unsigned index zero-extended, a
@@ -314,12 +326,15 @@ impl Sema<'_, '_> {
         let bits = target::size_align(&self.ast, st, &self.abi).map_or(64, |x| x.0 * 8);
         let total = total.map(|t| if bits < 64 { t & ((1u64 << bits) - 1) } else { t });
         match total.map(|t| (t, u32::try_from(t))) {
-            Some((_, Ok(v))) => self.builder().offsetof(st, &indices, v, invalid, loc, rparen),
+            Some((_, Ok(v))) => {
+                self.builder().offsetof(st, &indices, designator, v, invalid, loc, rparen)
+            }
             // A constant offset past `u32` (or a negative index's wrapped
             // one) is kept as one step.
             Some((t, Err(_))) => self.builder().offsetof_steps(
                 st,
                 &indices,
+                designator,
                 &[OffsetofStep::Offset(t)],
                 invalid,
                 loc,
@@ -328,23 +343,25 @@ impl Sema<'_, '_> {
             // An index that is not a constant: the value is computed when
             // the expression is evaluated, from clang's `OffsetOfNode`s
             // (GNU extension: C and C++ accept any integral index).
-            None => self.builder().offsetof_steps(st, &indices, &steps, invalid, loc, rparen),
+            None => self
+                .builder()
+                .offsetof_steps(st, &indices, designator, &steps, invalid, loc, rparen),
         }
     }
 
     /// The steps of `__builtin_offsetof(ty, comps...)`, one per clang
     /// `OffsetOfNode` (a base class, a member of an anonymous struct or
     /// union chain, a member, an array index), or `false` after an
-    /// error. The converted indices go to `indices`; `invalid` is set
-    /// when the designator passes through an invalid class (the value is
-    /// then not a constant, clang `ExprConstant`).
+    /// error. The converted indices go to `out.indices`, the resolved
+    /// designator to `out.nodes`; `invalid` is set when the designator
+    /// passes through an invalid class (the value is then not a
+    /// constant, clang `ExprConstant`).
     fn offsetof_steps(
         &mut self,
         loc: Loc,
         ty: QualType,
         comps: &[OffsetofComponent],
-        indices: &mut Vec<ExprId>,
-        steps: &mut Vec<OffsetofStep>,
+        out: &mut OffsetofOut<'_>,
         invalid: &mut bool,
     ) -> bool {
         if self.is_error_type(ty) {
@@ -365,7 +382,7 @@ impl Sema<'_, '_> {
         let mut warned = false;
         for &c in comps {
             match c {
-                OffsetofComponent::Index { index, end, .. } => {
+                OffsetofComponent::Index { index, start, end } => {
                     let Some(elem) =
                         self.ast.types.is_array(cur).then(|| self.ast.types.element(cur)).flatten()
                     else {
@@ -375,7 +392,9 @@ impl Sema<'_, '_> {
                         return false;
                     };
                     let idx = conv::lvalue_to_rvalue(self, index);
-                    indices.push(idx);
+                    let position = u32::try_from(out.indices.len()).unwrap_or(u32::MAX);
+                    out.nodes.push(OffsetofNode::Index { position, start, end });
+                    out.indices.push(idx);
                     let it = self.ast.exprs.get(idx).ty();
                     if self.is_error_type(it) {
                         return false;
@@ -386,12 +405,12 @@ impl Sema<'_, '_> {
                     }
                     let elem_size =
                         target::size_align(&self.ast, elem, &self.abi).map_or(0, |x| x.0);
-                    steps.push(OffsetofStep::Index { index: idx, elem_size });
+                    out.steps.push(OffsetofStep::Index { index: idx, elem_size });
                     cur = elem;
                 }
                 OffsetofComponent::Field { name, start, end } => {
                     let Some(next) =
-                        self.offsetof_field(loc, cur, name, (start, end), &mut warned, steps)
+                        self.offsetof_field(loc, cur, name, (start, end), &mut warned, out)
                     else {
                         return false;
                     };
@@ -404,8 +423,9 @@ impl Sema<'_, '_> {
     }
 
     /// One `name` component (written from `start` to `end`) of an
-    /// offsetof designator into `cur`: its steps go to `steps`; the
-    /// member's type, or `None` after an error.
+    /// offsetof designator into `cur`: its steps go to `out.steps` and
+    /// its resolved nodes to `out.nodes`; the member's type, or `None`
+    /// after an error.
     fn offsetof_field(
         &mut self,
         loc: Loc,
@@ -413,7 +433,7 @@ impl Sema<'_, '_> {
         name: Symbol,
         (start, end): (Loc, Loc),
         warned: &mut bool,
-        steps: &mut Vec<OffsetofStep>,
+        out: &mut OffsetofOut<'_>,
     ) -> Option<QualType> {
         if !self.require_complete(cur, start) {
             let d = self.diag(DiagId::sema_offsetof_incomplete_type, start).arg(self.ty_arg(cur));
@@ -471,10 +491,11 @@ impl Sema<'_, '_> {
         if let Some(&outer) = chain.first()
             && let Some(parent) = self.ast.decls.get(outer).ctx()
         {
-            self.offsetof_base_steps(def, parent, end, steps)?;
+            self.offsetof_base_steps(def, parent, end, out)?;
         }
         for f in chain {
-            steps.push(OffsetofStep::Offset(self.field_bit_offset(f) / 8));
+            out.steps.push(OffsetofStep::Offset(self.field_bit_offset(f) / 8));
+            out.nodes.push(OffsetofNode::Field { field: f, start, end });
         }
         let fty = self.ast.decls.get(field).ty().unwrap_or(QualType::ERROR);
         let fty = if self.ast.types.is_reference(fty) {
@@ -498,7 +519,7 @@ impl Sema<'_, '_> {
         def: DeclId,
         parent: DeclId,
         end: Loc,
-        steps: &mut Vec<OffsetofStep>,
+        out: &mut OffsetofOut<'_>,
     ) -> Option<()> {
         let BaseSearch::Unique(path) = find_base(self, def, parent) else {
             return Some(());
@@ -511,10 +532,11 @@ impl Sema<'_, '_> {
         for &c in &path.classes {
             let first = self.ast.first(c);
             let bases = kiln_abi::ensure_layout(&mut self.ast, cur, &self.abi)?.bases.clone();
-            steps.push(OffsetofStep::Offset(
+            out.steps.push(OffsetofStep::Offset(
                 bases.iter().find(|&&(b, _)| self.ast.first(b) == first)?.1,
             ));
             cur = self.ast.definition(c).unwrap_or(c);
+            out.nodes.push(OffsetofNode::Base { class: cur });
         }
         Some(())
     }

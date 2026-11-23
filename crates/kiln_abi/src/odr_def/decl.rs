@@ -237,16 +237,32 @@ impl DefHasher<'_> {
                 debug_assert!(TlsKind::Dynamic as u32 <= 3 && InitStyle::ParenList as u32 <= 3);
                 self.u32(bits);
                 self.listed_attrs(d, false);
+                // A tuple-like binding's holding variable: its type and
+                // its initializer (the `get<i>` call), after the
+                // decomposition's own initializer (`kiln-odr-2`, WP-2361).
+                // An array or data-member binding follows from the type.
+                let mut holding: Vec<Option<ExprId>> = Vec::new();
                 if let Some(bs) = ast.decls.decomp_bindings(d) {
-                    // A structured binding: each binding is a local; the
-                    // binding expressions sema builds are implicit.
+                    // A structured binding: each binding is a local.
                     self.count(ast.lists.len(bs));
-                    for b in ast.lists.iter::<DeclId>(bs) {
-                        self.declare(b);
+                    for binding in ast.lists.iter::<DeclId>(bs) {
+                        self.declare(binding);
+                        match ast.decls.binding_var(binding) {
+                            Some(held) => {
+                                self.byte(1);
+                                match ast.decls.get(held).ty() {
+                                    Some(ty) => self.ty(ty),
+                                    None => self.byte(T_NONE),
+                                }
+                                holding.push(ast.decls.var(held).and_then(|hv| hv.init));
+                            }
+                            None => self.byte(0),
+                        }
                     }
                 } else {
                     self.byte(T_NONE);
                 }
+                self.stack.extend(holding.into_iter().rev().map(Work::OptExpr));
                 let init: Option<ExprId> = v.init;
                 self.stack.push(Work::OptExpr(init));
             }

@@ -11,6 +11,7 @@
 use kiln_ast::DeclId;
 use kiln_ast::decl::{DeclKind, FriendTarget};
 use kiln_ast::ids::TemplateParamListId;
+use kiln_diag::DiagId;
 
 use crate::declspec::DeclaratorContext;
 use crate::scope::{Ns, Scope, ScopeKind};
@@ -298,6 +299,7 @@ impl Substituter<'_, '_, '_> {
             if self.sema.ast.instantiated_from(p).is_none() {
                 self.member_link(p, pattern);
             }
+            self.friend_template_redeclared_defaults(x, &old);
             // Its own template, mangled in this class's scope
             // ([temp.friend]/9; clang `isMemberLikeConstrainedFriend`).
             if apart && let Some(c) = self.sema.ast.decls.get(fd).ctx() {
@@ -340,6 +342,33 @@ impl Substituter<'_, '_, '_> {
             }
         }
         Ok(fd)
+    }
+
+    /// [temp.param]/12: a friend function template declaration with a
+    /// default template argument is a definition and the only
+    /// declaration of the template. The class template's friend
+    /// definition `x` (its pattern's head `old`) redeclares a template
+    /// declared before this instantiation: each default is reported at
+    /// its parameter, with the instantiation's context (clang's
+    /// `VisitFunctionDecl` checks the head against the previous
+    /// declaration as a friend template that is not a definition, the
+    /// body not being instantiated yet:
+    /// `err_template_parameter_default_friend_template`). A redeclaration
+    /// after the instantiation is not seen, as in clang (and GCC 16
+    /// accepts both; WP-2363).
+    fn friend_template_redeclared_defaults(&mut self, x: DeclId, old: &[DeclId]) {
+        // A template's redeclarations are chained through its function
+        // (`first` follows the templated declaration).
+        if self.sema.ast.first(x) == x {
+            return;
+        }
+        for &o in old {
+            if self.sema.templ.default_locs.contains_key(&o) {
+                let loc = self.sema.ast.decls.get(o).loc();
+                let m = self.sema.diag(DiagId::sema_template_param_default_friend_template, loc);
+                self.sema.emit(m);
+            }
+        }
     }
 
     /// The constraints of friend template pattern `pattern` (those of

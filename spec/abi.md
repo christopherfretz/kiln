@@ -2207,7 +2207,7 @@ O-10..O-13). This section is its contract: a later kiln reproduces these
 bytes, or changes `ODR_DEF_SCHEME`. Codegen's kind 2 rows call it
 (WP-1583, K-3c; spec/codegen.md §5.5 "Kind 2").
 
-**Scheme.** `ODR_DEF_SCHEME = "kiln-odr-1"`, separate from the layout
+**Scheme.** `ODR_DEF_SCHEME = "kiln-odr-2"`, separate from the layout
 serialization's scheme. Bump rule (O-11): every change to what is
 serialized or how changes the constant; the golden test
 `crates/kiln_codegen/tests/mason_def_hash.golden` pins the bytes and says
@@ -2231,12 +2231,17 @@ area that no longer depends on the rest of the unit, the `noreturn`
 type bit left to the attribute record, and no `USES_INTERNAL` for an
 externally visible closure under a function type. `kiln-odr-1`
 (WP-1586, K-3f): `d5`'s serialization frozen and renamed, not one byte
-changed (the golden digests are those of `d5`). Any later change to what
-is serialized or how is `kiln-odr-2`. Objects written under a `d`
-scheme (`kiln-odr-1.d0` .. `kiln-odr-1.d5`) are incomparable with
-`kiln-odr-1` objects: the scheme names differ, so mortar treats such a
-pair as incomparable (a miss, never a finding) even where `d5`'s bytes
-are equal.
+changed (the golden digests are those of `d5`). `kiln-odr-2` (WP-2360,
+WP-2361; a tooling client's audit of 11-22): a local class's tag,
+`#pragma pack` value and layout attributes and a local enumeration's
+underlying type, a coroutine lambda's wrapped body, a tuple-like
+binding's holding variable, a local's `cleanup(f)`, and `offsetof`'s
+operand type and resolved designator (each below). Any later change to
+what is serialized or how is `kiln-odr-3`. Objects written under an
+older scheme (`kiln-odr-1.d0` .. `kiln-odr-1.d5`, `kiln-odr-1`) are
+incomparable with newer ones: the scheme names differ, so mortar treats
+such a pair as incomparable (a miss, never a finding) even where the
+bytes are equal.
 
 **Digest.** `DefHasher::function(def) -> DefDigest { hash, partial, uses_internal }`:
 `hash` is the FNV-1a 128 (offset `0x6c62272e07bb014262b821756295c58d`,
@@ -2363,7 +2368,13 @@ preceded, when it carries `[[assume(e)]]`, by its tag, the count and the
 assumption expressions (no other statement attribute is hashed).
 A local variable: `0xA9`, its index, type, bits (storage class,
 thread-local kind, initialization style, `constexpr`, `constinit`), its
-bindings (count + indexes) or `0xA0`, its initializer or `0xA0`.
+listed attributes (below; a local's `cleanup(f)` among them), its
+bindings or `0xA0`, its initializer or `0xA0`. The bindings are a count,
+then per binding its index and `0`, or `1` and the type of its holding
+variable (a tuple-like binding, [dcl.struct.bind]/4); after the
+initializer, each holding variable's initializer in binding order (the
+`get<i>` call, so which `get` a binding calls is hashed; `kiln-odr-2`).
+An array or data-member binding follows from the type and the index.
 
 **Expressions.** Transparent (their operand hashes in their place):
 implicit conversions, `ConstantExpr` (never its cached value),
@@ -2502,6 +2513,7 @@ list instead).
 | `target_clones` | the clone list: the strings split at commas, trimmed, joined by `,` (`d5`) | `"a,b"` and `"a", "b"` equal; the order is hashed |
 | `indeterminate` | a bit per parameter | any declaration of the chain writing it on the parameter |
 | `[[assume(e)]]` | the expressions, at the statement | |
+| `cleanup(f)` on a local (`kiln-odr-2`) | `1` and the function as an entity (a callee), or `2` and the argument expression of a pattern whose argument is dependent | what runs at scope exit. The attribute's `a` word is the function's `DeclId` once checked (`AttrNode::CHECKED`, which every attribute attached to a declaration has at the end of the unit), the argument's `ExprId` before (spec/ast.md §7) |
 | everything else | not hashed | `visibility`, `exclude_from_explicit_instantiation`, `abi_tag`, `weak`, `section`, `deprecated`, `nodiscard`, `maybe_unused`, ... |
 
 Legal differences: `[[nodiscard]]` and `[[deprecated]]` may differ
@@ -2561,16 +2573,17 @@ on equal meaning); a *pass* is two different definitions whose rows agree
 | 6 | a dependent node of the K-6 kinds | pass, the row `PARTIAL` | a token per kind (mortar's ruling 2) | `mason_def_hash::partial_tokens_are_per_kind` |
 | 7 | `noreturn` reaching a function only through a typedef'd function type | pass | no attribute record; the type bit is not hashed (WP-1637) | `mason_defs::noreturn_spellings_agree`; corpus `typedef-noreturn` |
 | 8 | a synthesized member's effective exception specification (a `noexcept(false)` member destructor makes the implicit destructor potentially throwing) | pass | a synthesized member's declarator is the fixed byte `2`, and its callees are named by symbol only. WP-1586 remainder: hash a synthesized member's effective noexcept | corpus `effective-noexcept` |
-| 9 | `__FILE__` and the source-location builtins inside one literal (`"at " __FILE__` against `"in " __FILE__`) | pass | the whole literal is the value placeholder (X17, mortar's ruling (b): must-equal across routes outranks detection) | corpus `file-provenance`; `mason_def_hash::golden_digests` ("placeholders") |
+| 9 | any string literal concatenated from pieces (`"ab" "c"` against `"ab" "d"`; `"at " __FILE__` against `"in " __FILE__`) | pass | the whole literal is the value placeholder (X17, mortar's ruling (b): must-equal across routes outranks detection). The node keeps only the first and last pieces' locations, so a builtin-macro or `#` piece in the middle cannot be told apart from a plain one without a bit per literal at parse time (WP-2361 decided against it) | corpus `file-provenance`; `mason_def_hash::golden_digests` ("placeholders"); `mason_def_hash::misses_pass` ("concatenated literal") |
 | 10 | contract assertions | pass | not hashed (X16) | `mason_def_hash::must_equal_pairs` ("contract assertion (X16)") |
 | 11 | a reference to the enclosing scope's captures from inside a generic lambda specialization's own body | pass | the placeholder | `mason_defs::closure_rows` |
 | 12 | a TU-local component (unnamed namespace, internal entity) | `USES_INTERNAL`, its part the per-TU placeholder (O-2) | not comparable across units | `mason_defs::uses_internal_across_units`; `mason_tu_local::named_cases` |
-| 13 | `alignas` or `packed` on a class | carried by kind 3 (the layout), not kind 2 | layout is kind 3's | corpus `alignas-changed`, `packed-changed` |
+| 13 | `alignas` or `packed` on a namespace-scope class | carried by kind 3 (the layout), not kind 2 | layout is kind 3's; a local class has no kind 3 row, its layout attributes are in the kind 2 row (`kiln-odr-2`) | corpus `alignas-changed`, `packed-changed` |
 | 14 | a lambda in a declarator, a default argument or a trailing requires-clause (X15) | no row | the closure type has no stable name across units | `mason_defs::units_and_definitions_without_rows`; corpus `lambda-in-declarator` |
 | 15 | a C unit (N21) | no row | kind 2 is C++ only | `mason_defs::units_and_definitions_without_rows` |
 | 16 | internal linkage, `weak` (N5), `gnu_inline` / `available_externally` (N7), an ordinary strong definition | no row | not a vague definition a linker merges | `mason_defs::definition_rows_golden` |
 | 17 | an `alias` or `ifunc` symbol (the aliasee has the row), a coroutine's outlined parts, an `always_inline` inline function | no row | decided forms (O-14) | `mason_defs::decided_forms` |
 | 18 | a closure's static invoker and conversion function; a local class's members | no row | their definitions are the enclosing function's (O-14, ruling 1) | `mason_defs::closure_rows` |
+| 19 | `[[clang::musttail]]` on a `return` (`[[clang::musttail]] return g(x);` against `return g(x);`) | pass | no statement attribute but `[[assume]]` is hashed; the values are the same, only the stack behaviour differs (WP-2361) | `mason_def_hash::misses_pass` ("musttail") |
 
 A skipped construct writes `0xA6`, its class and its kind's code in place
 of its subtree (one token per node kind, mortar's ruling 2), so equal
@@ -2607,7 +2620,11 @@ declarator (the rule above: `constexpr` never, `consteval`, `static` and
 an explicit object parameter as written, the effective `noexcept`),
 `mutable`, a generic lambda's template parameters (count; kind, pack, a
 non-type parameter's type, the type-constraint) and requires-clause or
-`0xA0`, and the body. The capture-default is not hashed (`[=]` and `[x]`
+`0xA0`, and the body: the call operator's (`FunctionData::body`), which
+for a coroutine lambda is the `CoroutineBodyStmt` sema wrapped the
+written body in, so the promise, the suspends and the allocation are
+hashed as for any coroutine (`kiln-odr-2`; before, `LambdaData::body`,
+the written compound statement). The capture-default is not hashed (`[=]` and `[x]`
 capturing only `x` are equal; `[&]` and `[=]` differ by the kinds). A
 generic lambda's body is its pattern: its dependent nodes are the
 dependent kinds below. The digest is memoized per closure (a closure
@@ -2631,17 +2648,31 @@ reference to the enclosing scope's captures from inside a
 specialization's own body is the placeholder (a miss).
 
 **Local classes and enumerations** are hashed where they are declared:
-`0xB4`, the index, the declaration kind, the bases (count; type, virtual
-and access bits) for a class, then the members in declaration order
-(implicit ones, typedefs and access specifiers left out): a field as
-kind, name, type, flags, bit-width, default member initializer; an
+`0xB4`, the index, the declaration kind; for a class (`kiln-odr-2`) a
+byte `1` for a `union` (`class` and `struct` are equal), the
+`#pragma pack` value (`u32`, 0 for none) and its layout attributes; for
+an enumeration (`kiln-odr-2`) whether its underlying type is fixed and
+the type, or `0xA0`; then the bases (count; type, virtual and access
+bits) for a class, then the members in declaration order (implicit ones,
+typedefs and access specifiers left out): a field as kind, name, type,
+flags, its layout attributes, bit-width, default member initializer; an
 enumerator as name and value; a member function as kind, operator or
 name and its definition inline (declarator, ctor-initializers or
 deallocation function, body; its parameters and locals share the
 enclosing numbering); a nested class recursively; anything else
 `partial`. A reference to a member is `0xB3`. Their member functions
 have no rows (the symbols are the enclosing function's, O-14 and ruling
-1). Static locals hash inside their function (above).
+1). Static locals hash inside their function (above). The layout
+attributes of a local class or field: the records (kind, arguments, as
+for the listed attributes) of its `aligned`/`alignas`, `packed`,
+`ms_struct`, `gcc_struct`, `no_unique_address` and `trivial_abi`
+attributes over its redeclarations, written or implicit (a `#pragma`'s,
+an instantiation's copies), sorted and deduplicated, then the further
+`alignas` expressions sema keeps apart (count, expressions). A local
+class has no kind 3 row (its type is TU-local, O-17), so its
+definition's row carries what its layout depends on: with its members,
+these are every input of kiln's layout (`kiln_abi::layout`), and no
+layout row of its own is needed.
 
 **X15** (`lambda_in_declarator`). A function definition gets no row when
 its function type or its template arguments (on the definition or the
@@ -2661,7 +2692,14 @@ builtins: the operation and the operands. `__builtin_shufflevector`: the
 operands and index expressions; `__builtin_convertvector` and an
 imaginary literal: the type and operand; an ext-vector element access:
 the accessor string and base; `va_arg`: the type and operand;
-`offsetof`: the type and the computed offset or its steps. A constraint
+`offsetof`: the type and the computed offset or its steps, then
+(`kiln-odr-2`) `1`, the operand type and the resolved designator (count;
+per node `0` and a base class's type item, `1` and the member item, or
+`2` and the index position), or `0xA0` for a value-dependent one:
+`offsetof(A, y)` and `offsetof(Bq, q)` at one offset name different
+entities, and a name is its entity everywhere else in the hash (two
+definitions spelled with different tokens are different definitions,
+[basic.def.odr]/14). A constraint
 outside a template (`ConceptSpecializationExpr`, `RequiresExpr`): its
 satisfaction value. A pseudo-object: its semantic result. Coroutines:
 `co_await`/`co_yield` the implicit bit, the suspend kind, the written

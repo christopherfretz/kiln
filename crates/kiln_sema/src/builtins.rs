@@ -2879,7 +2879,8 @@ impl Sema<'_, '_> {
     /// `__builtin_va_list &` parameter (so a mismatch is a reference
     /// binding error). A non-dependent `T` must be complete and not
     /// abstract; a non-POD `T` (a reference included) is a
-    /// `-Wnon-pod-varargs` error that does not stop the expression; a
+    /// `-Wnon-pod-varargs` error that does not stop the expression (as an
+    /// error it sets the node's `ERROR` dependence bit); a
     /// promotable `T` (an integer type of rank below `int`, an unscoped
     /// enumeration whose promoted type is not its underlying type, or
     /// `float`) gets the `-Wvarargs` undefined-behavior warning as a
@@ -2923,6 +2924,7 @@ impl Sema<'_, '_> {
                 };
             }
         }
+        let mut erroneous = false;
         if !self.ast.types.is_dependent(ty) {
             if !self.require_complete(ty, ty_loc) {
                 let msg = self.diag(DiagId::sema_va_arg_incomplete, ty_loc).arg(self.ty_arg(ty));
@@ -2936,7 +2938,14 @@ impl Sema<'_, '_> {
                 return self.recover_err(&[list], loc);
             }
             if self.ast.types.is_reference(ty) || !self.is_pod_type(ty) {
-                let msg = self.diag(DiagId::sema_va_arg_not_pod, ty_loc).arg(self.ty_arg(ty));
+                // clang's default-error warning (-Wnon-pod-varargs) keeps
+                // the `VAArgExpr`: with the warning off the program is
+                // valid. As an error it marks the node erroneous (the
+                // `ERROR` dependence bit, as a `RecoveryExpr` has), so a
+                // client walking the body sees it (WP-2362).
+                let id = DiagId::sema_va_arg_not_pod;
+                erroneous = self.diags.severity_at(id, ty_loc) >= kiln_diag::Severity::Error;
+                let msg = self.diag(id, ty_loc).arg(self.ty_arg(ty));
                 self.emit(msg);
             }
             if let Some(p) = self.va_arg_promotion(ty) {
@@ -2954,7 +2963,7 @@ impl Sema<'_, '_> {
         {
             rty = conv::strip_cv(self, rty);
         }
-        self.builder().va_arg_expr(list, ty, rty, ty_loc, loc, rparen)
+        self.builder().va_arg_expr(list, ty, rty, erroneous, ty_loc, loc, rparen)
     }
 
     /// The type a variadic argument read as `t` was promoted to when `t`

@@ -345,7 +345,7 @@ impl DefHasher<'_> {
     }
 
     /// Class `c` as a type item (a scope of a template).
-    fn owner_of(&mut self, c: DeclId) {
+    pub(super) fn owner_of(&mut self, c: DeclId) {
         match self.refs.tag(c, &mut self.stats) {
             Some(h) => {
                 self.byte(super::T_TYPE);

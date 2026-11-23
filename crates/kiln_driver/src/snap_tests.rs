@@ -187,6 +187,24 @@ fn check_round_trip(case: &str, orig: &mut Ast, sm: &SourceManager, main: Option
         restored.decl_extents.dump(&restored, sm, main),
         "{case}: extent dump"
     );
+    // The resolved `offsetof` designators (WP-2360), which the dump
+    // does not show.
+    let designators = |a: &Ast| {
+        let mut v: Vec<_> = a
+            .exprs
+            .cold
+            .offsetof_designator
+            .iter()
+            .map(|(e, (t, n))| (e.index(), *t, n.to_vec()))
+            .collect();
+        v.sort_by_key(|r| r.0);
+        v
+    };
+    let rows = designators(orig);
+    if case == "offsetof" {
+        assert_eq!(rows.len(), 4, "{case}: offsetof designator rows");
+    }
+    assert!(rows == designators(&restored), "{case}: offsetof designators");
     // (b) The canonical encoding.
     let canon = kiln_snap::to_bytes_canonical(&*orig);
     assert!(canon == kiln_snap::to_bytes_canonical(&restored), "{case}: canonical bytes");
@@ -299,6 +317,22 @@ fn snapshot_round_trip_decl_extents() {
     let flags = ["-std=c++26", "-fkiln-decl-extents"];
     run_case("extents", &flags, text);
     run_case("extents-mid", &flags, &header_set("mid"));
+}
+
+/// The resolved designators of `__builtin_offsetof` (WP-2360) survive
+/// the snapshot: a member, a member of a base, an index, the
+/// instantiation of a template's (and its pattern, which has none).
+#[test]
+fn snapshot_round_trip_offsetof() {
+    let text = "struct A { int x, y; };\n\
+                struct B : A {};\n\
+                struct Arr { int a[4]; };\n\
+                inline unsigned long f() { return __builtin_offsetof(A, y); }\n\
+                inline unsigned long g() { return __builtin_offsetof(B, x); }\n\
+                inline unsigned long h() { return __builtin_offsetof(Arr, a[2]); }\n\
+                template <class T> unsigned long t() { return __builtin_offsetof(T, y); }\n\
+                inline unsigned long u() { return t<A>(); }\n";
+    run_case("offsetof", &["-std=c++26"], text);
 }
 
 /// GCC 16.1 libstdc++'s `<meta>` with nine common headers, the way the

@@ -2738,7 +2738,17 @@ instantiation unless stated.
   permitted on a friend template" at each defaulted parameter (its name,
   or the `=` when unnamed); the default no longer counts for the
   redeclaration rules. A friend class template in a dependent context is
-  not checked (clang's `CheckClassTemplate`).
+  not checked (clang's `CheckClassTemplate`). A class template's friend
+  function template definition with a default is checked again when the
+  class is instantiated (`templ/member.rs`,
+  `friend_template_redeclared_defaults`; WP-2363): when the template was
+  declared before the instantiation (the friend redeclares it), the same
+  error at each defaulted parameter, with the instantiation's notes
+  (clang's `VisitFunctionDecl` checks the head against the previous
+  declaration as a friend template that is not a definition, the body
+  not yet being instantiated). A redeclaration after the instantiation,
+  or of a non-template class's friend, is not reported (as clang 19 and
+  22; GCC 16 reports neither).
 - **Template declaration scope** ([temp.pre]/2, [temp.mem]/2; WP-1063,
   WP-1041): `template<...> enum E` is "enumeration cannot be a template"
   after the name and enum-base, with "declaration does not declare
@@ -7941,6 +7951,11 @@ for them.
     fits a `u32` is the node's value; any other (a negative index
     wraps it) is kept as a single `Offset` step
     (`ColdExprData::offsetof_layout`).
+  - (WP-2360) The same walk records the designator as resolved, one
+    `OffsetofNode` per `OffsetOfNode` (a base class, a member, an index
+    position), with the operand type as written, in
+    `ColdExprData::offsetof_designator` (spec/ast.md §5, "`offsetof`'s
+    designator"); an instantiation records its own.
   - An index that does not fold is a GNU extension clang and GCC
     accept in C and C++: the `OffsetOfExpr` keeps all its steps
     (`Builder::offsetof_steps`) and is not a constant expression. The
@@ -8969,7 +8984,13 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   type, so `E : short` warns and `enum class` does not) is
   `sema_va_arg_promotable` (`-Wvarargs`) through `diag_runtime_behavior`.
   Dependent operands build a dependent `VAArgExpr`; substitution rebuilds
-  through `act_on_va_arg`.
+  through `act_on_va_arg`. A non-POD type keeps the `VAArgExpr` (clang's
+  node: the program is valid with the warning disabled, and is compiled)
+  and gives it `ExprDeps::ERROR` when `sema_va_arg_non_pod` is an error
+  at that location (`Severity::Error`, so `-Wno-non-pod-varargs` and
+  `-Wno-error=non-pod-varargs` leave it ordinary), so a consumer walking
+  the body sees the expression is erroneous; the diagnostics are
+  unchanged (WP-2362).
 - **Runtime-behavior diagnostics** (`stmt.rs`, clang
   `DiagRuntimeBehavior`): inside a function body they are queued on
   `FnState::runtime_diags` and flushed in `end_function_body`; outside a
