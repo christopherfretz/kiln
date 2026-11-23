@@ -279,7 +279,11 @@ the preprocessing record build on):
   `add_expansion` rule). An argument is macro-expanded before it is
   substituted ([cpp.subst]/1), so a macro invoked inside an argument
   written in the file has no parent, and its tokens reach the body
-  through `MacroArg` entries spelled in its entry.
+  through `MacroArg` entries spelled in its entry. An `Embed` entry
+  (the bytes of an `#embed`, spec/pp.md "`#embed`"; WP-2544) has no
+  parent: its expansion range is the directive's `#`. An entry is
+  shorter than 2^30 positions (`add_expansion` refuses a longer one
+  with `LocSpaceExhausted`), which frees a second kind bit.
 - Cost: one entry read per item, and for a parent the last parent is
   tried before a binary search.
 

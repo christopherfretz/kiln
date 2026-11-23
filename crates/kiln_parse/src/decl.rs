@@ -2659,9 +2659,28 @@ impl Parser<'_, '_> {
     /// `_Nullable` (clang nullability on classes) may appear among them
     /// any number of times (clang `ParseClassSpecifier`); the other
     /// nullability keywords are not parsed here.
-    fn parse_tag_key_attrs(&mut self, keyword: TagKeyword) -> Vec<AttrId> {
+    /// `inst_head`: the class-key is the one right after an explicit
+    /// instantiation's `template`.
+    fn parse_tag_key_attrs(&mut self, keyword: TagKeyword, inst_head: bool) -> Vec<AttrId> {
         let mut attrs = Vec::new();
         self.parse_attributes(&mut attrs);
+        // clang `ParseClassSpecifier` (`ProhibitCXX11Attributes` of an
+        // explicit instantiation; WP-2541): each standard attribute
+        // after the class-key is "an attribute list cannot appear here",
+        // at its name, and dropped (`template struct [[deprecated]]
+        // C<int>;`).
+        if inst_head && keyword != TagKeyword::Enum {
+            attrs.retain(|&a| {
+                let n = *self.s.ast.attrs.get(a);
+                // An annotation is the explicit instantiation's own
+                // ([dcl.attr.annotation]/3, P3394).
+                if n.syntax != AttrSyntax::Cxx11 || n.kind == AttrKind::ANNOTATION {
+                    return true;
+                }
+                self.prohibit_attrs_at(Some(n.loc));
+                false
+            });
+        }
         while keyword != TagKeyword::Enum && self.at_kw(Kw::Nullable) {
             let loc = self.loc();
             self.bump();
@@ -2783,9 +2802,12 @@ impl Parser<'_, '_> {
         // A tag this specifier creates or declares gets a declaration-extent
         // row (spec/ast.md §19).
         let decls_before = self.s.ast.decls.len();
+        let inst_head = self.s.has_explicit_inst_head()
+            && self.pos() > 0
+            && self.kw_of(self.tok_at(self.pos() - 1)) == Some(Kw::Template);
         let kw_loc = self.bump().span.lo;
         let (keyword, scoped, scoped_loc) = self.parse_tag_key(ds, k);
-        let mut attrs = self.parse_tag_key_attrs(keyword);
+        let mut attrs = self.parse_tag_key_attrs(keyword, inst_head);
         // clang `ParseClassSpecifier`: `struct __is_void` makes a
         // revertible trait keyword an identifier for the rest of the
         // translation unit (`TryKeywordIdentFallback`), so library headers
@@ -3164,7 +3186,11 @@ impl Parser<'_, '_> {
     /// explicit specialization, an explicit instantiation, or a
     /// reference to a specialization ([class.pre]/1, [dcl.type.elab]/1,
     /// [temp.spec.partial], [temp.expl.spec], [temp.explicit]).
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        clippy::too_many_lines,
+        reason = "a class-head template-id's forms in one place"
+    )]
     fn parse_class_template_id_tag(
         &mut self,
         ds: &mut DeclSpec,
@@ -3250,6 +3276,7 @@ impl Parser<'_, '_> {
                     self.ext_redecl(d);
                     self.ext_tag_head(d, kw_loc, ext_qual, Span::new(name_loc, name_end));
                     ds.tag_extent = self.ext_on();
+                    self.ext_attrs(d, &attrs); // an explicit instantiation's (WP-2541)
                 }
                 self.s.act_on_tag_attrs(d, &attrs, use_);
             }
@@ -5715,6 +5742,7 @@ impl Parser<'_, '_> {
                 && self.ext_on()
             {
                 self.ext_declarator(Some(x), &d, specs_end);
+                self.ext_attrs(x, ds.attrs.iter().chain(&d.attrs));
                 named.push(x);
             }
             if init.is_err() {

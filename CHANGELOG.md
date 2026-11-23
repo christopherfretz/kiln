@@ -17,6 +17,15 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   `FnSpec::exc_spec_computed` bit is set on every redeclaration when sema
   resolves a deferred specification, and PCH snapshots and module images
   (`IMAGE_VERSION` 83) carry it.
+- Tooling locations (WP-2541, WP-2542): the row of an explicit
+  instantiation in the declaration-extent table records the attributes
+  written on it, each one's kind, syntax and extent
+  (`DeclExtents::row_attrs`, spec/ast.md §19.2; carried by PCH snapshots
+  and module images); the split `>` locations move onto `Ast`
+  (`Ast::split_greaters`, carried by module images) and the public
+  token-end query has a split-aware form (`kiln_lex::token_end_split`,
+  `token_range_split`), so an expression ending at the first `>` of a
+  `>>`, `>=`, `>>=` or `>>>` ends where sema says.
 
 - Native stack sizing for evaluation-session workers (WP-2500,
   spec/eval-session.md §9 "Limits that bound the native depth"): every
@@ -1071,6 +1080,24 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 - A `_` member of an anonymous union or anonymous struct is no longer
   marked name-independent ([basic.scope.scope]/5); an ambiguous use of it
   keeps clang's placeholder wording (WP-2477).
+- The attributes of an explicit instantiation (WP-2541): the
+  decl-specifier ones are merged onto the specialization as clang merges
+  them, so `template __attribute__((weak)) void f<long>(long);` defines
+  a `weak` function, `extern template __attribute__((weak)) ...`
+  declares it `extern_weak`, a `weak` variable instantiation is `weak`,
+  and `deprecated` warns at the uses; one after the declarator is
+  dropped, as clang drops it. A standard attribute before the
+  decl-specifiers, or after the class-key of a class's explicit
+  instantiation, is "an attribute list cannot appear here". A `weak` (or
+  other interposable) function definition is no longer inferred
+  `nounwind` (clang `TryMarkNoThrow`).
+- A user-defined literal's call, and an expression it begins, begin at
+  the literal's token rather than at its suffix; a concatenated string
+  literal's call ends at its last piece (WP-2543).
+- `#embed` data has a place in the unit (WP-2544): its scratch buffer is
+  an expansion of the directive, so a diagnostic in the embedded data
+  points at the `#embed` line as clang's does, and tooling clients can
+  map every embedded token back to its directive.
 
 - `EvalSession::variable_value` instantiates on demand a static data
   member's initializer that nothing instantiated (an in-class `constexpr`

@@ -719,8 +719,14 @@ fn predicate_text(sm: &kiln_source::SourceManager, t: kiln_source::Span) -> Opti
                 kiln_source::ExpansionKind::MacroArg => {
                     e.spelling.with_offset(l.to_raw() - e.base.to_raw())
                 }
-                kiln_source::ExpansionKind::Macro { .. } if hi => e.expansion.hi,
-                kiln_source::ExpansionKind::Macro { .. } => e.expansion.lo,
+                kiln_source::ExpansionKind::Macro { .. } | kiln_source::ExpansionKind::Embed
+                    if hi =>
+                {
+                    e.expansion.hi
+                }
+                kiln_source::ExpansionKind::Macro { .. } | kiln_source::ExpansionKind::Embed => {
+                    e.expansion.lo
+                }
             };
         }
         l

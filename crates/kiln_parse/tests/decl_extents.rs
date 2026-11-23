@@ -245,3 +245,56 @@ fn every_redeclaration_keeps_its_row() {
         ]
     );
 }
+
+/// Explicit instantiations with attributes (WP-2541).
+const INST_ATTRS: &str = "\
+template <class T> void f(T) {}
+template <class T> struct C {};
+template <class T> T v = T();
+extern template __attribute__((weak)) void f<int>(int);
+template __attribute__((visibility(\"hidden\"))) void f<int>(int) __attribute__((weak));
+template struct __attribute__((visibility(\"hidden\"))) C<long>;
+template __attribute__((weak)) int v<int>;
+";
+
+/// An explicit instantiation declares nothing, so its row records its
+/// attributes as written: each one's kind and extent, from its name to
+/// its last token, the dropped one after the declarator too (spec/ast.md
+/// §19.2; WP-2541). Sema merges the decl-specifier ones onto the
+/// specialization.
+#[test]
+fn an_explicit_instantiation_row_keeps_its_attributes() {
+    use kiln_ast::attr::{AttrKind, AttrSyntax};
+    let (sm, file, tu) = parse_src(INST_ATTRS, true);
+    let ast = &tu.ast;
+    let table = &ast.decl_extents;
+    let written = |x: DeclId, row: usize| -> Vec<(AttrKind, AttrSyntax, &str)> {
+        table.row_attrs(x, row).map(|a| (a.kind, a.syntax, text(&sm, a.span))).collect()
+    };
+    let fs: Vec<DeclId> = find_all(ast, "f", "Function")
+        .into_iter()
+        .filter(|&x| table.rows_of(x).count() == 2)
+        .collect();
+    assert_eq!(fs.len(), 1, "f<int>, written twice");
+    let vis = (AttrKind::VISIBILITY, AttrSyntax::Gnu, "visibility(\"hidden\")");
+    assert_eq!(written(fs[0], 0), [(AttrKind::WEAK, AttrSyntax::Gnu, "weak")]);
+    assert_eq!(written(fs[0], 1), [vis, (AttrKind::WEAK, AttrSyntax::Gnu, "weak")]);
+    let class = find_all(ast, "C", "CXXRecord")
+        .into_iter()
+        .find(|&x| table.row_attrs(x, 0).next().is_some() || table.row_attrs(x, 1).next().is_some())
+        .expect("C<long> has a written attribute");
+    let last = table.rows_of(class).count() - 1;
+    assert_eq!(written(class, last), [vis]);
+    let var = find_all(ast, "v", "Var")
+        .into_iter()
+        .find(|&x| table.row_attrs(x, 0).next().is_some())
+        .expect("v<int> has a written attribute");
+    assert_eq!(written(var, 0), [(AttrKind::WEAK, AttrSyntax::Gnu, "weak")]);
+    // Merged: the decl-specifier attributes only.
+    let merged: Vec<AttrKind> =
+        ast.lists.iter(ast.attrs.of_decl(fs[0])).map(|a| ast.attrs.get(a).kind).collect();
+    assert!(merged.contains(&AttrKind::WEAK) && merged.contains(&AttrKind::VISIBILITY));
+    let dump = table.dump(ast, &sm, Some(file));
+    assert!(dump.contains(" attr=Weak@4:32-4:36"), "{dump}");
+    assert!(dump.contains(" attr=Visibility@5:25-5:45"), "{dump}");
+}

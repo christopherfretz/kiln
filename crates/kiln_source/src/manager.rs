@@ -144,6 +144,14 @@ pub enum ExpansionKind {
     /// the parameter token in the macro's replacement list (itself a macro
     /// location of the enclosing [`ExpansionKind::Macro`] entry).
     MacroArg,
+    /// The bytes of an `#embed` directive ([cpp.embed]; WP-2544): the
+    /// integer literals and commas the preprocessor spells for the
+    /// resource in a scratch buffer. The expansion span is the
+    /// directive's `#` (one character), where clang puts its one
+    /// `annot_embed` token: a diagnostic in the bytes points there, with
+    /// no "expanded from" note, and the bytes have a place in the unit's
+    /// order (spec/source.md "Expansion entries").
+    Embed,
 }
 
 /// One expansion entry (modeled on clang's expansion `SLocEntry`).
@@ -160,7 +168,8 @@ pub struct ExpansionInfo {
     pub spelling: Loc,
     /// The range that was replaced: the macro invocation for
     /// [`ExpansionKind::Macro`], the parameter token for
-    /// [`ExpansionKind::MacroArg`].
+    /// [`ExpansionKind::MacroArg`], the directive's `#` for
+    /// [`ExpansionKind::Embed`].
     pub expansion: Span,
     /// What produced the entry.
     pub kind: ExpansionKind,
@@ -217,6 +226,8 @@ impl Iterator for ExpansionEntries<'_> {
             debug_assert_eq!(b, e.base);
             self.name += 1;
             ExpansionKind::Macro { name }
+        } else if e.is_embed_kind() {
+            ExpansionKind::Embed
         } else {
             ExpansionKind::MacroArg
         };
@@ -245,6 +256,10 @@ impl ExactSizeIterator for ExpansionEntries<'_> {}
 /// Set in [`Entry::len_kind`] for [`ExpansionKind::Macro`] entries.
 /// Free because an entry is shorter than the 2^31-position macro space.
 const MACRO_KIND: u32 = 1 << 31;
+/// Set in [`Entry::len_kind`] for [`ExpansionKind::Embed`] entries; an
+/// entry is shorter than 2^30 positions (`add_expansion` refuses a longer
+/// one), so the bit is free too.
+const EMBED_KIND: u32 = 1 << 30;
 
 /// How an expansion entry is stored (24 bytes; [`ExpansionInfo`] is the
 /// public view). The macro-name span of a [`ExpansionKind::Macro`] entry
@@ -253,7 +268,7 @@ const MACRO_KIND: u32 = 1 << 31;
 #[derive(Debug, Clone, Copy, Snap)]
 struct Entry {
     base: Loc,
-    /// `len` | [`MACRO_KIND`].
+    /// `len` | [`MACRO_KIND`] or [`EMBED_KIND`].
     len_kind: u32,
     spelling: Loc,
     /// [`SourceManager::spelling_loc`] of `spelling`, computed once when
@@ -265,11 +280,20 @@ struct Entry {
 
 impl Entry {
     fn len(&self) -> u32 {
-        self.len_kind & !MACRO_KIND
+        self.len_kind & !(MACRO_KIND | EMBED_KIND)
     }
 
     fn is_macro_kind(&self) -> bool {
         self.len_kind & MACRO_KIND != 0
+    }
+
+    fn is_embed_kind(&self) -> bool {
+        self.len_kind & EMBED_KIND != 0
+    }
+
+    /// An [`ExpansionKind::MacroArg`] entry.
+    fn is_arg_kind(&self) -> bool {
+        self.len_kind & (MACRO_KIND | EMBED_KIND) == 0
     }
 
     fn contains(&self, loc: Loc) -> bool {
@@ -1660,12 +1684,16 @@ impl SourceManager {
         if end > MACRO_SPACE_END {
             return Err(LocSpaceExhausted);
         }
+        if len >= EMBED_KIND {
+            return Err(LocSpaceExhausted);
+        }
         let base = Loc(base as u32);
         let len_kind = match kind {
             ExpansionKind::Macro { name } => {
                 self.macro_names.push((base, name));
                 len | MACRO_KIND
             }
+            ExpansionKind::Embed => len | EMBED_KIND,
             ExpansionKind::MacroArg => len,
         };
         self.expansions.push(Entry { base, len_kind, spelling, file_spelling, expansion });
@@ -1752,6 +1780,8 @@ impl SourceManager {
             let &(b, name) = self.macro_names.get(i)?;
             debug_assert_eq!(b, e.base);
             ExpansionKind::Macro { name }
+        } else if e.is_embed_kind() {
+            ExpansionKind::Embed
         } else {
             ExpansionKind::MacroArg
         };
@@ -1852,7 +1882,7 @@ impl SourceManager {
     /// the invocation. Identity for file locations.
     pub fn immediate_macro_caller_loc(&self, loc: Loc) -> Loc {
         match self.find_expansion(loc) {
-            Some(e) if !e.is_macro_kind() => e.spelling.with_offset(loc.0 - e.base.0),
+            Some(e) if e.is_arg_kind() => e.spelling.with_offset(loc.0 - e.base.0),
             Some(e) => e.expansion.lo,
             None if loc.is_macro() => Loc::INVALID,
             None => loc,

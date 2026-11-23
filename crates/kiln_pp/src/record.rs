@@ -602,6 +602,9 @@ pub enum MadeKind {
     HeaderName,
     /// The `##` of a paste that formed no valid token (for its diagnostic).
     InvalidPaste,
+    /// The bytes of an `#embed` directive (WP-2544): `exp` is `None` and
+    /// `from` the directive's `#`.
+    Embed,
 }
 
 /// A kind of entry row (the top 4 bits of the row's `u32`).
@@ -1518,6 +1521,9 @@ impl PpRecord {
                     index,
                 }
             }
+            ExpansionKind::Embed => {
+                Origin::Made { exp: None, kind: MadeKind::Embed, from: info.expansion, body: None }
+            }
         }
     }
 
@@ -1700,6 +1706,7 @@ impl<'r, 's> Dumper<'r, 's> {
                         MadeKind::PragmaText => "pragma",
                         MadeKind::HeaderName => "header-name",
                         MadeKind::InvalidPaste => "invalid-paste",
+                        MadeKind::Embed => "embed",
                     };
                     match exp {
                         Some(e) => {

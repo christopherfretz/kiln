@@ -3729,6 +3729,21 @@ Three padding bytes remain. 44 bytes for the row plus 4 bytes of index
 per declaration up to the last one with a row, and 8 more per later row
 of a declaration written more than once under one `DeclId` (§19.1).
 
+**Written attributes** (WP-2541). An explicit instantiation of a
+function, variable or class declares nothing (the specialization's
+`SpecKind` stands for it), and sema merges its decl-specifier
+attributes onto the specialization, whose attribute list then holds
+them by the location of their names only (spec/sema.md "Explicit
+instantiation attributes"). So the row of an explicit instantiation
+also records every attribute written on it, merged or dropped (one
+after the declarator, one an error drops), in source order, as a
+`WrittenAttr`: its `AttrKind`, its `AttrSyntax`, and its `span` from its
+name (a scoped one's scope) to the end of its last token (the `)` of
+its arguments). `DeclExtents::row_attrs(d, n)` gives those of `d`'s
+`n`th row (`rows_of` order); other rows have none. 16 bytes each (with
+the row index); the dump appends ` attr=<Kind>@<range>` (clang's
+attribute class name without `Attr`) to the row.
+
 ### 19.3 First and last tokens
 
 The first token is that of the outermost construct the declaration
@@ -3812,14 +3827,16 @@ struct Q<int> {};`, WP-2470). The `Friend` has its own row either way.
   and unit-tested.
 - **PCH.** The table is written into snapshots (§17; FORMAT_VERSION
   129; 146 since WP-2091, which adds the module and import declarations'
-  rows; 152 since WP-2470, which adds the later rows of §19.1), with its
+  rows; 152 since WP-2470, which adds the later rows of §19.1; 157 since
+  WP-2541, which adds the written attributes of §19.2), with its
   on bit; the consumer then sets that bit from its own
   options. `-fkiln-decl-extents` is part of the PCH identity (a producer
   and a consumer must agree); `-fkiln-dump-decl-extents` is not, and
   makes the producer take two passes.
 - **Module images** (spec/modules.md §11.11; IMAGE_VERSION 62, 79
   since WP-2091, 81 since WP-2470, which carries every row of a
-  declaration written more than once). A module unit parsed with the
+  declaration written more than once, 84 since WP-2541, which carries
+  the rows' written attributes of §19.2). A module unit parsed with the
   table on carries a row
   per record that has one and per parameter of a function record,
   located in the image's location space; an importer whose table is on
@@ -4141,7 +4158,22 @@ This section is the promise kiln makes, and where it makes none.
 - **Calls without parentheses**: a user-defined literal (`12_k`,
   `"ab" "cd"_sv`) is its literal, through the last piece of a
   concatenation; an implicit conversion function call (`int i = s;`)
-  is its object.
+  is its object. `Ast::begin_loc` and `Ast::end_loc` agree (WP-2543,
+  clang `UserDefinedLiteral::getBeginLoc`/`getEndLoc`, the same in
+  clang 19 and 22): the call (`Ast::is_udl_call`) begins at the literal
+  token's start, not at its callee, so an expression it begins
+  (`12_k + 1`) begins there too; it ends at the literal, a concatenated
+  string at its last piece. The callee (`DeclRefExpr` of
+  `operator""_k`) keeps its own location, the ud-suffix, as clang's.
+- **Split `>`** (WP-2542): a template-id closed by the first `>` of a
+  `>>`, `>=` or `>>=` ([temp.names]/4; `>>>` lexes as `>>` then `>`)
+  ends at that one character. The parser records each such `>` (the
+  first character, and the second of a `>>` whose rest is a `>`) in
+  `Ast::split_greaters`, the set sema's `token_end` reads; the client
+  extents measure their last token with `kiln_lex::token_range_split`
+  over it (spec/lex.md "End of a token"). The set is part of the AST's
+  PCH snapshot and of a module image (spec/modules.md §11.11, `splits`
+  section), so a unit built from either measures the same ends.
 - **Brace elision**: a list whose braces were elided begins at its first
   written initializer and ends at its last; one a designator opens
   (`.a.y = 3`'s list of `a`) begins inside the designator, at a part

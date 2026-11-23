@@ -116,6 +116,7 @@ impl Preprocessor<'_, '_> {
         match kind {
             ExpansionKind::Macro { .. } => crate::profile::count!(exp_macro),
             ExpansionKind::MacroArg => crate::profile::count!(exp_macro_arg),
+            ExpansionKind::Embed => {}
         }
         let kind = match kind {
             ExpansionKind::Macro { name } if !name.is_valid() => ExpansionKind::Macro { name: exp },

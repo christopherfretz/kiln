@@ -203,7 +203,7 @@ impl<'a> WrittenExtents<'a> {
                         // An implicit conversion function call: the object.
                         Some(obj) => e = obj,
                         // A literal with a ud-suffix is written.
-                        None if self.call_is_udl(e) => return Some(e),
+                        None if self.is_udl_call(e) => return Some(e),
                         None => return None,
                     }
                 }
@@ -532,32 +532,6 @@ impl WrittenExtents<'_> {
             .map(|&i| ExprId::new(i))
             .find(|&i| self.written_node(i).is_some())?;
         self.written_last(last)
-    }
-
-    /// Whether the unwritten call `e` calls a literal operator.
-    fn call_is_udl(&self, e: ExprId) -> bool {
-        if self.exprs.get(e).kind() != ExprKind::CallExpr {
-            return false;
-        }
-        let mut c = self.exprs.callee(e);
-        for _ in 0..8 {
-            let n = self.exprs.get(c);
-            match n.kind() {
-                ExprKind::ImplicitCastExpr => match self.exprs.first_child(c, &self.lists) {
-                    Some(x) => c = x,
-                    None => return false,
-                },
-                ExprKind::DeclRefExpr => {
-                    let d = self.exprs.decl(c);
-                    return self.decls.get(d).name().kind() == DeclNameKind::LiteralOperator;
-                }
-                ExprKind::UnresolvedLookupExpr => {
-                    return self.unresolved_name(c).kind() == DeclNameKind::LiteralOperator;
-                }
-                _ => return false,
-            }
-        }
-        false
     }
 }
 

@@ -3720,6 +3720,35 @@ instantiation unless stated.
   `tests/conformance/ext.gnu.visibility/`,
   `tests/conformance/cpp.pragma/gcc-visibility{,-syntax,-namespace}.cpp`,
   `tests/codegen/visibility_explicit_inst.cpp`.
+- **Explicit instantiation attributes** (WP-2541; clang
+  `ActOnExplicitInstantiation`, `decl_attrs.rs`
+  `explicit_inst_attrs`). An explicit instantiation of a function,
+  variable or static data member has no declaration of its own (the
+  specialization's `SpecKind` stands for it), so its attributes go where
+  clang puts them. Only the decl-specifier attributes are merged onto the
+  specialization (clang processes `D.getDeclSpec().getAttributes()`);
+  those after the declarator (`template void f<char>(char)
+  __attribute__((weak));`, `f<short> [[gnu::weak]] (short)`) are dropped
+  without a diagnostic, as clang drops them. Visibility merges as above;
+  every other attribute passes its subject check (not the "after
+  definition" check: clang adds it to the instantiated definition) and
+  joins the specialization's attributes unless the same one is there
+  already. So `weak` makes an explicit instantiation definition `weak`
+  (and its variable `weak`) and an `extern template` declaration
+  `extern_weak`, and `deprecated` warns at the uses with the note at the
+  attribute. A standard attribute (`[[...]]`) before an explicit
+  instantiation's decl-specifiers (also after GNU ones) is "an attribute
+  list cannot appear here" once, at its first `[[` (clang
+  `ProhibitCXX11Attributes`); after the class-key of a class's explicit
+  instantiation it is the same error once per attribute, at its name,
+  and the attribute is dropped. An annotation-list (`[[=...]]`) is
+  neither: it is the explicit instantiation's own
+  ([dcl.attr.annotation]/3, P3394; GCC accepts it), so the leading check
+  skips it and the class-key check keeps it. Every attribute written on an explicit
+  instantiation, merged or dropped, is also recorded on its row of the
+  declaration-extent table (spec/ast.md §19.2). Tests:
+  `tests/conformance/temp.explicit/explicit-inst-attrs*.cpp`,
+  `crates/kiln_parse/tests/decl_extents.rs`.
 - **Function multiversioning** (clang extension; AttrDocs "target",
   "target_clones", "cpu_dispatch", "cpu_specific"). On AArch64 kiln is
   clang without the `fmv` target feature (spec/landed/codegen/WP-810.md):

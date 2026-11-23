@@ -150,6 +150,55 @@ impl Parser<'_, '_> {
         wmark
     }
 
+    /// clang `ParseDeclarationAfterTemplate` (`ProhibitAttributes` of an
+    /// explicit instantiation's leading attributes; WP-2541): a C++11
+    /// attribute-specifier among the GNU attributes before the
+    /// decl-specifiers is "an attribute list cannot appear here", once,
+    /// at the first `[[` (`template [[gnu::weak]] void f<int>(int);`).
+    /// An annotation-list is not one: an explicit instantiation adds its
+    /// annotations ([dcl.attr.annotation]/3, P3394; as GCC), so a
+    /// `[[=...]]` is skipped and the first other `[[` is the one.
+    fn prohibit_explicit_inst_attrs(&mut self) {
+        let mut i = self.pos();
+        loop {
+            if self.kw_of(self.tok_at(i)) == Some(Kw::Attribute) {
+                let Some(j) = self.skip_balanced(i + 1) else { return };
+                i = j;
+                continue;
+            }
+            if Self::punct_of(self.tok_at(i)) == Some(Punct::LSquare)
+                && Self::punct_of(self.tok_at(i + 1)) == Some(Punct::LSquare)
+                && Self::punct_of(self.tok_at(i + 2)) == Some(Punct::Equal)
+            {
+                let Some(j) = self.skip_balanced(i) else { return };
+                i = j;
+                continue;
+            }
+            if self.after_cxx11_attrs_at(i).is_some_and(|j| j != i) {
+                let at = self.tok_at(i).span.lo;
+                self.prohibit_attrs_at(Some(at));
+            }
+            return;
+        }
+    }
+
+    /// The declaration of an explicit-instantiation ([temp.explicit]/1)
+    /// after its `template` at `loc` (and `extern` at `extern_loc`).
+    fn parse_explicit_instantiation(
+        &mut self,
+        extern_loc: Option<Loc>,
+        loc: Loc,
+        ctx: DeclaratorContext,
+    ) {
+        self.prohibit_explicit_inst_attrs();
+        self.s.act_explicit_inst_start(extern_loc, loc);
+        self.template_decl_kind = Some(TemplateDeclKind::ExplicitInstantiation);
+        self.parse_spec_declaration(ctx);
+        self.template_decl_kind = None;
+        self.s.act_explicit_inst_end();
+        self.attr_ends.clear();
+    }
+
     /// A declaration starting at `template` or `extern template`
     /// ([temp.pre]/1, [temp.explicit], [temp.expl.spec]) in namespace
     /// (`File`) or class (`Member`) scope.
@@ -159,11 +208,7 @@ impl Parser<'_, '_> {
         if extern_loc.is_some() || !self.at(Punct::Less) {
             // explicit-instantiation ([temp.explicit]/1).
             if !matches!(self.kw(), Some(Kw::Enum | Kw::Template)) {
-                self.s.act_explicit_inst_start(extern_loc, loc);
-                self.template_decl_kind = Some(TemplateDeclKind::ExplicitInstantiation);
-                self.parse_spec_declaration(ctx);
-                self.template_decl_kind = None;
-                self.s.act_explicit_inst_end();
+                self.parse_explicit_instantiation(extern_loc, loc, ctx);
                 return;
             }
             if self.at_kw(Kw::Enum) && !self.at_qualified_enum() {

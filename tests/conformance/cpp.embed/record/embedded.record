@@ -1,2 +1,5 @@
+tok 97 embed
+tok , embed
+tok 98 embed
 inc embedded.cpp:393 embed "Inputs/two.bin" name embedded.cpp:400..embedded.cpp:416 embedded file two.bin
 record complete

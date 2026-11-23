@@ -1,6 +1,7 @@
 //! Expression extents for tooling clients (spec/ast.md §21, WP-2327):
 //! [`kiln_ast::expr_extent::WrittenExtents`] mapped to bytes of one file by the
-//! rule of `kiln_lex::token_range` (spec/lex.md "Token ranges"), and the
+//! rule of `kiln_lex::token_range` (spec/lex.md "Token ranges"), a split
+//! `>` measured as one character (`kiln_lex::token_range_split`), and the
 //! `-fkiln-dump-expr-extents` dump (§21.4).
 
 use std::fmt::Write as _;
@@ -44,7 +45,8 @@ impl<'a> ExprExtents<'a> {
 
     /// The first and the last token of `e` as written (spec/ast.md §21),
     /// or `None`: [`WrittenExtents::get`] when the two tokens are the
-    /// bytes of one file by the rule of `kiln_lex::token_range`, so a
+    /// bytes of one file by the rule of `kiln_lex::token_range_split`
+    /// (a split `>` is one character), so a
     /// `Some` is always [`Self::written_range`]'s `Some`.
     pub fn written_extent(&self, e: ExprId) -> Option<(Loc, Loc)> {
         let (first, last) = self.tree.get(e)?;
@@ -59,7 +61,14 @@ impl<'a> ExprExtents<'a> {
     }
 
     fn range(&self, first: Loc, last: Loc) -> Option<(FileId, u32, u32)> {
-        let r = kiln_lex::token_range(self.sm, self.interner, first, last, self.opts)?;
+        let r = kiln_lex::token_range_split(
+            self.sm,
+            self.interner,
+            first,
+            last,
+            self.opts,
+            &self.ast.split_greaters,
+        )?;
         // A paste or stringizing buffer is no file a client can edit.
         (!self.sm.is_written_in_scratch_space(self.sm.loc(r.0, r.1))).then_some(r)
     }

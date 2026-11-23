@@ -2056,7 +2056,10 @@ written extent kiln states must be the range clang gives that node.
   does not say which macros are function-like, so both are candidates);
   a builtin macro's result (`__has_builtin(x)`), spelled in clang's
   scratch space and expanded at the invocation's `)`, also begins at the
-  invocation's name. A kiln extent left over is matched against those. A clang node
+  invocation's name; a split `>` (clang `SplitToken`: one character
+  spelled in the scratch space, expanded at a written `>>`, `>=` or
+  `>>=`) ends one character into the written token, as kiln's split-aware
+  end does (WP-2542). A kiln extent left over is matched against those. A clang node
   touching a macro with no candidate (a scratch-buffer spelling, ends in
   two files) is *macro-skipped*. A kiln extent still left over passes
   when it is the extent of a matched kiln node (an implicit node around

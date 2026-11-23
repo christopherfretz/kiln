@@ -1,6 +1,9 @@
 //! The end of one token, by lexing it (spec/lex.md "End of a token"): the
 //! query tooling clients use to turn a token's start into its range.
 
+use std::collections::HashSet;
+use std::hash::BuildHasher;
+
 use kiln_source::{Loc, SourceManager};
 
 use crate::{Interner, LexMode, LexOptions, Lexer, TokKind};
@@ -59,6 +62,32 @@ pub fn token_end(
     (t.kind != TokKind::Eof && t.span.lo == loc).then_some(t.span.hi)
 }
 
+/// [`token_end`] aware of the parser's split `>` tokens (spec/lex.md
+/// "Split `>` tokens"): a location in `split_greaters` (the unit's
+/// `kiln_ast::Ast::split_greaters`, where the parser took the first `>`
+/// of a `>>`, `>=`, `>>=` or `>>>` as the end of a template argument
+/// list, [temp.names]/4) is a one-character `>` token, as sema and clang
+/// measure it; every other location is [`token_end`]'s. `None` as for
+/// [`token_end`], and for a split location that is not a `>`.
+pub fn token_end_split<S: BuildHasher>(
+    sm: &SourceManager,
+    interner: &Interner,
+    loc: Loc,
+    opts: LexOptions,
+    split_greaters: &HashSet<Loc, S>,
+) -> Option<Loc> {
+    if split_greaters.contains(&loc) {
+        let sp = sm.spelling_loc(loc);
+        let (file, pos) = sm.offset_of(sp)?;
+        if sm.text(file).as_bytes().get(pos as usize) != Some(&b'>') {
+            return None;
+        }
+        let end = Loc::from_raw(loc.to_raw().checked_add(1)?);
+        return sm.same_entry_distance(loc, end).map(|_| end);
+    }
+    token_end(sm, interner, loc, opts)
+}
+
 /// The bytes of one file that the tokens from the one at `first` through
 /// the one at `last` are written as: `(file, begin, end)` with `end`
 /// exclusive, or `None` (spec/lex.md "Token ranges", spec/source.md
@@ -83,6 +112,25 @@ pub fn token_range(
     opts: LexOptions,
 ) -> Option<(kiln_source::FileId, u32, u32)> {
     let end = token_end(sm, interner, last, opts)?;
+    file_range(sm, first, end)
+}
+
+/// [`token_range`] with `last`'s token measured by [`token_end_split`]:
+/// a range that ends at a split `>` (`vt<1>` in `B<vt<1>> y;`) ends
+/// after its first character.
+pub fn token_range_split<S: BuildHasher>(
+    sm: &SourceManager,
+    interner: &Interner,
+    first: Loc,
+    last: Loc,
+    opts: LexOptions,
+    split_greaters: &HashSet<Loc, S>,
+) -> Option<(kiln_source::FileId, u32, u32)> {
+    let end = token_end_split(sm, interner, last, opts, split_greaters)?;
+    file_range(sm, first, end)
+}
+
+fn file_range(sm: &SourceManager, first: Loc, end: Loc) -> Option<(kiln_source::FileId, u32, u32)> {
     let (file, begin, end) = sm.editable_file_range(kiln_source::Span::new(first, end))?;
     (begin < end).then_some((file, begin, end))
 }

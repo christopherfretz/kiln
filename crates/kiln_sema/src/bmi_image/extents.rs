@@ -21,11 +21,16 @@
 //! preamble's import declarations, by preprocessing; an image without a
 //! preamble carries it, and the importer gives it to the module
 //! declaration it enters.
+//!
+//! A row's written attributes ([`WrittenAttr`], an explicit
+//! instantiation's; WP-2541) follow the rows: each names its row by the
+//! row's index in the section, with its kind, syntax and two locations.
 
 use super::{Image, NONE, Rd, Res, W, Wr, Writer, bad};
 use crate::Sema;
 use kiln_ast::DeclId;
-use kiln_ast::decl_extents::{DeclEnd, DeclExtent, ModuleDeclExtent, ModuleDeclKind};
+use kiln_ast::attr::AttrKind;
+use kiln_ast::decl_extents::{DeclEnd, DeclExtent, ModuleDeclExtent, ModuleDeclKind, WrittenAttr};
 use kiln_source::{Loc, Span};
 
 /// The locations of one row, in [`DeclExtent`] field order.
@@ -51,12 +56,19 @@ const LATER: u8 = 0x80;
 /// [`ModuleDeclExtent`] field order (seven spans).
 const MLOCS: usize = 14;
 
+/// A row's written attribute: (the row's entry index, kind, syntax,
+/// first location, last location).
+type AttrEntry = (u32, u16, u8, u32, u32);
+
 /// The section, ascending by record and position.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub(super) struct Extents {
     entries: Vec<Entry>,
     /// The module declaration's row, in an image without a preamble.
     module: Option<[u32; MLOCS]>,
+    /// The rows' written attributes, ascending by entry, a row's in
+    /// source order.
+    attrs: Vec<AttrEntry>,
 }
 
 fn module_locs_of(e: &ModuleDeclExtent) -> [Loc; MLOCS] {
@@ -120,6 +132,7 @@ impl Writer<'_, '_, '_> {
         let mut recs: Vec<(u32, DeclId)> = self.recs.iter().map(|(&d, &i)| (i, d)).collect();
         recs.sort_unstable();
         let mut out = Vec::new();
+        let mut attrs = Vec::new();
         for (i, d) in recs {
             let ast = &self.s.ast;
             let params: Vec<DeclId> = match ast.decls.function(d) {
@@ -136,6 +149,16 @@ impl Writer<'_, '_, '_> {
                         Some(locs) => out.push((i, k, locs, end_code(e.end) | later)),
                         None => self.miss(i, "a declaration extent the image does not carry")?,
                     }
+                    let at = u32::try_from(out.len() - 1).unwrap_or(NONE);
+                    let was: Vec<WrittenAttr> = self.s.ast.decl_extents.row_attrs(x, n).collect();
+                    for a in was {
+                        match (self.loc(a.span.lo), self.loc(a.span.hi)) {
+                            (Ok(lo), Ok(hi)) => {
+                                attrs.push((at, a.kind.0, a.syntax as u8, lo, hi));
+                            }
+                            _ => self.miss(i, "a written attribute the image does not carry")?,
+                        }
+                    }
                 }
             }
         }
@@ -151,6 +174,7 @@ impl Writer<'_, '_, '_> {
             }
         }
         self.img.extents.entries = out;
+        self.img.extents.attrs = attrs;
         Ok(())
     }
 
@@ -185,6 +209,13 @@ pub(super) fn encode_extents(w: &mut Wr, s: &Extents) {
     for &o in s.module.iter().flatten() {
         w.u32(o);
     }
+    w.u32(u32::try_from(s.attrs.len()).unwrap_or(u32::MAX));
+    for &(r, kind, syntax, lo, hi) in &s.attrs {
+        w.u32(r);
+        w.u32(u32::from(kind) | u32::from(syntax) << 16);
+        w.u32(lo);
+        w.u32(hi);
+    }
 }
 
 pub(super) fn decode_extents(r: &mut Rd) -> Res<Extents> {
@@ -211,7 +242,18 @@ pub(super) fn decode_extents(r: &mut Rd) -> Res<Extents> {
         }
         Some(locs)
     };
-    Ok(Extents { entries, module })
+    let na = r.u32()? as usize;
+    if na.saturating_mul(16) > r.0.len() {
+        return bad("length exceeds the section");
+    }
+    let mut attrs = Vec::with_capacity(na);
+    for _ in 0..na {
+        let row = r.u32()?;
+        let ks = r.u32()?;
+        let syntax = u8::try_from(ks >> 16).or_else(|_| bad("bad written attribute"))?;
+        attrs.push((row, (ks & 0xffff) as u16, syntax, r.u32()?, r.u32()?));
+    }
+    Ok(Extents { entries, module, attrs })
 }
 
 /// The section's records are in range and ascending, a parameter's
@@ -231,7 +273,16 @@ pub(super) fn validate_extents(img: &Image) -> Res<()> {
     let ok = e.iter().all(|&(i, k, _, end)| in_range(i, k) && end & !LATER <= 2)
         && e.first().is_none_or(|f| f.3 & LATER == 0)
         && e.windows(2).all(|w| ascends(&w[0], &w[1]))
-        && (img.extents.module.is_none() || img.preamble == NONE);
+        && (img.extents.module.is_none() || img.preamble == NONE)
+        // A written attribute names a row (not a requires-expression
+        // parameter's), in order, and a syntax.
+        && img.extents.attrs.iter().all(|&(r, _, syntax, lo, hi)| {
+            e.get(r as usize).is_some_and(|x| x.0 != REQ)
+                && super::attrs::syntax_of(syntax).is_some()
+                && lo != NONE
+                && hi != NONE
+        })
+        && img.extents.attrs.windows(2).all(|w| w[0].0 <= w[1].0);
     if ok { Ok(()) } else { bad("bad declaration extents") }
 }
 
@@ -241,6 +292,7 @@ pub(super) fn extent_offsets(img: &Image, offs: &mut Vec<u32>) {
         offs.extend(locs.iter().copied().filter(|&o| o != NONE));
     }
     offs.extend(img.extents.module.iter().flatten().copied().filter(|&o| o != NONE));
+    offs.extend(img.extents.attrs.iter().flat_map(|&(_, _, _, lo, hi)| [lo, hi]));
 }
 
 impl Sema<'_, '_> {
@@ -279,7 +331,7 @@ impl Sema<'_, '_> {
         if !self.ast.decl_extents.is_on() {
             return;
         }
-        for (i, k, locs, end) in &img.extents.entries {
+        for (row, (i, k, locs, end)) in img.extents.entries.iter().enumerate() {
             if (*i == REQ) != reqs.is_some() {
                 continue;
             }
@@ -325,6 +377,16 @@ impl Sema<'_, '_> {
                         table.redeclare(d);
                     }
                     table.set(d, e);
+                    // The row's written attributes (WP-2541).
+                    let row = u32::try_from(row).unwrap_or(NONE);
+                    let lo = img.extents.attrs.partition_point(|a| a.0 < row);
+                    for &(_, kind, syntax, a, b) in
+                        img.extents.attrs[lo..].iter().take_while(|a| a.0 == row)
+                    {
+                        let Some(syntax) = super::attrs::syntax_of(syntax) else { continue };
+                        let span = Span::new(at(a), at(b));
+                        table.add_attr(d, WrittenAttr { kind: AttrKind(kind), syntax, span });
+                    }
                 }
             }
         }

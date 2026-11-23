@@ -525,7 +525,7 @@ impl Sema<'_, '_> {
                 let found: Vec<DeclId> = self.ast.lookup_local(class, name).iter().collect();
                 self.function_templates_in(&found)
             };
-            self.act_on_explicit_special_template_inst(ds, d, &templates, name, ty, sloc);
+            self.act_on_explicit_special_template_inst(ds, &templates, name, ty, sloc);
             return None;
         }
         if matched.is_none()

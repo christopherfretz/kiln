@@ -195,7 +195,9 @@ matters, because it decides where declarations created inside a body
 land, the order in which comdats are created (at definition), and
 nounwind inference: clang's `TryMarkNoThrow` marks a definition
 `nounwind` when every call in it is to a `nounwind` callee, so a callee
-defined earlier turns a caller's `invoke` into `call`. kiln mirrors
+defined earlier turns a caller's `invoke` into `call` (never an
+interposable definition, `weak`, `linkonce`, `extern_weak` or `common`,
+whose body another may replace at link time: `isInterposable`; WP-2541). kiln mirrors
 clang's `CodeGenModule` pipeline:
 1. **Top-level walk** (`emit_members`, clang `HandleTopLevelDecl` per
    declaration, in parse order). Strong definitions are emitted now.

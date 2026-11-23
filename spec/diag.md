@@ -790,6 +790,11 @@ from here` instead. With limit `L ≠ 0` and more than `L` levels, the first
 `note: (skipping K expansions in backtrace; use -fmacro-backtrace-limit=0 to see all)`
 between them.
 
+An `#embed`'s bytes (an `ExpansionKind::Embed` location, spec/pp.md
+"`#embed`"; WP-2544) are reported at the directive's `#` with no
+backtrace: clang gives them the `#`'s file location, so there is no
+level to show.
+
 ### 8.3 Range mapping
 
 Each range is mapped to the level of the entry it is shown with (clang's

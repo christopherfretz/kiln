@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use kiln_diag::{Diag, DiagId, SCRATCH_BUFFER_NAME};
 use kiln_lex::{Encoding, Interner, LexMode, Punct, Std, Symbol, TokFlags, TokKind, Token};
-use kiln_source::{FileId, Loc, SourceManager, Span};
+use kiln_source::{ExpansionKind, FileId, Loc, SourceManager, Span};
 
 use crate::builtin::OPERATOR_NAMES;
 use crate::callbacks::FileChange;
@@ -2350,7 +2350,13 @@ impl Preprocessor<'_, '_> {
         }
     }
 
-    /// Appends `b0 , b1 , ...` as tokens spelled in one scratch buffer.
+    /// Appends `b0 , b1 , ...` as tokens spelled in one scratch buffer,
+    /// behind an [`ExpansionKind::Embed`] entry whose expansion is the
+    /// directive's `#` (WP-2544; spec/pp.md "`#embed`"): clang gives every
+    /// byte the `#`'s location (one `annot_embed` token), kiln keeps the
+    /// spelling for `-E` and the bytes' order in the unit, the way a
+    /// `_Pragma` operand or a pasted token is a scratch buffer behind a
+    /// macro expansion entry.
     fn embed_tokens(&mut self, bytes: &[u8], out: &mut Vec<PpTok>) {
         use std::fmt::Write as _;
         let mut text = String::with_capacity(bytes.len() * 5 + 1);
@@ -2360,10 +2366,16 @@ impl Preprocessor<'_, '_> {
             }
             let _ = write!(text, "{b}");
         }
+        // The entry ends where the last byte does (the newline is the
+        // buffer's, past every token), so the whole run maps to the `#`.
+        let len = u32::try_from(text.len()).unwrap_or(u32::MAX);
         text.push('\n');
         let Ok(f) = self.sm.add_virtual(SCRATCH_BUFFER_NAME, text) else { return };
         self.embed_bufs.insert(f);
-        let base = self.sm.loc(f, 0);
+        let hash = self.dir_hash;
+        let exp =
+            if hash.is_valid() { Span::new(hash, hash.with_offset(1)) } else { Span::INVALID };
+        let base = self.add_exp(self.sm.loc(f, 0), len, exp, ExpansionKind::Embed);
         let mut off = 0u32;
         out.reserve(bytes.len() * 2);
         for (i, b) in bytes.iter().enumerate() {

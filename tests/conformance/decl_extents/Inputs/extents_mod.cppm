@@ -19,4 +19,6 @@ template <class T> struct Box<T *> {};
 enum class Opaque : int;
 enum class Opaque : int;
 template struct Box<int>;
+template struct __attribute__((visibility("default"))) Box<long>;
+template __attribute__((visibility("default"))) long twice<long>(long);
 } // namespace geo

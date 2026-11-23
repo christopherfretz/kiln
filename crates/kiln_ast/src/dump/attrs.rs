@@ -4,7 +4,7 @@ use crate::attr::{AttrKind, AttrNode, AttrSyntax};
 
 /// The clang class name of `a` without the `Attr` suffix, or `None` for
 /// a kind kiln does not name (printed `UnknownAttr kind=N`).
-pub(super) fn class_name(a: &AttrNode) -> Option<&'static str> {
+pub(crate) fn class_name(a: &AttrNode) -> Option<&'static str> {
     Some(match a.kind {
         AttrKind::ALIGNED => "Aligned",
         AttrKind::ASSUME => "CXXAssume",

@@ -1,3 +1,8 @@
+tok 120 embed
+tok , embed
+tok 121 embed
+tok , embed
+tok 122 embed
 inc embed-dir.cpp:453 embed <three.bin> name embed-dir.cpp:460..embed-dir.cpp:471 embedded file three.bin dir 1
 inc embed-dir.cpp:531 embed <empty.bin> name embed-dir.cpp:538..embed-dir.cpp:549 embedded file empty.bin dir 0
 record complete

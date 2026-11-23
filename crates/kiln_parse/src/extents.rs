@@ -14,9 +14,9 @@
 //! ([`Parser::ext_finish`]). Every helper is one branch when recording
 //! is off; the lead bookkeeping (a `Loc` move) runs regardless.
 
-use kiln_ast::DeclId;
 use kiln_ast::decl_extents::{DeclEnd, DeclExtent};
 use kiln_ast::ids::LambdaId;
+use kiln_ast::{AttrId, DeclId};
 use kiln_lex::{Punct, TokKind};
 use kiln_sema::declspec::{DeclSpec, Declarator};
 use kiln_sema::lambda::LambdaIntroducer;
@@ -89,6 +89,30 @@ impl Parser<'_, '_> {
     pub(crate) fn ext_redecl(&mut self, d: DeclId) {
         if self.ext_on() && self.s.ast.decl_extents.get(d).is_some() {
             self.s.ast.decl_extents.redeclare(d);
+        }
+    }
+
+    /// Records `attrs`, written on the explicit instantiation of `d` whose
+    /// row is `d`'s last, on that row as written: each one's kind and its
+    /// extent ([`kiln_ast::decl_extents::WrittenAttr`]; spec/ast.md §19.2;
+    /// WP-2541). Sema merges them onto the specialization, which keeps
+    /// only their locations; an attribute dropped on the way (one clang
+    /// ignores after the declarator) is still written here.
+    pub(crate) fn ext_attrs<'a>(&mut self, d: DeclId, attrs: impl IntoIterator<Item = &'a AttrId>) {
+        if !self.ext_on() {
+            return;
+        }
+        for &a in attrs {
+            let Some(&(_, end)) = self.attr_ends.iter().rev().find(|(x, _)| *x == a) else {
+                continue;
+            };
+            let n = *self.s.ast.attrs.get(a);
+            let w = kiln_ast::decl_extents::WrittenAttr {
+                kind: n.kind,
+                syntax: n.syntax,
+                span: Span::new(n.loc, end),
+            };
+            self.s.ast.decl_extents.add_attr(d, w);
         }
     }
 

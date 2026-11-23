@@ -594,6 +594,7 @@ impl Sema<'_, '_> {
             // of an implicit class template specialization.
             return Ok(match inst {
                 Some((ext, _)) => {
+                    self.explicit_inst_attrs(m, &ds.attrs);
                     self.explicit_inst_annotations(m, ds, d, name_loc);
                     self.note_explicit_inst_named(m);
                     self.note_written_inst_target(name_loc, m);
@@ -611,8 +612,9 @@ impl Sema<'_, '_> {
             if !self.check_inst_exc_spec(m.spec, ty, ds.loc) {
                 return Ok(None);
             }
-            let attrs: Vec<_> = ds.attrs.iter().chain(&d.attrs).copied().collect();
-            self.explicit_inst_visibility_attrs(m.spec, &attrs);
+            // clang merges the decl-specifier's attributes only (one after
+            // the declarator is dropped; WP-2541).
+            self.explicit_inst_attrs(m.spec, &ds.attrs);
             self.explicit_inst_annotations(m.spec, ds, d, name_loc);
             let n = self.decl_name(m.template);
             self.check_explicit_inst_scope(m.template, n, d.qualifier.is_some(), name_loc);
@@ -637,7 +639,6 @@ impl Sema<'_, '_> {
     pub(crate) fn act_on_explicit_special_template_inst(
         &mut self,
         ds: &DeclSpec,
-        d: &Declarator,
         templates: &[DeclId],
         name: DeclName,
         ty: QualType,
@@ -653,8 +654,7 @@ impl Sema<'_, '_> {
         if !self.check_inst_exc_spec(m.spec, ty, ds.loc) {
             return;
         }
-        let attrs: Vec<_> = ds.attrs.iter().chain(&d.attrs).copied().collect();
-        self.explicit_inst_visibility_attrs(m.spec, &attrs);
+        self.explicit_inst_attrs(m.spec, &ds.attrs);
         let n = self.decl_name(m.template);
         self.check_explicit_inst_scope(m.template, n, true, loc);
         self.note_explicit_inst_named(m.spec);

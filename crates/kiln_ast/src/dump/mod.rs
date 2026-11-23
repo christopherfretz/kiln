@@ -19,7 +19,7 @@
 //! how the dump, diagnostics and the constant printer name declarations,
 //! expressions and values.
 
-mod attrs;
+pub(crate) mod attrs;
 mod names;
 mod pretty;
 

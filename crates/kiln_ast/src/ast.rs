@@ -101,6 +101,13 @@ pub struct Ast {
     /// The declaration-extent table (§19): opt-in, off by default;
     /// written into snapshots.
     pub decl_extents: crate::decl_extents::DeclExtents,
+    /// The `>` tokens the parser split off a `>>`, `>=`, `>>=` (or the
+    /// `>>` of a `>>>`) to close a template argument list
+    /// ([temp.names]/4), by location (§21.2, WP-2542): each is a
+    /// one-character token for `kiln_lex::token_end_split` and sema's
+    /// `token_end`, as clang measures it. Always recorded; written into
+    /// snapshots and carried in module images.
+    pub split_greaters: kiln_source::fx::FxHashSet<kiln_source::Loc>,
     symbols: Arc<Interner>,
     inst: InstantiationMeter,
 }
@@ -141,6 +148,20 @@ impl Ast {
     pub fn end_loc(&self, mut e: ExprId) -> kiln_source::Loc {
         loop {
             if let Some(l) = self.exprs.end_loc(e) {
+                // clang `UserDefinedLiteral::getEndLoc`: the literal's last
+                // token, the last piece of a concatenated string.
+                if self.is_udl_call(e) {
+                    let mut arg = self.lists.at::<ExprId>(self.exprs.call_args(e), 0);
+                    while let Some(a) =
+                        arg.filter(|&a| self.exprs.get(a).kind() == ExprKind::ImplicitCastExpr)
+                    {
+                        arg = self.exprs.first_child(a, &self.lists);
+                    }
+                    let piece = arg
+                        .filter(|&a| self.exprs.get(a).kind() == ExprKind::StringLiteral)
+                        .and_then(|a| self.exprs.end_loc(a));
+                    return piece.unwrap_or(l);
+                }
                 return l;
             }
             let n = self.exprs.get(e);
@@ -315,11 +336,55 @@ impl Ast {
         loc
     }
 
+    /// Whether `e` is the call of a literal operator sema builds for a
+    /// user-defined literal ([lex.ext], [over.literal]; clang
+    /// `UserDefinedLiteral`): a `CallExpr` with no written parentheses
+    /// (its stored closing token is its own location, the literal token's
+    /// start) whose callee names a literal operator (`operator""_k`, a
+    /// literal operator template's lookup).
+    pub fn is_udl_call(&self, e: ExprId) -> bool {
+        let node = self.exprs.get(e);
+        if node.kind() != ExprKind::CallExpr {
+            return false;
+        }
+        // The callee first: a few reads, where the stored closing token is
+        // a cold-map lookup (`begin_loc` asks this of every call it
+        // passes).
+        let mut callee = self.exprs.callee(e);
+        for _ in 0..8 {
+            let literal_op = match self.exprs.get(callee).kind() {
+                ExprKind::ImplicitCastExpr => match self.exprs.first_child(callee, &self.lists) {
+                    Some(inner) => {
+                        callee = inner;
+                        continue;
+                    }
+                    None => false,
+                },
+                ExprKind::DeclRefExpr => {
+                    self.decls.get(self.exprs.decl(callee)).name().kind()
+                        == crate::names::DeclNameKind::LiteralOperator
+                }
+                ExprKind::UnresolvedLookupExpr => {
+                    self.unresolved_name(callee).kind()
+                        == crate::names::DeclNameKind::LiteralOperator
+                }
+                _ => false,
+            };
+            return literal_op && self.exprs.end_loc(e) == Some(node.loc());
+        }
+        false
+    }
+
     /// One step of [`Ast::begin_loc`]: the operand `e` begins where (`Ok`),
     /// or where `e` itself begins (`Err`).
     fn begin_step(&self, e: ExprId) -> Result<ExprId, kiln_source::Loc> {
         crate::expr::note_walk_step();
         let n = self.exprs.get(e);
+        // clang `UserDefinedLiteral::getBeginLoc`: the literal token, not
+        // the callee at its ud-suffix.
+        if n.kind() == ExprKind::CallExpr && self.is_udl_call(e) {
+            return Err(n.loc());
+        }
         let first = match n.kind() {
             ExprKind::ImplicitCastExpr
             | ExprKind::ConstantExpr
@@ -411,6 +476,7 @@ impl Ast {
             contract_sites: crate::slot::ColdMap::new("contract_sites"),
             written_refs: crate::written_refs::WrittenRefs::default(),
             decl_extents: crate::decl_extents::DeclExtents::default(),
+            split_greaters: kiln_source::fx::FxHashSet::default(),
             symbols,
             inst: InstantiationMeter::default(),
         }
