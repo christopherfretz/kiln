@@ -69,6 +69,14 @@ pub struct ExpansionHead {
     form: ExpansionForm,
 }
 
+impl ExpansionHead {
+    /// The variable of the for-range-declaration ([stmt.expand]/2).
+    #[must_use]
+    pub fn decl(&self) -> DeclId {
+        self.decl
+    }
+}
+
 /// An element of an expansion statement being expanded: what its
 /// `CXXExpansionSelectExpr` at `depth` becomes.
 #[derive(Clone, Copy, Debug)]

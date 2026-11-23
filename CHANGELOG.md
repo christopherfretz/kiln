@@ -10,6 +10,22 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- The written-reference table records declarative names (stage 3,
+  WP-1932, WP-2100, WP-2131; spec/ast.md §18.4): using-declarators,
+  using-directives, namespace alias targets, the names qualified
+  declarator-ids and class-head-names redeclare (new role `redecl`),
+  declaring elaborated-type-specifiers and friends, explicit and partial
+  specialization and explicit instantiation targets, type-constraint
+  concept names, field and offsetof designators and deduction-guide
+  names, each with its lookup provenance; an identifier-accounting test
+  (`crates/kiln_parse/tests/written_refs_accounting.rs`, `KILN_REFS_DIR`)
+  checks that every identifier the parser sees is an entry, a
+  declaration's own name or a documented non-name (spec/ast.md §18.8).
+  The gaps it found are filled: `sizeof...(pack)` names, and
+  declaration-extent rows for for-range and expansion-statement
+  variables, condition and for-range bindings, exception declarations,
+  requires-expression parameters and init-captures, with friend
+  declarations no longer overwriting the row of what they name.
 - The front end as a library call for tooling clients (WP-2120):
   `kiln_driver::front_end::run_front_end(argv0, command_line, options, f)`
   runs one `-fsyntax-only` job through the same driver stages as `kiln`

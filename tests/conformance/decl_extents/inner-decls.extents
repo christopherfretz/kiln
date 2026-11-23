@@ -1,0 +1,35 @@
+CXXRecord 'P'  full=15:1-18:3 ; own=15:1-18:2 name=15:8-15:9 'P' body=15:10-18:2
+Field 'P::a'  full=16:3-16:12 ; own=16:7-16:8 name=16:7-16:8 'a' specs-end=16:6
+Field 'P::b'  full=16:3-16:12 ; own=16:10-16:11 name=16:10-16:11 'b' specs-end=16:6
+CXXConversion 'P::operator bool'  full=17:3-17:52 } own=17:12-17:52 name=17:12-17:25 'operator bool' body=17:34-17:52 specs-end=17:11
+ParmVar 'arr'  full=19:8-19:19 - own=19:10-19:19 name=19:12-19:15 'arr' specs-end=19:9
+ParmVar 'p'  full=19:21-19:24 - own=19:23-19:24 name=19:23-19:24 'p' specs-end=19:22
+Function 'f'  full=19:1-32:2 } own=19:6-32:2 name=19:6-19:7 'f' body=19:26-32:2 specs-end=19:5
+Var 'x'  full=20:8-20:18 - own=20:16-20:18 name=20:17-20:18 'x' specs-end=20:15
+Binding 'a'  full=22:8-22:19 - own=22:14-22:15 name=22:14-22:15 'a'
+Binding 'b'  full=22:8-22:19 - own=22:17-22:18 name=22:17-22:18 'b'
+Var '(anonymous)'  full=22:8-22:19 - own=22:13-22:19 specs-end=22:12
+Binding 'c'  full=24:7-24:23 - own=24:14-24:15 name=24:14-24:15 'c'
+Binding 'd'  full=24:7-24:23 - own=24:17-24:18 name=24:17-24:18 'd'
+Var '(anonymous)'  full=24:7-24:23 - own=24:12-24:23 specs-end=24:11
+Binding 'g'  full=26:17-26:28 - own=26:23-26:24 name=26:23-26:24 'g'
+Binding 'h'  full=26:17-26:28 - own=26:26-26:27 name=26:26-26:27 'h'
+Var '(anonymous)'  full=26:17-26:28 - own=26:22-26:28 specs-end=26:21
+Var 'e'  full=29:12-29:22 - own=29:20-29:22 name=29:21-29:22 'e' specs-end=29:19
+TemplateTypeParm 'T'  full=33:11-33:18 - name=33:17-33:18 'T'
+ParmVar 't'  full=34:28-34:31 - name=34:30-34:31 't' specs-end=34:29
+ParmVar 'u'  full=34:33-34:36 - name=34:35-34:36 'u' specs-end=34:34
+Concept 'Addable'  full=33:1-34:49 ; name=34:9-34:16 'Addable'
+CXXRecord 'G'  full=35:1-35:10 ; own=35:1-35:9 name=35:8-35:9 'G'
+CXXRecord 'H'  full=36:1-38:3 ; own=36:1-38:2 name=36:8-36:9 'H' body=36:10-38:2
+ParmVar '(anonymous)'  full=37:10-37:13 - own=37:12-37:13 specs-end=37:11
+CXXMethod 'H::h'  full=37:3-37:15 ; own=37:8-37:14 name=37:8-37:9 'h' specs-end=37:7
+CXXRecord 'G'  full=39:1-42:3 ; own=39:1-42:2 name=39:8-39:9 'G' body=39:10-42:2
+Friend 'G::(anonymous)'  full=40:3-40:19 ;
+ParmVar '(anonymous)'  full=41:20-41:23 - own=41:22-41:23 specs-end=41:21
+CXXMethod 'H::h'  full=41:3-41:25 ; own=41:15-41:24 name=41:18-41:19 'h' qual=41:15 specs-end=41:14
+Friend 'G::(anonymous)'  full=41:3-41:25 ; own=41:15-41:24 name=41:18-41:19 'h' qual=41:15 specs-end=41:14
+Var 'target'  full=43:1-43:16 ; own=43:5-43:15 name=43:5-43:11 'target' specs-end=43:4
+Var 'lam'  full=44:1-44:51 ; own=44:6-44:50 name=44:6-44:9 'lam' specs-end=44:5
+Var '(lambda at inner-decls.cpp:44:12)::n'  full=44:13-44:18 - name=44:13-44:14 'n'
+Var '(lambda at inner-decls.cpp:44:12)::r'  full=44:20-44:31 - name=44:21-44:22 'r'

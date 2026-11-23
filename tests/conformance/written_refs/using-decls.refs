@@ -1,0 +1,34 @@
+20:7-20:10  nns  'lib' -> lib@9:11 in=f@20:12
+20:12-20:13  using-decl  'f' -> lib::f@10:5 q=20:7 in=f@20:12
+21:7-21:10  nns  'lib' -> lib@9:11 in=Widget@21:12
+21:12-21:18  using-decl  'Widget' -> lib::Widget@12:8 q=21:7 in=Widget@21:12
+21:20-21:23  nns  'lib' -> lib@9:11 in=count@21:25
+21:25-21:30  using-decl  'count' -> lib::count@13:5 q=21:20 in=count@21:25
+22:9-22:12  nns  'lib' -> lib@9:11 q=:: in=helper@22:22
+22:14-22:20  nns  'detail' -> lib::detail@15:11 q=22:9 in=helper@22:22
+22:22-22:28  using-decl  'helper' -> lib::detail::helper@16:5 q=22:14 in=helper@22:22
+23:12-23:15  nns  'lib' -> lib@9:11 in=(tu)
+23:17-23:22  type  'Color' -> lib::Color@14:12 q=23:12 in=(tu)
+29:3-29:7  type  'Base' -> Base@25:8 in=Base::operator=@29:9 how=injected
+29:25-29:29  type  'Base' -> Base@25:8 in=(anonymous)@29:31 how=injected
+31:18-31:22  base  'Base' -> Base@25:8 in=Derived@31:8
+32:9-32:13  nns  'Base' -> Base@25:8 in=Derived::Derived@32:15 how=injected
+32:15-32:19  using-decl  'Base' -> Base::Base@26:3 q=32:9 in=Derived::Derived@32:15
+33:9-33:13  nns  'Base' -> Base@25:8 in=Derived::value@33:15 how=injected
+33:15-33:20  using-decl  'value' -> Base::value@28:7 q=33:9 in=Derived::value@33:15
+33:22-33:26  nns  'Base' -> Base@25:8 in=Derived::operator=@33:28 how=injected
+33:28-33:37  using-decl  'operator=' -> Base::operator=@29:9 q=33:22 in=Derived::operator=@33:28
+36:34-36:35  base  'T' -> T@36:17 in=Wrap@36:27
+37:18-37:19  nns  'T' -> T@36:17 in=Wrap::type@37:21
+37:21-37:25  using-decl  'type' -> (dependent) q=37:18 in=Wrap::type@37:21
+38:9-38:10  nns  'T' -> T@36:17 in=Wrap::get@38:12
+38:12-38:15  using-decl  'get' -> (dependent) q=38:9 in=Wrap::get@38:12
+40:42-40:44  base  'Ts' -> Ts@40:20 in=Overload@40:31
+41:9-41:11  nns  'Ts' -> Ts@40:20 in=Overload::operator()@41:13
+41:13-41:23  using-decl  'operator()' -> (dependent) q=41:9 in=Overload::operator()@41:13
+45:9-45:12  nns  'lib' -> lib@9:11 in=helper@45:22
+45:14-45:20  nns  'detail' -> lib::detail@15:11 q=45:9 in=helper@45:22
+45:22-45:28  using-decl  'helper' -> lib::detail::helper@16:5 q=45:14 in=helper@45:22
+46:10-46:11  expr  'f' -> lib::f@10:5 found=f@20:12 in=use@44:5 adl-ns=
+46:17-46:22  expr  'count' -> lib::count@13:5 found=count@21:25 in=use@44:5
+46:25-46:31  expr  'helper' -> lib::detail::helper@16:5 found=helper@45:22 in=use@44:5 adl-ns=

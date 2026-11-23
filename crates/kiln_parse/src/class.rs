@@ -2145,6 +2145,7 @@ impl Parser<'_, '_> {
                 decls.function(x).map(|_| x)
             }
         });
+        self.note_declarator_ref(decl, d);
         self.s.claim_written_refs(self.member_ref_mark, decl);
         (decl, target)
     }
@@ -2656,6 +2657,7 @@ impl Parser<'_, '_> {
         };
         let nl = self.bump().span.lo;
         d.special = Some((SpecialName::Destructor(n), loc));
+        d.dtor_name = nl;
         if self.at(Punct::Less) {
             // `~X<T>()`, `X<T>::~X<T>()` (CWG2237).
             let class = d.qualifier.or_else(|| {

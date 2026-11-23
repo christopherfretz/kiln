@@ -10,6 +10,7 @@
 22:15-22:21  nns  'Widget' -> defaults::Widget@13:8 q=22:5 in=defaults::Widget::resize@22:23
 22:53-22:55  expr  'to' -> to@22:34 in=defaults::Widget::resize@22:23
 22:58-22:63  expr  'width' -> defaults::Widget::width@14:7 in=defaults::Widget::resize@22:23
+22:23-22:29  redecl  'resize' -> defaults::Widget::resize@16:7 q=22:15 in=defaults::Widget::resize@22:23
 25:3-25:11  nns  'defaults' -> defaults@10:11 in=w@25:20
 25:13-25:19  type  'Widget' -> defaults::Widget@13:8 q=25:3 in=w@25:20
 27:21-27:29  nns  'defaults' -> defaults@10:11 in=k@27:17

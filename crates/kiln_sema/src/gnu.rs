@@ -282,6 +282,11 @@ impl Sema<'_, '_> {
                 OffsetofComponent::Field { .. } => false,
             });
         if dependent {
+            for c in comps {
+                if let OffsetofComponent::Field { end, .. } = *c {
+                    self.note_written_offsetof_member(end, None, true);
+                }
+            }
             let st = self.size_type();
             return self.builder().dependent_offsetof(st, ty, comps, loc, rparen);
         }
@@ -445,6 +450,7 @@ impl Sema<'_, '_> {
             Some(m) => vec![m],
             None => Vec::new(),
         };
+        self.note_written_offsetof_member(end, chain.last().copied(), false);
         let Some(&field) = chain.last() else {
             let d = self
                 .diag(DiagId::sema_no_member, loc)

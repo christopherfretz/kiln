@@ -1,6 +1,7 @@
 13:8-13:9  type  'T' -> T@12:17 in=(anonymous)@13:9
 15:9-15:13  type  'Root' -> lib::Root@9:8 in=lib::RootAlias@15:14
-18:7-18:10  nns  'lib' -> lib@8:11 in=(tu)
+18:7-18:10  nns  'lib' -> lib@8:11 in=Root@18:12
+18:12-18:16  using-decl  'Root' -> lib::Root@9:8 q=18:7 in=Root@18:12
 23:19-23:20  mem-init  'n' -> Member::n@21:7 in=Member::Member@23:3
 23:21-23:22  expr  'v' -> v@23:14 in=Member::Member@23:3
 23:25-23:26  mem-init  'm' -> Member::m@22:8 in=Member::Member@23:3

@@ -1,0 +1,11 @@
+12:18-12:22  type  'Unit' -> Counter::Unit@11:10 in=(anonymous)@12:22
+17:13-17:17  type  'Opts' -> Opts@14:8 in=(anonymous)@17:17
+18:6-18:13  nns  'Counter' -> Counter@9:8 in=Counter::total@18:15
+18:15-18:20  redecl  'total' -> Counter::total@10:14 q=18:6 in=Counter::total@18:15
+21:3-21:10  nns  'Counter' -> Counter@9:8 in=u@21:17
+21:12-21:16  type  'Unit' -> Counter::Unit@11:10 q=21:3 in=u@21:17
+22:3-22:10  expr  'consume' -> consume@17:5 in=run@20:6 adl-ns=
+22:13-22:18  designator  'level' -> Opts::level@15:7 in=run@20:6
+23:3-23:10  nns  'Counter' -> Counter@9:8 in=run@20:6
+23:12-23:15  expr  'add' -> Counter::add@12:14 q=23:3 in=run@20:6
+23:16-23:17  expr  'u' -> u@21:17 in=run@20:6

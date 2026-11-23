@@ -3,7 +3,8 @@
 16:21-16:24  type  'Rec' -> lib::Rec@12:8 in=lib@11:11
 17:3-17:4  type  'T' -> T@16:17 in=lib::Box::v@17:5
 17:9-17:10  type  'T' -> T@16:17 in=lib::Box::v@17:5
-24:7-24:10  nns  'lib' -> lib@11:11 in=(tu)
+24:7-24:10  nns  'lib' -> lib@11:11 in=Rec@24:12
+24:12-24:15  using-decl  'Rec' -> lib::Rec@12:8 q=24:7 in=Rec@24:12
 21:13-21:16  nns  'lib' -> lib@11:11 in=made@26:5 exp=26:1
 21:18-21:21  type  'Rec' -> lib::Rec@12:8 q=21:13 in=made@26:5 exp=26:1
 27:5-27:8  type  'Rec' -> lib::Rec@12:8 found=Rec@24:12 in=pointer@27:10 exp=27:1

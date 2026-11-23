@@ -38,7 +38,7 @@ impl WrittenRefId {
 
 /// The syntactic role of a written name (spec/ast.md §18.4). The full
 /// set; stage 1 fills `Expr`, `Member` and `Nns`, stage 2 `Type`,
-/// `Template`, `Base` and `MemInit`.
+/// `Template`, `Base` and `MemInit`, stage 3 the declarative roles.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum RefRole {
@@ -73,6 +73,10 @@ pub enum RefRole {
     Concept,
     /// A designator (stage 3).
     Designator,
+    /// The declarator-id or class-head-name of a declaration that
+    /// redeclares an entity declared before it, written qualified
+    /// (`void A::f() {}`, `int C::x = 0;`, `struct C::In {}`; stage 3).
+    Redecl,
 }
 
 impl RefRole {
@@ -93,6 +97,7 @@ impl RefRole {
             RefRole::SpecTarget => "spec-target",
             RefRole::Concept => "concept",
             RefRole::Designator => "designator",
+            RefRole::Redecl => "redecl",
         }
     }
 }
@@ -304,6 +309,14 @@ pub struct WrittenRefs {
     /// The using-directive in namespace `.0` that nominates `.1`, once
     /// looked up (§18.7.3).
     udir_cache: HashMap<(DeclId, DeclId), Option<DeclId>>,
+    /// The entries of field designators, by the name's location: sema
+    /// patches them when it finds the member (§18.4, stage 3).
+    designators: HashMap<Loc, WrittenRefId>,
+    /// What the explicit instantiation whose declarator-id is at the
+    /// location names (a template or a member of a class template
+    /// specialization): sema finds it, the parser records the name
+    /// after (§18.4, stage 3).
+    inst_target: Option<(Loc, DeclId)>,
 }
 
 impl WrittenRefs {
@@ -410,6 +423,34 @@ impl WrittenRefs {
         Some(id)
     }
 
+    /// Remembers that entry `id` is the field designator at `loc`, for
+    /// [`designator_at`](Self::designator_at).
+    pub fn defer_designator(&mut self, loc: Loc, id: WrittenRefId) {
+        self.designators.insert(loc, id);
+    }
+
+    /// The entry of the field designator whose name is at `loc` (one
+    /// branch when there is none).
+    #[inline]
+    pub fn designator_at(&self, loc: Loc) -> Option<WrittenRefId> {
+        if self.designators.is_empty() { None } else { self.designators.get(&loc).copied() }
+    }
+
+    /// Remembers that the explicit instantiation whose declarator-id is
+    /// at `loc` names `target`, for [`take_inst_target`](Self::take_inst_target).
+    pub fn set_inst_target(&mut self, loc: Loc, target: DeclId) {
+        self.inst_target = Some((loc, target));
+    }
+
+    /// What the explicit instantiation whose declarator-id is at `loc`
+    /// names, once (`None` when sema matched nothing there).
+    pub fn take_inst_target(&mut self, loc: Loc) -> Option<DeclId> {
+        match self.inst_target.take() {
+            Some((l, t)) if l == loc => Some(t),
+            _ => None,
+        }
+    }
+
     /// The entry naming the overload set `e`, while it awaits resolution.
     pub fn pending_for(&self, e: ExprId) -> Option<WrittenRefId> {
         self.pending.get(&e).copied()
@@ -496,6 +537,7 @@ impl WrittenRefs {
         self.entries.truncate(n);
         self.pending.retain(|_, id| id.index() < n);
         self.extra.retain(|id, _| id.index() < n);
+        self.designators.retain(|_, id| id.index() < n);
     }
 
     /// Declaration `d`, whose names were parsed after `m`, claims them:
@@ -518,13 +560,18 @@ impl WrittenRefs {
         }
         let sz = size_of::<WrittenRef>() as u64;
         let pend = (size_of::<(ExprId, WrittenRefId)>() as u64) * 2;
+        let desig = (size_of::<(Loc, WrittenRefId)>() as u64) * 2;
         let (prov_live, prov_reserved) = self.provenance_mem();
         Some(MemRow::new(
             "written_refs",
             self.entries.len() as u64,
-            self.entries.len() as u64 * sz + self.pending.len() as u64 * pend + prov_live,
+            self.entries.len() as u64 * sz
+                + self.pending.len() as u64 * pend
+                + self.designators.len() as u64 * desig
+                + prov_live,
             self.entries.capacity() as u64 * sz
                 + self.pending.capacity() as u64 * pend
+                + self.designators.capacity() as u64 * desig
                 + prov_reserved,
         ))
     }
@@ -779,6 +826,30 @@ mod tests {
         t.truncate(m);
         assert_eq!(t.len(), 1);
         assert!(!t.has_pending());
+    }
+
+    #[test]
+    fn designators_and_inst_targets_are_found_by_location() {
+        let mut t = WrittenRefs::default();
+        t.set_on(true);
+        let (l1, l2) = (Loc::from_raw(10), Loc::from_raw(20));
+        assert_eq!(t.designator_at(l1), None);
+        let id = t.push(entry(None)).unwrap();
+        t.defer_designator(l1, id);
+        assert_eq!(t.designator_at(l1), Some(id));
+        assert_eq!(t.designator_at(l2), None);
+        let m = t.mark(0);
+        let id2 = t.push(entry(None)).unwrap();
+        t.defer_designator(l2, id2);
+        t.truncate(m);
+        assert_eq!(t.designator_at(l2), None, "truncate drops a dropped entry's designator");
+        assert_eq!(t.designator_at(l1), Some(id));
+        let f = DeclId::new(4);
+        t.set_inst_target(l1, f);
+        assert_eq!(t.take_inst_target(l2), None, "another location takes nothing");
+        t.set_inst_target(l1, f);
+        assert_eq!(t.take_inst_target(l1), Some(f));
+        assert_eq!(t.take_inst_target(l1), None, "taken once");
     }
 
     #[test]

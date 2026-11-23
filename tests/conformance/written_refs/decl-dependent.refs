@@ -1,0 +1,26 @@
+13:34-13:35  base  'T' -> T@13:17 in=Uses@13:27
+13:37-13:42  base  'Plain' -> Plain@9:8 in=Uses@13:27
+14:9-14:10  nns  'T' -> T@13:17 in=Uses::get@14:12
+14:12-14:15  using-decl  'get' -> (dependent) q=14:9 in=Uses::get@14:12
+15:18-15:19  nns  'T' -> T@13:17 in=Uses::value_type@15:21
+15:21-15:31  using-decl  'value_type' -> (dependent) q=15:18 in=Uses::value_type@15:21
+16:9-16:14  nns  'Plain' -> Plain@9:8 in=Uses::size@16:16 how=injected
+16:16-16:20  using-decl  'size' -> Plain::size@10:7 q=16:9 in=Uses::size@16:16
+17:16-17:17  nns  'T' -> T@13:17 in=Uses@13:27
+17:19-17:26  elaborated  'Builder' -> (dependent) q=17:16 in=Uses@13:27
+18:17-18:22  elaborated  'Plain' -> Plain@9:8 in=Uses@13:27
+21:3-21:4  type  'T' -> T@20:17 in=Shape::width@21:5
+23:26-23:27  type  'T' -> T@23:17 in=make@23:29
+23:20-23:25  template  'Shape' -> Shape@20:27 in=make@23:29
+23:34-23:35  type  'T' -> T@23:17 in=w@23:36
+23:54-23:55  type  'T' -> T@23:17 in=make@23:29
+23:48-23:53  template  'Shape' -> Shape@20:27 in=make@23:29
+23:58-23:63  designator  'width' -> (dependent) in=make@23:29
+23:66-23:67  expr  'w' -> w@23:36 in=make@23:29
+24:20-24:25  type  'Plain' -> Plain@9:8 in=plain@24:26
+24:43-24:48  type  'Plain' -> Plain@9:8 in=plain@24:26
+24:50-24:54  designator  'size' -> Plain::size@10:7 in=plain@24:26
+30:6-30:10  type  'Base' -> Base@25:8 in=uses@30:12
+30:1-30:5  template  'Uses' -> Uses@13:27 in=uses@30:12
+31:1-31:6  template  'Shape' -> Shape@20:27 in=shape@31:12
+31:20-31:24  expr  'make' -> make<int>@23:29 found=make@23:29 in=shape@31:12 adl-ns=

@@ -10,8 +10,10 @@
 20:39-20:40  type  'T' -> T@20:17 in=lib::<deduction guide for Pair>@20:20
 20:42-20:43  type  'T' -> T@20:17 in=lib::<deduction guide for Pair>@20:20
 20:34-20:38  template  'Pair' -> lib::Pair@16:36 in=lib::<deduction guide for Pair>@20:20
+20:20-20:24  template  'Pair' -> lib::Pair@16:36 in=lib::<deduction guide for Pair>@20:20
 21:32-21:33  type  'T' -> T@21:17 in=lib@10:11
-24:7-24:10  nns  'lib' -> lib@10:11 in=(tu)
+24:7-24:10  nns  'lib' -> lib@10:11 in=Pair@24:12
+24:12-24:16  using-decl  'Pair' -> lib::Pair@16:36 q=24:7 in=Pair@24:12
 26:38-26:41  nns  'lib' -> lib@10:11 in=(tu)
 26:43-26:46  template  'Vec' -> lib::Vec@11:27 q=26:38 in=(tu)
 27:3-27:4  template  'C' -> C@26:34 in=Holder::c@27:10

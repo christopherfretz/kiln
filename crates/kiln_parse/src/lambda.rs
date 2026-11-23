@@ -67,6 +67,7 @@ impl Parser<'_, '_> {
             return None;
         };
         let id = self.s.act_on_lambda_start(&intro);
+        self.ext_init_captures(id, &intro);
         let lbracket = intro.lbracket;
         if self.at(Punct::Less) {
             // P0428R2: a lambda template-head is C++20 (clang

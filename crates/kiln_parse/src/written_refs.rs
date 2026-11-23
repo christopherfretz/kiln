@@ -5,8 +5,10 @@
 //! [`kiln_sema::Sema::records_written_refs`] first, so recording off
 //! costs one branch per site.
 
+use kiln_ast::decl::{DeclKind, FriendTarget};
 use kiln_ast::written_refs::{RefMark, RefQualifier, RefRole};
 use kiln_ast::{DeclId, QualType};
+use kiln_sema::declspec::{Declarator, SpecialName};
 use kiln_source::{Loc, Span};
 
 use crate::parser::{PExpr, Parser};
@@ -77,5 +79,87 @@ impl Parser<'_, '_> {
             return true;
         }
         false
+    }
+
+    /// The one token starting at `lo`, as a span.
+    pub(crate) fn token_span_at(&self, lo: Loc) -> Span {
+        Span::new(lo, self.s.token_end_of(lo).unwrap_or(lo))
+    }
+
+    /// Records the declarator-id of declarator `d`, which declared `decl`
+    /// (stage 3, spec/ast.md §18.4), when it names something declared
+    /// elsewhere: a deduction guide's template name (`template`), the
+    /// template of an explicit specialization or instantiation, or the
+    /// member of a class template specialization one instantiates
+    /// (`spec-target`), the earlier declaration a friend function
+    /// redeclares (`elaborated`) or a qualified declarator-id redeclares
+    /// (`redecl`). A first declaration's own name is not recorded. Callers
+    /// run it before the declaration claims its names.
+    pub(crate) fn note_declarator_ref(&mut self, decl: Option<DeclId>, d: &Declarator) {
+        if !self.s.records_written_refs() || d.id_recorded {
+            return;
+        }
+        let range = match d.special {
+            Some((SpecialName::DeductionGuide(t), l)) => {
+                let r = self.token_span_at(l);
+                self.s.note_written_decl_name(
+                    r,
+                    Some(t),
+                    RefRole::Template,
+                    RefQualifier::NONE,
+                    false,
+                );
+                return;
+            }
+            Some((SpecialName::Constructor(_), l)) => self.token_span_at(l),
+            Some((SpecialName::Destructor(_), _)) if d.dtor_name.is_valid() => {
+                self.token_span_at(d.dtor_name)
+            }
+            Some(_) if d.id_span.lo.is_valid() => d.id_span,
+            Some(_) => return,
+            None => match d.name {
+                Some((_, l)) => self.token_span_at(l),
+                None => return,
+            },
+        };
+        let qualified = d.id_link != RefQualifier::NONE;
+        let friend = d.friend;
+        // An explicit instantiation declares nothing; sema says what it
+        // named ([temp.explicit]/3).
+        if let Some(t) = self.s.ast.written_refs.take_inst_target(d.name_loc()) {
+            self.s.note_written_decl_name(range, Some(t), RefRole::SpecTarget, d.id_link, false);
+            return;
+        }
+        let Some(decl) = decl else {
+            // A qualified declarator-id that named nothing (diagnosed).
+            if qualified && !d.dropped {
+                let dep = d.qualifier.is_some_and(|q| self.s.is_dependent_ctx(q));
+                self.s.note_written_decl_name(range, None, RefRole::Redecl, d.id_link, dep);
+            }
+            return;
+        };
+        let ast = &self.s.ast;
+        let target = if ast.decls.get(decl).kind() == DeclKind::Friend {
+            match ast.decls.friend_target(decl) {
+                FriendTarget::Decl(t) => t,
+                FriendTarget::Type { .. } => return,
+            }
+        } else {
+            decl
+        };
+        let spec = ast.spec_info(target).map(|(_, i)| i.template);
+        let first = ast.first(target);
+        let (entity, role) = if let Some(t) = spec {
+            (Some(t), RefRole::SpecTarget)
+        } else if qualified {
+            let role = if friend { RefRole::Elaborated } else { RefRole::Redecl };
+            (Some(first).filter(|&f| f != target), role)
+        } else if friend && first != target {
+            (Some(first), RefRole::Elaborated)
+        } else {
+            return;
+        };
+        let dep = entity.is_none() && d.qualifier.is_some_and(|q| self.s.is_dependent_ctx(q));
+        self.s.note_written_decl_name(range, entity, role, d.id_link, dep);
     }
 }

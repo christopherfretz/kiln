@@ -831,6 +831,16 @@ pub struct Declarator {
     pub id_span: kiln_source::Span,
     /// See `id_span`.
     pub id_qual: Loc,
+    /// The written-reference link of the declarator-id's
+    /// nested-name-specifier (its last component's entry; spec/ast.md
+    /// §18.4): `NONE` when unqualified or not recording.
+    pub id_link: kiln_ast::written_refs::RefQualifier,
+    /// The class name after a destructor declarator-id's `~` (invalid
+    /// otherwise; set by the parser).
+    pub dtor_name: Loc,
+    /// The parser recorded the declarator-id's written-reference entry
+    /// already (a template-id's template name).
+    pub id_recorded: bool,
     /// The start of its last token, counting a trailing requires-clause,
     /// an asm label, GNU attributes and the last virt-specifier but not
     /// trailing C++11 attributes (clang's `getEndLoc`); invalid unless
@@ -1105,6 +1115,9 @@ impl Declarator {
             loc,
             id_span: kiln_source::Span::INVALID,
             id_qual: Loc::INVALID,
+            id_link: kiln_ast::written_refs::RefQualifier::NONE,
+            dtor_name: Loc::INVALID,
+            id_recorded: false,
             end: Loc::INVALID,
             invalid: false,
             missing_typename: false,

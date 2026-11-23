@@ -1,0 +1,16 @@
+20:24-20:29  nns  'outer' -> outer@12:11 in=short_name@20:11
+20:31-20:36  ns-alias  'inner' -> outer::inner@13:11 q=20:24 in=short_name@20:11
+21:19-21:29  ns-alias  'short_name' -> short_name@20:11 in=again@21:11
+22:27-22:32  ns-alias  'outer' -> outer@12:11 q=:: in=from_global@22:11
+24:17-24:22  using-directive  'outer' -> outer@12:11 in=(tu)
+25:19-25:24  nns  'outer' -> outer@12:11 q=:: in=(tu)
+25:26-25:31  using-directive  'inner' -> outer::inner@13:11 q=25:19 in=(tu)
+26:17-26:27  using-directive  'short_name' -> short_name@20:11 in=(tu)
+29:19-29:24  using-directive  'again' -> again@21:11 in=read@28:5
+30:10-30:15  expr  'value' -> outer::inner::value@14:5 in=read@28:5 udir=outer::inner@29:3
+30:18-30:27  expr  'versioned' -> outer::versioned@17:5 in=read@28:5 udir=outer@24:1
+35:17-35:22  using-directive  'outer' -> outer@12:11 in=hides@33:11
+39:17-39:28  nns  'from_global' -> from_global@22:11 in=user@38:11
+39:30-39:35  using-directive  'inner' -> outer::inner@13:11 q=39:17 in=user@38:11
+40:19-40:30  nns  'from_global' -> from_global@22:11 in=user::local@40:11
+40:32-40:34  ns-alias  'v1' -> outer::v1@16:18 q=40:19 in=user::local@40:11

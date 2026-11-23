@@ -586,6 +586,7 @@ impl Sema<'_, '_> {
             return Ok(match inst {
                 Some((ext, _)) => {
                     self.explicit_inst_annotations(m, ds, d, name_loc);
+                    self.note_written_inst_target(name_loc, m);
                     self.act_on_explicit_member_inst(m, ext.is_some(), name_loc);
                     None
                 }
@@ -605,6 +606,7 @@ impl Sema<'_, '_> {
             self.explicit_inst_annotations(m.spec, ds, d, name_loc);
             let n = self.decl_name(m.template);
             self.check_explicit_inst_scope(m.template, n, d.qualifier.is_some(), name_loc);
+            self.note_written_inst_target(name_loc, m.template);
             self.act_on_explicit_function_inst(m, ext.is_some(), name_loc);
             return Ok(None);
         }
@@ -644,6 +646,7 @@ impl Sema<'_, '_> {
         self.explicit_inst_visibility_attrs(m.spec, &attrs);
         let n = self.decl_name(m.template);
         self.check_explicit_inst_scope(m.template, n, true, loc);
+        self.note_written_inst_target(loc, m.template);
         self.act_on_explicit_function_inst(m, ext.is_some(), loc);
     }
 

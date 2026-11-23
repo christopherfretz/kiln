@@ -1,0 +1,16 @@
+8:8-8:9  type  'T' -> T@7:17 in=(anonymous)@8:9
+8:11-8:12  type  'T' -> T@7:17 in=(anonymous)@8:12
+12:25-12:26  type  'T' -> T@12:17 in=(anonymous)@12:26
+12:28-12:29  type  'T' -> T@12:17 in=(anonymous)@12:29
+12:39-12:40  type  'T' -> T@12:17 in=box::<deduction guide for Pair>@12:20
+12:34-12:38  template  'Pair' -> box::Pair@7:27 in=box::<deduction guide for Pair>@12:20
+12:20-12:24  template  'Pair' -> box::Pair@7:27 in=box::<deduction guide for Pair>@12:20
+13:37-13:41  template  'Pair' -> box::Pair@7:27 in=box::<deduction guide for Pair>@13:1
+13:1-13:5  template  'Pair' -> box::Pair@7:27 in=box::<deduction guide for Pair>@13:1
+18:10-18:11  type  'T' -> T@17:19 in=(anonymous)@18:11
+20:27-20:28  type  'T' -> T@20:19 in=(anonymous)@20:30
+20:40-20:41  type  'T' -> T@20:19 in=Outer::<deduction guide for Cell>@20:22
+20:35-20:39  template  'Cell' -> Outer::Cell@17:29 in=Outer::<deduction guide for Cell>@20:22
+20:22-20:26  template  'Cell' -> Outer::Cell@17:29 in=Outer::<deduction guide for Cell>@20:22
+23:1-23:4  nns  'box' -> box@6:11 in=p@23:11
+23:6-23:10  template  'Pair' -> box::Pair@7:27 q=23:1 in=p@23:11

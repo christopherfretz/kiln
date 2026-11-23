@@ -171,3 +171,48 @@ fn provenance_through_the_api() {
         assert_eq!(t.provenance_mem(), (0, 0));
     });
 }
+
+const STAGE3: &str = "namespace n { void f(int); struct S { int a; }; }\n\
+                      namespace m = n;\n\
+                      using n::f;\n\
+                      using namespace m;\n\
+                      void n::f(int) {}\n\
+                      S s = {.a = 1};\n";
+
+/// Stage-3 entries through the API (spec/ast.md §18.4): every declarative
+/// name of `f` has the same entity (its first declaration), a
+/// using-declarator's names are enclosed by the using-declaration, a
+/// using-directive naming an alias has the alias as its entity, and each
+/// gets its `how` (§18.7.2).
+#[test]
+fn stage3_names_through_the_api() {
+    use kiln_ast::written_refs::{REF_MEMBER, RefLookup};
+    run_src(STAGE3, true, |t| {
+        let only = |role| {
+            let v: Vec<_> = t.iter().filter(|(_, r)| r.role == role).map(|(_, r)| *r).collect();
+            assert_eq!(v.len(), 1, "one {role:?} entry");
+            v[0]
+        };
+        let alias = only(RefRole::NamespaceAlias);
+        let ns = alias.entity.expect("the alias target is namespace n");
+        let alias_decl = alias.enclosing.expect("the alias claims its target");
+        assert_ne!(alias_decl, ns);
+        let udir = only(RefRole::UsingDirective);
+        assert_eq!(udir.entity, Some(alias_decl), "a directive naming an alias names the alias");
+        assert_eq!(udir.how, RefLookup::Unqualified);
+
+        let using = only(RefRole::UsingDecl);
+        let redecl = only(RefRole::Redecl);
+        assert!(using.entity.is_some());
+        assert_eq!(using.entity, redecl.entity, "both name f's first declaration");
+        assert_eq!((using.how, redecl.how), (RefLookup::Qualified, RefLookup::Qualified));
+        let decl = using.enclosing.expect("enclosed");
+        let roles: Vec<_> = t.enclosed_by(decl).map(|(_, r)| r.role).collect();
+        assert_eq!(roles, [RefRole::Nns, RefRole::UsingDecl]);
+
+        let des = only(RefRole::Designator);
+        assert!(des.entity.is_some(), "the designator names S::a");
+        assert_eq!(des.flags & REF_MEMBER, REF_MEMBER);
+        assert_eq!(des.how, RefLookup::Member);
+    });
+}

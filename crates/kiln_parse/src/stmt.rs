@@ -907,6 +907,7 @@ impl Parser<'_, '_> {
         if let Some(v) = v {
             self.ext_declarator(Some(v), &d, specs_end);
             self.ext_finish_inner(Some(v), begin);
+            self.ext_bindings_inner(v);
         }
         c
     }
@@ -1008,7 +1009,10 @@ impl Parser<'_, '_> {
             // A class definition here is rejected by the declarator
             // (clang's `CXXCatch` context, [dcl.type.general]/3).
             self.next_tag_site = Some(kiln_sema::TagSite::TypeId);
+            let begin = self.loc();
+            let specs_pos = self.pos();
             let mut ds = self.parse_decl_specifiers(ctx);
+            let specs_end = self.ext_specs_end(specs_pos);
             // A type-specifier-seq: no storage class.
             self.reject_type_name_specifiers(&mut ds, false);
             let mut d = Declarator::new(ctx, self.loc());
@@ -1019,7 +1023,14 @@ impl Parser<'_, '_> {
             self.in_exception_decl = false;
             self.set_abstract_loc(&mut d);
             let base = self.s.type_from_declspec_at(&ds, d.name_loc());
-            self.s.act_on_exception_decl(&ds, base, &d)
+            let v = self.s.act_on_exception_decl(&ds, base, &d);
+            // The exception declaration's row, as a parameter's
+            // (spec/ast.md §19.1).
+            if self.ext_on() {
+                self.ext_declarator(v, &d, specs_end);
+                self.ext_finish_inner(v, begin);
+            }
+            v
         };
         if self.eat(Punct::RParen).is_none() {
             self.expect_closing(Punct::RParen, Punct::LParen, lparen);
@@ -1401,7 +1412,10 @@ impl Parser<'_, '_> {
             let v = v.filter(|&v| self.s.act_on_for_range_decl(&ds, v));
             return self.finish_for_range(open, loc, init, v, range, Vec::new(), colon);
         }
+        // Its own first token, never a pending lead (spec/ast.md §19.3).
+        let (begin, specs_pos) = (self.loc(), self.pos());
         let ds = self.parse_decl_specifiers(ctx);
+        let specs_end = self.ext_specs_end(specs_pos);
         if ds.is_empty() {
             // `for (expr : r)`: clang `err_for_range_expected_decl` at the
             // `:` after the expression.
@@ -1435,12 +1449,14 @@ impl Parser<'_, '_> {
             self.parse_dead_loop_body();
             return None;
         }
+        let decl_end = self.prev_end();
         let colon = self.bump().span.lo;
         let collect = self.s.begin_for_range_init(self.s.range_lifetime_extension);
         let range = self.parse_for_range_initializer();
         let temps = self.s.end_for_range_init(collect);
         d.init_style = Some(InitStyle::C);
         let v = self.s.act_on_declarator(&ds, base, &d);
+        self.ext_for_range_var(v, &d, (begin, specs_end, decl_end));
         let v = v.filter(|&v| self.s.act_on_for_range_decl(&ds, v));
         self.finish_for_range(open, loc, init, v, range, temps, colon)
     }
@@ -1574,7 +1590,9 @@ impl Parser<'_, '_> {
             init
         };
         let ctx = DeclaratorContext::ForInit;
+        let (begin, specs_pos) = (self.loc(), self.pos());
         let ds = self.parse_decl_specifiers(ctx);
+        let specs_end = self.ext_specs_end(specs_pos);
         if ds.is_empty() {
             let _ = self.parse_expression();
             if self.at(Punct::Colon) {
@@ -1606,6 +1624,7 @@ impl Parser<'_, '_> {
             self.parse_dead_loop_body();
             return None;
         }
+        let decl_end = self.prev_end();
         let colon = self.bump().span.lo;
         let range = self.parse_expansion_initializer();
         let Some(range) = range else {
@@ -1616,6 +1635,7 @@ impl Parser<'_, '_> {
         self.expect_closing(Punct::RParen, Punct::LParen, open);
         d.init_style = Some(InitStyle::C);
         let head = self.s.act_on_expansion_head(init, &ds, base, &d, range, colon, loc);
+        self.ext_for_range_var(head.map(|h| h.decl()), &d, (begin, specs_end, decl_end));
         // [stmt.expand]/1: the body is a compound-statement; any other
         // statement is accepted as an extension (clang 23
         // `ext_expansion_stmt_body_not_compound_stmt`; GCC accepts it).

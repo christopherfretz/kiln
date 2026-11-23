@@ -1,7 +1,9 @@
 11:34-11:35  type  'T' -> T@11:17 in=lib::Wrap::w@11:36
 12:9-12:14  type  'Mixin' -> lib::Mixin@10:8 in=lib::MixinAlias@12:15
-15:7-15:10  nns  'lib' -> lib@8:11 in=(tu)
-16:7-16:10  nns  'lib' -> lib@8:11 in=(tu)
+15:7-15:10  nns  'lib' -> lib@8:11 in=Root@15:12
+15:12-15:16  using-decl  'Root' -> lib::Root@9:8 q=15:7 in=Root@15:12
+16:7-16:10  nns  'lib' -> lib@8:11 in=Wrap@16:12
+16:12-16:16  using-decl  'Wrap' -> lib::Wrap@11:27 q=16:7 in=Wrap@16:12
 18:16-18:20  base  'Root' -> lib::Root@9:8 found=Root@15:12 in=Plain@18:8
 19:20-19:23  nns  'lib' -> lib@8:11 in=Qualified@19:8
 19:25-19:29  base  'Root' -> lib::Root@9:8 q=19:20 in=Qualified@19:8
