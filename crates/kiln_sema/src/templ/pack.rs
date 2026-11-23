@@ -1387,10 +1387,21 @@ impl Sema<'_, '_> {
             | TypeView::ExtQual { base: x, .. }
             | TypeView::Attributed { modified: x, .. }
             | TypeView::Vector { elem: x, .. }
-            | TypeView::ConstantArray(kiln_ast::types::ConstArray { elem: x, .. }) => {
+            | TypeView::Decayed { original: x, .. }
+            | TypeView::ConstantArray(kiln_ast::types::ConstArray {
+                elem: x,
+                size_expr: None,
+                ..
+            }) => {
                 self.type_packs(x, out, depth + 1);
             }
-            TypeView::VariableArray { elem, size } => {
+            // A kept bound (`char[sizeof(sizeof(Ts))]`, WP-2720).
+            TypeView::VariableArray { elem, size }
+            | TypeView::ConstantArray(kiln_ast::types::ConstArray {
+                elem,
+                size_expr: Some(size),
+                ..
+            }) => {
                 self.type_packs(elem, out, depth + 1);
                 self.expr_packs(size, out, depth + 1);
             }

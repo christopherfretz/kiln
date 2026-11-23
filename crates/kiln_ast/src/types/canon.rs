@@ -259,7 +259,14 @@ impl TypeContext {
 
     // ----- arrays --------------------------------------------------------
 
-    /// `T[N]`; `size_expr` is the bound as written (sugar).
+    /// `T[N]`; `size_expr` is the bound as written (sugar), kept only when
+    /// it is instantiation-dependent (clang `getConstantArrayType`;
+    /// WP-2720): the node is then instantiation-dependent, so
+    /// substitution checks the bound ([temp.deduct.general]/7), and
+    /// carries an unexpanded pack when the bound does
+    /// ([`Self::note_pack_bound`]). The canonical type has no expression:
+    /// two spellings of one value are one type, as in clang
+    /// (spec/types.md §7.2).
     pub fn constant_array(
         &mut self,
         elem: QualType,
@@ -267,7 +274,13 @@ impl TypeContext {
         size_expr: Option<ExprId>,
     ) -> QualType {
         let t: TypeId = {
-            let flags = self.qflags(elem);
+            let mut flags = self.qflags(elem);
+            if let Some(e) = size_expr {
+                flags |= TypeFlags::INSTANTIATION_DEPENDENT;
+                if self.pack_bounds.contains(&e) {
+                    flags |= TypeFlags::UNEXPANDED_PACK;
+                }
+            }
             let a = ConstArray { elem, size, size_expr };
             self.intern_with(Key::Array(a), flags, |ctx| {
                 let ce = ctx.canonical(elem);
@@ -727,6 +740,23 @@ impl TypeContext {
             self.intern_with(Key::inline(TypeKind::Paren, 0, raw(inner)), flags, |ctx| {
                 Some(ctx.canonical(inner))
             });
+        t.into()
+    }
+
+    /// The parameter type `adjusted`, adjusted from the declared array
+    /// type `original` whose bound is an instantiation-dependent
+    /// expression ([dcl.fct]/5; clang's `DecayedType`, WP-2720): sugar
+    /// whose canonical type is `canonical(adjusted)`. It is
+    /// instantiation-dependent (not dependent) through `original`, so
+    /// substitution visits it and checks the bound the adjusted type
+    /// lost (spec/types.md §5.4).
+    pub fn decayed(&mut self, original: QualType, adjusted: QualType) -> QualType {
+        let of = self.qflags(original);
+        let mut flags = self.qflags(adjusted) | (of & TypeFlags::UNEXPANDED_PACK);
+        if of.intersects(TypeFlags::DEPENDENT_INSTANTIATION) {
+            flags |= TypeFlags::INSTANTIATION_DEPENDENT;
+        }
+        let t: TypeId = self.sugar2(TypeKind::Decayed, 0, raw(original), adjusted, flags);
         t.into()
     }
 

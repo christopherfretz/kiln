@@ -3486,6 +3486,14 @@ instantiated. The found set is that result.
 
 #### 18.12.1 Contract
 
+- **Names in array bounds.** A dependent name in an array bound whose
+  value is known but whose expression is instantiation-dependent
+  (`char (*)[sizeof(sizeof(f(T())))]`) is an entry like any other: the
+  constant array type keeps the expression (spec/types.md §7.2 "Kept
+  bounds"; WP-2720), so the entry's set is reachable from the
+  declaration's written type, and each specialization substitutes the
+  bound and records its row (§18.9).
+
 - **Definition.** The found set of a `DEPENDENT` entry is the result of
   the name lookup the standard performs for its name in the template
   definition: unqualified lookup from the name's position

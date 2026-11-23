@@ -998,6 +998,23 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- An array bound whose value is known but whose expression is
+  instantiation-dependent (`char (*)[sizeof(sizeof(f(T())))]`) keeps its
+  expression on the constant array type (WP-2720, spec/types.md §7.2
+  "Kept bounds"), as clang does: substitution checks it, so a bound
+  that is ill-formed for the deduced arguments is a substitution
+  failure and overload resolution picks another candidate
+  ([temp.deduct.general]/7), an ill-formed bound in an instantiated
+  function template or class template member is diagnosed, a pack in
+  such a bound expands (`char[sizeof(sizeof(Ts))]...`), and a tooling
+  client finds the bound's names and their found sets through the type
+  (the specializations' rows are recorded). An array parameter adjusted
+  to a pointer keeps a kept or value-dependent bound in new `Decayed`
+  sugar (clang's `DecayedType`), so `void (*)(int[sizeof(f(T()))])` and
+  `template <int N> void v(int a[N])` with `v<-1>` are substitution
+  failures too. The canonical type is unchanged (the value), so
+  redeclarations still match as in clang. PCH snapshots and module
+  images (`IMAGE_VERSION` 86) carry both.
 - The lookup log records every lookup of an absolute name, found or not
   (`#include`, `#import`, `#include_next`, `__has_include`,
   `__has_include_next`, `#embed`, `__has_embed`, `-include`), and

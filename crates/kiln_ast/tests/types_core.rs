@@ -131,6 +131,48 @@ fn array_size_expr_is_sugar() {
     assert_eq!(ctx.array_size(a), Some(4));
 }
 
+/// spec/types.md §7.2 "Kept bounds" (WP-2720): a kept bound makes the
+/// sugar instantiation-dependent (not dependent), and carries a pack only
+/// when recorded; a bound without an expression adds no flag.
+#[test]
+fn kept_array_bound_flags() {
+    let mut ctx = TypeContext::default();
+    let plain = ctx.constant_array(INT, 8, None);
+    assert!(ctx.flags(plain.ty()).is_empty());
+    let kept = ctx.constant_array(INT, 8, Some(ExprId::new(9)));
+    let f = ctx.flags(kept.ty());
+    assert!(f.contains(TypeFlags::INSTANTIATION_DEPENDENT));
+    assert!(!f.intersects(TypeFlags::DEPENDENT | TypeFlags::UNEXPANDED_PACK));
+    assert_eq!(ctx.canonical(kept), plain);
+    assert!(!ctx.is_dependent(kept));
+    ctx.note_pack_bound(ExprId::new(10));
+    let packed = ctx.constant_array(INT, 8, Some(ExprId::new(10)));
+    assert!(ctx.flags(packed.ty()).contains(TypeFlags::UNEXPANDED_PACK));
+    // Rebuilt over another element (a qualifier), the bound keeps both.
+    let c = ctx.qualify(packed, Quals::CONST);
+    assert!(
+        ctx.qflags(c).contains(TypeFlags::UNEXPANDED_PACK | TypeFlags::INSTANTIATION_DEPENDENT)
+    );
+}
+
+/// spec/types.md §5.3 `Decayed` (WP-2720): sugar for the adjusted
+/// pointer, instantiation-dependent through the declared array type.
+#[test]
+fn decayed_is_sugar_for_the_adjusted_type() {
+    let mut ctx = TypeContext::default();
+    let kept = ctx.constant_array(INT, 8, Some(ExprId::new(9)));
+    let p = ctx.pointer_to(INT);
+    let d = ctx.decayed(kept, p);
+    assert_ne!(d, p);
+    assert_eq!(ctx.canonical(d), p);
+    assert_eq!(ctx.desugar_once(d), p);
+    assert!(ctx.flags(d.ty()).contains(TypeFlags::INSTANTIATION_DEPENDENT | TypeFlags::SUGAR));
+    assert!(!ctx.is_dependent(d));
+    assert_eq!(ctx.decayed(kept, p), d);
+    assert!(matches!(ctx.view(d.ty()), TypeView::Decayed { original, adjusted }
+        if original == kept && adjusted == p));
+}
+
 #[test]
 fn exception_specs_cxx17() {
     let mut ctx = TypeContext::default();

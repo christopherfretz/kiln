@@ -2175,6 +2175,7 @@ impl Cg<'_> {
             | TypeView::Record(..)
             | TypeView::UnresolvedUsing(..)
             | TypeView::Paren(..)
+            | TypeView::Decayed { .. }
             | TypeView::DependentVector { .. }
             | TypeView::ExtQual { .. }
             | TypeView::DependentAddrSpace { .. }
