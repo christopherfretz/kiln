@@ -139,8 +139,10 @@ An entry is a function the session may run:
   a reference (already refused: a reference return is no object), a
   non-literal type (a class with a non-`constexpr` destructor, or with
   no `constexpr` constructor that is not an aggregate or closure type),
-  `_BitInt(N)` with N > 128, a vector type, and a class with a virtual
-  base anywhere in it (refused by decision; row WP-2210). The
+  `_BitInt(N)` with N > 128, and a vector type. A class with virtual
+  bases is a result type when its bases and members are (WP-2210; a
+  literal type in C++26, P3533R2); its virtual base
+  subobjects are decoded as §4.1 says. The
   check walks the return type once, at resolve; it keeps nothing;
 - **defined** in the translation unit: else `Undefined`.
 
@@ -327,7 +329,7 @@ pub enum RunValue {                           // 32 bytes (asserted)
     Enum(Box<EnumValue>),
     Null,                                     // null pointer, null pointer to member, `nullptr`
     Pointer(Box<PointerValue>),
-    MemberPointer(Box<Entity>),               // the member designated
+    MemberPointer(Box<MemberPointerValue>),   // the member and its conversion path
     Info(Box<InfoValue>),
     Text { unit: CharUnit, data: Box<[u8]> }, // an array of a character type
     Array(Box<[RunValue]>),
@@ -336,7 +338,8 @@ pub enum RunValue {                           // 32 bytes (asserted)
 pub struct Entity { pub display: Arc<str>, pub decl: Option<DeclId> }
 pub enum IntValue { Signed(i128), Unsigned(u128) }
 pub struct EnumValue { pub ty: Entity, pub value: IntValue, pub enumerator: Option<Arc<str>> }
-pub struct RecordValue { pub ty: Entity, pub union: bool, pub fields: Box<[Field]> }
+pub struct RecordValue { pub ty: Entity, pub union: bool, pub fields: Box<[Field]>,
+                         pub virtual_bases: Box<[Field]> }
 pub struct Field { pub kind: FieldKind, pub name: Arc<str>, pub value: RunValue }
 pub enum FieldKind { Base, Member, Anonymous }
 pub struct PointerValue { pub base: PointerBase, pub path: Box<[PathStep]>, pub past_end: bool }
@@ -344,7 +347,9 @@ pub enum PointerBase {
     Variable(Entity), Function(Entity), Temporary(Entity), TypeInfo(Arc<str>),
     Constant(u32),                            // index into the constants table
 }
-pub enum PathStep { Base(Arc<str>), Member(Arc<str>), Anonymous(u32), Index(u64) }
+pub enum PathStep { Base(Arc<str>), VirtualBase(Arc<str>), Member(Arc<str>), Anonymous(u32),
+                    Index(u64) }
+pub struct MemberPointerValue { pub member: Entity, pub derived: bool, pub path: Box<[Entity]> }
 pub struct InfoValue { pub kind: InfoKind, pub display: Arc<str>, pub decl: Option<DeclId>, pub value: Option<RunValue> }
 pub enum InfoKind { Null, Type, Declaration, Namespace, NamespaceAlias, Template, Value, Object,
                     BaseSpecifier, DataMemberSpec, Annotation, Parameter }
@@ -362,18 +367,44 @@ constants table (empty when no pointer reaches an unnamed object).
 | floating-point | `Float`: the format and its exact bits, so `-0.0` and a NaN's sign and payload survive |
 | `std::nullptr_t`, a null pointer or pointer to member | `Null` (the client knows the type it declared) |
 | pointer, reference member, `cv void *` | `Pointer` (below) |
-| pointer to member | `MemberPointer`: the member designated (`%D`); the conversion path is not given |
+| pointer to member | `MemberPointer` (below): the member designated (`%D`) and its conversion path |
 | `std::meta::info` | `Info`: its kind (the `Reflectee` kinds), its `display_string_of` text, `decl` for a declaration, namespace, namespace alias, template, or a type that is a class or enumeration (by the rule above), and `value` for a value (`reflect_constant`: its value) or an object (`reflect_object`: a `Pointer` to it) |
 | array of a character type | `Text`: every element as a code unit, little-endian at the unit's width (1, 2 or 4 bytes; `wchar_t` the target's); every NUL is kept, nothing is trimmed |
 | other array, `_Complex T` | `Array`: the elements in order (`_Complex` as `[real, imag]`) |
-| class, union | `Record`: the type; the direct non-virtual bases in declaration order (`FieldKind::Base`, named by type), then the non-static data members in declaration order (`Member`; an anonymous union or struct member is `Anonymous`, its name empty); unnamed bit-fields omitted; empty bases and empty members (`[[no_unique_address]]` or not) present, as `Record`s without fields; so positions map onto the class and never depend on the layout. A union gives its active member only (no field when none is active), `union: true`. A closure type's captures are its unnamed members (`Anonymous`) |
+| class, union | `Record`: the type; the direct non-virtual bases in declaration order (`FieldKind::Base`, named by type), then the non-static data members in declaration order (`Member`; an anonymous union or struct member is `Anonymous`, its name empty); unnamed bit-fields omitted; empty bases and empty members (`[[no_unique_address]]` or not) present, as `Record`s without fields; so positions map onto the class and never depend on the layout. A most derived object's virtual base subobjects are `virtual_bases` (below; empty for every other record). A union gives its active member only (no field when none is active), `union: true`. A closure type's captures are its unnamed members (`Anonymous`) |
+
+**Virtual bases** (WP-2210). A virtual base subobject is shared by
+every base that names it ([class.mi]) and only the most derived
+object's constructor initializes it ([class.base.init]/13.1): so a class's
+virtual bases are decoded once, at the most derived object (a variable,
+a member, an array element, the root, a constant), in
+`RecordValue::virtual_bases`, every one of them, direct or indirect, as
+`FieldKind::Base` fields named by type, in the order
+[class.base.init]/13.1 initializes them (a depth-first left-to-right
+traversal of the base classes' graph: for each direct base in
+declaration order, that base's virtual bases, then the base itself if it
+is virtual; each class once: clang's `CXXRecordDecl::vbases()` order,
+the order of the record layout's `vbases`). A base subobject's
+`Record` (a `Base` field, or a virtual base itself) has empty
+`virtual_bases`: its own virtual bases are the most derived object's.
+They are a list apart, not `fields` entries with a flag, so a class's
+`fields` are the same for a most derived object and a base subobject of
+it: `field(name)` and every `Anonymous(i)` position of a class mean one
+thing wherever the class occurs. They are decoded after `fields` (the
+order constants are first reached in). The AST dump's `value=` of such
+a constant prints no virtual base (clang's `APValue` has no form for
+one; a class with virtual bases is not literal in clang 22), so the
+tests compare a run with the translation unit's own `constexpr`
+variable through `variable_value` and with hand-written trees.
 
 **Pointers.** A `Pointer` gives the complete object it points into and
 the designator from it. `Variable` is a variable with static storage
 duration, `Function` a function (overloads tell apart by `%D`'s
 signature), `Temporary` a lifetime-extended temporary (named by the
 variable that extends it), `TypeInfo` a `std::type_info` object (by
-its type's spelling). The path's steps are a base (by type), a member
+its type's spelling). The path's steps are a base (by type), a virtual base of the most
+derived object the path has reached (`VirtualBase`, by type: an index
+into its `virtual_bases`, as `Base` names a `Base` field), a member
 (by name), an unnamed member (`Anonymous(i)`: `i` is the member's
 position among its record's bases and members, unnamed bit-fields
 omitted: its index in a class's `fields`; a union's `fields` holds
@@ -435,10 +466,27 @@ of the freezer (initialized subobjects, pointer validity, immediate
 functions, union members, past-the-end bits) and its notes, and could
 drift from what a `constexpr` variable gets.
 
+**Pointers to members** (WP-2212). A `MemberPointer` is the
+translation unit's constant (`Scalar::MemberPtr`, clang's
+`APValue::MemberPointer`): `member` the member designated (a data
+member or member function, `%D`, an anonymous union's member by its
+own name); `path` the classes the conversions of [conv.mem]/2 and
+[expr.static.cast]/12 went through since `&C::m` named it, each by its
+type (an `Entity`), in conversion order, normalized as the evaluator
+does (a conversion back to the previous class removes the last entry,
+clang's `castBack`); `derived` clang's `isMemberPointerToDerivedMember`:
+`false` when the path walks from the member's class towards derived
+classes, `true` when it walks towards bases (a member of `D` cast to
+`int B::*`). The pointer's class is the path's last entry, the member's
+class when the path is empty. So `&B::x` as `int B::*` is `{x, false,
+[]}`, the same converted to `int D::*` is `{x, false, [D]}` (two values
+with one member, [expr.eq]/4 tells them apart by class), and
+`static_cast<int B::*>(&D::y)` is `{y, true, [B]}`. A null pointer to
+member is `Null`.
+
 **Not representable, by design.** A reflection gives only its kind,
-its text, its `decl` and a value or object, not its structure; a
-pointer to member does not give its conversion path. A client that
-needs more computes it in the transform and returns that.
+its text, its `decl` and a value or object, not its structure. A client
+that needs more computes it in the transform and returns that.
 
 **What cannot cross is a run error.** A value that is not a constant
 expression's (a pointer to an object of the run, heap or frame; an
@@ -455,7 +503,8 @@ never of allocation history: `size_of::<RunValue>()` (32) for the root,
 every array element and every constant; `size_of::<Field>()` (64,
 its value included) for every field; the `size_of` of every boxed
 payload (`Entity`, `EnumValue`, `RecordValue`, `PointerValue`,
-`InfoValue`) and of every path step; each `Text`'s bytes; and each
+`MemberPointerValue`, `InfoValue`), of every path step and of every
+member pointer path entry (an `Entity`); each `Text`'s bytes; and each
 distinct string once, at its length. The cap is the budget's
 **`result_bytes`** (`RunBudget::PROGRAM`: 64 MiB;
 `RunBudget::with_result_bytes`), the constants table included: a tree
@@ -1054,7 +1103,14 @@ session's translation unit is parsed without recording either.
   instantiated, `run(f) == variable_value(v)` on run 1 and run N, fresh
   and used, `variable_value` before and after runs and on demand, and
   `kept()` flat over 1000 runs. `crates/kiln_ast/tests/consts.rs`
-  `truncate_to_a_mark`: `ConstStore::mark` / `truncate`.
+  `truncate_to_a_mark`: `ConstStore::mark` / `truncate`. WP-2210 and
+  WP-2212: a class with one virtual base, a diamond with a shared one
+  (decoded once), a virtual base beside non-virtual ones and one
+  reached only through a member, pointers into virtual base
+  subobjects, member pointers to a base's member as `int B::*` and as
+  `int D::*`, a derived member cast to the base, a null member pointer
+  and a member function pointer through a base, each equal to the
+  translation unit's own `constexpr` variable on run 1 and run N.
 - `crates/kiln_parse/tests/eval_session_nested.rs`: §5.1 (WP-2073):
   each fixed bug of §7, the determinism criterion (run 1 and run N,
   fresh and used, both orders, nested inside nested work, the memo),

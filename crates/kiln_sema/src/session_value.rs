@@ -23,7 +23,7 @@ use kiln_ast::decl::DeclKind;
 use kiln_ast::dump::AstNames;
 use kiln_ast::reflect::Reflectee;
 use kiln_ast::strings::StringEncoding;
-use kiln_ast::types::{BuiltinType, TypeView};
+use kiln_ast::types::{BuiltinType, RecordLayout, TypeView};
 use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, QualType, ReflectionId, StringLitId};
 use kiln_oven::ResultReadError;
 use kiln_source::fx::{FxHashMap, FxHashSet};
@@ -56,8 +56,9 @@ pub enum RunValue {
     Null,
     /// A non-null pointer or a reference.
     Pointer(Box<PointerValue>),
-    /// A non-null pointer to member: the member it designates.
-    MemberPointer(Box<Entity>),
+    /// A non-null pointer to member: the member it designates and its
+    /// conversion path.
+    MemberPointer(Box<MemberPointerValue>),
     /// A `std::meta::info`.
     Info(Box<InfoValue>),
     /// An array of a character type: every element (NULs included) as a
@@ -156,6 +157,12 @@ pub struct RecordValue {
     /// The direct non-virtual bases, then the non-static data members, in
     /// declaration order; unnamed bit-fields omitted.
     pub fields: Box<[Field]>,
+    /// A most derived object's virtual base subobjects (direct and
+    /// indirect, each once, as [`FieldKind::Base`] fields), in the order
+    /// [class.base.init]/13.1 initializes them; empty for a base
+    /// subobject and for a class without virtual bases
+    /// (spec/eval-session.md §4.1 "Virtual bases").
+    pub virtual_bases: Box<[Field]>,
 }
 
 /// A base or member of a record value.
@@ -212,6 +219,9 @@ pub enum PointerBase {
 pub enum PathStep {
     /// A base class subobject, by its type's spelling.
     Base(Arc<str>),
+    /// A virtual base subobject of the most derived object the path has
+    /// reached (one of its `virtual_bases`), by its type's spelling.
+    VirtualBase(Arc<str>),
     /// A named member.
     Member(Arc<str>),
     /// An unnamed member: its position among its record's bases and
@@ -219,6 +229,22 @@ pub enum PathStep {
     Anonymous(u32),
     /// An array element (the array's length: one past the last).
     Index(u64),
+}
+
+/// A non-null pointer to member (spec/eval-session.md §4.1 "Pointers to
+/// members"): clang's `APValue::MemberPointer`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MemberPointerValue {
+    /// The member designated.
+    pub member: Entity,
+    /// The path walks from the member's class towards bases (clang's
+    /// `isMemberPointerToDerivedMember`): a member of a derived class
+    /// cast to a pointer to member of a base.
+    pub derived: bool,
+    /// The classes the conversions went through, in conversion order;
+    /// the pointer's class is the last one (the member's class when
+    /// empty).
+    pub path: Box<[Entity]>,
 }
 
 /// A `std::meta::info` value.
@@ -389,7 +415,7 @@ fn type_ok(ast: &Ast, q: QualType, depth: u32) -> bool {
         TypeView::Record(r) => {
             let Some(def) = ast.definition(r) else { return false };
             for b in ast.decls.bases(def, &ast.lists) {
-                if b.is_virtual || !type_ok(ast, b.ty, depth + 1) {
+                if !type_ok(ast, b.ty, depth + 1) {
                     return false;
                 }
             }
@@ -419,7 +445,7 @@ struct Decoder<'s, 'a, 'sm> {
     queue: Vec<CKey>,
 }
 
-impl Decoder<'_, '_, '_> {
+impl<'s> Decoder<'s, '_, '_> {
     fn charge(&mut self, n: u64) -> R<()> {
         self.used = self.used.saturating_add(n);
         if self.used > self.cap {
@@ -499,6 +525,32 @@ impl Decoder<'_, '_, '_> {
         Ok(Entity { display: self.type_display(t)?, decl: d.and_then(|d| self.decl_at_open(d)) })
     }
 
+    /// Class `d` by its type.
+    fn class_entity(&mut self, d: DeclId) -> R<Entity> {
+        match self.ast.decls.get(d).ty() {
+            Some(t) => self.type_entity(t),
+            None => unreadable("a member pointer's class"),
+        }
+    }
+
+    /// The layout of class type `t`'s definition, if `t` is one.
+    fn layout(&self, t: QualType) -> Option<&'s RecordLayout> {
+        let ast = self.ast;
+        let def = ast.definition(ast.types.as_record(t)?)?;
+        ast.layouts.get(ast.first(def))
+    }
+
+    /// The bytes a base subobject of type `t` occupies, `full` (its
+    /// `sizeof`) when it has no virtual bases: those of a class with
+    /// virtual bases are its non-virtual part ([class.derived]: its
+    /// virtual bases are the most derived object's).
+    fn base_size(&self, t: QualType, full: u64) -> u64 {
+        match self.layout(t) {
+            Some(l) if !l.vbases.is_empty() => l.nv_size,
+            _ => full,
+        }
+    }
+
     fn shape(&mut self, t: QualType) -> Rc<Shape> {
         let t = self.ast.types.canonical(t).without_quals();
         if let Some(s) = self.shapes.get(&t) {
@@ -520,7 +572,7 @@ impl Decoder<'_, '_, '_> {
         let ast = self.ast;
         match ast.consts.get(v) {
             ConstValue::Scalar(s) => self.scalar(&s),
-            ConstValue::Aggregate(img) => self.object(&img, img.ty, 0),
+            ConstValue::Aggregate(img) => self.object(&img, img.ty, 0, true),
         }
     }
 
@@ -537,9 +589,19 @@ impl Decoder<'_, '_, '_> {
                 let sel = self.ast.consts.union_path(unions);
                 self.pointer(ty, base, (offset, sel), designated, past)?
             }
-            Scalar::MemberPtr { member, .. } => {
-                self.charge(size_of::<Entity>() as u64)?;
-                RunValue::MemberPointer(Box::new(self.entity(member)?))
+            Scalar::MemberPtr { member, derived, path, .. } => {
+                self.charge(size_of::<MemberPointerValue>() as u64)?;
+                self.charge((path.len() * size_of::<Entity>()) as u64)?;
+                let member = self.entity(member)?;
+                let mut classes = Vec::with_capacity(path.len());
+                for &c in path {
+                    classes.push(self.class_entity(c)?);
+                }
+                RunValue::MemberPointer(Box::new(MemberPointerValue {
+                    member,
+                    derived,
+                    path: classes.into_boxed_slice(),
+                }))
             }
             Scalar::Reflection { id, .. } => self.info(id)?,
         })
@@ -624,8 +686,10 @@ impl Decoder<'_, '_, '_> {
         Ok(RunValue::Info(Box::new(InfoValue { kind, display, decl, value })))
     }
 
-    /// The object of type `ty` at byte `at` of image `img`.
-    fn object(&mut self, img: &ByteImage<'_>, ty: QualType, at: u64) -> R<RunValue> {
+    /// The object of type `ty` at byte `at` of image `img`: a most
+    /// derived object (`whole`, whose virtual bases it holds), or a base
+    /// subobject.
+    fn object(&mut self, img: &ByteImage<'_>, ty: QualType, at: u64, whole: bool) -> R<RunValue> {
         let shape = self.shape(ty);
         // A pointer-like subobject (an aggregate may start with one).
         if !matches!(&*shape, Shape::Array { .. } | Shape::Record { .. })
@@ -660,7 +724,7 @@ impl Decoder<'_, '_, '_> {
                 self.charge(len.saturating_mul(size_of::<RunValue>() as u64))?;
                 let mut out = Vec::with_capacity(len as usize);
                 for i in 0..len {
-                    out.push(self.object(img, elem, at + i * stride)?);
+                    out.push(self.object(img, elem, at + i * stride, true)?);
                 }
                 Ok(RunValue::Array(out.into_boxed_slice()))
             }
@@ -685,7 +749,7 @@ impl Decoder<'_, '_, '_> {
                     let Some(f) = m.field else {
                         let name = self.type_display(m.ty)?;
                         self.charge(size_of::<Field>() as u64)?;
-                        let value = self.object(img, m.ty, at + m.offset_bits / 8)?;
+                        let value = self.object(img, m.ty, at + m.offset_bits / 8, false)?;
                         fields.push(Field { kind: FieldKind::Base, name, value });
                         continue;
                     };
@@ -708,14 +772,17 @@ impl Decoder<'_, '_, '_> {
                         (FieldKind::Member, self.ident(f)?)
                     };
                     self.charge(size_of::<Field>() as u64)?;
-                    let value = self.object(img, m.ty, at + m.offset_bits / 8)?;
+                    let value = self.object(img, m.ty, at + m.offset_bits / 8, true)?;
                     fields.push(Field { kind, name, value });
                 }
+                let virtual_bases =
+                    if whole && !*union { self.virtual_bases(img, ty, at)? } else { Vec::new() };
                 let ty = self.type_entity(ty)?;
                 Ok(RunValue::Record(Box::new(RecordValue {
                     ty,
                     union: *union,
                     fields: fields.into_boxed_slice(),
+                    virtual_bases: virtual_bases.into_boxed_slice(),
                 })))
             }
             Shape::Pointer { .. } | Shape::MemberPointer | Shape::Reflection => {
@@ -723,6 +790,24 @@ impl Decoder<'_, '_, '_> {
             }
             Shape::Unknown => unreadable("a value of this type"),
         }
+    }
+
+    /// The virtual base subobjects of the most derived object of type
+    /// `ty` at byte `at` of `img`, after its fields, in the layout's
+    /// `vbases` order ([class.base.init]/13.1).
+    fn virtual_bases(&mut self, img: &ByteImage<'_>, ty: QualType, at: u64) -> R<Vec<Field>> {
+        let mut out = Vec::new();
+        let Some(l) = self.layout(ty) else { return Ok(out) };
+        for &(vb, off) in &*l.vbases {
+            let Some(vty) = self.ast.decls.get(vb).ty() else {
+                return unreadable("a virtual base");
+            };
+            let name = self.type_display(vty)?;
+            self.charge(size_of::<Field>() as u64)?;
+            let value = self.object(img, vty, at + off, false)?;
+            out.push(Field { kind: FieldKind::Base, name, value });
+        }
+        Ok(out)
     }
 
     // ---- pointers -----------------------------------------------------
@@ -811,12 +896,12 @@ impl Decoder<'_, '_, '_> {
         // it), then one whose last step is a scalar of another type (a
         // `void*`).
         for strict in [true, false] {
-            if !past && self.walk(whole, (offset, sel), pointee, strict, &mut steps, 0)? {
+            if !past && self.walk((whole, true), (offset, sel), pointee, strict, &mut steps, 0)? {
                 return Ok((steps, false));
             }
             steps.clear();
             if let Some(size) = size
-                && self.walk(whole, (offset - size, sel), pointee, strict, &mut steps, 0)?
+                && self.walk((whole, true), (offset - size, sel), pointee, strict, &mut steps, 0)?
             {
                 return Ok((steps, true));
             }
@@ -831,9 +916,12 @@ impl Decoder<'_, '_, '_> {
     /// until one holds `pointee` (`strict`), or a scalar at the offset. A
     /// union is entered first by the member union path `sel` names, else
     /// by its default member (`union_path_member`, as the printer does).
+    /// `whole`: the object of type `ty` is a most derived object, whose
+    /// virtual bases are tried after its bases and members (a base
+    /// subobject holds none).
     fn walk(
         &mut self,
-        mut ty: QualType,
+        (mut ty, mut whole): (QualType, bool),
         (mut offset, sel): (u64, &[DeclId]),
         pointee: Option<QualType>,
         strict: bool,
@@ -861,6 +949,7 @@ impl Decoder<'_, '_, '_> {
                     steps.push(PathStep::Index(i));
                     offset -= i * stride;
                     ty = elem;
+                    whole = true;
                 }
                 Shape::Record { members, union } => {
                     let first = if *union {
@@ -877,10 +966,12 @@ impl Decoder<'_, '_, '_> {
                             continue;
                         }
                         let at = m.offset_bits / 8;
+                        let size =
+                            if m.field.is_none() { self.base_size(m.ty, m.size) } else { m.size };
                         let hit = m.bit_width.is_none()
                             && m.offset_bits % 8 == 0
                             && at <= offset
-                            && (offset < at + m.size || (offset == at && m.size == 0));
+                            && (offset < at + size || (offset == at && size == 0));
                         if !hit {
                             continue;
                         }
@@ -902,15 +993,53 @@ impl Decoder<'_, '_, '_> {
                         };
                         let len = steps.len();
                         steps.push(step);
-                        if self.walk(m.ty, (offset - at, sel), pointee, strict, steps, depth + 1)? {
+                        let sub = (m.ty, m.field.is_some());
+                        if self.walk(sub, (offset - at, sel), pointee, strict, steps, depth + 1)? {
                             return Ok(true);
                         }
                         steps.truncate(len);
+                    }
+                    if whole && !*union {
+                        return self.walk_virtual_bases(
+                            ty,
+                            (offset, sel),
+                            (pointee, strict),
+                            steps,
+                            depth,
+                        );
                     }
                     return Ok(false);
                 }
                 _ => return Ok(offset == 0 && !strict),
             }
+        }
+        Ok(false)
+    }
+
+    /// [`Self::walk`] into the virtual bases of the most derived object
+    /// of type `ty` that hold byte `offset`.
+    fn walk_virtual_bases(
+        &mut self,
+        ty: QualType,
+        (offset, sel): (u64, &[DeclId]),
+        (pointee, strict): (Option<QualType>, bool),
+        steps: &mut Vec<PathStep>,
+        depth: u32,
+    ) -> R<bool> {
+        let Some(l) = self.layout(ty) else { return Ok(false) };
+        for &(vb, at) in &*l.vbases {
+            let Some(vty) = self.ast.decls.get(vb).ty() else { continue };
+            let full = self.names.size_of(vty).unwrap_or(0);
+            let size = self.base_size(vty, full);
+            if at > offset || (offset >= at + size && !(offset == at && size == 0)) {
+                continue;
+            }
+            let len = steps.len();
+            steps.push(PathStep::VirtualBase(self.type_display(vty)?));
+            if self.walk((vty, false), (offset - at, sel), pointee, strict, steps, depth + 1)? {
+                return Ok(true);
+            }
+            steps.truncate(len);
         }
         Ok(false)
     }
