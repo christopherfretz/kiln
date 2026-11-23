@@ -60,7 +60,7 @@ pub mod x86_targets;
 use std::io::{self, Read, Write};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use kiln_diag::{Diag, DiagEngine, DiagId, DiagOptions, Format, JsonSink, TextSink};
+use kiln_diag::{Diag, DiagEngine, DiagId, DiagOptions};
 use kiln_source::{SourceManager, Span};
 
 use crate::args::{Action, ArgError, Args, Lang};
@@ -130,13 +130,7 @@ pub fn make_engine<'sm>(
     stderr: SharedWriter,
     prefix: Option<&str>,
 ) -> DiagEngine<'sm> {
-    match (opts.format, prefix) {
-        (Format::Json, _) => DiagEngine::new(sm, opts, JsonSink::new(stderr, opts)),
-        (Format::Text, None) => DiagEngine::new(sm, opts, TextSink::new(stderr, opts)),
-        (Format::Text, Some(p)) => {
-            DiagEngine::new(sm, opts, TextSink::new(stderr, opts).with_prefix(p))
-        }
-    }
+    DiagEngine::new(sm, opts, kiln_diag::format_sink(stderr, opts, prefix))
 }
 
 /// Makes the engines of the driver's own reports that are not the

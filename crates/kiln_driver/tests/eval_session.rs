@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use kiln_diag::{DiagId, Level};
 use kiln_driver::session::{SessionRefused, with_eval_session};
 use kiln_driver::{Io, SharedWriter};
 use kiln_parse::{CancelToken, EvalSession, HostCalls, HostError, HostOut, RunBudget, RunValue};
@@ -162,7 +163,11 @@ fn a_translation_unit_with_errors_is_refused() {
     let err = Captured::default();
     let cl = ["-std=c++26".to_owned(), d.join("t.cpp").to_string_lossy().into_owned()];
     let got = with_eval_session(&kilnpp(), &cl, io(&err), |fe| fe.map(drop).err());
-    assert_eq!(got, Some(SessionRefused::TuHasErrors { errors: 1 }));
+    let Some(SessionRefused::TuHasErrors { errors: 1, diagnostics }) = got else {
+        panic!("{got:?}")
+    };
+    let messages: Vec<&str> = diagnostics.iter().map(|d| d.message.as_str()).collect();
+    assert_eq!(messages, ["expected expression"]);
     let text = err.text();
     assert!(text.contains("t.cpp:1:9: error: expected expression"), "{text}");
     assert!(
@@ -179,11 +184,146 @@ fn a_command_line_without_one_source_is_refused() {
     let err = Captured::default();
     let got =
         with_eval_session(&kilnpp(), &["-std=c++26".to_owned()], io(&err), |fe| fe.map(drop).err());
-    assert_eq!(got, Some(SessionRefused::CommandLine));
+    let message = "the command line does not name exactly one C++ source input".to_owned();
+    assert_eq!(got, Some(SessionRefused::CommandLine { message }));
     let missing = ["no-such-file.cpp".to_owned()];
     let got = with_eval_session(&kilnpp(), &missing, io(&err), |fe| fe.map(drop).err());
-    assert_eq!(got, Some(SessionRefused::CommandLine));
+    let message = "no such file or directory: 'no-such-file.cpp'".to_owned();
+    assert_eq!(got, Some(SessionRefused::CommandLine { message }));
     assert!(err.text().contains("no-such-file.cpp"), "{}", err.text());
+}
+
+/// WP-2322 (spec/eval-session.md §2 "Refusal"): why no session was
+/// opened, case by case: the driver's message for a command line it
+/// rejects; the records of a unit with errors (the error limit's fatal
+/// error included); the records of a front end that stopped (a fatal
+/// error); a panic of the front end; and a panic of the closure, which
+/// propagates.
+#[test]
+fn refusals_say_why() {
+    let d = scratch(
+        "refusals",
+        &[
+            ("ok.cpp", "consteval int f() { return 1; }\n"),
+            ("errors.cpp", "int a = ;\nint b = ;\nint c = ;\n"),
+            ("fatal.cpp", "int a = ;\n#include \"missing.h\"\nint b;\n"),
+        ],
+    );
+    let path = |n: &str| d.join(n).to_string_lossy().into_owned();
+    let refused = |extra: &[&str], file: &str| {
+        let err = Captured::default();
+        let mut cl: Vec<String> = extra.iter().map(|&s| s.to_owned()).collect();
+        cl.push(path(file));
+        let got = with_eval_session(&kilnpp(), &cl, io(&err), |fe| fe.map(drop).err());
+        (got.expect("refused"), err.text())
+    };
+    // The driver's message.
+    let (r, text) = refused(&["-std=c++99x"], "ok.cpp");
+    let message = "invalid value 'c++99x' in '-std=c++99x'".to_owned();
+    assert_eq!(r, SessionRefused::CommandLine { message }, "{text}");
+    assert!(text.contains("error: invalid value 'c++99x' in '-std=c++99x'"), "{text}");
+    // A unit with errors, and one stopped at the error limit.
+    let (r, _) = refused(&[], "errors.cpp");
+    assert!(
+        matches!(&r, SessionRefused::TuHasErrors { errors: 3, diagnostics } if diagnostics.len() == 3),
+        "{r:?}"
+    );
+    let (r, _) = refused(&["-ferror-limit=2"], "errors.cpp");
+    let SessionRefused::TuHasErrors { errors: 3, diagnostics } = &r else { panic!("{r:?}") };
+    let last = diagnostics.last().unwrap();
+    assert_eq!((last.level, last.id), (Level::Fatal, Some(DiagId::diag_too_many_errors)));
+    // A fatal error stops the front end: its records, the fatal one last.
+    let (r, text) = refused(&[], "fatal.cpp");
+    let SessionRefused::Stopped { diagnostics } = &r else { panic!("{r:?}") };
+    let messages: Vec<&str> = diagnostics.iter().map(|d| d.message.as_str()).collect();
+    assert_eq!(messages, ["expected expression", "'missing.h' file not found"]);
+    assert_eq!(diagnostics[1].level, Level::Fatal);
+    assert!(text.contains("fatal error: 'missing.h' file not found"), "{text}");
+    // A panic of the front end comes back as `Panicked`.
+    let (r, _) = refused(&["-std=c++26", "-fkiln-crash-for-testing=parse"], "ok.cpp");
+    assert!(matches!(&r, SessionRefused::Panicked(m) if !m.is_empty()), "{r:?}");
+    // The same command line without the crash opens, on the same thread.
+    let err = Captured::default();
+    let ok = ["-std=c++26".to_owned(), path("ok.cpp")];
+    let opened = with_eval_session(&kilnpp(), &ok, io(&err), |fe| fe.is_ok());
+    assert!(opened, "{}", err.text());
+    // A panic of the closure is the caller's.
+    let caught = std::panic::catch_unwind(|| {
+        let err = Captured::default();
+        with_eval_session(&kilnpp(), &ok, io(&err), |_| -> u8 { panic!("the closure's") })
+    });
+    let payload = caught.unwrap_err();
+    assert_eq!(payload.downcast_ref::<&str>(), Some(&"the closure's"));
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+/// WP-2324 (spec/eval-session.md §7): the public renderer renders records
+/// exactly as the driver prints them, in text and JSON. The unit's own
+/// warning (in a header, with a note) is rendered as `kiln++
+/// -fsyntax-only` prints it on standard error, and as the session printed
+/// it; a run's failure is rendered with its notes and its call stack.
+#[test]
+fn run_diagnostics_render_as_the_driver() {
+    let d = scratch(
+        "render",
+        &[
+            (
+                "h.h",
+                "[[deprecated(\"use new\")]] constexpr int old() { return 1; }\n\
+                 inline int w = old();\n",
+            ),
+            (
+                "t.cpp",
+                "#include \"h.h\"\n\
+                 constexpr int at(int i) { int a[2]{}; return a[i]; }\n\
+                 consteval int bad() { return at(5); }\n",
+            ),
+        ],
+    );
+    let t = d.join("t.cpp").to_string_lossy().into_owned();
+    for json in [false, true] {
+        let mut cl = vec!["-std=c++26".to_owned()];
+        if json {
+            cl.push("-fdiagnostics-format=json".to_owned());
+        }
+        cl.push(t.clone());
+        let err = Captured::default();
+        let (tu, run) = with_eval_session(&kilnpp(), &cl, io(&err), |fe| {
+            let mut fe = fe.expect("session opens");
+            assert_eq!(fe.tu_diagnostics.len(), 1, "{:?}", fe.tu_diagnostics);
+            let e = fe.session.entry_named("bad").unwrap();
+            let r = fe.session.run(e, &mut Seven, RunBudget::PROGRAM, &CancelToken::new());
+            assert!(r.result.is_err());
+            (fe.render(&fe.tu_diagnostics), fe.render(&r.diagnostics))
+        });
+        let mut exe_cl = vec!["-fsyntax-only".to_owned()];
+        exe_cl.extend(cl.iter().cloned());
+        let exe = std::process::Command::new(kilnpp()).args(&exe_cl).output().unwrap();
+        assert!(exe.status.success());
+        let exe = String::from_utf8(exe.stderr).unwrap();
+        let summary = if json { "" } else { "1 warning generated.\n" };
+        assert_eq!(format!("{tu}{summary}"), exe, "json: {json}");
+        // The session printed the same records; the summary line is the
+        // driver's at exit, which an opened session has not reached.
+        assert_eq!(err.text(), tu, "json: {json}");
+        if json {
+            let lines: Vec<&str> = run.lines().collect();
+            assert_eq!(lines.len(), 1, "{run}");
+            assert!(lines[0].starts_with('{') && lines[0].ends_with('}'), "{run}");
+            assert!(
+                lines[0].contains("call to consteval function 'bad' is not a constant expression")
+            );
+            assert!(lines[0].contains("in call to 'at(5)'"), "{run}");
+            assert!(lines[0].contains("in call to 'bad()'"), "{run}");
+        } else {
+            assert!(run.starts_with(&format!("{t}:3:15: error: call to consteval function 'bad' is not a constant expression\n")), "{run}");
+            assert!(run.contains(&format!("{t}:2:46: note: cannot refer to element 5")), "{run}");
+            assert!(run.contains("note: in call to 'at(5)'"), "{run}");
+            assert!(run.contains("note: in call to 'bad()'"), "{run}");
+            assert!(run.contains("    3 | consteval int bad() { return at(5); }\n"), "{run}");
+        }
+    }
+    std::fs::remove_dir_all(&d).unwrap();
 }
 
 #[test]

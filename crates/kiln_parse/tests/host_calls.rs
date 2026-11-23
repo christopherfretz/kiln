@@ -142,7 +142,7 @@ fn run_with(src: &str, host: bool, state: State, limits: ConstexprLimits) -> Run
     pp.set_feature_queries(Box::new(features));
     pp.enter_main_file(file);
     let state = Arc::new(Mutex::new(state));
-    let handler = host.then(|| Box::new(Handler(Arc::clone(&state))) as Box<dyn HostCalls>);
+    let handler = host.then(|| Box::new(Handler(Arc::clone(&state))) as Box<dyn HostCalls + Send>);
     let target = Target::for_arch(Arch::X86_64);
     let (mut tu, _pp) = parse_preprocessed_with_host(
         pp,

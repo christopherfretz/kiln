@@ -63,8 +63,12 @@ pub struct Ast {
 }
 ```
 `Ast` is created by sema at TU start, owned by `kiln_sema::Sema` while
-parsing, then moved to codegen. Sema is single-threaded per TU (§13 Q8);
-`Ast: Send`, not `Sync`-shared during construction.
+parsing, then moved to codegen. Sema is single-threaded per TU (§13 Q8):
+one thread builds the tree. `Ast: Send + Sync` (a compile-time assertion
+beside the struct, as `SourceManager`'s, WP-2321): a finished tree can be
+moved, and read through `&Ast` from several threads at once (a tooling
+client's host-call handler that reads another unit's tree, spec/host-calls.md
+§3): every field is `Sync` (a cache is behind a lock or an atomic).
 
 ### 2.3 Memory accounting
 Every arena implements `HeapSize { fn heap_bytes(&self) -> MemReport }`
@@ -1742,7 +1746,9 @@ field `Ast::written_refs`. Built in five stages:
 
 - **Opt-in.** `WrittenRefs::is_on()` is false unless the front end's
   `ParseOptions::written_refs` is set (the driver's
-  `-fkiln-written-refs` and `-fkiln-dump-written-refs` set it). Off,
+  `-fkiln-written-refs` and `-fkiln-dump-written-refs` set it, and the
+  front-end library entry's `FrontEndOptions::written_refs`, WP-2320,
+  spec/driver.md "Front-end library entry"). Off,
   every recording site costs one predictable branch on that flag and
   allocates nothing; the table is empty, `Ast::memory()` has no row for
   it, and a snapshot or image differs from a compiler without the table

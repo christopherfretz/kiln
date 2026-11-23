@@ -18,7 +18,8 @@ use kiln_source::fx::{FxHashMap, FxHashSet};
 use crate::compile::{FState, RetKind};
 use crate::failure::Note;
 use crate::host::HostMode;
-use crate::ty::TyKind;
+use crate::mem::Ptr;
+use crate::ty::{OTy, TyKind};
 use crate::value::Freeze;
 use crate::vm::Fault;
 use crate::{Budget, EvalFailure, FailKind, Oven, SemaBridge};
@@ -31,10 +32,13 @@ pub const CANCEL_INTERVAL: u64 = 65_536;
 /// this many bytes each (spec/eval-session.md §10).
 pub const RELEASE_FLOOR: usize = 1 << 20;
 
+/// At most this many [`RunError::Uncaught`] scalars.
+pub const UNCAUGHT_SCALARS: usize = 4;
+
 /// The note of a host call refused in semantic work a run triggered
-/// (spec/eval-session.md §6).
-pub(crate) const NESTED_HOST_NOTE: &str =
-    "host call in semantic work a run triggered (its result is kept across runs)";
+/// (spec/eval-session.md §6), in the author's terms (WP-2325).
+pub(crate) const NESTED_HOST_NOTE: &str = "a host call cannot be evaluated here: this expression \
+     is evaluated when the code is instantiated, not when it runs";
 
 /// The limits of one run (spec/eval-session.md §8). A client that builds
 /// it literally writes `..RunBudget::PROGRAM` for the fields it leaves.
@@ -173,6 +177,13 @@ pub enum RunError {
         type_name: String,
         /// Its `what()`, when it derives from `std::exception`.
         what: Option<String>,
+        /// The values of the thrown object's first [`UNCAUGHT_SCALARS`]
+        /// non-static data members of integral or enumeration type, in
+        /// declaration order, a base class's before the class's own; a
+        /// signed value in two's complement (sign-extended to 64 bits). Empty
+        /// for an object not of class type (spec/eval-session.md §8,
+        /// WP-2324).
+        scalars: Vec<u64>,
     },
     /// The result's tree would exceed the budget's `result_bytes`
     /// (spec/eval-session.md §4.1).
@@ -601,9 +612,10 @@ impl Oven {
             Fault::Host(m) if !m.is_empty() => RunError::Host {
                 message: m.strip_prefix("host call failed: ").unwrap_or(m).to_owned(),
             },
-            Fault::Uncaught { ty, what, .. } => RunError::Uncaught {
+            Fault::Uncaught { obj, ty, what } => RunError::Uncaught {
                 type_name: self.tname(b.ast(), *ty),
                 what: what.as_deref().map(str::to_owned),
+                scalars: self.uncaught_scalars(b.ast(), *obj, *ty),
             },
             f => match f.kind() {
                 FailKind::StepLimit => RunError::StepBudget,
@@ -615,6 +627,70 @@ impl Oven {
         if let Some(a) = self.sess.as_mut().and_then(|s| s.arm.as_mut()) {
             a.fault = Some(k);
         }
+    }
+
+    /// [`RunError::Uncaught`]'s scalars of the exception object `obj` of
+    /// type `ty` (read before the failure is rendered, while the object
+    /// lives): none unless `ty` is a class that is not a union.
+    fn uncaught_scalars(&self, ast: &kiln_ast::Ast, obj: u64, ty: OTy) -> Vec<u64> {
+        let mut out = Vec::new();
+        if matches!(self.types.kind(ty), TyKind::Record { union: false, .. }) {
+            self.scalars_into(ast, obj, ty, &mut out);
+        }
+        out
+    }
+
+    /// Appends the integral and enumeration members of the object of class
+    /// type `t` at `raw` to `out`, its direct non-virtual bases' first (in
+    /// base-specifier order, each the same way), until `out` holds
+    /// [`UNCAUGHT_SCALARS`]. A bit-field counts with its value; an unnamed
+    /// one is no member and does not; a virtual base, a member of class,
+    /// array, pointer or floating type, or a union member is skipped. A
+    /// member whose value is not initialized ends the list. `false` once
+    /// the list is complete.
+    fn scalars_into(&self, ast: &kiln_ast::Ast, raw: u64, t: OTy, out: &mut Vec<u64>) -> bool {
+        let base_off = u64::from(Ptr::decode(raw).off);
+        for f in self.types.fields(t) {
+            if out.len() >= UNCAUGHT_SCALARS {
+                return false;
+            }
+            let at = Ptr::with_off(raw, base_off + f.offset, false);
+            if f.base {
+                if matches!(self.types.kind(f.ty), TyKind::Record { union: false, .. })
+                    && !self.scalars_into(ast, at, f.ty, out)
+                {
+                    return false;
+                }
+                continue;
+            }
+            let (width, signed) = match self.types.kind(f.ty) {
+                TyKind::Bool => (1, false),
+                TyKind::Int { width, signed } => (u32::from(width), signed),
+                _ => continue,
+            };
+            let v = match f.width {
+                Some(w) => {
+                    if w == 0 || ast.decls.get(f.decl).name().is_empty() {
+                        continue;
+                    }
+                    let n = u64::from((f.bit + w).div_ceil(8));
+                    let bits = self.mem.check(at, n, false).ok().and_then(|(st, abs, _)| {
+                        let sp = self.mem.space(st);
+                        sp.is_init(abs, n).then(|| sp.read(abs, n))
+                    });
+                    let Some(bits) = bits else { return false };
+                    let m = if w >= 128 { u128::MAX } else { (1u128 << w) - 1 };
+                    crate::arith::canon((bits >> f.bit) & m, w, signed)
+                }
+                None => match self.load(at, f.ty, crate::kbc::ak::READ) {
+                    Ok(v) => crate::arith::canon(v, width, signed),
+                    Err(_) => return false,
+                },
+            };
+            // The low 64 bits of the two's-complement value.
+            out.push(v as u64);
+        }
+        out.len() < UNCAUGHT_SCALARS
     }
 
     /// A nested evaluation starts inside a run: it runs under the

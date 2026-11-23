@@ -1733,7 +1733,18 @@ it: the driver's PCH probe, spec/driver.md "Precompiled headers", does
 not run), `environment` (an `env::Environment`,
 default the process's), and `pp_record` (default off; on, the
 preprocessor keeps its preprocessing record, spec/pp.md "Preprocessing
-record", which the closure reads as `fe.pp.record()`; WP-2110). Under a fixed environment the driver reads
+record", which the closure reads as `fe.pp.record()`; WP-2110), and
+`written_refs` (default off; WP-2320; on, the command line's
+`-fkiln-written-refs`: the parser records the written-reference table,
+spec/ast.md §18, and nothing is printed). The closure reads the table
+on the finished tree as `fe.ast.written_refs`; its content is that of
+`-fkiln-dump-written-refs` for the same input:
+`fe.ast.written_refs.dump(fe.ast, fe.sm, fe.main_file)` equals that
+dump, line for line (`front_end.rs` test `written_refs_equal_the_dump`).
+Like the flag it is part of no PCH identity (the entry refuses
+`-include-pch`), and a module the run builds in process from the
+module cache's source is built with the table (the cache's key holds
+it, spec/ast.md §18.10.2). Under a fixed environment the driver reads
 every variable it consults from it and never from the process:
 `KILN_RESOURCE_DIR`, `KILN_LLVM_DIR` and the LLVM search's variables,
 `KILN_BACKEND` / `KILN_HOD`, `PATH` (the GCC driver's and hod's search),
@@ -3501,8 +3512,21 @@ when one is given:
 2. Else `$KILN_REPRODUCIBLE_TIME`, where a non-number means 0.
 3. Else `$SOURCE_DATE_EPOCH`, as clang does.
 
-Otherwise they come from the clock. The test harness always sets
-`KILN_REPRODUCIBLE_TIME`.
+All three are spelled from that one epoch (`time::spellings`), so
+`__TIMESTAMP__` is the epoch's `Www Mmm dd hh:mm:ss yyyy` (epoch 0:
+`Thu Jan  1 00:00:00 1970`) in every file of the unit, whatever the
+file's modification time (WP-2323; clang 19 and 22 also take
+`__TIMESTAMP__` from `SOURCE_DATE_EPOCH`). `--help` says so on the
+flag's line. Tests: `crates/kiln_driver/tests/driver.rs`
+`reproducible_timestamp` (two files with different modification times,
+under the flag and under `SOURCE_DATE_EPOCH`),
+`tests/conformance/cpp.predefined/reproducible-timestamp.cpp`.
+
+Otherwise `__DATE__` and `__TIME__` come from the clock, and
+`__TIMESTAMP__` is `??? ??? ?? ??:??:?? ????` (clang: the current
+file's modification time; a deviation). The test harness does not pin
+the compiler's time: a corpus test that needs it passes
+`-fkiln-reproducible-time` (and skips clang).
 
 ## Deviations from clang 19
 

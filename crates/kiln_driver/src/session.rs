@@ -6,14 +6,16 @@
 //! front end is handed to a closure as a [`SessionFrontEnd`].
 
 use std::io::Write as _;
-use std::sync::Arc;
+use std::panic::{self, AssertUnwindSafe};
+use std::sync::{Arc, Mutex, PoisonError};
 
-use kiln_diag::{Diag, DiagId, Format};
+use kiln_diag::{Diag, DiagEngine, DiagId, DiagOptions, DiagSink, Diagnostic, Format, Level};
 use kiln_lex::Interner;
 use kiln_parse::{EvalSession, HostCalls, HostError, HostOut, OpenError};
 use kiln_source::{FileId, SourceManager, Span};
 
 use crate::args::{Action, Lang};
+use crate::front_end::Host;
 use crate::pp_cmd::Job;
 use crate::syntax_cmd::SyntaxJob;
 use crate::{Io, codegen_cmd, make_engine, rsp};
@@ -29,22 +31,72 @@ pub struct SessionFrontEnd<'a, 'sm> {
     pub sources: &'sm SourceManager,
     /// The main file.
     pub main: Option<FileId>,
+    /// The command line's diagnostic options (the output format, the
+    /// display settings, the clang level), which [`SessionFrontEnd::render`]
+    /// renders with (WP-2324).
+    pub diag_options: DiagOptions,
+    /// The translation unit's own diagnostics (warnings and remarks: a
+    /// unit with an error opens no session), as the engine's sink received
+    /// them and printed them on standard error (WP-2324).
+    pub tu_diagnostics: Vec<Diagnostic>,
 }
 
-/// Why [`with_eval_session`] opened no session.
+impl SessionFrontEnd<'_, '_> {
+    /// `records` (a run's `RunReport::diagnostics`, or a refusal's)
+    /// rendered against [`SessionFrontEnd::sources`] exactly as the driver
+    /// renders diagnostics on standard error for this command line, in
+    /// its format (text, or JSON under `-fdiagnostics-format=json`), each
+    /// note and call-stack frame under its diagnostic
+    /// (spec/eval-session.md §7). [`kiln_diag::render_diagnostics`] with
+    /// [`SessionFrontEnd::diag_options`]; to render another form, call it
+    /// with changed options.
+    #[must_use]
+    pub fn render(&self, records: &[Diagnostic]) -> String {
+        kiln_diag::render_diagnostics(self.sources, &self.diag_options, records)
+    }
+}
+
+/// Why [`with_eval_session`] opened no session (spec/eval-session.md §2
+/// "Refusal").
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SessionRefused {
     /// The command line does not name exactly one C++ source input, or
-    /// the driver rejected it (reported on standard error).
-    CommandLine,
-    /// The translation unit reported errors (reported on standard error,
-    /// then `drv_eval_session_tu_errors`).
-    TuHasErrors {
-        /// How many.
-        errors: u32,
+    /// the driver rejected it before the translation unit's job ran
+    /// (reported on standard error).
+    CommandLine {
+        /// The driver's first error as the text form prints it after
+        /// `error: `, or why the command line names no one C++ source.
+        message: String,
     },
+    /// The translation unit reported errors and no fatal error other
+    /// than the error limit's (reported on standard error, then
+    /// `drv_eval_session_tu_errors`).
+    TuHasErrors {
+        /// How many (the error limit's fatal error counts as one).
+        errors: u32,
+        /// Every diagnostic the unit reported, warnings included, as the
+        /// engine's sink received them (their locations are the unit's
+        /// source manager's, which ends with the call: the rendered text
+        /// is what went to standard error).
+        diagnostics: Vec<Diagnostic>,
+    },
+    /// The front end stopped: a fatal error other than the error limit's
+    /// (a header not found, an internal limit such as the include depth),
+    /// or no tree was built (reported on standard error).
+    Stopped {
+        /// Every diagnostic the unit reported, the fatal one last.
+        diagnostics: Vec<Diagnostic>,
+    },
+    /// The front end panicked (the payload as text): the panic is caught,
+    /// as `run_front_end`'s `FrontEndError::Panicked` is, and the closure
+    /// called with this. A panic of the closure itself is not caught.
+    Panicked(String),
 }
+
+/// The message of [`SessionRefused::CommandLine`] for a command line
+/// without one C++ source input.
+const NOT_ONE_SOURCE: &str = "the command line does not name exactly one C++ source input";
 
 /// The translation unit's handler of a session opened here: every call
 /// fails (runs get their own handler).
@@ -63,14 +115,34 @@ impl HostCalls for Placeholder {
     }
 }
 
+/// The translation unit's sink: the driver's ([`kiln_diag::format_sink`])
+/// keeping a copy of every record for a refusal.
+struct Recorder {
+    inner: Box<dyn DiagSink + Send>,
+    records: Arc<Mutex<Vec<Diagnostic>>>,
+}
+
+impl DiagSink for Recorder {
+    fn emit(&mut self, sm: &SourceManager, d: &Diagnostic) {
+        self.records.lock().unwrap_or_else(PoisonError::into_inner).push(d.clone());
+        self.inner.emit(sm, d);
+    }
+
+    fn flush(&mut self) {
+        self.inner.flush();
+    }
+}
+
 /// Parses the one C++ source input of `command_line` (the driver's
 /// arguments after `argv0`) as `-fsyntax-only` would, opens an
 /// evaluation session on it and calls `f` with the front end, or with
-/// why there is none. The command line goes through the driver's stages
-/// as the front-end library entry's does ([`crate::front_end::prepare`],
-/// the PCH probe off), whatever action it names. The translation unit's
-/// diagnostics go to `io`'s standard error as the driver prints them;
-/// runs' diagnostics are returned in their reports.
+/// why there is none ([`SessionRefused`]). The command line goes through
+/// the driver's stages as the front-end library entry's does
+/// ([`crate::front_end::prepare`], the PCH probe off), whatever action it
+/// names. The translation unit's diagnostics go to `io`'s standard error
+/// as the driver prints them; runs' diagnostics are returned in their
+/// reports. A panic of the front end calls `f` with
+/// [`SessionRefused::Panicked`]; one of `f` propagates.
 pub fn with_eval_session<R>(
     argv0: &str,
     command_line: &[String],
@@ -93,39 +165,65 @@ pub fn with_eval_session<R>(
         _ => false,
     };
     if !one_cxx_source {
-        return f(Err(SessionRefused::CommandLine));
+        return f(Err(SessionRefused::CommandLine { message: NOT_ONE_SOURCE.to_owned() }));
     }
+    // `f` is taken only to be called: still here after a panic, the panic
+    // was the front end's.
     let mut f = Some(f);
     let rules = crate::EntryRules { pch_probe: false };
-    let opened = crate::front_end::prepare(&args, rules, &stderr, &stderr, |job| {
-        let f = f.take()?;
-        Some(open(job, &stderr, f))
-    });
-    match (opened.flatten(), f.take()) {
+    let host = Host::new(Some(stderr.clone()));
+    let opened = panic::catch_unwind(AssertUnwindSafe(|| {
+        crate::crash_for_testing(&args);
+        crate::front_end::prepare(&args, rules, &host, &stderr, |job| open(job, &stderr, &mut f))
+    }));
+    kiln_source::activity::set_crash_for_testing(None);
+    let opened = match opened {
+        Ok(r) => r.flatten(),
+        Err(payload) => match f.take() {
+            Some(f) => {
+                let text = crate::front_end::payload_text(&*payload);
+                return f(Err(SessionRefused::Panicked(text)));
+            }
+            None => panic::resume_unwind(payload),
+        },
+    };
+    match (opened, f.take()) {
         (Some(r), _) => r,
-        (None, Some(f)) => f(Err(SessionRefused::CommandLine)),
+        (None, Some(f)) => {
+            let message = host.first_error().map_or_else(
+                || "the driver stopped before the translation unit's job".to_owned(),
+                |e| e.message,
+            );
+            f(Err(SessionRefused::CommandLine { message }))
+        }
         // `f` is taken only by the job, which returns its result.
         (None, None) => unreachable!("the session's closure was called and its result lost"),
     }
 }
 
 /// The job of [`with_eval_session`]: the parse, the session opened, `f`
-/// called.
-fn open<R>(
-    job: Job<'_>,
-    stderr: &crate::SharedWriter,
-    f: impl for<'a, 'sm> FnOnce(Result<SessionFrontEnd<'a, 'sm>, SessionRefused>) -> R,
-) -> R {
-    let diag_opts = job.diag_opts;
+/// (taken from its slot) called. `None` only with an empty slot.
+fn open<R, F>(job: Job<'_>, stderr: &crate::SharedWriter, f: &mut Option<F>) -> Option<R>
+where
+    F: for<'a, 'sm> FnOnce(Result<SessionFrontEnd<'a, 'sm>, SessionRefused>) -> R,
+{
+    let diag_opts = job.diag_opts.clone();
     let path = job.path.to_owned();
     let program = job.args.program.clone();
     let sm = SourceManager::new();
     let interner = Arc::new(Interner::new());
-    let engine = make_engine(&sm, diag_opts, stderr.clone(), None);
+    let records = Arc::new(Mutex::new(Vec::new()));
+    let sink = Recorder {
+        inner: kiln_diag::format_sink(stderr.clone(), &diag_opts, None),
+        records: Arc::clone(&records),
+    };
+    let engine = DiagEngine::new(&sm, &diag_opts, sink);
     let parsed = crate::crash::catching(&path, None, &sm, || {
         SyntaxJob(job).parse_retained(&sm, &engine, &interner, Box::new(Placeholder))
     });
-    let summary = |engine: &kiln_diag::DiagEngine<'_>| {
+    // A crash phase asked for is the front end's: runs do not crash.
+    kiln_source::activity::set_crash_for_testing(None);
+    let summary = |engine: &DiagEngine<'_>| {
         engine.flush();
         if let Some(s) = engine.summary()
             && diag_opts.format == Format::Text
@@ -134,14 +232,23 @@ fn open<R>(
             let _ = writeln!(err, "{s}");
         }
     };
+    let take = || std::mem::take(&mut *records.lock().unwrap_or_else(PoisonError::into_inner));
     let Some((sema, main)) = parsed else {
         summary(&engine);
-        return f(Err(SessionRefused::CommandLine));
+        let diagnostics = take();
+        return f.take().map(|f| f(Err(SessionRefused::Stopped { diagnostics })));
     };
     match EvalSession::open(sema) {
         Ok(session) => {
             engine.flush();
-            f(Ok(SessionFrontEnd { session, sources: &sm, main }))
+            let fe = SessionFrontEnd {
+                session,
+                sources: &sm,
+                main,
+                diag_options: diag_opts.clone(),
+                tu_diagnostics: take(),
+            };
+            f.take().map(|f| f(Ok(fe)))
         }
         Err(e) => {
             summary(&engine);
@@ -152,7 +259,7 @@ fn open<R>(
             let dsm = SourceManager::new();
             let drv = make_engine(
                 &dsm,
-                &codegen_cmd::driver_diag_options(diag_opts),
+                &codegen_cmd::driver_diag_options(&diag_opts),
                 stderr.clone(),
                 Some(&program),
             );
@@ -160,7 +267,18 @@ fn open<R>(
                 .arg(errors.to_string())
                 .emit(&drv);
             drv.flush();
-            f(Err(SessionRefused::TuHasErrors { errors }))
+            let diagnostics = take();
+            // The error limit's fatal error stops a unit that has errors;
+            // any other stops the front end.
+            let stopped = diagnostics
+                .iter()
+                .any(|d| d.level == Level::Fatal && d.id != Some(DiagId::diag_too_many_errors));
+            let refused = if stopped {
+                SessionRefused::Stopped { diagnostics }
+            } else {
+                SessionRefused::TuHasErrors { errors, diagnostics }
+            };
+            f.take().map(|f| f(Err(refused)))
         }
     }
 }

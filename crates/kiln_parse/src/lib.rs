@@ -48,8 +48,8 @@ use kiln_source::{FileId, Loc, SourceManager};
 pub use kiln_sema::session::{
     CancelToken, CharUnit, Entity, Entry, EntryError, EnumValue, EvalSession, Field, FieldKind,
     FloatKind, InfoKind, InfoValue, IntValue, KeptMemory, MemberPointerValue, OpenError, PathStep,
-    PointerBase, PointerValue, RecordValue, RunBudget, RunError, RunReport, RunValue, ValueError,
-    ValueTree,
+    PointerBase, PointerValue, RecordValue, RunBudget, RunError, RunReport, RunValue,
+    UNCAUGHT_SCALARS, ValueError, ValueTree,
 };
 pub use kiln_sema::{HostCalls, HostError, HostOut};
 pub use parser::{PExpr, Parser};
@@ -534,7 +534,7 @@ pub fn parse_preprocessed_with_host<'a, 'sm>(
     target: Target,
     opts: &ParseOptions,
     limits: ConstexprLimits,
-    host: Option<Box<dyn HostCalls>>,
+    host: Option<Box<dyn HostCalls + Send>>,
 ) -> (ParsedTu, Preprocessor<'sm, 'a>) {
     let (p, main) = parse_to_end(pp, interner, diags, target, opts, limits, host);
     kiln_snap::timing::timed_part("finish unit", || finish_tu(p, &main, opts))
@@ -556,7 +556,7 @@ pub fn parse_preprocessed_retained<'a, 'sm>(
     target: Target,
     opts: &ParseOptions,
     limits: ConstexprLimits,
-    host: Option<Box<dyn HostCalls>>,
+    host: Option<Box<dyn HostCalls + Send>>,
 ) -> (Sema<'a, 'sm>, Preprocessor<'sm, 'a>) {
     let (p, _) = parse_to_end(pp, interner, diags, target, opts, limits, host);
     let (s, src) = kiln_snap::timing::timed_part("finish unit", || p.finish());
@@ -572,7 +572,7 @@ fn parse_to_end<'a, 'sm>(
     target: Target,
     opts: &ParseOptions,
     limits: ConstexprLimits,
-    host: Option<Box<dyn HostCalls>>,
+    host: Option<Box<dyn HostCalls + Send>>,
 ) -> (Parser<'a, 'sm>, String) {
     assert!(
         std::ptr::eq(Arc::as_ptr(&interner), std::ptr::from_ref(pp.interner())),

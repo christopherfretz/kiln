@@ -42,22 +42,14 @@ impl HostCalls for Seven {
     }
 }
 
-/// Each diagnostic and note of `ds` as `L:C message`.
+/// `ds` rendered as the driver renders diagnostics (the public renderer,
+/// `kiln_diag::render_diagnostics`, WP-2324), one string per line.
 fn render(sm: &SourceManager, ds: &[Diagnostic]) -> Vec<String> {
-    fn one(sm: &SourceManager, d: &Diagnostic, out: &mut Vec<String>) {
-        let pos = sm
-            .line_col(d.span.lo)
-            .map_or_else(|| "-".to_owned(), |lc| format!("{}:{}", lc.line, lc.col));
-        out.push(format!("{pos} {}", d.message));
-        for n in &d.notes {
-            one(sm, n, out);
-        }
-    }
-    let mut out = Vec::new();
-    for d in ds {
-        one(sm, d, &mut out);
-    }
-    out
+    let dopts = DiagOptions {
+        clang_compat: ParseOptions::default().clang_compat,
+        ..DiagOptions::default()
+    };
+    kiln_diag::render_diagnostics(sm, &dopts, ds).lines().map(str::to_owned).collect()
 }
 
 /// Parses `PRE` + `src` with the translation unit's step limit
@@ -467,7 +459,7 @@ fn a_host_call_in_nested_work_fails_every_run_alike() {
     let f = fresh(HOST_SRC, &["XP::f", "XQ::f"]);
     for x in &f {
         assert_eq!(x.result, Err(RunError::Failed), "{x:?}");
-        assert!(has(x, "host call in semantic work a run triggered"), "{x:?}");
+        assert!(has(x, NESTED_HOST_NOTE), "{x:?}");
     }
     for order in [["XP::f", "XQ::f"], ["XQ::f", "XP::f"]] {
         session(HOST_SRC, |s, sm| {
@@ -481,6 +473,36 @@ fn a_host_call_in_nested_work_fails_every_run_alike() {
             }
         });
     }
+}
+
+/// The note of a host call refused in nested work (spec/eval-session.md §6).
+const NESTED_HOST_NOTE: &str = "a host call cannot be evaluated here: this expression is \
+evaluated when the code is instantiated, not when it runs";
+
+/// WP-2325 (spec/eval-session.md §6): the instantiation that makes a host
+/// call is first reached in run 1; every one of N runs fails with the
+/// same `RunError` and the same diagnostics, rendered by the public
+/// renderer as the driver prints them: the refusal's note in the author's
+/// terms, with the instantiation's context notes.
+#[test]
+fn every_run_reaching_a_refused_host_call_fails_identically() {
+    session(HOST_SRC, |s, sm| {
+        let e = s.entry_named("XP::f").unwrap();
+        let first = s.run(e, &mut Seven, RunBudget::PROGRAM, &CancelToken::new());
+        assert_eq!(first.result, Err(RunError::Failed));
+        let shown = render(sm, &first.diagnostics);
+        let text = shown.join("\n");
+        assert!(text.contains(&format!("note: {NESTED_HOST_NOTE}")), "{text}");
+        assert!(
+            text.contains("note: in instantiation of static data member 'H<int>::v'"),
+            "{text}"
+        );
+        for n in 2..=5 {
+            let r = s.run(e, &mut Seven, RunBudget::PROGRAM, &CancelToken::new());
+            assert_eq!(r.result, first.result, "run {n}");
+            assert_eq!(render(sm, &r.diagnostics), shown, "run {n}");
+        }
+    });
 }
 
 /// Nested work that hits the translation unit's own step limit fails the

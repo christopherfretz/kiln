@@ -35,6 +35,20 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   it imports. The table gives back its spare capacity at the end of the
   parse. Off, nothing changes (PCH `FORMAT_VERSION` 146, `IMAGE_VERSION`
   79).
+- Tooling-client API for evaluation sessions (WP-2320..WP-2325):
+  `FrontEndOptions::written_refs` records the written-reference table in
+  process (the table read after the closure equals the
+  `-fkiln-dump-written-refs` dump); `kiln_diag::render_diagnostics` and
+  `SessionFrontEnd::render` render `RunReport::diagnostics` in text or
+  JSON through the driver's own sink (`kiln_diag::format_sink`), equal to
+  the driver's standard error; `SessionFrontEnd` carries the unit's
+  `diag_options` and `tu_diagnostics`; `RunError::Uncaught` gains
+  `scalars`, the thrown object's first four integral or enumeration
+  members (`UNCAUGHT_SCALARS`, spec/eval-session.md §8); `Ast: Send +
+  Sync` is asserted at compile time. Under `-fkiln-reproducible-time`,
+  `__TIMESTAMP__` is the pinned epoch's spelling in every file, whatever
+  its modification time (spec/driver.md "Reproducible time").
+
 - The written-reference table is carried in PCH snapshots and module
   images (stage 5, WP-1934; spec/ast.md §18.10): a TU restored from a
   snapshot made with the table continues its table (the dump equals the
@@ -698,6 +712,18 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Changed
 
+- Breaking, for tooling clients (WP-2321, WP-2322, WP-2324, WP-2325):
+  `HostCalls` no longer requires `Send`; only a registered handler is
+  `Box<dyn HostCalls + Send>`, and `EvalSession::run` takes any handler
+  (an `Rc` one included). `SessionRefused` says why no session was
+  opened: `CommandLine { message }` (the driver's message),
+  `TuHasErrors { errors, diagnostics }` (the records, not only a count),
+  `Stopped { diagnostics }` (a fatal error, or no tree) and
+  `Panicked(text)` (a front-end panic, caught). `RunError::Uncaught` has
+  the new field `scalars`. A host call in work a run triggers is refused
+  with the note "a host call cannot be evaluated here: this expression
+  is evaluated when the code is instantiated, not when it runs", and
+  every run that reaches the work fails identically.
 - `EntryError::NotConsteval` is renamed `EntryError::NotConstexpr`
   (WP-2072): it is now returned only for a function that is neither
   `constexpr` nor `consteval`.

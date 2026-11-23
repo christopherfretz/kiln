@@ -88,7 +88,7 @@ pub use meta::{
 pub use notes::FrameMark;
 pub use session::{
     CANCEL_INTERVAL, CancelToken, NestedCost, RELEASE_FLOOR, ResultReadError, RunBudget, RunError,
-    RunOutcome, RunRaw, SessUnit,
+    RunOutcome, RunRaw, SessUnit, UNCAUGHT_SCALARS,
 };
 pub use stats::{EvalRecord, EvalStats, EvalTotals, JobTotals};
 

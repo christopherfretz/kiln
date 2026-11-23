@@ -104,7 +104,7 @@ pub trait HostCalls {
   past a capacity is kept (the call then fails, §2.4), never truncated.
 - `HostError::new(message)`; `message()`. It implements `Display` and
   `std::error::Error`.
-- Registration: `Oven::set_host_calls(Option<Box<dyn HostCalls>>)`
+- Registration: `Oven::set_host_calls(Option<Box<dyn HostCalls + Send>>)`
   (returns the previous handler), `Sema::set_host_calls` (also makes the
   name visible, §1), and `kiln_parse::parse_preprocessed_with_host`,
   which registers the handler for one translation unit and hands it back
@@ -113,9 +113,20 @@ pub trait HostCalls {
   (`ClangFeatures::with_kiln_host_calls`), as the preprocessor runs
   before sema exists; the two must agree.
 - `Oven::host_call_count()` counts the calls the handler received.
-- `HostCalls: Send`, so an Oven (and a `ParsedTu`) holding a handler can
-  still be moved to another thread; an Oven is used by one thread at a
-  time, so nothing needs `Sync`.
+- **`Send` is the registration's bound, not the trait's** (WP-2321).
+  The trait has no supertrait. A handler that is *stored* (registered
+  with `Oven::set_host_calls`, `Sema::set_host_calls`, given to
+  `parse_preprocessed_with_host` or `parse_preprocessed_retained`, kept
+  as `EvalSession::take_tu_host_calls`) is a `Box<dyn HostCalls + Send>`,
+  so an Oven (and a `ParsedTu`, an `EvalSession`) holding one can still
+  be moved to another thread; an Oven is used by one thread at a time,
+  so nothing needs `Sync`. An evaluation-session run's handler
+  (`EvalSession::run(.., host: &mut dyn HostCalls, ..)`) is borrowed for
+  the call and never stored (spec/eval-session.md §6), so it may be any
+  handler: one holding an `Rc`, a `RefCell` or a borrow of another
+  unit's `Ast` (`Ast: Sync` holds, spec/ast.md §2.2, but a handler need
+  not rely on it). Test: `crates/kiln_parse/tests/eval_session.rs`
+  `a_runs_handler_need_not_be_send`.
 - **Zero cost when unregistered.** Without a handler no call of the
   builtin can be compiled (the name is undeclared). What remains on the
   other paths is saving and restoring the host mode (§4) at each

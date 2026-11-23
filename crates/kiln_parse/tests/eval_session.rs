@@ -78,22 +78,15 @@ impl HostCalls for TuHandler {
     }
 }
 
-/// Each diagnostic and note of `ds` as `L:C message`.
+/// The diagnostic options of every engine here.
+fn dopts() -> DiagOptions {
+    DiagOptions { clang_compat: ParseOptions::default().clang_compat, ..DiagOptions::default() }
+}
+
+/// `ds` rendered as the driver renders diagnostics (the public renderer,
+/// `kiln_diag::render_diagnostics`, WP-2324), one string per line.
 fn render(sm: &SourceManager, ds: &[Diagnostic]) -> Vec<String> {
-    fn one(sm: &SourceManager, d: &Diagnostic, out: &mut Vec<String>) {
-        let pos = sm
-            .line_col(d.span.lo)
-            .map_or_else(|| "-".to_owned(), |lc| format!("{}:{}", lc.line, lc.col));
-        out.push(format!("{pos} {}", d.message));
-        for n in &d.notes {
-            one(sm, n, out);
-        }
-    }
-    let mut out = Vec::new();
-    for d in ds {
-        one(sm, d, &mut out);
-    }
-    out
+    kiln_diag::render_diagnostics(sm, &dopts(), ds).lines().map(str::to_owned).collect()
 }
 
 /// Parses `PRE` + `src` and calls `f` with the session (or why it was
@@ -111,8 +104,7 @@ fn with_session<R>(
     let interner = Arc::new(Interner::new());
     let sink = MemorySink::new();
     let opts = ParseOptions::default();
-    let dopts = DiagOptions { clang_compat: opts.clang_compat, ..DiagOptions::default() };
-    let engine = DiagEngine::new(&sm, &dopts, sink.clone());
+    let engine = DiagEngine::new(&sm, &dopts(), sink.clone());
     let mut ppo = PpOptions::new(opts.std);
     ppo.parser_pragmas = true;
     ppo.modules = Some(ModuleOptions::default());
@@ -274,7 +266,11 @@ fn every_failure_kind_leaves_the_session_as_fresh() {
                 "thrown",
                 tiny,
                 None,
-                RunError::Uncaught { type_name: "E".into(), what: Some("bad thing".into()) },
+                RunError::Uncaught {
+                    type_name: "E".into(),
+                    what: Some("bad thing".into()),
+                    scalars: Vec::new(),
+                },
                 "",
             ),
             ("leak", tiny, None, RunError::Failed, "not deallocated"),
@@ -308,7 +304,7 @@ fn failure_diagnostics_have_call_stack_notes_and_repeat() {
     session(FAILURES, |s, sm| {
         let first = render(sm, &run(s, "bad").diagnostics);
         assert!(first.iter().any(|d| d.contains("in call to 'at(5)'")), "{first:?}");
-        assert!(first[0].starts_with("9:"), "{first:?}");
+        assert!(first[0].starts_with("t.cpp:9:"), "{first:?}");
         for _ in 0..3 {
             assert_eq!(render(sm, &run(s, "bad").diagnostics), first);
             assert!(run(s, "good").diagnostics.is_empty());
@@ -422,7 +418,10 @@ fn instantiation_diagnostics_are_reported_by_every_run() {
             let bad = run(s, "X::checked");
             assert_eq!(bad.result, Err(RunError::Failed), "{:?}", render(sm, &bad.diagnostics));
             let shown = render(sm, &bad.diagnostics);
-            assert!(shown.iter().any(|d| d.contains("host call in semantic work")), "{shown:?}");
+            assert!(
+                shown.iter().any(|d| d.contains("a host call cannot be evaluated here")),
+                "{shown:?}"
+            );
             for _ in 0..3 {
                 let r = run(s, "X::checked");
                 assert_eq!(r.result, bad.result);
@@ -532,4 +531,90 @@ fn a_session_moves_to_another_thread() {
         });
         assert_eq!(ok(&r), RunValue::Signed(144));
     });
+}
+
+/// WP-2321 (spec/host-calls.md §3, spec/eval-session.md §6): a run's
+/// handler is borrowed for the call, so it need not be `Send`: this one
+/// shares its count with the test through an `Rc<Cell<u32>>`, and borrows
+/// a value of the caller's frame.
+#[test]
+fn a_runs_handler_need_not_be_send() {
+    struct Shared<'b> {
+        count: std::rc::Rc<std::cell::Cell<u32>>,
+        base: &'b u64,
+    }
+    impl HostCalls for Shared<'_> {
+        fn call(
+            &mut self,
+            op: u32,
+            _ints: &[u64],
+            _bytes: &[u8],
+            _out: &mut HostOut<'_>,
+        ) -> Result<u64, HostError> {
+            self.count.set(self.count.get() + 1);
+            Ok(*self.base + u64::from(op))
+        }
+    }
+    session("consteval u64 twice() { return hc(1) + hc(2); }\n", |s, _| {
+        let count = std::rc::Rc::new(std::cell::Cell::new(0));
+        let base = 100;
+        let e = s.entry_named("twice").unwrap();
+        for n in 1..=3 {
+            let mut h = Shared { count: std::rc::Rc::clone(&count), base: &base };
+            let r = s.run(e, &mut h, RunBudget::PROGRAM, &CancelToken::new());
+            assert_eq!(ok(&r), RunValue::Unsigned(203));
+            assert_eq!(r.host_calls, 2);
+            assert_eq!(count.get(), 2 * n);
+        }
+        // The session kept no handle on the handler.
+        assert_eq!(std::rc::Rc::strong_count(&count), 1);
+    });
+}
+
+/// WP-2324 (spec/eval-session.md §8): `RunError::Uncaught` carries the
+/// thrown object's first four integral or enumeration data members in
+/// declaration order, a base's first, for a class that derives from
+/// `std::exception` and for one that does not; signed values in two's
+/// complement; bit-fields by their value, unnamed ones skipped; members
+/// of other types skipped; an uninitialized member ends the list.
+#[test]
+fn uncaught_exceptions_carry_their_leading_scalars() {
+    session(
+        "namespace std { struct exception { \
+         constexpr virtual ~exception() {} \
+         constexpr virtual const char* what() const noexcept { return \"e\"; } }; }\n\
+         enum class Code : short { a = 3, b = -2 };\n\
+         struct Err : std::exception { int line; double d; Code code; \
+           constexpr Err(int l, Code c) : line(l), d(1.5), code(c) {} \
+           constexpr const char* what() const noexcept override { return \"err\"; } };\n\
+         struct Base { unsigned char tag = 9; };\n\
+         struct Plain : Base { const char* s = \"x\"; long long big = -5; bool ok = true; \
+           int : 3; int bits : 4 = -3; int fifth = 77; };\n\
+         struct Empty {};\n\
+         struct Gap { int a = 1; int b; int c = 3; constexpr Gap() {} };\n\
+         consteval int std_derived() { throw Err(12, Code::b); }\n\
+         consteval int plain() { throw Plain{}; }\n\
+         consteval int empty() { throw Empty{}; }\n\
+         consteval int scalar() { throw -1; }\n\
+         consteval int gap() { throw Gap(); }\n",
+        |s, _| {
+            let uncaught = |s: &mut EvalSession<'_, '_>, name: &str| match run(s, name).result {
+                Err(RunError::Uncaught { type_name, what, scalars }) => (type_name, what, scalars),
+                r => panic!("{name}: {r:?}"),
+            };
+            assert_eq!(
+                uncaught(s, "std_derived"),
+                ("Err".into(), Some("err".into()), vec![12, (-2i64) as u64])
+            );
+            assert_eq!(
+                uncaught(s, "plain"),
+                ("Plain".into(), None, vec![9, (-5i64) as u64, 1, (-3i64) as u64])
+            );
+            assert_eq!(uncaught(s, "empty"), ("Empty".into(), None, Vec::new()));
+            assert_eq!(uncaught(s, "scalar"), ("int".into(), None, Vec::new()));
+            assert_eq!(uncaught(s, "gap"), ("Gap".into(), None, vec![1]));
+            // Every run reads them alike.
+            assert_eq!(uncaught(s, "plain").2, vec![9, (-5i64) as u64, 1, (-3i64) as u64]);
+        },
+    );
 }

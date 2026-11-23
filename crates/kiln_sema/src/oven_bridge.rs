@@ -1090,8 +1090,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     /// (spec/host-calls.md §1, §3). Call before parsing.
     pub fn set_host_calls(
         &mut self,
-        handler: Option<Box<dyn kiln_oven::HostCalls>>,
-    ) -> Option<Box<dyn kiln_oven::HostCalls>> {
+        handler: Option<Box<dyn kiln_oven::HostCalls + Send>>,
+    ) -> Option<Box<dyn kiln_oven::HostCalls + Send>> {
         self.host_calls = handler.is_some();
         let Some(o) = &mut self.oven else { unreachable!("the Oven is out during an evaluation") };
         o.set_host_calls(handler)
