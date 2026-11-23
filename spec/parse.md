@@ -92,6 +92,8 @@ once` files).
 - `keep_tokens` keeps the whole token stream in memory instead of the
   lookahead window (§2.1). It exists for measurement and tests; the
   parse is identical.
+- `token_table` records the token table, `ParsedTu::token_table`
+  (§2.6, WP-2825). Off by default; the parse is identical.
 
 `ConstexprLimits { budget, backtrace_limit }` are the driver's
 `-fconstexpr-*` limits (WP-054; spec/oven.md "Integration"), applied to
@@ -814,6 +816,101 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   small slope: `bench/frontend/nested-template-ids-dup.cpp` (generated at
   bench time, 1.3 MB; spec/bench.md "Generated entries") tracks it, and
   docs/status/perf-history.md "WP-919" has the g++-16 comparison.
+
+### 2.6 The token table (`token_table.rs`, WP-2825)
+For tooling clients that check that an edited range begins and ends on
+a token boundary: the tokens of the unit as the parser received them,
+so a client need not lex a buffer a second time (which disagrees with
+the first lex in a skipped group and at a split `>>`).
+
+- **The option.** `ParseOptions::token_table` (off by default), set by
+  the front-end library entry's `FrontEndOptions::token_table`
+  (spec/driver.md "Front-end library entry"). The driver never sets it:
+  there is no command-line flag, because nothing the executable prints
+  reads it (no dump, no report) and no module file or PCH carries it;
+  the flags of the other tooling tables (`-fkiln-written-refs`,
+  `-fkiln-builtin-literals`) exist for their dumps and for the module
+  cache's key, neither of which applies. Off, the token source pays one
+  predictable branch per delivered token (an `Option` test) and
+  allocates nothing.
+- **The record.** On, the token source (§2.1) appends a `TokenRow` for
+  every token `Preprocessor::next_item` delivers, in delivery order, the
+  end of file excluded, so the rows before splits number exactly
+  `ParsedTu::tokens` (`TokenTable::delivered`). A row is 16 bytes: the
+  kind the parser sees (`TokKind`: an alternative token is its
+  punctuator, a digraph its primary punctuator, a keyword an
+  identifier), the location the parser sees (`Loc`: a file location,
+  or a macro location for a token from an expansion), and 32 bits
+  holding the length of the token's spelling in bytes (30 bits:
+  `span.hi - span.lo` in the location's own space, line splices inside
+  the token included) and two flags: *from a macro expansion* (the
+  location is a macro location: replacement list, argument, `#`, `##`,
+  builtin macro) and *from a macro argument* (the location's own
+  expansion entry is `ExpansionKind::MacroArg`). A string-literal
+  concatenation ([lex.string]) is its literals, one row each; a
+  user-defined literal (`12_k`) is one row; `#embed` data delivered as
+  tokens are rows with macro locations (`ExpansionKind::Embed`).
+- **Where it lives.** `ParsedTu::token_table: Option<TokenTable>`
+  (`None` when off), and `FrontEnd::token_table` in the library entry.
+  It is a product of the token source, not of semantic analysis, so it
+  is not on `Ast`: the AST's snapshot and module-file field lists
+  (spec/ast.md "Snapshot") are unchanged and Sema never sees it. It
+  lives as long as the `ParsedTu`, like the AST. `ParsedTu::memory`
+  adds a `token_table` row when it exists.
+- **Built at the end of the parse.** `finish_tu` builds the table from
+  the recorded rows once the parse is over (`TokenTable::build`); no
+  index work happens during the parse. `parse_prefix` (a PCH producer)
+  records nothing; `continue_preprocessed` records the tokens after the
+  prefix; an evaluation session's parse (`parse_preprocessed_retained`)
+  drops them.
+- **Split tokens.** A `>>`, `>=` or `>>=` the parser split to close a
+  template argument list ([temp.names]/4, `Parser::split_greater`) is
+  the tokens the parser consumed, not the one lexed token: the `>` it
+  took (length 1, at the token's location) and the rest (at location
+  + 1: `>` length 1, `=` length 1, or `>=` length 2, itself split again
+  into `>` and `=` when the parser took its `>` too). The splits are
+  read from `Ast::split_greaters`, which `split_greater` fills (spec/ast.md
+  §21.2), so a token replayed (§2.4) and split once more is still split
+  once; `TokenTable::len` is `delivered` plus one per split.
+- **Not in the table.** Tokens never delivered to the parser: those of
+  directive lines (`#include`, `#define`, `#if`, ... including the
+  replacement list as written), of skipped groups, of a macro
+  invocation's name and parentheses (the expansion's tokens are
+  delivered instead), and of a pragma the preprocessor consumes.
+  Tokens of a PCH prefix and of an imported module file are not
+  delivered to the unit that uses them, so they are not in its table
+  (the table is transient, like the builtin-macro literal table:
+  nothing is written to a snapshot or a module file). A header unit or
+  module interface the preprocessor reads as source (between
+  `UnitBegin` and `UnitEnd`, spec/modules.md §3) is delivered, so its
+  tokens are rows. The parser's own tokens are not rows: a `;` inserted
+  for recovery (`inject_semi`), the replay sentinel.
+- **The query.** `starts_token(file, offset) -> bool` and
+  `token_at(file, offset) -> Option<row>` (the row whose spelling holds
+  the byte; the first in delivery order when several were spelled
+  there), O(log n) over a per-file index of *file tokens* built with the
+  table. A file token of `file` is a row whose location is a file
+  location in `file`, or a macro-argument row whose spelling chain
+  (`SourceManager::immediate_spelling_loc`) passes only through
+  macro-argument entries and ends in `file` (the argument as written at
+  the invocation). A token of a replacement list is not a file token of
+  the `#define` line, and the invocation's name starts no token: an edit
+  there is an edit of a directive or of an invocation, which the table
+  does not describe. An offset can hold several file tokens (a file
+  entered twice, an argument substituted twice); `file_tokens(file)`
+  lists them all, by offset.
+- **Cost.** 16 bytes per row (a split adds one row), plus 8 bytes per
+  file token for the index, with no slack (the vectors are trimmed when
+  built); during the parse the row vector grows by doubling. Measured on `<algorithm>`,
+  `<vector>`, `<string>`, `<map>`, `<memory>` and `<iostream>` of
+  libstdc++ (one 6-header unit, `-std=c++26`): see the WP-2825 row of
+  docs/status/perf-history.md.
+- Tests: `kiln_parse/tests/token_table.rs` (kinds and lengths, macro
+  expansion and argument, concatenation, the three split forms, a
+  skipped group, a UDL, digraphs and alternative tokens, the queries,
+  off by default), `kiln_driver/tests/front_end.rs`
+  `token_table_of_two_files` (an `#include`, the query per file, the
+  entry's option).
 
 ## 3. Parser core (`parser.rs`)
 - **Token access:**

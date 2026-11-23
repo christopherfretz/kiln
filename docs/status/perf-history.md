@@ -852,3 +852,23 @@ The image costs 2.3 MiB more peak RSS than the replay at
 `-fsyntax-only` (its eager decode), as WP-1139 measured. The gate's
 per-token bookkeeping is below noise on `u-plain` and the file grows by
 the gated-name list (804 B here: a length and 200 gated namespaces, 4 B each).
+
+### WP-2825: the token table's cost (2026-11-23)
+
+One unit including `<algorithm>`, `<vector>`, `<string>`, `<map>`,
+`<memory>` and `<iostream>` of the system libstdc++ (GCC 14, aarch64),
+`-std=c++26 -fsyntax-only`, through the library entry with
+`FrontEndOptions::token_table` (`cargo test -p kiln_driver --test
+front_end token_table_cost -- --ignored --nocapture`):
+
+| tokens delivered | rows (after splits) | file tokens (index) | bytes held |
+|---|---|---|---|
+| 456,757 | 457,878 (1,121 splits) | 427,673 | 10,754,792 (16 B per row + 8 B per file token) |
+
+That is 23.5 bytes per delivered token with the table on.
+
+With the option off (the driver's path) the same unit costs nothing
+measurable: `kiln++ -std=c++26 -fsyntax-only` on it, harness profile, 5
+interleaved runs each, `/usr/bin/time -f "%e %M"`, load ~10: base
+9e8a2d6d8 median 0.63 s / 54,984 KB, branch median 0.59 s / 54,968 KB
+(run-to-run spread 0.55-0.80 s on both).

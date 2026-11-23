@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use kiln_ast::Ast;
 use kiln_diag::{Diag, DiagEngine, DiagId, DiagOptions, DiagSink, Diagnostic, Level};
-use kiln_parse::{ParseOptions, ParsedTu};
+use kiln_parse::{ParseOptions, ParsedTu, TokenTable};
 use kiln_pp::{LookupLog, Preprocessor, SearchEvent};
 use kiln_sema::Oven;
 use kiln_sema::stack_guard::StackGuard;
@@ -35,8 +35,8 @@ use crate::{Engines, EntryRules, SharedWriter};
 /// How one run behaves. `Default` is: diagnostics discarded, no lookup
 /// log, a thread of its own, the PCH probe on, the process environment,
 /// no preprocessing record, no written-reference table, no builtin-macro
-/// literal table, the process's working directory (read once), no
-/// overlay.
+/// literal table, no token table, the process's working directory (read
+/// once), no overlay.
 #[non_exhaustive]
 #[derive(Clone)]
 #[allow(clippy::struct_excessive_bools, reason = "independent switches")]
@@ -84,6 +84,12 @@ pub struct FrontEndOptions {
     /// `-fkiln-builtin-literals` on the command line does: the closure
     /// reads it as `fe.ast.literal_builtin(e)`. Off by default (WP-2821).
     pub builtin_literals: bool,
+    /// Record the token table (`ParseOptions::token_table`, spec/parse.md
+    /// §2.6): every token the preprocessor delivered to the parser, a
+    /// split `>>` as its two `>`s, and the query "does a token start
+    /// here" per file. The closure reads it as `fe.token_table`. No
+    /// command-line flag sets it. Off by default (WP-2825).
+    pub token_table: bool,
     /// The directory every relative path of the run opens against (the
     /// main input, `-I` and the other search directories, `-include`,
     /// `#embed`, module files, `@file`s), as clang's `-working-directory`
@@ -119,6 +125,7 @@ impl Default for FrontEndOptions {
             pp_record: false,
             written_refs: false,
             builtin_literals: false,
+            token_table: false,
             working_directory: None,
             overlay: None,
         }
@@ -137,6 +144,7 @@ impl std::fmt::Debug for FrontEndOptions {
             .field("pp_record", &self.pp_record)
             .field("written_refs", &self.written_refs)
             .field("builtin_literals", &self.builtin_literals)
+            .field("token_table", &self.token_table)
             .field("working_directory", &self.working_directory)
             .field("overlay", &self.overlay)
             .finish()
@@ -173,6 +181,10 @@ pub struct FrontEnd<'r, 'sm> {
     /// not counted ([`ParsedTu::tokens`]: after a fatal error, the ones
     /// before it plus the one the preprocessor returned with it).
     pub tokens: u64,
+    /// The token table, when `FrontEndOptions::token_table` was set
+    /// ([`ParsedTu::token_table`], spec/parse.md §2.6): the tokens of
+    /// this unit, not those of a PCH prefix or an imported module file.
+    pub token_table: Option<&'r TokenTable>,
     /// Paths the result depends on that are not files the preprocessor
     /// entered, in the order first met, each once.
     pub consulted: &'r [Consulted],
@@ -186,6 +198,7 @@ impl std::fmt::Debug for FrontEnd<'_, '_> {
             .field("files", &self.sm.file_count())
             .field("main_file", &self.main_file)
             .field("tokens", &self.tokens)
+            .field("token_table", &self.token_table.map(TokenTable::len))
             .field("consulted", &self.consulted)
             .field("lookups", &self.lookups.is_some())
             .finish_non_exhaustive()
@@ -431,9 +444,12 @@ pub(crate) struct Unit<'u, 'sm> {
     pub(crate) main: Option<FileId>,
 }
 
-/// The entry's hooks in the job: the preprocessor's, and the closure.
+/// The entry's hooks in the job: the preprocessor's, the parser's
+/// token table, and the closure.
 pub(crate) struct Hooks<'h> {
     pub(crate) pp: PpHooks,
+    /// `FrontEndOptions::token_table`.
+    pub(crate) token_table: bool,
     see: &'h mut dyn FnMut(&FrontEnd<'_, '_>),
 }
 
@@ -455,6 +471,7 @@ impl Hooks<'_> {
             parse_options: unit.popts,
             main_file: unit.main,
             tokens: unit.tu.tokens,
+            token_table: unit.tu.token_table.as_ref(),
             consulted: &consulted,
             lookups: lookups.as_ref(),
         };
@@ -673,7 +690,7 @@ fn run_here<R>(
             overlay: overlay.cloned(),
             overlay_failures: Vec::new(),
         };
-        let mut hooks = Hooks { pp, see: &mut see };
+        let mut hooks = Hooks { pp, token_table: options.token_table, see: &mut see };
         SyntaxJob(job).run_hooked(&host, &mut hooks);
         overlay_failures = std::mem::take(&mut hooks.pp.overlay_failures);
     });

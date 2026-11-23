@@ -27,6 +27,7 @@ use kiln_source::{Loc, Span};
 
 use crate::keywords::ALTERNATIVE_TOKENS;
 use crate::pragma::{PragmaCx, classify};
+use crate::token_table::TokenRow;
 
 /// A preprocessor event the parser acts on when it reaches the token
 /// after it (clang's pragma annotation tokens).
@@ -251,6 +252,9 @@ pub struct TokenSource<'a, 'sm> {
     alternatives: Vec<(Symbol, Punct)>,
     /// Never drop consumed tokens ([`crate::ParseOptions::keep_tokens`]).
     keep_all: bool,
+    /// The delivered tokens' rows ([`crate::ParseOptions::token_table`]);
+    /// `None` when the option is off.
+    rows: Option<Vec<TokenRow>>,
 }
 
 impl std::fmt::Debug for TokenSource<'_, '_> {
@@ -284,7 +288,19 @@ impl<'a, 'sm> TokenSource<'a, 'sm> {
             events: VecDeque::new(),
             alternatives,
             keep_all: false,
+            rows: None,
         }
+    }
+
+    /// Records a row for every token delivered from now on
+    /// ([`crate::ParseOptions::token_table`], spec/parse.md §2.6).
+    pub fn record_tokens(&mut self, on: bool) {
+        self.rows = on.then(Vec::new);
+    }
+
+    /// The rows recorded so far ([`Self::record_tokens`]), taken.
+    pub fn take_token_rows(&mut self) -> Option<Vec<TokenRow>> {
+        self.rows.take()
     }
 
     /// Keeps every token (the whole-file buffer the parser used before
@@ -418,6 +434,12 @@ impl<'a, 'sm> TokenSource<'a, 'sm> {
                         {
                             *before = t.span.lo;
                         }
+                    }
+                    // The token table: one branch per token when off.
+                    if let Some(rows) = &mut self.rows
+                        && t.kind != TokKind::Eof
+                    {
+                        rows.push(TokenRow::of(&t));
                     }
                     self.toks.push(t);
                     return;

@@ -10,6 +10,16 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- The unit's tokens as a table (WP-2825, spec/parse.md §2.6): with
+  `FrontEndOptions::token_table` (`ParseOptions::token_table`) a tooling
+  client reads `FrontEnd::token_table` (`ParsedTu::token_table`): every
+  token the preprocessor delivered to the parser, in order, with its
+  kind, location, spelling length and macro / macro-argument flags in
+  16 bytes; a `>>`, `>=` or `>>=` the parser split to close a template
+  argument list is the tokens it consumed; `starts_token(file, offset)`
+  and `token_at(file, offset)` answer per file in O(log n), with no
+  second lex (a skipped group starts no token). Off by default, one
+  branch per token when off.
 - A refused evaluation session's diagnostics as data (WP-2827,
   spec/eval-session.md §2, spec/diag.md §10.4):
   `SessionRefused::TuHasErrors` and `Stopped` carry `records`

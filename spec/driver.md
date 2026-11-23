@@ -1703,7 +1703,7 @@ parse, in the order above, before its IR or object (WP-1745).
 runs one `-fsyntax-only` job as a call and calls `f` with the parsed unit
 (`FrontEnd`: the source manager, interner, job engine, AST, Oven,
 preprocessor, target, standard, parser options, main file, token count,
-consulted paths, lookup log) once the AST is final and before anything
+token table, consulted paths, lookup log) once the AST is final and before anything
 is dropped, whenever a parse happened (errors or not, a fatal error
 included). `FrontEnd`, `FrontEndError`, `JobConfig` are
 `#[non_exhaustive]`.
@@ -1798,7 +1798,13 @@ module cache's source is built with the table (the cache's key holds
 it, spec/ast.md §18.10.2). `builtin_literals` (default off; WP-2821; on,
 the command line's `-fkiln-builtin-literals`) keeps the builtin-macro
 literal table, spec/ast.md §22: the closure reads it as
-`fe.ast.literal_builtin(e)`. Under a fixed environment the driver reads
+`fe.ast.literal_builtin(e)`. `token_table` (default off; WP-2825; no
+command-line flag) sets `ParseOptions::token_table`: the closure reads
+the token table, every token the preprocessor delivered to the parser
+with a split `>>` as its two `>`s and the per-file query
+`starts_token(file, offset)`, as `fe.token_table` (`None` when off;
+spec/parse.md §2.6; `front_end.rs` test `token_table_of_two_files`).
+Under a fixed environment the driver reads
 every variable it consults from it and never from the process:
 `KILN_RESOURCE_DIR`, `KILN_LLVM_DIR` and the LLVM search's variables,
 `KILN_BACKEND` / `KILN_HOD`, `PATH` (the GCC driver's and hod's search),
