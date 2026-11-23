@@ -2,6 +2,8 @@
 # extents` (spec/harness.md "Expression extents"): unit, FNV-1a hash of its
 # text, <Kind>=<none>/<total>. A unit whose text is unchanged may not get a
 # larger None share of any kind. Regenerate: cargo xtask extents --update-baseline
+# The arch line names the host it was recorded on; other hosts are not gated.
+arch aarch64
 unit tests/conformance/ast/basic.fundamental/fundamental-types.cpp 89fc8c5ed82a47c4
 unit tests/conformance/ast/class.bit/bitfield-access.cpp d2f6d35f8fc9d956
 unit tests/conformance/ast/class.bit/bitfield-decls.cpp 88d274bc3e83d817

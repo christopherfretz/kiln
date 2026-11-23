@@ -137,6 +137,10 @@ fn baseline_round_trips() {
     let text = b.render();
     assert!(text.contains("unit tests/a.cpp 0000000000000abc CallExpr=2/7\n"));
     assert_eq!(Baseline::parse(&text).unwrap(), b);
+    b.arch = Some(s("aarch64"));
+    let text = b.render();
+    assert!(text.contains("\narch aarch64\nunit "));
+    assert_eq!(Baseline::parse(&text).unwrap(), b);
     assert!(Baseline::parse("unit x zz").is_err());
     assert!(Baseline::parse("unit x 1 A=1").is_err());
     assert_eq!(fnv1a(b""), 0xcbf2_9ce4_8422_2325);

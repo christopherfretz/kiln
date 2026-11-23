@@ -2079,7 +2079,13 @@ written extent kiln states must be the range clang gives that node.
   (baseline n/t)`, a failure); a new or changed unit is not gated and is
   counted on a `baseline:` line. `--update-baseline` rewrites the file
   from a whole default run (not with `--shard`, `--compdb` or
-  `--filter`).
+  `--filter`). Its `arch <arch>` line names the host architecture it
+  was recorded on (`std::env::consts::ARCH`): the system headers a unit
+  includes expand differently per architecture (`va_list` is a structure
+  on one and an array on another, `NULL` may be `__null`), so the `None`
+  shares are gated only on that architecture; elsewhere the run prints
+  `baseline: recorded on <arch>, not gated on <host>` and mismatches stay
+  gated. A file without an `arch` line is gated everywhere.
 - **Output**, deterministic: `extents: <units> units, <n> compared, <m>
   mismatches, <s> macro-skipped`; one `kind <Kind>: some <a> none <b>
   clang-only <c> mismatch <d>` per kind, sorted; then, sorted, the
