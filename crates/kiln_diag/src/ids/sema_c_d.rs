@@ -323,6 +323,7 @@ sema_decltype_auto_compound = Error (1) "cannot form {0:pointer to|reference to|
 // ----- WP-1135 (clang `err_decltype_auto_function_declarator_not_declaration`)
 sema_decltype_auto_function_declarator = Error (0) "'decltype(auto)' can only be used as a return type in a function declaration";
 sema_decltype_auto_initializer_list = Error (0) "cannot deduce 'decltype(auto)' from initializer list";
+sema_decltype_in_declarator = Error (0) "a 'decltype' specifier cannot be used in a declarative nested name specifier";
 sema_decomp_decl_ambiguous_base = Error (2) "cannot bind members of ambiguous base class {1} of {0}";
 sema_decomp_decl_ambiguous_base_19 = Error (2) "cannot decompose members of ambiguous base class {1} of {0}";
 sema_decomp_decl_anon_union_member = Error (2) "cannot bind class type {0} because it has an anonymous {1:struct|union} member";

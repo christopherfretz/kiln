@@ -1165,6 +1165,28 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- Sema: a friend function definition whose name is qualified (`friend
+  void N::f() { }`, `friend void ::g() { }`, a qualified friend
+  constructor or destructor, or a decltype qualifier) is now an error,
+  "friend function definition cannot be qualified with '...'"
+  ([class.friend]/6, WP-3140). A dependent qualifier is reported at the
+  declaration. A non-dependent one is reported once the friend matches
+  its target. As in clang, the declaration is kept.
+- Sema: friend templates whose qualifier names a specialization that is
+  not their own are now diagnosed as clang does ([temp.friend],
+  WP-3140). A friend class or function template naming a member of a
+  specialization that is not explicitly specialized (`template <int M>
+  friend struct Bq<4>::Z;`) is an error, "template parameter list
+  matching the non-templated nested type ... should be empty". This also
+  applies when the dependent qualifier resolves at instantiation. A
+  friend template whose dependent qualifier does not use its own
+  parameters is ignored with the -Wunsupported-friend warning.
+- Parse: a friend declarator-id qualified by a decltype-specifier
+  (`friend void decltype(Bq<N>{})::g();`) now parses and names the member
+  ([expr.prim.id.qual]/1, WP-3141). Outside a friend declaration, a
+  decltype qualifier on a declarative nested-name-specifier is the error
+  "a 'decltype' specifier cannot be used in a declarative nested name
+  specifier" ([expr.prim.id.qual]/3).
 - xtask (harness): no `core` dumps and honest host errors (WP-2762,
   WP-2780). xtask turns core dumps off for itself at startup, so no
   compiler, oracle, test binary, cargo test or extents clang it starts

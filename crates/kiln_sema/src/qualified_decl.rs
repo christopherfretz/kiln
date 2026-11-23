@@ -145,7 +145,39 @@ impl Sema<'_, '_> {
             self.emit(m);
             return QualifiedDecl::Keep;
         }
+        // [expr.prim.id.qual]/3: a declarative nested-name-specifier has no
+        // computed-type-specifier (`void decltype(a)::g() {}`; clang
+        // `err_decltype_in_declarator` at the name, the declaration is
+        // kept). A friend's is accepted, as clang (WP-3141).
+        if d.qualifier_nns.is_some_and(|q| self.nns_starts_with_decltype(q)) {
+            self.error(DiagId::sema_decltype_in_declarator, loc);
+        }
         QualifiedDecl::Keep
+    }
+
+    /// Whether the first component of `n` is a decltype-specifier
+    /// (`decltype(e)::`).
+    pub(crate) fn nns_starts_with_decltype(&self, n: kiln_ast::NnsId) -> bool {
+        use kiln_ast::types::{Nns, TypeView};
+        let t = &self.ast.types;
+        let mut cur = n;
+        for _ in 0..1024 {
+            let prefix = match t.nns_view(cur) {
+                Nns::Type { prefix: None, ty, .. } => {
+                    return matches!(t.view(ty.ty()), TypeView::Decltype { .. });
+                }
+                Nns::Type { prefix, .. }
+                | Nns::Identifier { prefix, .. }
+                | Nns::Namespace { prefix, .. }
+                | Nns::NamespaceAlias { prefix, .. } => prefix,
+                Nns::Global | Nns::Splice(_) => None,
+            };
+            match prefix {
+                Some(p) => cur = p,
+                None => return false,
+            }
+        }
+        false
     }
 
     /// The scope a qualified declaration is in, as clang's `CurContext`

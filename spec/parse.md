@@ -2119,6 +2119,21 @@ for `^^`, §5 for splices).
   | `typename splice-specifier < args > ::` [temp.names]/3 | `parse_typename_specifier` (`typename_splice_scope_end`); the tentative scanner skips the whole qualified name (`typename_splice_end`) | `act_on_splice_template_type` → `act_on_nested_name_decltype` (pending first component) |
   | `^^ nested-name-specifier template identifier` [expr.reflect]/1-2 | `reflect_lookahead` returns `Template` (never the type-id path); after any qualifier the identifier must denote a template | `reflect_template_kw_non_template` otherwise (clang's "does not refer to a template") |
 
+  A declarator-id's nested-name-specifier may begin with a
+  decltype-specifier (`friend void decltype(Bq<8>{})::g();`, WP-3141):
+  `parse_direct_declarator` takes the qualified path at a `decltype (
+  expression ) ::` (`decltype_scope_end`), and `parse_nested_name_nns`
+  annotates it as any other `decltype(e)::` qualifier (the written
+  reference after it is qualified by the specifier, `q=specifier:L:C`,
+  spec/ast.md §18.11.2). clang accepts it in a friend declaration; in any
+  other declaration it is sema's `err_decltype_in_declarator`, "a
+  'decltype' specifier cannot be used in a declarative nested name
+  specifier", at the name, after the scope checks of
+  `diagnose_qualified_declaration` ([expr.prim.id.qual]/3); the
+  declaration is kept, as clang keeps it. Tests:
+  `expr.prim.id.qual/decltype-qualifier-*.cpp`,
+  `written_refs/decltype-qualifier-friend.cpp`.
+
   A declarative nested-name-specifier that starts with a splice
   ([expr.prim.id.qual]/3) is diagnosed by the parser, which then skips the
   qualifier: in `parse_direct_declarator` (the declarator-id; the

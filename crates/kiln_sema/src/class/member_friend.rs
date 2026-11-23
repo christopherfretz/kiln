@@ -231,6 +231,41 @@ impl Sema<'_, '_> {
         Some(fd)
     }
 
+    /// `template<int M> friend struct Bq<sizeof(T)>::Z;` in a class
+    /// template: a dependent qualifier naming none of the friend's own
+    /// parameters leaves its head to the class named, a member template
+    /// of a class the template definition cannot name. clang ignores the
+    /// friend with `warn_template_qualified_friend_ignored` at the name
+    /// (from `CheckClassTemplate`; clang 22 prints the specifier without
+    /// its trailing `::`). Whether it was ignored (WP-3140).
+    pub(crate) fn ignore_dependent_friend_class_template(
+        &mut self,
+        ds: &DeclSpec,
+        base: QualType,
+        loc: Loc,
+    ) -> bool {
+        if !self.has_pending_head() || !self.inst.stack.is_empty() {
+            return false;
+        }
+        let TypeView::DependentName { nns, .. } = self.ast.types.view(base.ty()) else {
+            return false;
+        };
+        let Some((_, args, _)) = self.member_friend_shape(nns) else { return false };
+        if self.member_friend_head(&args).is_some() {
+            return false;
+        }
+        self.take_open_heads();
+        self.templ.cur = None;
+        let mut spec = self.nns_str(nns);
+        if self.clang_compat >= 22 && spec.ends_with("::") {
+            spec.truncate(spec.len() - 2);
+        }
+        let at = ds.dependent_tag_name.unwrap_or(loc);
+        let e = self.diag(DiagId::sema_unsupported_friend_template, at).arg(spec);
+        self.emit(e);
+        true
+    }
+
     /// `template<class T> friend void A<T>::f();` in class `record`:
     /// `None` when the declaration is not of that form.
     pub(crate) fn declare_member_friend_fn(
@@ -267,6 +302,15 @@ impl Sema<'_, '_> {
             Some(_) => return None,
         };
         if self.templ.fn_def_next {
+            // clang warns for such a definition too, after its
+            // `err_qualified_friend_def` (WP-3140).
+            if special.is_none()
+                && self.inst.stack.is_empty()
+                && let Some((_, args, _)) = self.member_friend_shape(nns)
+                && self.member_friend_head(&args).is_some()
+            {
+                self.warn_unsupported_friend(nns, record, d.name_loc());
+            }
             return None;
         }
         let ident = if special.is_some() { None } else { Some(d.name?.0) };

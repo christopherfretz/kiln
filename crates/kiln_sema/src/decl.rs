@@ -11374,11 +11374,36 @@ impl Sema<'_, '_> {
             return None;
         }
         // The friend's own template head declares nothing (clang matches
-        // it against the template's only on instantiation).
-        let head = self.take_template_head(None);
-        self.check_friend_class_template_defaults(head);
+        // it against the template's only on instantiation). It is matched
+        // to the qualifier first: an implicitly instantiated class there
+        // takes `template<>` only (`template<int M> friend struct
+        // Bq<8>::Z;`: clang's `err_template_param_list_matches_nontemplate`
+        // at `template`, from `MatchTemplateParametersToScopeSpecifier`;
+        // nothing is befriended, WP-3140). A qualifier naming a class
+        // template (the current instantiation, `template<bool> friend
+        // class take<V>::sentinel;` in a member defined out of its class)
+        // has its parameters matched by the enclosing heads already: the
+        // head is the friend's own, as before.
+        let head = if self.qualifier_names_class_template(q) {
+            self.take_template_head(None)
+        } else {
+            self.take_template_head_of(Some(q), true)
+        };
+        let mismatch = std::mem::take(&mut self.templ.head_mismatch);
+        if !mismatch {
+            self.check_friend_class_template_defaults(head);
+        }
         self.templ.cur = None;
-        let Some((t, p)) = t.and_then(|t| self.pattern_of(t).map(|p| (t, p))) else {
+        let pattern = t.and_then(|t| self.pattern_of(t).map(|p| (t, p))).filter(|_| !mismatch);
+        let Some((t, p)) = pattern else {
+            if mismatch {
+                let mut h = DeclHead::new(q, DeclName::ident(n), nloc);
+                h.lexical = Some(self.ctx);
+                h.misc = h.misc.with_friend(FriendKind::Undeclared);
+                let d = self.builder().record(h, Self::tag_kind_of(keyword), None);
+                self.ast.decls.set_flags(d, DeclFlags::INVALID);
+                return Some(d);
+            }
             let msg = if let Some(&other) = found.first() {
                 let msg =
                     self.diag(DiagId::sema_redefinition_different_kind, nloc).arg(sym_str(self, n));

@@ -132,6 +132,28 @@ field's type becomes the error type);
 static data member in a local class or in an anonymous/unnamed class;
 `virtual`/`explicit`/pure on the wrong kind of member.
 
+A function defined in a friend declaration is named unqualified
+([class.friend]/6, WP-3140): a qualified friend function definition
+(`friend void N::f() { }`, `friend void ::g() { }`, `friend C::C() { }`,
+`template <class U> friend void N::k(U) { }`, `friend void
+decltype(x)::g() { }`) is clang's `err_qualified_friend_def`, "friend
+function definition cannot be qualified with 'N'", at the start of the
+nested-name-specifier (`report_qualified_friend_def`). The specifier is
+printed as written without its trailing `::` (clang 22; under
+`-fclang-compat=19` with it, `'N::'`); the global specifier is `'::'`
+under both. A dependent specifier (`friend void Bq<sizeof(T)>::g() { }`,
+a [temp.friend]/5 friend `template <class T> friend void A<T>::m() { }`,
+which also gets its `-Wunsupported-friend` warning after the error) is
+reported when the declaration is parsed; a non-dependent one once the
+friend matched a declaration: a friend that matches nothing gets only
+the "does not match any declaration" error, as in clang. The declaration
+goes on as written either way (its body is checked; a later redefinition
+of the befriended function is reported against it, as clang does).
+Known gap: a class template holding a non-dependent qualified friend
+definition redefines the befriended function at its instantiation (an
+extra "redefinition" error clang does not give; the program is already
+ill-formed). Tests: `class.friend/qualified-friend-definition*.cpp`.
+
 A friend constructor, destructor or conversion function of another class
 (`friend A::A(int);`, `friend A::~A();`, `friend A::operator int();`,
 [class.friend]/4; `declare_special_member_friend`, WP-1466) is matched as

@@ -3897,7 +3897,13 @@ impl Parser<'_, '_> {
         // The scopes a qualified declarator-id enters for the rest of the
         // declarator.
         let mut entered = 0;
-        if (self.ident().is_some() || self.at(Punct::ColonColon))
+        // A qualifier may begin with a decltype-specifier
+        // (`friend void decltype(x)::g();`, [expr.prim.id.qual]/1, as clang
+        // parses it; a non-friend one is diagnosed by sema,
+        // `diagnose_qualified_declaration`).
+        let decltype_qual =
+            self.at_kw(Kw::Decltype) && self.decltype_scope_end(self.pos()).is_some();
+        if (self.ident().is_some() || self.at(Punct::ColonColon) || decltype_qual)
             && d.ctx != DeclaratorContext::TypeName
         {
             let last_qual = self.last_qualifier_name();

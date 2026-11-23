@@ -1758,6 +1758,13 @@ impl Sema<'_, '_> {
     /// explicitly instantiated) specialization `template<>`. The walk
     /// stops at an explicit specialization, whose members are declared
     /// as those of an ordinary class ([temp.expl.spec]/4).
+    /// Whether the qualifier's class chain holds a class template (or a
+    /// partial specialization) whose head is still to be matched: a
+    /// [`ScopeSlot::Params`] of [`Self::scope_slots`].
+    pub(crate) fn qualifier_names_class_template(&self, qualifier: DeclId) -> bool {
+        self.scope_slots(Some(qualifier)).iter().any(|s| matches!(s, ScopeSlot::Params(_)))
+    }
+
     fn scope_slots(&self, qualifier: Option<DeclId>) -> Vec<ScopeSlot> {
         let Some(mut c) = qualifier else { return Vec::new() };
         let mut slots = Vec::new();

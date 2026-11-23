@@ -258,6 +258,31 @@ impl Sema<'_, '_> {
         self.diagnose_unexpanded_pack(PackOperand::Type(ty), "friend declaration", d.name_loc())
     }
 
+    /// [class.friend]/6: a function defined in a friend declaration is
+    /// named by an unqualified name. `Some(dependent)` when `d` is a
+    /// qualified friend function definition being parsed, `dependent`
+    /// when its nested-name-specifier is (clang reports a dependent one
+    /// at once and a non-dependent one once the friend matched).
+    fn qualified_friend_def(&self, d: &Declarator) -> Option<bool> {
+        let n = d.qualifier_nns.filter(|_| self.templ.fn_def_next && self.inst.stack.is_empty())?;
+        Some(self.ast.types.nns_flags(n).intersects(kiln_ast::types::TypeFlags::DEPENDENT))
+    }
+
+    /// clang's `err_qualified_friend_def` at the start of the
+    /// nested-name-specifier (clang 22 prints it without its trailing
+    /// `::`, except the global `::`). The declaration goes on as written
+    /// (WP-3140).
+    fn report_qualified_friend_def(&mut self, d: &Declarator) {
+        let Some(n) = d.qualifier_nns else { return };
+        let mut spec = self.nns_str(n);
+        if self.clang_compat >= 22 && spec.len() > 2 && spec.ends_with("::") {
+            spec.truncate(spec.len() - 2);
+        }
+        let at = if d.id_qual.is_valid() { d.id_qual } else { d.name_loc() };
+        let e = self.diag(DiagId::sema_qualified_friend_def, at).arg(spec);
+        self.emit(e);
+    }
+
     /// [`Sema::act_on_friend`]: the befriended function or type, recorded
     /// in the class being defined (`RecordCold.friends` at `}`).
     #[allow(
@@ -294,6 +319,11 @@ impl Sema<'_, '_> {
         // `friend void f(auto);` is an abbreviated friend function
         // template ([dcl.fct]/22): its invented head is the friend's.
         self.finish_invented_head();
+        let qualified_def = self.qualified_friend_def(d);
+        if qualified_def == Some(true) {
+            self.report_qualified_friend_def(d);
+        }
+        let concrete_qualified_def = qualified_def == Some(false);
         // `template<class T> friend void A<T>::f();` ([temp.friend]/5).
         if let Some(fd) = self.declare_member_friend_fn(ds, base, d, record) {
             return Some(fd);
@@ -318,7 +348,11 @@ impl Sema<'_, '_> {
             )
             && let Some(class) = d.qualifier
         {
-            return self.declare_special_member_friend(ds, base, d, record, class, head, sloc);
+            let fd = self.declare_special_member_friend(ds, base, d, record, class, head, sloc);
+            if concrete_qualified_def && fd.is_some() {
+                self.report_qualified_friend_def(d);
+            }
+            return fd;
         }
         // [class.friend]/1, [class.mem.general]/3: a constructor,
         // destructor or conversion function is a member, so a friend names
@@ -403,6 +437,10 @@ impl Sema<'_, '_> {
             d
         };
         let f = self.act_on_function(ds, ty, d, name, true);
+        if concrete_qualified_def && !self.ast.decls.get(f).has(kiln_ast::decl::DeclFlags::INVALID)
+        {
+            self.report_qualified_friend_def(d);
+        }
         // [class.friend]/6: a function may be defined in a friend
         // declaration only of a non-local class (clang
         // `err_friend_def_in_local_class`, for a valid declaration).
@@ -990,6 +1028,9 @@ impl Sema<'_, '_> {
             && let Some(fd) = self.declare_member_friend_class(ds, base, record, loc)
         {
             return Some(fd);
+        }
+        if owned.is_none() && self.ignore_dependent_friend_class_template(ds, base, loc) {
+            return None;
         }
         let target = FriendTarget::Type { ty: base, owned_tag: owned };
         let fd = self.builder().friend(record, loc, target);

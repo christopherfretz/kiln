@@ -3501,6 +3501,35 @@ reports a dropped statement, part or declaration lookup.
     note: kept for diagnostic parity). A friend without its own head
     (`friend class C<U>::Member;`, `friend class A<int>::Member;`) is an
     ordinary dependent friend type (above) and is not warned about.
+  - A friend class template whose head the qualifier does not take
+    (WP-3140; clang's `MatchTemplateParametersToScopeSpecifier` and
+    `CheckClassTemplate`): when the qualifier names an implicitly
+    instantiated specialization (`template <int M> friend struct
+    Bq<4>::Z;`, also through a non-dependent argument that is only
+    instantiation-dependent, `Bq<sizeof(sizeof(f(T())))>::`, which is
+    `Bq<8>`), that class takes `template<>` only: "template parameter
+    list matching the non-templated nested type 'Bq<4>' should be empty
+    ('template<>')" at the head's `template`, whether the member is a
+    class template or not, and nothing is befriended (an invalid hidden
+    class, as for "does not match"; `act_on_qualified_friend_class_template`
+    through `take_template_head_of(Some(q), true)`, the check function
+    friends had). A namespace or an explicit specialization takes no
+    head (`template <int M> friend struct Bq<9>::T;` for `template <>
+    struct Bq<9>`). A qualifier naming a class template (the current
+    instantiation, `template <bool> friend class take<V>::sentinel;` in
+    a member class template defined outside its class) is not matched:
+    the enclosing heads matched it, so the head is the friend's own
+    (`qualifier_names_class_template`;
+    `temp.friend/friend-template-current-instantiation-out-of-line-run.cpp`). When the qualifier is dependent but names none of the
+    friend's own parameters (`template <int M> friend struct
+    Bq<sizeof(T)>::Z;`), the head is the befriended class template's, a
+    member of a class the definition cannot name: clang ignores the
+    friend with `-Wunsupported-friend`, "dependent nested name specifier
+    'Bq<sizeof(T)>' for friend template declaration is not supported;
+    ignoring this friend declaration", at the name (`'Bq<sizeof(T)>::'`
+    under `-fclang-compat=19`), and so does kiln: no `Friend` is declared
+    (`ignore_dependent_friend_class_template`;
+    `temp.friend/friend-template-qualifier-*.cpp`).
   - An operator-function-id or literal-operator-id (`template <class T>
     friend void *A<T>::operator new(std::size_t);`) is matched by name
     like any other member function (WP-1737), and a deallocation
