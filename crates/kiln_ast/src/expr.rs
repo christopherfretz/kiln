@@ -1525,6 +1525,9 @@ pub struct ColdExprData {
     /// one, the location and context of the use. Computed by sema (which
     /// owns the source manager and the function-name printer).
     pub source_loc: ColdMap<ExprId, SourceLocValues>,
+    /// The maker of each string object kiln makes itself (§5.8.1), keyed
+    /// by the `StringLiteral` expression that is the object's origin.
+    pub string_maker: ColdMap<ExprId, StringMaker>,
     /// The value of an immediate invocation (`ConstantExpr`) in a default
     /// argument or default member initializer, which has none of its own
     /// (it is evaluated at each use, §5.10): sema's evaluation at a use
@@ -1681,6 +1684,49 @@ pub struct SourceLocValues {
     pub ctx: DeclId,
 }
 
+/// The role of a source-location string: which value of a use it is
+/// (§5.8.1).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
+pub enum SrcLocRole {
+    /// `__builtin_FILE()`, `source_location::file_name()`: the presumed
+    /// file name.
+    File,
+    /// `__builtin_FILE_NAME()`: the presumed file name's last component.
+    FileName,
+    /// `__builtin_FUNCTION()`: the plain function name.
+    Function,
+    /// `source_location::function_name()` (`__impl::_M_function_name`):
+    /// the pretty function name.
+    PrettyFunction,
+}
+
+/// The maker of a string object kiln makes itself, a string no
+/// `StringLiteral` of the source spells (§5.8.1): what made the
+/// `StringLiteral` expression that is the object's `origin` in a
+/// [`PtrBase::StringLit`](crate::consts::PtrBase) pointer.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
+pub enum StringMaker {
+    /// A source-location builtin's string of `role`, at a use evaluated in
+    /// declaration `decl` (the use's [`SourceLocValues::ctx`]: for a
+    /// default argument or default member initializer, the context of the
+    /// use, not of the initializer). Every use whose values point at the
+    /// object has this role and this context.
+    SourceLoc {
+        /// Which value of the use.
+        role: SrcLocRole,
+        /// The declaration the use is evaluated in.
+        decl: DeclId,
+    },
+    /// A string of reflection (`std::meta::identifier_of` and the other
+    /// name queries, `symbol_of`, a `meta::exception`'s message, the
+    /// strings of `std::meta::source_location_of`).
+    Reflection,
+    /// A contract assertion's `contract_violation` string (its file, its
+    /// function's pretty name, its predicate's text; spec/contracts.md
+    /// §6.3).
+    ContractSite,
+}
+
 /// The cold record of an `ArrayTypeTraitExpr` (§9.4).
 #[derive(Clone, Copy, Debug, kiln_snap::Snap)]
 pub struct ArrayTraitExtra {
@@ -1701,6 +1747,7 @@ impl Default for ColdExprData {
             array_trait: ColdMap::new("array_trait"),
             trait_rhs_loc: ColdMap::new("trait_rhs_loc"),
             source_loc: ColdMap::new("source_loc"),
+            string_maker: ColdMap::new("string_maker"),
             default_imm: ColdMap::new("default_imm"),
             union_field: ColdMap::new("union_field"),
             cast_written: ColdMap::new("cast_written"),
@@ -2758,6 +2805,20 @@ impl ExprArena {
         v: SourceLocValues,
     ) -> Result<(), AlreadySet> {
         self.cold.source_loc.insert(e, v)
+    }
+
+    /// The maker of the string object whose origin is the `StringLiteral`
+    /// expression `e` (§5.8.1): `None` for a literal the source spells.
+    pub fn string_maker(&self, e: ExprId) -> Option<StringMaker> {
+        self.cold.string_maker.get(e).copied()
+    }
+
+    /// Records the maker of the string object whose origin is `e` (once).
+    ///
+    /// # Errors
+    /// If one is already recorded.
+    pub fn set_string_maker(&mut self, e: ExprId, m: StringMaker) -> Result<(), AlreadySet> {
+        self.cold.string_maker.insert(e, m)
     }
 
     /// The value sema found for immediate invocation `e` of a default

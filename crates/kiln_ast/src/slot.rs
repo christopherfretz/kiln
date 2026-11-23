@@ -187,6 +187,7 @@ const COLD_MAP_NAMES: &[&str] = &[
     "size_of_pack_partial",
     "source_loc",
     "splice_args",
+    "string_maker",
     "syntactic_list",
     "template_defaults",
     "template_inherited_defaults",

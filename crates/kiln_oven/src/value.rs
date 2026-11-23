@@ -1825,7 +1825,9 @@ impl Oven {
         e: Option<ExprId>,
     ) -> u64 {
         let size = self.types.size(ty);
-        let p = self.mem.alloc_static(ty, size, flags::CONST, Origin::Str(s, e));
+        let made = e.is_some_and(|e| b.ast().exprs.string_maker(e).is_some());
+        let fl = if made { flags::CONST | flags::MADE_STR } else { flags::CONST };
+        let p = self.mem.alloc_static(ty, size, fl, Origin::Str(s, e));
         let base = u64::from(
             self.mem.statics[(Ptr::decode(p).slot & !crate::mem::STATIC_BIT) as usize].base,
         );

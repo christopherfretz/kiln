@@ -10,6 +10,14 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- The maker of a string kiln makes itself (WP-3000, spec/ast.md §5.8.1):
+  `ExprArena::string_maker(origin)` and `Ast::string_maker_of(value)`
+  lead a pointer to a source-location, reflection or contract-site
+  string held in a constant to its maker, `StringMaker::SourceLoc {
+  role, decl }` (the use's role and the declaration it is evaluated in;
+  a default argument counts as its caller's use), `Reflection` or
+  `ContractSite`, for tooling clients.
+
 - The unit's tokens as a table (WP-2825, spec/parse.md §2.6): with
   `FrontEndOptions::token_table` (`ParseOptions::token_table`) a tooling
   client reads `FrontEnd::token_table` (`ParsedTu::token_table`): every
@@ -935,6 +943,15 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   header-unit key is computed with no file-system call since WP-2621.)
 
 ### Changed
+
+- String identity (WP-3000, spec/ast.md §5.8.1): a source-location
+  string is one object per (content, role, declaration the use is
+  evaluated in), and reflection's and contract sites' strings are
+  objects of their own, so each object has one maker. Objects with
+  equal contents keep one address at run time (one `.str` per content,
+  as clang) and to the Oven's pointer comparison and subtraction
+  (`f(1) == f(1L)` for two overloads' `__builtin_FUNCTION()` stays a
+  constant `true`, as in clang 19, 22 and GCC 16.1).
 
 - `kiln_ast::dump::AstNames::for_keys` / `type_key` print a type as a
   key: unlike the diagnostic text, two different types never print alike

@@ -14,7 +14,7 @@ use kiln_ast::attr::{AttrKind, AttrNode, AttrSyntax};
 use kiln_ast::consts::{PtrBase, Scalar};
 use kiln_ast::decl::{ConstexprKind, DeclFlags, DeclKind, FnSpec, FnStorage, LinkageLang, builtin};
 use kiln_ast::expr::{CastKind, ExprFlags, ExprKind, ValueCategory};
-use kiln_ast::expr::{SourceLocKind, SourceLocValues};
+use kiln_ast::expr::{SourceLocKind, SourceLocValues, SrcLocRole, StringMaker};
 use kiln_ast::ids::RawId;
 use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::types::TargetTypes;
@@ -3436,10 +3436,14 @@ impl Sema<'_, '_> {
 pub(crate) struct SrcLocCache {
     /// `std::source_location::__impl` once found and checked.
     impl_decl: Option<DeclId>,
-    /// The string literal object every source-location string with this
-    /// content points into: one `StringLiteral` expression per content
-    /// (clang `getPredefinedStringLiteralFromCache`).
-    strings: kiln_source::fx::FxHashMap<kiln_ast::StringLitId, ExprId>,
+    /// The string object every string kiln makes with this content and
+    /// this maker points into: one `StringLiteral` expression per
+    /// (content and encoding, maker), so a source-location string is one
+    /// object per (content, role, declaration evaluated in), and
+    /// reflection's and contract sites' strings are never shared with
+    /// them (spec/ast.md §5.8.1, WP-3000; clang's
+    /// `getPredefinedStringLiteralFromCache` keys by content alone).
+    strings: kiln_source::fx::FxHashMap<(kiln_ast::StringLitId, StringMaker), ExprId>,
     /// Which builtins a parameter's default argument evaluates,
     /// transitively through the default arguments of the calls in it
     /// (bit `1 << kind`; computed once per parameter).
@@ -3633,11 +3637,18 @@ impl Sema<'_, '_> {
         };
         let file_name = file.rsplit('/').next().unwrap_or(&file).to_owned();
         let (plain, pretty) = self.predefined_function_names(ctx);
-        let Some(file_p) = self.srcloc_string(&file) else { return };
-        let Some(file_name_p) = self.srcloc_string(&file_name) else { return };
-        let Some(function_p) = self.srcloc_string(&plain) else { return };
+        let Some(file_p) = self.srcloc_string(&file, SrcLocRole::File, ctx) else { return };
+        let Some(file_name_p) = self.srcloc_string(&file_name, SrcLocRole::FileName, ctx) else {
+            return;
+        };
+        let Some(function_p) = self.srcloc_string(&plain, SrcLocRole::Function, ctx) else {
+            return;
+        };
         let location = if location {
-            let Some(pretty_p) = self.srcloc_string(&pretty) else { return };
+            let Some(pretty_p) = self.srcloc_string(&pretty, SrcLocRole::PrettyFunction, ctx)
+            else {
+                return;
+            };
             self.source_location_object(file_p, pretty_p, line, column)
         } else {
             None
@@ -3677,7 +3688,9 @@ impl Sema<'_, '_> {
             std::mem::take(&mut self.srcloc.deferred).into_iter().partition(|&(_, c)| c == f);
         self.srcloc.deferred = rest;
         let (_, pretty) = self.predefined_function_names(f);
-        let Some(pretty_p) = self.srcloc_string(&pretty) else { return };
+        let Some(pretty_p) = self.srcloc_string(&pretty, SrcLocRole::PrettyFunction, f) else {
+            return;
+        };
         for (e, _) in mine {
             let Some(mut v) = self.ast.exprs.source_loc_values(e).copied() else { continue };
             v.location = self.source_location_object(v.file, pretty_p, v.line, v.column);
@@ -3687,16 +3700,48 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// The `const char *` value pointing to the string literal object
-    /// holding `s` (one object per content).
-    pub(crate) fn srcloc_string(&mut self, s: &str) -> Option<kiln_ast::ConstValueId> {
-        self.frozen_string(s, false)
+    /// The `const char *` value pointing to the string object holding `s`
+    /// as the value of `role` of a source-location use evaluated in
+    /// `decl`: one object per (content, role, declaration), so every use
+    /// whose values point at it has that role and is evaluated in that
+    /// declaration (spec/ast.md §5.8.1).
+    pub(crate) fn srcloc_string(
+        &mut self,
+        s: &str,
+        role: SrcLocRole,
+        decl: DeclId,
+    ) -> Option<kiln_ast::ConstValueId> {
+        self.made_string(s, false, StringMaker::SourceLoc { role, decl })
     }
 
     /// The `const char *` (`const char8_t *` when `u8`) value pointing to
-    /// the string literal object holding `s` (one object per content and
-    /// encoding).
-    pub(crate) fn frozen_string(&mut self, s: &str, u8: bool) -> Option<kiln_ast::ConstValueId> {
+    /// the string object holding `s` for reflection (one object per
+    /// content and encoding among reflection's strings).
+    pub(crate) fn reflection_string(
+        &mut self,
+        s: &str,
+        u8: bool,
+    ) -> Option<kiln_ast::ConstValueId> {
+        self.made_string(s, u8, StringMaker::Reflection)
+    }
+
+    /// The `const char *` value pointing to the string object holding `s`
+    /// for a contract site's `contract_violation` (one object per content
+    /// among contract sites' strings).
+    pub(crate) fn contract_string(&mut self, s: &str) -> Option<kiln_ast::ConstValueId> {
+        self.made_string(s, false, StringMaker::ContractSite)
+    }
+
+    /// The `const char *` (`const char8_t *` when `u8`) value pointing to
+    /// the string object holding `s` made by `maker`: one object (one
+    /// `StringLiteral` origin, its maker recorded in
+    /// `ExprArena::string_maker`) per content, encoding and maker.
+    fn made_string(
+        &mut self,
+        s: &str,
+        u8: bool,
+        maker: StringMaker,
+    ) -> Option<kiln_ast::ConstValueId> {
         use kiln_ast::expr::StringKind;
         use kiln_ast::strings::StringEncoding;
         let (enc, lex, kind, elem) = if u8 {
@@ -3710,12 +3755,13 @@ impl Sema<'_, '_> {
             )
         };
         let lit = self.ast.strings.intern(enc, s.as_bytes());
-        let origin = if let Some(&e) = self.srcloc.strings.get(&lit) {
+        let origin = if let Some(&e) = self.srcloc.strings.get(&(lit, maker)) {
             e
         } else {
             let ty = crate::literal::string_literal_type(self, lex, s.len() as u64 + 1);
             let e = self.builder().string_literal(ty, kind, lit, Loc::INVALID);
-            self.srcloc.strings.insert(lit, e);
+            let _ = self.ast.exprs.set_string_maker(e, maker);
+            self.srcloc.strings.insert((lit, maker), e);
             e
         };
         let ty = self.const_char_ptr(elem);
@@ -3760,8 +3806,8 @@ impl Sema<'_, '_> {
             Some(p) => (sm.remap_macro_path(&sm.presumed_file_name(&p, loc)), p.line, p.col),
             None => (String::new(), 0, 0),
         };
-        let file = self.srcloc_string(&file)?;
-        let function = self.srcloc_string(function)?;
+        let file = self.reflection_string(&file, false)?;
+        let function = self.reflection_string(function, false)?;
         self.source_location_object(file, function, line, column)
     }
 

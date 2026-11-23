@@ -235,7 +235,7 @@ impl Sema<'_, '_> {
             return None;
         }
         let (_, u8) = self.meta_names.exc?;
-        let what_cv = self.frozen_string(what, u8)?;
+        let what_cv = self.reflection_string(what, u8)?;
         let from = self.intern_reflection(Reflectee::Decl(self.entity_decl(callee)), loc).ok()?;
         let at = self.meta_source_location(loc, "");
         Some(MetaThrow { what: what_cv, len: what.len() as u64, from, at })

@@ -37,7 +37,7 @@ impl Sema<'_, '_> {
 
     /// `name_of(r)`: the identifier of a declaration, or a type's name.
     /// The spike returns a `const char *` to a string literal object
-    /// (one per content, shared with `std::source_location`'s).
+    /// (one per content among reflection's strings, spec/ast.md §5.8.1).
     fn reflect_name(&mut self, r: ReflectionId, loc: Loc) -> Result<ConstValueId, MetaError> {
         let name = match self.ast.reflections.get(r) {
             Reflectee::Decl(d) | Reflectee::Namespace(d) | Reflectee::NamespaceAlias(d) => {
@@ -55,7 +55,7 @@ impl Sema<'_, '_> {
         if name.is_empty() {
             return fail(loc, format!("'{}' has no name", self.reflection_str(r)));
         }
-        match self.srcloc_string(&name) {
+        match self.reflection_string(&name, false) {
             Some(cv) => Ok(cv),
             None => fail(loc, "kiln: name too large for a constant"),
         }

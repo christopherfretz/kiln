@@ -864,9 +864,10 @@ needed later). Values of non-constant-context folding (`try_fold`) are
   `Exprs::source_loc_values` / `set_source_loc_values`): sema computes
   them, since it owns the source manager and the function-name printer.
   `SourceLocValues { file, file_name, function: ConstValueId, line,
-  column: u32, location: Option<ConstValueId> }`; the `ConstValueId`s are
-  interned pointers to string-literal objects (one per distinct string)
-  and, for `location`, to the frozen `__impl` object of that location.
+  column: u32, location: Option<ConstValueId>, at, ctx }`; the
+  `ConstValueId`s are interned pointers to string objects kiln makes
+  (one per content, role and `ctx`, §5.8.1) and, for `location`, to the
+  frozen `__impl` object of that location.
   The key is the `SourceLocExpr` itself (its own location and context),
   or a `CXXDefaultArgExpr` that uses a default argument containing one
   (the call's location and the caller's context, [dcl.fct.default]/9 via
@@ -875,6 +876,62 @@ needed later). Values of non-constant-context folding (`try_fold`) are
   initialization's location and context). Consumers (Oven, codegen) take
   the values of the outermost `CXXDefaultArgExpr`/`CXXDefaultInitExpr` in
   scope that has an entry, else the `SourceLocExpr`'s own.
+
+#### 5.8.1 Kiln-made strings and their makers (WP-3000)
+Some string objects no `StringLiteral` of the source spells are made by
+kiln: the strings of the source-location builtins (and of
+`std::source_location`), reflection's strings, and a contract site's
+strings. Each is a `StringLiteral` expression without a location (the
+`origin` of every `PtrBase::StringLit` pointer into it), and its maker is
+recorded in `exprs.cold.string_maker: ColdMap<ExprId, StringMaker>`:
+- `StringMaker::SourceLoc { role, decl }`: the value of `role`
+  (`SrcLocRole::File` `__builtin_FILE()` / `file_name()`, `FileName`
+  `__builtin_FILE_NAME()`, `Function` `__builtin_FUNCTION()`,
+  `PrettyFunction` `function_name()`) of a use evaluated in `decl`.
+  One object per (content, role, `decl`): every use whose
+  `SourceLocValues` point at the object has that role and that `ctx`, so
+  the record of §5.8 lists all of an object's uses. A default argument
+  (or default member initializer) evaluated at a use counts as a use in
+  the context of the call (or of the construction), as §5.8 records it
+  (`Sema::note_default_arg_use`, [dcl.fct.default]/9 via
+  [support.srcloc.cons]/2): `void g(const char *s =
+  __builtin_FUNCTION())` called from `h()` makes `"h"` with
+  `decl = h`.
+- `StringMaker::Reflection`: `identifier_of` and the other name queries,
+  `symbol_of`, a `meta::exception`'s message and the strings of
+  `source_location_of` (one object per content and encoding among
+  them).
+- `StringMaker::ContractSite`: a contract assertion's file, function and
+  predicate text (spec/contracts.md §6.3; one object per content among
+  them).
+
+Queries (for embedders): `ExprArena::string_maker(origin)`, and
+`Ast::string_maker_of(v)` from a frozen pointer value to `(maker,
+origin)`. A literal the source spells (and a predefined `__func__`) has
+no maker.
+
+The rule is the language's: nothing ties the identity of these strings
+to their contents. [support.srcloc.obs] returns an NTBS and says nothing
+of its identity; the builtins' strings are not *string-literal*s, and even
+for those [lex.string]/9 leaves whether equal literals share an object
+unspecified (they are potentially non-unique objects, [intro.object]/9).
+The strings `define_static_string` and `define_static_array` make are
+another path (template parameter objects, spec/reflection-values.md §4:
+equal contents give one object) and stay shared by content.
+
+The maker is the only difference: kiln-made strings with equal contents
+and encoding have one address at run time (codegen's string pool merges
+them, `private unnamed_addr`, as clang 19 and 22 emit one `.str` per
+content) and are one object to the Oven's pointer comparison and
+subtraction (spec/oven.md "Kiln-made strings"), so `f(1) == f(1L)` for
+`constexpr const char *f(T) { return __builtin_FUNCTION(); }` is a
+constant `true` as in clang 19 and 22 (whose
+`getPredefinedStringLiteralFromCache` keeps one `StringLiteral` per
+content) and GCC 16.1. A kiln-made string against a literal the source
+spells stays a comparison of potentially overlapping literals.
+Tests: `tests/conformance/support.srcloc/string-identity*.cpp`,
+`meta.reflection.names/string-identity-srcloc.cpp`,
+`kiln_parse/tests/string_maker.rs`.
 
 ### 5.9 Lambdas (WP-075)
 - **`LambdaExpr`** ([expr.prim.lambda]; spec/sema-lambda.md): `a` is its

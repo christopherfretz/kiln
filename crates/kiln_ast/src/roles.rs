@@ -1123,6 +1123,7 @@ pub static COLD_MAPS: &[ColdMapRoles] = &[
     cold("ColdExprData", "array_trait", E, Role::Record("ArrayTraitExtra")),
     cold("ColdExprData", "trait_rhs_loc", E, L),
     cold("ColdExprData", "source_loc", E, Role::Record("SourceLocValues")),
+    cold("ColdExprData", "string_maker", E, Role::Record("StringMaker")),
     cold("ColdExprData", "default_imm", E, Role::ConstValue),
     cold("ColdExprData", "union_field", E, D),
     cold("ColdExprData", "cast_written", E, T),
