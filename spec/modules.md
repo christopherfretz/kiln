@@ -10,7 +10,8 @@ Reference: clang 22 (`clang++-22 -std=c++20`) for diagnostics, mangling and
 ## 1. The design: no binary module interface in part A
 
 A kiln invocation that imports a module **builds that module in-process
-from its interface source**. There is no BMI and no serialisation: the
+from its interface source** (a file, or a buffer an embedder holds in
+memory, §2 item 0). There is no BMI and no serialisation: the
 imported unit is preprocessed, parsed and analysed by the same
 `Preprocessor` / `Parser` / `Sema` / `Ast` as the importer, its tokens
 spliced into the token stream at the import, with every declaration tagged
@@ -54,6 +55,38 @@ is a declaration of a variable `m` of an unknown type name.
 
 Module sources are found in this order (spec/driver.md, "Modules"):
 
+0. **In-memory interface sources (WP-2824; embedders only, the driver
+   never sets it).** `ModuleOptions::module_buffers` lists `(name,
+   FileId)` pairs: module `<name>` (`M:P` for a partition) is built from
+   that buffer of the run's `SourceManager` (typically one
+   `add_virtual` made), the last entry of a name winning, as for
+   `-fmodule-file`. It is asked first, right after the per-invocation
+   cache (a unit built or being built, a cycle diagnosed), for every
+   import: the main unit's, an implementation unit's implicit import of
+   its interface (§3), a partition's, and those of a unit itself built
+   from a buffer. The import is then exactly that of a source named by
+   item 1, from `begin_unit` on (§1: the unit's includes go through the
+   include resolver, its imports through this same order, a cycle is
+   `pp_module_cycle`), so the `ModuleTable`, owners and diagnostics are
+   those of the same text read from disk, with the buffer's name as the
+   file name. Before `begin_unit` nothing happens: a buffer is always a
+   source, never sniffed or read as a module file whatever its first
+   bytes or name (`.pcm` included), and no path is opened, stat'ed or
+   canonicalised for it (nor for a header unit from a buffer, §11.6).
+   The list is the run's option: nothing is cached across runs.
+   A field and not a resolver method: the buffers live in the run's
+   `SourceManager`, whose `FileId`s are only meaningful to it, and a
+   list in the options keeps the lookup a pure function of the run's
+   inputs with no new trait surface; an embedder that wants a module
+   lazily adds its buffer before the parse. Under `ModuleOptions::record`
+   (a module file of the main unit is being recorded), an import the
+   main unit itself would record is refused with
+   `error: module 'M' is built from the in-memory buffer 'B', which a
+   module file cannot record as its import` (`pp_module_buffer_recorded`)
+   and the unit is still built: the module file would name the buffer as
+   the import's path, which no importer of it can find, and a host file
+   of that name could stand for it. Imports of units built from source
+   are not recorded and are not refused.
 1. `-fmodule-file=<name>=<path>`: the interface source, or the module
    file (§11), for module `<name>` (a partition is named `M:P`). A
    `-fmodule-file=<path>` without a name must name a module file, whose
@@ -6632,6 +6665,18 @@ diagnostics. The `-fkiln-pch-image=check` mode is clean on both, in
   warning and the `--precompile` error, the mismatch, missing,
   wrong-module and clang-file diagnostics, and 40 truncated or flipped
   module files through the driver (each a fatal error, exit code 1).
+- `crates/kiln_parse/tests/module_buffers.rs` (WP-2824, §2 item 0):
+  every file in memory, from C++20: a module, a partition and an
+  implementation unit's interface given as buffers (unit kinds, keys,
+  imports, owners); the same text named by `-fmodule-file` gives the
+  same table and diagnostics but for file names; an error is reported
+  in the buffer by its name; decoy `h.h`, `m.cppm`, `m-p.cppm` in the
+  working directory (also a prebuilt path, and a header-unit module
+  file named for its `h.h`) change nothing, with and without the
+  image; a buffer named `.pcm` or starting with a module file's magic
+  is a source; the refusal under `record`.
+  `crates/kiln_pp/tests/header_unit_virtual.rs` (WP-2621, §11.6): the
+  header-unit key of an in-memory header.
 - Dependency scanning (WP-982, §11.9): `crates/kiln_driver/tests/scan_deps.rs`
   compares the P1689r5 document with clang-scan-deps 22's bytes for a
   primary interface importing its partitions (with a GMF `#include`

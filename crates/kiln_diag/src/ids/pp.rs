@@ -94,6 +94,9 @@ pp_missing_lparen_after = Error (1) "missing '(' after '{0}'";
 pp_missing_rparen_in_params = Error (0) "missing ')' in macro parameter list";
 pp_missing_varargs_arg = Extension [GnuZeroVariadicMacroArguments] (0) "must specify at least one argument for '...' parameter of variadic macro";
 pp_missing_whitespace_after_name = ExtWarn (0) "ISO C99 requires whitespace after the macro name";
+// WP-2824: a module the main unit imports from an in-memory buffer
+// (`ModuleOptions::module_buffers`) while its module file is recorded.
+pp_module_buffer_recorded = Error (2) "module '{0}' is built from the in-memory buffer '{1}', which a module file cannot record as its import";
 pp_module_cycle = Fatal (2) "cyclic dependency in module '{0}': {1}";
 // WP-1744: clang `err_module_decl_in_header_unit`.
 pp_module_decl_in_header_unit = Error (0) "'module' declaration found while building header unit";

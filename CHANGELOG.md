@@ -891,6 +891,19 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   each use of a `long double` declaration is "requires  'long double'
   type support". The predefined macros and `"target-features"` follow.
   The flag was an unknown argument.
+- Embedders can import a named module (or partition) whose interface
+  source is a buffer already in the source manager (WP-2824,
+  spec/modules.md §2 item 0): `ModuleOptions::module_buffers` names
+  `(module, FileId)` pairs, asked before every other lookup step. The
+  unit is built as from a source named by `-fmodule-file=<name>=<path>`
+  (the same `ModuleTable`, owners and diagnostics, with the buffer's
+  name as the file name), and nothing of the host's file system is
+  asked for it. A buffer is always a source, never read as a module
+  file whatever its name or first bytes; recording a module file of a
+  unit that imports one is the error `module 'M' is built from the
+  in-memory buffer 'B', which a module file cannot record as its
+  import`. The driver never sets the field. (An in-memory header's
+  header-unit key is computed with no file-system call since WP-2621.)
 
 ### Changed
 

@@ -573,6 +573,8 @@ impl Job<'_> {
         });
         Some(kiln_pp::ModuleOptions {
             module_files,
+            // For embedders only (spec/modules.md §2 item 0).
+            module_buffers: Vec::new(),
             prebuilt_paths: a.prebuilt_module_paths.iter().map(Into::into).collect(),
             std_dir: Some(self.toolchain.libcxx_module_dir()),
             std_cache,
