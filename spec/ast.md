@@ -1763,6 +1763,7 @@ field `Ast::written_refs`. Built in five stages:
 | 4 | per-specialization entries for dependent names, in a separate table keyed by (pattern entry, specialization) (§18.9) | WP-1933 |
 | 5 | carriage in PCH snapshots and module images | WP-1934 |
 | | the join with expressions; the leading `::` and the `~` (§18.11) | WP-2326 |
+| | the found set of a dependent entry: what lookup found at the template definition (§18.12) | WP-2472 |
 
 ### 18.1 Contract
 
@@ -1833,6 +1834,10 @@ of the two an entry without an entity has:
   arguments are parsed, as `DEPENDENT` until they tell, and becomes
   `UNRESOLVED` when the call is resolved at the definition and fails
   (`written_call_failed`).
+
+A `DEPENDENT` entry with a definition-context lookup also has a found
+set, the declarations that lookup found, in a side table (§18.12); the
+entry itself does not change.
 
 One padding byte remains. Deviation from a 4-byte `entity`-only design:
 `found` and `qualifier` are stored, not derived, because deriving `found`
@@ -2184,8 +2189,9 @@ stage 1.
   dependent name resolves to in each specialization goes to the
   separate per-specialization table (stage 4, §18.9), so the main
   table's entry shape and its one-entry-per-written-name rule do not
-  change. Default arguments and default member initializers are
-  entries once, at the written site.
+  change. What lookup found at the definition, before any
+  specialization, is the entry's found set (§18.12). Default arguments
+  and default member initializers are entries once, at the written site.
 - **PCH and modules.** Stage 5 (§18.10) carries both tables in PCH
   snapshots and module images: a TU restored from a snapshot continues
   the prefix's table, and an importer built from an image merges the
@@ -2704,7 +2710,9 @@ a separate table: the main table keeps one entry per written name.
   whose `entity` or `found` is `d`), `specs_by_entry()` (one pass, for
   clients that query many entries), `spec_adl_set(&row)`. A rename of
   `d` edits the ranges of the main-table entries naming `d` and of the
-  pattern entries of `specs_naming(d)`'s rows.
+  pattern entries of `specs_naming(d)`'s rows, and the entries whose
+  found set has `d` (`entries_finding(d)`, §18.12.1), which also cover
+  templates no specialization of which is instantiated.
 - **Snapshots and images.** Carried with the main table (§18.10).
 
 #### 18.9.2 The specialization
@@ -3019,10 +3027,11 @@ names to be carried.
   side rows (using-directive, argument-dependent set); the interned sets;
   the directive cache; the deferred designators; the per-specialization
   rows, dropped rows included so every `SpecRefId` stays; the pattern
-  nodes and their candidates' using-directives (§18.9.1); the unrecorded rows (§18.10.3); the leads (§18.11.2). Maps are written as their
+  nodes and their candidates' using-directives (§18.9.1); the unrecorded rows (§18.10.3); the leads (§18.11.2); the found sets, their
+  elements and the (entry, set) rows (§18.12.6). Maps are written as their
   entries sorted by key, so the bytes do not depend on hashing.
-  **Rebuilt** on read: the set index and the row de-duplication index,
-  from the sets and the live rows. **Transient**: the scratch of one
+  **Rebuilt** on read: the set index, the found-set index and the row
+  de-duplication index, from the sets and the live rows. **Transient**: the scratch of one
   declaration or one instantiation (`inst_target`, `spec_pending`,
   `spec_last`, `spec_key`), empty at the end of a prefix.
 - **Validated** on read (an `Invalid` error, never a panic): every
@@ -3055,14 +3064,15 @@ names to be carried.
   image's last section, `refs` (spec/modules.md §11.11 "Written
   references"), carries the entries of the names written in the unit's
   own sources after its preamble, their provenance, the
-  per-specialization rows of its carried specializations and the
-  pattern nodes of its dependent entries. The preamble's names (the
+  per-specialization rows of its carried specializations, the
+  pattern nodes of its dependent entries and their found sets
+  (§18.12.6). The preamble's names (the
   module declaration, the imports, and with them the names the imported
   units' replays recorded) are not carried: the importer replays the
   preamble (spec/modules.md §11.11 "Imports and re-exports") and
   records them by parsing, as it does for any source it reads. A name
   whose declaration (entity, found, enclosing, using-directive, a set's
-  member), location, qualifier or pattern node the image cannot carry
+  member, a found set's element), location, qualifier or pattern node the image cannot carry
   fails the image, and the importer replays the unit: correctness
   first. A per-specialization row whose specialization or entity is
   not a record is left out (the importer makes the row again when it
@@ -3342,6 +3352,219 @@ goldens: `Inputs/refs_pch.h` and `Inputs/refs_mod.cppm` end with a
 `p->::N::Pt::~Pt()`, so `pch.refs` (through the snapshot and as text)
 and `module.refs` (through the image and replayed) show the same
 `q=::` and `tilde=` positions.
+
+### 18.12 The found set of a dependent entry (WP-2472)
+
+A `DEPENDENT` entry has no entity (§18.2): what it names is decided per
+specialization (§18.9). But for most dependent names a lookup already
+ran at the template definition, and its result constrains every
+specialization: ordinary lookup of an unqualified dependent call's name
+([temp.dep.candidate]/1), qualified lookup in a non-dependent scope, and
+class member lookup in the current instantiation ([temp.dep.type]/6). A
+tooling client renaming a declaration must know which declarations
+such a name found, also in a template no specialization of which was
+instantiated. The found set is that result.
+
+#### 18.12.1 Contract
+
+- **Definition.** The found set of a `DEPENDENT` entry is the result of
+  the name lookup the standard performs for its name in the template
+  definition: unqualified lookup from the name's position
+  ([basic.lookup.unqual]) for an unqualified name; qualified lookup in a
+  non-dependent scope ([basic.lookup.qual]); class member lookup in the
+  current instantiation ([class.member.lookup], [temp.dep.type]). It is
+  fixed when the entry is made and never changes: a declaration that
+  appears after the name is not in it (in a complete-class context the
+  whole class is visible, [class.mem.general]).
+- **Same switch as the table.** Recorded only when
+  `ParseOptions::written_refs` is on, by the parse-time site that makes
+  the entry (`note_written_name`, beside its pattern node, §18.9.4).
+  Off, nothing changes: no branch is added (every recording site is
+  inside a function that already returns when the table is off, and the
+  rows are removed only where an overloaded name's pending patch, which
+  exists only when on, is resolved). Names parsed for the table alone
+  (§18.8: no pattern node) get no set.
+- **Where the facts come from.** An overload set's list is the pattern
+  node's own: the declarations of the `UnresolvedLookupExpr`, which
+  instantiation itself selects from (spec/sema-templates.md §3.5), with
+  their using-shadows and naming class, or the set of an overloaded
+  member access (a `MemberExpr` of overloaded type). A dependent member
+  access of the current instantiation (`this->a(t)`, `C::a(t)`, `a(t)`
+  with an implicit `this`, `this->template mt<T>(t)`) re-runs, at the
+  recording site, the class member lookup that decided it was dependent
+  (`Sema::current_member_lookup`, which `try_dependent_member_q` uses
+  too) or, for an implicit `this`, the scope walk: the same pure
+  functions over the same scopes, as §18.7.1 re-runs the walk.
+- **Storage.** A sparse side table: one row (entry, set) per entry with
+  a set, sorted by entry by construction, read by binary search; the
+  sets interned by content (elements, `how`, flags), one copy each. The
+  28-byte entry does not change. A callee recorded before its arguments
+  and then resolved at the definition loses its row
+  (`WrittenRefs::resolve`, `written_call_failed`): its entry is no
+  longer `DEPENDENT`. `truncate` drops the rows of the entries it drops.
+- **Read access** (`kiln_ast::written_refs`):
+  `found_at_definition(id) -> Option<FoundSet>`: `None` when the entry
+  is not `DEPENDENT` or no lookup ran at its definition, else the set
+  (`decls: &[FoundDecl]`, `how`, `flags`; `is_closed()`, `adl()`,
+  `dependent_base()`, `unresolved_using()`, `contains(d)`);
+  `found_set_id(id)` (equal ids are equal sets), `found_set(s)`;
+  `found_udir(id, decl)`: the using-directive the definition lookup
+  found an element through (§18.9.1's, by the element's `decl`);
+  `entries_finding(d)`: the dependent entries whose set has `d` as an
+  element's `decl` (a first declaration) or `found` (a using-shadow);
+  `Ast::spec_origin(&row)`: the element a per-specialization row
+  selected (§18.12.4).
+- **Rename.** A rename of `d` edits the main-table entries naming `d`
+  (§18.1), the entries of `entries_finding(d)`, and the pattern entries
+  of `specs_naming(d)` (§18.9.1). For an entry of `entries_finding(d)`,
+  a scan of its set's `decls` tells whether `d` is every element (the
+  name always names `d` or a specialization of it), one of several (the
+  edit renames a name other declarations share), or `d` is reached
+  only through a using-shadow.
+
+#### 18.12.2 Kinds
+
+| entry (§18.9.4 pattern node) | the set is | `flags` |
+|---|---|---|
+| unqualified dependent call `f(t)`, a template-id `f<T>(t)`, an operator-function-id `operator+(t, t)` (`UnresolvedLookupExpr` with ADL) | ordinary unqualified lookup at the name | `ADL`: argument-dependent lookup at each instantiation adds to it |
+| the same, nothing visible (`g(t)`, an assumed template name `get<0>(t)`, [temp.names]/3) | empty: lookup ran and found nothing | `ADL`: only argument-dependent lookup can resolve it |
+| `(f)(t)`, `::f(t)`, `N::f(t)` with several overloads | unqualified (parenthesized) or qualified lookup | none: closed, every instantiation selects from it |
+| one visible `f` with argument-dependent lookup suppressed (a block-scope declaration, a class member), one member found by `this->a(t)` | no set: resolved at the definition, the entry has its entity | |
+| `this->a(t)`, `C::a(t)`, `a(t)` (implicit `this`), `this->mt(t)`, `this->template mt<T>(t)`: members of the current instantiation (`CXXDependentScopeMemberExpr`, or an overloaded member access) | class member lookup in the current instantiation: members of the pattern class and its non-dependent bases | none when the class searched has no dependent base; else `DEPENDENT_BASE`: the instantiation looks the name up again, and a different result is ill-formed ([temp.dep.type]/6; not diagnosed, §18.12.6) |
+| a name a dependent using-declarator introduces (`using B<T>::bm; ... bm(t)`) | the class's lookup result, the `UnresolvedUsingValue` an element | `UNRESOLVED_USING`: what it names exists per specialization only |
+| `T::x`, `B<T>::bm(t)` (a dependent qualifier), `t.m(t)`, `this->bm(t)` naming nothing the class declares in a class with a dependent base (a member of an unknown specialization), `using B<T>::bm;` itself, `typename T::ty`, a dependent nested-name-specifier component | no set (`None`): no lookup runs at the definition; all knowledge is per specialization (§18.9) | |
+| an operator expression `t + t` | no entry (§18.4): its definition-context lookup set is `Ast::dependent_oper_candidates` (§8.5) | |
+
+An unqualified name in a class template with a dependent base: the
+dependent base is not examined, at the definition or at instantiation
+([temp.dep.general]/4); a set found at namespace scope stays closed or
+`ADL` and gets no `DEPENDENT_BASE`. A failed call (`UNRESOLVED`) has no
+set. Argument-dependent lookup in the definition context is not
+precomputed into the set: its declarations appear as rows with
+`how=adl` (§18.9), as do hidden friends, which ordinary lookup never
+finds ([class.friend]/7) and so are never elements.
+
+#### 18.12.3 The element
+
+`FoundDecl { decl, found }` (8 bytes), as `oper_lookup::OperCandidate`
+and §18.2 do it: `decl` is the entity's first declaration (through a
+using-declaration: what it names), so equal sets intern across
+redeclarations; `found` is the using-shadow lookup found, else `decl`.
+A dependent using-declarator is an element by itself (`decl` its
+`UnresolvedUsingValue`). The elements are in the order overload
+resolution enumerates them (innermost scope first, newest first);
+clients treat them as a set. `how` is the definition lookup's kind:
+`Unqualified`, `Qualified` (after a qualifier) or `Member` (after `.`
+or `->`), by the entry's syntax (the entry's own `how` stays `None`,
+§18.7.2). The flags are `FOUND_ADL` (1), `FOUND_DEPENDENT_BASE` (2)
+and `FOUND_UNRESOLVED_USING` (4); no flag is `is_closed()`. `None`
+(no definition lookup) and `Some` with no element (lookup ran, found
+nothing) differ.
+
+#### 18.12.4 The join with the per-specialization rows
+
+The set is the specialization-independent half, a row (§18.9) one
+specialization's selection. For a row `r` of an entry with set `S`, in a
+specialization without errors: `r.how == Adl` implies `S` has `ADL` and
+`r` is not from `S`; otherwise `spec_origin(r)` is an element's `decl`,
+where `spec_origin` is the first declaration of what lookup found
+(`found`, else `entity`, a using-shadow looked through), mapped by
+`Ast::instantiated_from` to the pattern's member when it is a member of
+a class template specialization, and a variable template's
+specialization to its template. A row whose `how` is `Both` is from
+`S` too. Exceptions, each visible to the client: an ill-formed
+specialization (kiln's two-phase recovery selects a declaration found
+after an error, spec/sema-templates.md §3.5), `DEPENDENT_BASE` (a member
+of a dependent base), `UNRESOLVED_USING`, and a member of a closure type
+(`[&]<int I>() {...}.template operator()<1>()` in a function template:
+the lambda-expression of each specialization defines a new closure type
+([expr.prim.lambda.closure]/1), and kiln keeps no link from its members
+to the pattern closure's, so `spec_origin` returns the specialization's
+call operator template). The invariant is tested over
+the written-reference corpus and the §18.8 directories
+(`spec_rows_agree_with_definition_sets`).
+
+#### 18.12.5 The dump
+
+The entry's line ends with `def=<n>`, then `+adl`, `+base` and `+using`
+for the flags; then one line per element, before the entry's `spec=`
+lines (§18.9.5), sorted by the position of the element's `decl` (the
+main file first):
+
+```
+<lo>-<hi>  <role>  '<spelling>' def=<decl> [found=<shadow>] [udir=<ns>@<line>:<col>]
+```
+
+`<decl>` and `<shadow>` print as an entity does (§18.6), `udir=` as
+§18.7.5's. The dump through a PCH or a module image equals the dump
+with the source as text.
+
+#### 18.12.6 Cost and carriage
+
+**Cost.** Off: zero (no branch added; the tracked memory totals on
+`<bits/stdc++.h>` are byte-identical to the base, and the 29
+`bench/oven` counters are identical). On: 8 bytes per row, 12 per
+distinct set and 8 per element, plus the content index. Measured
+(WP-2472, against the base, recording off and on, interleaved, three
+rounds each, `-fsyntax-only -fkiln-dump-written-refs
+-fkiln-memory-report`): `<bits/stdc++.h>` at `-std=c++26` has 11483
+entries with a set of 25302 dependent entries (8829 closed, 1212
+`ADL`, 784 `DEPENDENT_BASE`, 658 `DEPENDENT_BASE` and
+`UNRESOLVED_USING`; 5525 of one element, 3390 of two); the table's
+tracked memory grows from 8366308 to 8687172 bytes (+320864, +3.8%;
++0.6% of the TU's 51.3 MB tracked total). LLVM's `SemaExpr.cpp` at
+`-std=c++17`: 10662 entries with a set of 24652, +265784 bytes
+(23340264 to 23606048, +1.1%; +0.1% of 219 MB). Peak RSS grows by
+5.5 MB and 4 MB (the dump's text, 32468 and 24506 more lines, most of
+it); wall time is within the shared host's run-to-run noise (medians
+1.68 s and 1.45 s, 7.51 s and 7.18 s, base and new). Off: the memory
+report of both TUs is byte-identical to the base's, and the 29
+`bench/oven` `-fconstexpr-report` counters (all but `wall_us`) are
+identical.
+
+**Carriage.** The PCH section (§18.10.1) carries the rows, the sets and
+the elements (`WrittenRefsSection::found_rows`, `found_sets`,
+`found_decls`), validated on read: rows sorted and in range, each set a
+run of the elements, no set interned twice; the content index is
+rebuilt. The image's `refs` section (spec/modules.md §11.11) ends with
+the sets (`how`, flags, `decl, found` word pairs) and the rows (entry,
+set) of the unit's own entries; an element the image cannot carry fails
+the image and the importer replays (§18.10.2). A prefix or unit made
+with recording off has no entries at all, so there is no "entries
+without sets" state (§18.10.3). PCH `FORMAT_VERSION` 154,
+`IMAGE_VERSION` 82.
+
+Not done: the [temp.dep.type]/6 rule that a member of the current
+instantiation whose lookup in the instantiation differs from the
+definition's is ill-formed is not diagnosed (kiln looks the name up
+again in the instantiated class and does not compare); folding the
+per-candidate using-directives of §18.9.1 into the elements.
+
+#### 18.12.7 Tests
+
+`crates/kiln_ast/src/written_refs.rs` (`found_sets_are_interned`,
+`found_rows_follow_their_entries`, `off_records_no_found_set`: the entry
+still 28 bytes, interning, a popped row, truncation, off),
+`written_refs_carry.rs` (`found_sets_round_trip_and_are_validated`),
+`crates/kiln_sema/src/bmi_image/refs.rs` (the sets and rows round trip
+and are validated), `crates/kiln_parse/tests/written_refs.rs`
+(`rename_by_found_set`: all subjects, none, mixed),
+`crates/kiln_parse/tests/written_refs_accounting.rs`
+(`spec_rows_agree_with_definition_sets`: §18.12.4 over the corpus and
+the §18.8 directories), and `tests/conformance/written_refs/found-*.cpp`:
+one visible declaration (`found-one`), three through a declaration, a
+using-declaration and a using-directive (`found-several`), none
+(`found-none`), a hidden friend (`found-hidden-friend`), a later
+overload (`found-later-overload`), closed sets and a block-scope
+declaration (`found-closed`), members of the current instantiation
+(`found-this`) and with a dependent base, an unknown specialization and
+a dependent using-declarator (`found-this-base`), function template-ids
+and an assumed template name (`found-template-id`), an
+operator-function-id call and an operator expression
+(`found-operator`), and the carriage goldens through a PCH and as text
+(`found-pch`, `found-pch-include`) and through a module image and
+replayed (`found-module-image`, `found-module-replay`). The goldens of
+the earlier stages with dependent entries gain their `def=` lines.
 
 ## 19. The declaration-extent table (WP-2090)
 

@@ -1,0 +1,8 @@
+9:18-9:19  type  'H' -> lib::H@8:8 in=(anonymous)@9:19 how=injected
+12:30-12:31  type  'T' -> T@12:17 in=t@12:32
+12:37-12:39  expr  'hf' -> (dependent) in=call@12:25 def=0+adl
+12:37-12:39  expr  'hf' -> lib::hf@9:15 spec=call<lib::H>@12:25 how=adl adl-ns=lib@7:11 adl-cls=lib::H@8:8
+12:40-12:41  expr  't' -> t@12:32 in=call@12:25
+13:14-13:18  expr  'call' -> call<lib::H>@12:25 found=call@12:25 in=use@13:6 adl-ns=lib@7:11 adl-cls=lib::H@8:8
+13:19-13:22  nns  'lib' -> lib@7:11 in=use@13:6
+13:24-13:25  type  'H' -> lib::H@8:8 q=13:19 in=use@13:6

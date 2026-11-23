@@ -1,0 +1,6 @@
+9:29-9:30  type  'T' -> T@9:17 in=t@9:31
+9:36-9:37  expr  'f' -> (dependent) in=one@9:25 def=1+adl
+9:36-9:37  expr  'f' def=f@8:6
+9:36-9:37  expr  'f' -> f@8:6 spec=one<int>@9:25 adl-ns=
+9:38-9:39  expr  't' -> t@9:31 in=one@9:25
+10:14-10:17  expr  'one' -> one<int>@9:25 found=one@9:25 in=use@10:6 adl-ns=

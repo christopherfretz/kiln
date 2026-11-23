@@ -16,14 +16,16 @@
 //! entity) is not a record is left out: the importer makes it again when
 //! it instantiates that specialization. With the table off the section
 //! is `len = 0`, and an importer that does not record skips the section
-//! without decoding it.
+//! without decoding it. The found sets of the unit's dependent entries
+//! (spec/ast.md §18.12) follow, with their elements as declaration
+//! words: an element the image cannot carry fails the image.
 
 use super::body::PARAM;
 use super::{Image, LEX_TU, Locs, NONE, QRef, Rd, Res, W, Wr, Writer, bad};
 use crate::Sema;
 use kiln_ast::written_refs::{
-    AdlSet, AdlSetId, PatternNode, QualLink, RefLookup, RefQualifier, RefRole, SpecRef, Unrecorded,
-    WrittenRef, WrittenRefId,
+    AdlSet, AdlSetId, FoundDecl, FoundSetId, PatternNode, QualLink, RefLookup, RefQualifier,
+    RefRole, SpecRef, Unrecorded, WrittenRef, WrittenRefId,
 };
 use kiln_ast::{DeclId, QualType};
 use kiln_source::fx::FxHashMap;
@@ -38,6 +40,8 @@ const SPEC_BYTES: usize = 6 * 4 + 2;
 const UDIR_BYTES: usize = 3 * 4;
 const NODE_BYTES: usize = 1 + 2 * 4;
 const LEAD_BYTES: usize = 3 * 4;
+const FOUND_SET_BYTES: usize = 2 + 4;
+const FOUND_ROW_BYTES: usize = 2 * 4;
 
 /// One entry: `lo, hi, entity, found, enclosing, qualifier, udir, adl`
 /// (declaration words, the qualifier an earlier entry's index or
@@ -83,8 +87,10 @@ pub(super) enum NodeRec {
 /// A recorded table: argument-dependent sets (namespace and class
 /// counts, then the declaration words), entries, rows, nodes, and the
 /// using-directives of the dependent entries' ordinary lookups (`entry,
-/// declaration, directive`), and the entries' leading `::` and `~`
-/// tokens (`entry, colon, tilde`, locations or [`NONE`]; WP-2326).
+/// declaration, directive`), the entries' leading `::` and `~`
+/// tokens (`entry, colon, tilde`, locations or [`NONE`]; WP-2326), the
+/// found sets (`how`, flags, `decl, found` word pairs) and the dependent
+/// entries' rows (`entry, set`; WP-2472).
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub(super) struct RefsRec {
     sets: Vec<(u32, u32, Vec<u32>)>,
@@ -93,6 +99,16 @@ pub(super) struct RefsRec {
     nodes: Vec<NodeRec>,
     udirs: Vec<[u32; 3]>,
     leads: Vec<[u32; 3]>,
+    found_sets: Vec<FoundRec>,
+    found_rows: Vec<[u32; 2]>,
+}
+
+/// One found set: its lookup kind, flags and `decl, found` words.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub(super) struct FoundRec {
+    how: u8,
+    flags: u8,
+    decls: Vec<[u32; 2]>,
 }
 
 /// The section as decoded.
@@ -230,6 +246,7 @@ impl Writer<'_, '_, '_> {
             }
         }
         self.ref_nodes(&map, &mut out)?;
+        self.ref_found(&map, &mut out)?;
         for l in t.leads() {
             let entry = map[l.entry.index()];
             if entry != NONE {
@@ -237,6 +254,42 @@ impl Writer<'_, '_, '_> {
             }
         }
         self.img.refs = Refs::Table(out);
+        Ok(())
+    }
+
+    /// The found sets of the section's dependent entries (spec/ast.md
+    /// §18.12), by `map`; an element the image does not carry fails it.
+    fn ref_found(&self, map: &[u32], out: &mut RefsRec) -> W<()> {
+        const UNCARRIED: &str = "a found declaration the image does not carry";
+        let t = &self.s.ast.written_refs;
+        let mut memo: FxHashMap<FoundSetId, u32> = FxHashMap::default();
+        for &(id, _) in t.found_rows() {
+            let entry = map[id.index()];
+            let Some(s) = t.found_set_id(id) else { continue };
+            if entry == NONE {
+                continue;
+            }
+            let set = if let Some(&i) = memo.get(&s) {
+                i
+            } else {
+                let f = t.found_set(s);
+                let mut decls = Vec::with_capacity(f.decls.len());
+                for e in f.decls {
+                    let d = self.ref_word(e.decl).ok_or(UNCARRIED)?;
+                    let g = if e.found == e.decl {
+                        d
+                    } else {
+                        self.ref_word(e.found).ok_or(UNCARRIED)?
+                    };
+                    decls.push([d, g]);
+                }
+                let i = out.found_sets.len() as u32;
+                out.found_sets.push(FoundRec { how: f.how as u8, flags: f.flags, decls });
+                memo.insert(s, i);
+                i
+            };
+            out.found_rows.push([entry, set]);
+        }
         Ok(())
     }
 
@@ -349,6 +402,21 @@ pub(super) fn encode_refs(w: &mut Wr, s: &Refs) {
             b.u32(x);
         }
     }
+    b.len(t.found_sets.len());
+    for f in &t.found_sets {
+        b.u8(f.how);
+        b.u8(f.flags);
+        b.len(f.decls.len());
+        for &[d, g] in &f.decls {
+            b.u32(d);
+            b.u32(g);
+        }
+    }
+    b.len(t.found_rows.len());
+    for &[entry, set] in &t.found_rows {
+        b.u32(entry);
+        b.u32(set);
+    }
     // A recorded table is never empty (its six counts): the length
     // tells it from the table off.
     w.len(b.0.len());
@@ -404,6 +472,18 @@ pub(super) fn decode_refs(r: &mut Rd, want: bool) -> Res<Refs> {
     }
     for _ in 0..r.count(LEAD_BYTES)? {
         t.leads.push([r.u32()?, r.u32()?, r.u32()?]);
+    }
+    for _ in 0..r.count(FOUND_SET_BYTES)? {
+        let (how, flags) = (r.u8()?, r.u8()?);
+        let m = r.count(8)?;
+        let mut decls = Vec::with_capacity(m);
+        for _ in 0..m {
+            decls.push([r.u32()?, r.u32()?]);
+        }
+        t.found_sets.push(FoundRec { how, flags, decls });
+    }
+    for _ in 0..r.count(FOUND_ROW_BYTES)? {
+        t.found_rows.push([r.u32()?, r.u32()?]);
     }
     if !r.0.is_empty() {
         return bad("trailing bytes in the written references");
@@ -461,7 +541,14 @@ pub(super) fn validate_refs(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Res<
         && t.leads.iter().all(|&[entry, colon, _]| {
             entry < ne && (colon == NONE || t.entries[entry as usize].words[5] == Q_GLOBAL)
         });
-    if ok_sets && ok_entries && ok_specs && ok_nodes && ok_udirs && ok_leads {
+    // Found sets of known kinds over records; rows by entry, once each.
+    let nf = t.found_sets.len() as u32;
+    let ok_found = t.found_sets.iter().all(|f| {
+        RefLookup::from_u8(f.how).is_some()
+            && f.decls.iter().all(|&[d, g]| word_ok(d) && word_ok(g))
+    }) && t.found_rows.windows(2).all(|w| w[0][0] < w[1][0])
+        && t.found_rows.iter().all(|&[entry, set]| entry < ne && set < nf);
+    if ok_sets && ok_entries && ok_specs && ok_nodes && ok_udirs && ok_leads && ok_found {
         Ok(())
     } else {
         bad("bad written references")
@@ -598,6 +685,37 @@ impl Sema<'_, '_> {
             let some = |o: u32| (o != NONE).then(|| loc(o));
             self.ast.written_refs.set_lead(pushed[entry as usize], some(colon), some(tilde));
         }
+        self.image_found(t, &pushed, &dec);
+    }
+
+    /// The found sets of the unit's dependent entries (spec/ast.md
+    /// §18.12): `decl` a first declaration, `found` the same unless it was
+    /// a using-shadow; a set with an element the importer cannot map is
+    /// left out.
+    fn image_found(
+        &mut self,
+        t: &RefsRec,
+        pushed: &[WrittenRefId],
+        dec: &dyn Fn(u32) -> Option<DeclId>,
+    ) {
+        let mut sets: Vec<Option<FoundSetId>> = vec![None; t.found_sets.len()];
+        for &[entry, set] in &t.found_rows {
+            let s = if let Some(s) = sets[set as usize] {
+                s
+            } else {
+                let f = &t.found_sets[set as usize];
+                let decls = f.decls.iter().map(|&[d, g]| {
+                    let decl = self.ast.first(dec(d)?);
+                    Some(FoundDecl { decl, found: if g == d { decl } else { dec(g)? } })
+                });
+                let Some(decls) = decls.collect::<Option<Vec<FoundDecl>>>() else { continue };
+                let how = RefLookup::from_u8(f.how).unwrap_or_default();
+                let s = self.ast.written_refs.intern_found(&decls, how, f.flags);
+                sets[set as usize] = Some(s);
+                s
+            };
+            self.ast.written_refs.set_found(pushed[entry as usize], s);
+        }
     }
 }
 
@@ -629,6 +747,8 @@ mod tests {
             ],
             udirs: vec![[1, 1, 0]],
             leads: vec![[1, NONE, 4]],
+            found_sets: vec![FoundRec { how: 1, flags: 1, decls: vec![[1, 1], [0, 1]] }],
+            found_rows: vec![[1, 0]],
         });
         img
     }
@@ -662,7 +782,7 @@ mod tests {
     #[test]
     fn written_refs_section_is_validated() {
         type Corrupt = (&'static str, fn(&mut RefsRec));
-        let corrupt: [Corrupt; 16] = [
+        let corrupt: [Corrupt; 20] = [
             ("qualifier after its entry", |t| t.entries[0].words[5] = 0),
             ("unknown role", |t| t.entries[0].role = 99),
             ("unknown lookup", |t| t.entries[1].how = 99),
@@ -681,6 +801,10 @@ mod tests {
             ("lead of no entry", |t| t.leads[0][0] = 2),
             ("a `::` on an entry without one", |t| t.leads[0][1] = 4),
             ("leads out of order", |t| t.leads.insert(0, [1, NONE, 4])),
+            ("found set of an unknown lookup", |t| t.found_sets[0].how = 99),
+            ("found declaration past the records", |t| t.found_sets[0].decls[0][1] = 1000),
+            ("found row of no set", |t| t.found_rows[0][1] = 1),
+            ("found rows out of order", |t| t.found_rows.insert(0, [1, 0])),
         ];
         for (what, f) in corrupt {
             let mut img = with_table();

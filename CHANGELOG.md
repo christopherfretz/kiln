@@ -22,6 +22,17 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   against them; the ignored test `measure_native_stack_per_level`
   re-measures it.
 
+- The found set of a dependent written reference (WP-2472, spec/ast.md
+  §18.12): for an unqualified dependent call `f(t)`, a parenthesized or
+  qualified one, and a member of the current instantiation (`this->a(t)`,
+  `C::a(t)`, `a(t)` with an implicit `this`), the declarations lookup
+  found at the template definition, with flags for an open set
+  (argument-dependent lookup adds to it), a dependent base and a
+  dependent using-declarator. `WrittenRefs::found_at_definition`,
+  `entries_finding` (rename in templates no specialization of which is
+  instantiated) and `Ast::spec_origin` (the element a per-specialization
+  row selected); `-fkiln-dump-written-refs` prints `def=` lines; carried
+  by PCH snapshots and module images. Off, nothing changes.
 - A per-run source overlay for tooling clients (WP-2390, spec/source.md
   "Overlay", stage 1): `kiln_source::Overlay` holds replacement bytes for
   files that exist, keyed by the identity of the file each path names

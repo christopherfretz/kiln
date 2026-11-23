@@ -8,7 +8,8 @@ refs_mod.cppm:10:28-10:29  type  'T' -> T@refs_mod.cppm:10:17 in=v@refs_mod.cppm
 refs_mod.cppm:10:48-10:49  expr  'v' -> v@refs_mod.cppm:10:30 in=geo::twice@refs_mod.cppm:10:22 exp=refs_mod.cppm:10:42
 refs_mod.cppm:10:48-10:49  expr  'v' -> v@refs_mod.cppm:10:30 in=geo::twice@refs_mod.cppm:10:22 exp=refs_mod.cppm:10:42
 refs_mod.cppm:11:32-11:33  type  'T' -> T@refs_mod.cppm:11:17 in=t@refs_mod.cppm:11:34
-refs_mod.cppm:11:46-11:50  expr  'norm' -> (dependent) in=geo::measure@refs_mod.cppm:11:24
+refs_mod.cppm:11:46-11:50  expr  'norm' -> (dependent) in=geo::measure@refs_mod.cppm:11:24 def=1+adl
+refs_mod.cppm:11:46-11:50  expr  'norm' def=geo::norm@refs_mod.cppm:9:5
 refs_mod.cppm:11:46-11:50  expr  'norm' -> geo::norm@refs_mod.cppm:9:5 spec=geo::measure<geo::Pt>@refs_mod.cppm:11:24 how=both adl-ns=geo@refs_mod.cppm:4:18 adl-cls=geo::Pt@refs_mod.cppm:5:8
 refs_mod.cppm:11:51-11:52  expr  't' -> t@refs_mod.cppm:11:34 in=geo::measure@refs_mod.cppm:11:24
 refs_mod.cppm:11:56-11:57  expr  't' -> t@refs_mod.cppm:11:34 in=geo::measure@refs_mod.cppm:11:24

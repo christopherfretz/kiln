@@ -1,0 +1,11 @@
+9:31-9:32  type  'T' -> T@9:17 in=t@9:33
+9:38-9:39  expr  'f' -> (dependent) in=later@9:25 def=1+adl
+9:38-9:39  expr  'f' def=f@8:6
+9:38-9:39  expr  'f' -> f@8:6 spec=later<int>@9:25 adl-ns=
+9:38-9:39  expr  'f' -> lib::f@13:6 spec=later<lib::A>@9:25 how=adl adl-ns=lib@11:11 adl-cls=lib::A@12:8
+9:40-9:41  expr  't' -> t@9:33 in=later@9:25
+13:8-13:9  type  'A' -> lib::A@12:8 in=(anonymous)@13:9
+16:3-16:8  expr  'later' -> later<int>@9:25 found=later@9:25 in=use@15:6 adl-ns=
+17:3-17:8  expr  'later' -> later<lib::A>@9:25 found=later@9:25 in=use@15:6 adl-ns=lib@11:11 adl-cls=lib::A@12:8
+17:9-17:12  nns  'lib' -> lib@11:11 in=use@15:6
+17:14-17:15  type  'A' -> lib::A@12:8 q=17:9 in=use@15:6

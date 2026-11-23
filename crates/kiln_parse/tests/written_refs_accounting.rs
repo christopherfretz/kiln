@@ -1059,3 +1059,126 @@ fn every_name_expression_joins_its_entry_in_a_directory() {
         assert!(bad.is_empty(), "{} mismatches", bad.len());
     }
 }
+
+// ---------------------------------------------------------------------
+
+/// `(entries with a set, rows checked, mismatches as (line:col, what))`.
+type SetReport = (usize, usize, Vec<(String, String)>);
+
+/// The join of spec/ast.md §18.12.4 over `src` (named `name`): every
+/// per-specialization row of an entry with a found set selected an
+/// element of the set (`Ast::spec_origin`), or, found by
+/// argument-dependent lookup alone, one that is not an element of a set
+/// with `ADL`. Sets with `DEPENDENT_BASE` or `UNRESOLVED_USING`, a
+/// member of a closure type and a file with errors (`None`) are the
+/// documented exceptions.
+fn definition_sets(name: &str, src: &str) -> Option<SetReport> {
+    use kiln_ast::written_refs::{REF_UNRESOLVED, RefLookup};
+    let sm = SourceManager::new();
+    let main = sm.add_virtual(name, src.to_owned()).expect("location space");
+    let interner = Arc::new(Interner::new());
+    let engine = DiagEngine::new(&sm, &DiagOptions::default(), MemorySink::new());
+    let opts = parse_options(None);
+    let pp = preprocessor(&sm, &engine, &interner, main, None);
+    let target = Target::for_arch(Arch::X86_64);
+    let limits = ConstexprLimits::default();
+    let (tu, _) = parse_preprocessed(pp, Arc::clone(&interner), &engine, target, &opts, limits);
+    if engine.error_count() > 0 {
+        return None;
+    }
+    let ast = &tu.ast;
+    let refs = &ast.written_refs;
+    let name_of = |d| {
+        let mut s = String::new();
+        kiln_ast::types::TypeNames::write_decl_name(ast, d, true, &mut s);
+        s
+    };
+    let sets = refs.found_rows().len();
+    let (mut checked, mut bad) = (0, Vec::new());
+    for (_, r) in refs.specs() {
+        let Some(set) = refs.found_at_definition(r.entry) else { continue };
+        if set.dependent_base() || set.unresolved_using() || r.flags & REF_UNRESOLVED != 0 {
+            continue;
+        }
+        checked += 1;
+        let origin = ast.spec_origin(r);
+        let what = if r.how == RefLookup::Adl {
+            match origin {
+                _ if !set.adl() => "found by argument-dependent lookup, the set has no ADL".into(),
+                Some(o) if set.contains(o) => {
+                    format!(
+                        "'{}' found by argument-dependent lookup only, but in the set",
+                        name_of(o)
+                    )
+                }
+                _ => continue,
+            }
+        } else {
+            // A member of a closure type: the lambda-expression of a
+            // specialization defines a new closure type, with no link to
+            // the pattern's (§18.12.4's exception).
+            let closure = |o| {
+                let c = ast.decls.get(o).ctx();
+                c.and_then(|c| ast.decls.record(c)).is_some_and(|r| r.lambda.is_some())
+            };
+            match origin {
+                Some(o) if set.contains(o) || closure(o) => continue,
+                Some(o) => {
+                    let kinds: Vec<_> =
+                        set.decls.iter().map(|e| ast.decls.get(e.decl).kind()).collect();
+                    let k = ast.decls.get(o).kind();
+                    format!("'{}' ({k:?}, {:?}) is not in the set {kinds:?}", name_of(o), r.how)
+                }
+                None => format!("a row naming nothing ({:?})", r.how),
+            }
+        };
+        let at = spelled(&sm, Scope::Main(main), refs.name_lo(r.entry))
+            .map(|a| line_col(&sm, Scope::Main(main), a))
+            .unwrap_or_default();
+        bad.push((at, what));
+    }
+    Some((sets, checked, bad))
+}
+
+/// [`definition_sets`] over every `.cpp` file of `dir`: `(entries with a
+/// set, rows checked, mismatches as (file, line:col, what))`.
+fn run_definition_sets(dir: &Path) -> (usize, usize, Vec<(String, String, String)>) {
+    let files = cpp_files(dir);
+    let base = dir.to_path_buf();
+    let worker = std::thread::Builder::new().stack_size(1 << 30).spawn(move || {
+        let (mut sets, mut rows) = (0, 0);
+        let mut bad = Vec::new();
+        for f in &files {
+            let Ok(src) = std::fs::read_to_string(f) else { continue };
+            let name = f.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let shown = f.strip_prefix(&base).unwrap_or(f).display().to_string();
+            let Ok(r) = std::panic::catch_unwind(|| definition_sets(&name, &src)) else {
+                bad.push((shown, String::new(), "panic".into()));
+                continue;
+            };
+            let Some((s, n, b)) = r else { continue };
+            sets += s;
+            rows += n;
+            bad.extend(b.into_iter().map(|(at, w)| (shown.clone(), at, w)));
+        }
+        (sets, rows, bad)
+    });
+    worker.expect("a thread").join().expect("no panic")
+}
+
+/// §18.12.4 over the written-reference corpus and the pinned directories.
+#[test]
+fn spec_rows_agree_with_definition_sets() {
+    let mut dirs = vec!["written_refs"];
+    dirs.extend_from_slice(PINNED);
+    let (mut sets, mut rows, mut bad) = (0, 0, Vec::new());
+    for d in dirs {
+        let (s, n, b) = run_definition_sets(&conformance().join(d));
+        sets += s;
+        rows += n;
+        bad.extend(b.into_iter().map(|(f, at, w)| format!("{d}/{f}:{at}: {w}")));
+    }
+    eprintln!("definition sets: {sets} entries with a set, {rows} rows, {} mismatches", bad.len());
+    assert!(sets > 50 && rows > 50, "the corpus has found sets ({sets}) and rows ({rows})");
+    assert!(bad.is_empty(), "{} mismatches:\n{}", bad.len(), bad.join("\n"));
+}

@@ -238,6 +238,62 @@ fn line_col(sm: &SourceManager, loc: kiln_source::Loc) -> (u32, u32) {
     (lc.line, lc.col)
 }
 
+const FOUND: &str = "namespace n { void f(long); }\n\
+                     void f(int);\n\
+                     void f(double);\n\
+                     using n::f;\n\
+                     void g(int);\n\
+                     void unused(int);\n\
+                     template <class T> void all(T t) { g(t); }\n\
+                     template <class T> void mixed(T t) { f(t); }\n\
+                     void use() { unused(1); }\n";
+
+/// Rename by found set (spec/ast.md §18.12.1), in templates no
+/// specialization of which is instantiated: `g` is every element of the
+/// set of `g(t)` (the name always names it); `unused` is in no set;
+/// `f(int)` is one of three elements of the set of `f(t)` (a rename
+/// renames a name `f(double)` and `n::f` share), and `n::f` is reached
+/// through the using-declaration's shadow.
+#[test]
+fn rename_by_found_set() {
+    with_ast(FOUND, |ast, sm| {
+        let t = &ast.written_refs;
+        assert_eq!(t.spec_len(), 0, "nothing is instantiated");
+        let pos = |d: kiln_ast::DeclId| line_col(sm, ast.decls.get(d).loc());
+        // All subjects: `g(t)`.
+        let all = entry_at(t, sm, (7, 36));
+        let set = t.found_at_definition(all).expect("a set");
+        assert!(set.adl() && !set.dependent_base() && !set.unresolved_using());
+        let [g] = set.decls else { panic!("one element") };
+        assert_eq!((g.decl, pos(g.decl)), (g.found, (5, 6)));
+        assert_eq!(t.entries_finding(g.decl).collect::<Vec<_>>(), [all]);
+        assert!(set.decls.iter().all(|e| e.decl == g.decl));
+        // None: `unused` is named only by its non-dependent call.
+        let (_, call) = t.iter().find(|(_, r)| line_col(sm, r.range.lo) == (9, 14)).expect("call");
+        let unused = call.entity.expect("resolved");
+        assert!(t.found_at_definition(entry_at(t, sm, (9, 14))).is_none(), "not dependent");
+        assert_eq!(t.entries_finding(unused).count(), 0);
+        // Mixed: `f(t)`.
+        let mixed = entry_at(t, sm, (8, 38));
+        let set = t.found_at_definition(mixed).expect("a set");
+        assert_eq!(set.decls.len(), 3);
+        let mut at: Vec<_> = set.decls.iter().map(|e| pos(e.decl)).collect();
+        at.sort_unstable();
+        assert_eq!(at, [(1, 20), (2, 6), (3, 6)]);
+        let fi = set.decls.iter().find(|e| pos(e.decl) == (2, 6)).expect("f(int)");
+        assert!(set.contains(fi.decl));
+        assert!(set.decls.iter().any(|e| e.decl != fi.decl), "a name others share");
+        assert_eq!(t.entries_finding(fi.decl).collect::<Vec<_>>(), [mixed]);
+        let nf = set.decls.iter().find(|e| pos(e.decl) == (1, 20)).expect("n::f");
+        assert_ne!(nf.found, nf.decl, "through the shadow");
+        assert_eq!(pos(nf.found), (4, 10));
+        assert_eq!(t.entries_finding(nf.found).collect::<Vec<_>>(), [mixed]);
+        assert_eq!(t.entries_finding(nf.decl).collect::<Vec<_>>(), [mixed]);
+        // Equal sets are one interned set.
+        assert_ne!(t.found_set_id(all), t.found_set_id(mixed));
+    });
+}
+
 const SPECS: &str = "struct Vec { int size() const { return 1; } };\n\
                      struct List { int size() const { return 2; } };\n\
                      template <class T> int measure(const T &t) { return t.size(); }\n\

@@ -1,0 +1,45 @@
+12:10-12:11  type  'T' -> T@11:17 in=(anonymous)@12:11
+13:10-13:11  type  'T' -> T@11:17 in=(anonymous)@13:11
+14:18-14:19  type  'T' -> T@11:17 in=(anonymous)@14:19
+15:18-15:19  type  'T' -> T@11:17 in=(anonymous)@15:19
+16:30-16:31  type  'U' -> U@16:19 in=(anonymous)@16:31
+17:12-17:13  type  'T' -> T@11:17 in=t@17:14
+26:13-26:14  type  'T' -> T@11:17 in=(anonymous)@26:14
+27:13-27:14  type  'T' -> T@11:17 in=(anonymous)@27:14
+18:11-18:12  member  'a' -> (dependent) in=C::use@17:8 def=2
+18:11-18:12  member  'a' def=C::a@12:8
+18:11-18:12  member  'a' def=C::a@13:8
+18:11-18:12  member  'a' -> C<int>::a@12:8 spec=C<int>::use@17:8
+18:13-18:14  expr  't' -> t@17:14 in=C::use@17:8
+19:5-19:6  nns  'C' -> C@11:27 in=C::use@17:8 how=injected
+19:8-19:9  expr  'a' -> (dependent) q=19:5 in=C::use@17:8 def=2
+19:8-19:9  expr  'a' def=C::a@12:8
+19:8-19:9  expr  'a' def=C::a@13:8
+19:8-19:9  expr  'a' -> C<int>::a@12:8 spec=C<int>::use@17:8
+19:10-19:11  expr  't' -> t@17:14 in=C::use@17:8
+20:5-20:6  expr  'a' -> (dependent) in=C::use@17:8 def=2
+20:5-20:6  expr  'a' def=C::a@12:8
+20:5-20:6  expr  'a' def=C::a@13:8
+20:5-20:6  expr  'a' -> C<int>::a@12:8 spec=C<int>::use@17:8
+20:7-20:8  expr  't' -> t@17:14 in=C::use@17:8
+21:5-21:7  expr  'st' -> (dependent) in=C::use@17:8 def=2
+21:5-21:7  expr  'st' def=C::st@14:15
+21:5-21:7  expr  'st' def=C::st@15:15
+21:5-21:7  expr  'st' -> C<int>::st@14:15 spec=C<int>::use@17:8
+21:8-21:9  expr  't' -> t@17:14 in=C::use@17:8
+22:11-22:13  member  'mt' -> (dependent) in=C::use@17:8 def=1
+22:11-22:13  member  'mt' def=C::mt@16:27
+22:11-22:13  member  'mt' -> C<int>::mt<int>@16:27 found=C<int>::mt@16:27 spec=C<int>::use@17:8
+22:14-22:15  expr  't' -> t@17:14 in=C::use@17:8
+23:23-23:24  type  'T' -> T@11:17 in=C::use@17:8
+23:20-23:22  template  'mt' -> (dependent) in=C::use@17:8 def=1
+23:20-23:22  template  'mt' def=C::mt@16:27
+23:20-23:22  template  'mt' -> C<int>::mt<int>@16:27 found=C<int>::mt@16:27 spec=C<int>::use@17:8
+23:26-23:27  expr  't' -> t@17:14 in=C::use@17:8
+24:5-24:9  expr  'late' -> (dependent) in=C::use@17:8 def=2
+24:5-24:9  expr  'late' def=C::late@26:8
+24:5-24:9  expr  'late' def=C::late@27:8
+24:5-24:9  expr  'late' -> C<int>::late@26:8 spec=C<int>::use@17:8
+24:10-24:11  expr  't' -> t@17:14 in=C::use@17:8
+29:14-29:15  template  'C' -> C@11:27 in=run@29:6
+29:23-29:26  member  'use' -> C<int>::use@17:8 in=run@29:6

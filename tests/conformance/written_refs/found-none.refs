@@ -1,0 +1,8 @@
+9:8-9:9  type  'A' -> lib::A@8:8 in=(anonymous)@9:9
+11:30-11:31  type  'T' -> T@11:17 in=t@11:32
+11:37-11:38  expr  'g' -> (dependent) in=none@11:25 def=0+adl
+11:37-11:38  expr  'g' -> lib::g@9:6 spec=none<lib::A>@11:25 how=adl adl-ns=lib@7:11 adl-cls=lib::A@8:8
+11:39-11:40  expr  't' -> t@11:32 in=none@11:25
+12:14-12:18  expr  'none' -> none<lib::A>@11:25 found=none@11:25 in=use@12:6 adl-ns=lib@7:11 adl-cls=lib::A@8:8
+12:19-12:22  nns  'lib' -> lib@7:11 in=use@12:6
+12:24-12:25  type  'A' -> lib::A@8:8 q=12:19 in=use@12:6

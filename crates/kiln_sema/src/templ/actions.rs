@@ -2393,31 +2393,18 @@ impl Sema<'_, '_> {
         }
         // A member of the current instantiation found by lookup is an
         // ordinary member access ([temp.dep.expr]/5, clang's MemberExpr).
-        if targs.is_none() && !template_kw && !dep_qual && !dep_name {
-            let obj = if arrow {
-                self.pointee_sugared(bt).filter(|_| self.ast.types.is_pointer(bt))
-            } else {
-                Some(bt)
-            };
-            if let Some(rec) = obj.and_then(|o| self.ast.types.as_record(o)) {
-                let found = match qual {
-                    Some(q) => {
-                        let def = self.ast.definition(rec).unwrap_or(rec);
-                        if self.qualifier_names_base(q.ctx, def) {
-                            self.lookup_qualified_dn(q.ctx, name, LookupKind::Ordinary).decls
-                        } else {
-                            Vec::new()
-                        }
-                    }
-                    None => self.lookup_in_class_dn(rec, name, LookupKind::Ordinary).decls,
-                };
-                // A member named by a dependent using-declaration
-                // (`using __base::has_value;`) is found at instantiation.
-                if let [d] = found[..]
-                    && self.kind_of(d) != DeclKind::UnresolvedUsingValue
-                {
-                    return None;
-                }
+        if targs.is_none()
+            && !template_kw
+            && !dep_qual
+            && !dep_name
+            && let Some(found) = self.current_member_lookup(bt, arrow, qual.map(|q| q.ctx), name)
+        {
+            // A member named by a dependent using-declaration
+            // (`using __base::has_value;`) is found at instantiation.
+            if let [d] = found.decls[..]
+                && self.kind_of(d) != DeclKind::UnresolvedUsingValue
+            {
+                return None;
             }
         }
         let b = if arrow && !self.is_dependent_overloadable(bt) {
@@ -2432,6 +2419,39 @@ impl Sema<'_, '_> {
         }
         Some(e)
     }
+    /// The class member lookup of `name` in the class of an object of
+    /// type `bt` (its pointee for `arrow`), or with the qualifier
+    /// `qual` in that class when it names the class or a base of it
+    /// ([class.member.lookup], [temp.dep.type]/6: a member of the current
+    /// instantiation): what [`Sema::try_dependent_member_q`] decides by,
+    /// and the found set of the dependent access it builds (spec/ast.md
+    /// §18.12). `None` when the object's type names no class.
+    pub(crate) fn current_member_lookup(
+        &self,
+        bt: QualType,
+        arrow: bool,
+        qual: Option<DeclId>,
+        name: DeclName,
+    ) -> Option<crate::lookup::Found> {
+        let obj = if arrow {
+            self.pointee_sugared(bt).filter(|_| self.ast.types.is_pointer(bt))
+        } else {
+            Some(bt)
+        };
+        let rec = self.ast.types.as_record(obj?)?;
+        Some(match qual {
+            Some(q) => {
+                let def = self.ast.definition(rec).unwrap_or(rec);
+                if self.qualifier_names_base(q, def) {
+                    self.lookup_qualified_dn(q, name, LookupKind::Ordinary)
+                } else {
+                    crate::lookup::Found::default()
+                }
+            }
+            None => self.lookup_in_class_dn(rec, name, LookupKind::Ordinary),
+        })
+    }
+
     /// Parameter `p` (the `idx`th) of the requires-expression whose body
     /// is `body` ([expr.prim.req.general]/4): a `ParmVarDecl` in the body,
     /// visible to the requirements.

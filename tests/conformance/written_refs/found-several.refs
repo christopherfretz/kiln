@@ -1,0 +1,15 @@
+11:7-11:8  nns  'n' -> n@8:11 in=f@11:10
+11:10-11:11  using-decl  'f' -> n::f@8:20 q=11:7 in=f@11:10
+12:17-12:18  using-directive  'm' -> m@9:11 in=(tu)
+13:33-13:34  type  'T' -> T@13:17 in=t@13:35
+13:40-13:41  expr  'f' -> (dependent) in=several@13:25 def=3+adl
+13:40-13:41  expr  'f' def=n::f@8:20 found=f@11:10
+13:40-13:41  expr  'f' def=m::f@9:20 udir=m@12:1
+13:40-13:41  expr  'f' def=f@10:6
+13:40-13:41  expr  'f' -> f@10:6 spec=several<int>@13:25 adl-ns=
+13:40-13:41  expr  'f' -> m::f@9:20 spec=several<char>@13:25 udir=m@12:1 adl-ns=
+13:40-13:41  expr  'f' -> n::f@8:20 found=f@11:10 spec=several<long>@13:25 adl-ns=
+13:42-13:43  expr  't' -> t@13:35 in=several@13:25
+15:3-15:10  expr  'several' -> several<int>@13:25 found=several@13:25 in=use@14:6 adl-ns=
+16:3-16:10  expr  'several' -> several<long>@13:25 found=several@13:25 in=use@14:6 adl-ns=
+17:3-17:10  expr  'several' -> several<char>@13:25 found=several@13:25 in=use@14:6 adl-ns=

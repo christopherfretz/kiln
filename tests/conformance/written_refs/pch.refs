@@ -4,7 +4,8 @@ refs_pch.h:10:25-10:26  expr  'p' -> p@refs_pch.h:10:13 in=pch_ns::norm@refs_pch
 refs_pch.h:10:27-10:30  member  'get' -> pch_ns::Pt::get@refs_pch.h:8:7 in=pch_ns::norm@refs_pch.h:10:5
 refs_pch.h:10:35-10:43  expr  'from_pch' -> pch_ns::from_pch@refs_pch.h:5:10 in=pch_ns::norm@refs_pch.h:10:5
 refs_pch.h:11:32-11:33  type  'T' -> T@refs_pch.h:11:17 in=t@refs_pch.h:11:34
-refs_pch.h:11:46-11:50  expr  'norm' -> (dependent) in=pch_ns::measure@refs_pch.h:11:24
+refs_pch.h:11:46-11:50  expr  'norm' -> (dependent) in=pch_ns::measure@refs_pch.h:11:24 def=1+adl
+refs_pch.h:11:46-11:50  expr  'norm' def=pch_ns::norm@refs_pch.h:10:5
 refs_pch.h:11:46-11:50  expr  'norm' -> pch_ns::norm@refs_pch.h:10:5 spec=pch_ns::measure<pch_ns::Pt>@refs_pch.h:11:24 how=both adl-ns=pch_ns@refs_pch.h:4:11 adl-cls=pch_ns::Pt@refs_pch.h:6:8
 refs_pch.h:11:51-11:52  expr  't' -> t@refs_pch.h:11:34 in=pch_ns::measure@refs_pch.h:11:24
 refs_pch.h:11:56-11:57  expr  't' -> t@refs_pch.h:11:34 in=pch_ns::measure@refs_pch.h:11:24
