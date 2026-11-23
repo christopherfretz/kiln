@@ -783,14 +783,15 @@ impl Oven {
                     ),
                 )
             }
-            Fault::Callee(f) if self.funcs[f as usize].state == FState::Invalid => {
+            Fault::Callee(f) if self.func_state(f) == FState::Invalid => {
                 (site.loc, "subexpression not valid in a constant expression".into())
             }
             Fault::Callee(f) => {
+                let state = self.func_state(f);
                 let func = &self.funcs[f as usize];
                 let mut d = func.decl.unwrap_or_else(|| DeclId::new(0));
                 let mut what =
-                    if func.state == FState::NotConstexpr { "non-constexpr" } else { "undefined" };
+                    if state == FState::NotConstexpr { "non-constexpr" } else { "undefined" };
                 // An inheriting constructor whose inherited constructor is
                 // not constexpr is diagnosed as that constructor (clang
                 // `CheckConstexprFunction`).

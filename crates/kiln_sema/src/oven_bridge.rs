@@ -112,6 +112,14 @@ impl SemaBridge for Bridge<'_, '_, '_> {
 
     fn is_nothrow(&mut self, f: DeclId, oven: &mut Oven) -> bool {
         if let Some(n) = self.sema.known_nothrow(f) {
+            // Resolved in an earlier run: that run's diagnostics and cost
+            // are this one's too (spec/eval-session.md §5.1).
+            let key = crate::session::Key::Nothrow(f);
+            if self.sema.sess_recorded(&key) {
+                let c = self.reach(&key);
+                oven.mark_impure();
+                oven.session_charge(c);
+            }
             return n;
         }
         let at = self.sema.inst.eval_loc.unwrap_or_else(|| self.sema.ast.decls.get(f).loc());
@@ -209,7 +217,7 @@ impl SemaBridge for Bridge<'_, '_, '_> {
         let key = |b: &mut Self, oven: &mut Oven| {
             crate::session::Key::Meta(op, b.sema.meta_replay_key(op, args, ctx, oven))
         };
-        let r = if self.run.is_some() {
+        let r = if self.sema.eval_replay.is_some() {
             self.tracked_by(Some(op), key, oven, |b, oven| b.sema.meta(op, args, out, ctx, oven))
         } else {
             self.sema.meta(op, args, out, ctx, oven)
@@ -263,12 +271,24 @@ impl SemaBridge for Bridge<'_, '_, '_> {
         self.window_begin()
     }
 
-    fn session_window_end(&mut self, func: u32, mark: usize) -> bool {
-        self.window_end(crate::session::Key::Func(func), mark)
+    fn session_window_end(
+        &mut self,
+        unit: kiln_oven::SessUnit,
+        mark: usize,
+    ) -> (bool, kiln_oven::NestedCost) {
+        self.window_end(unit.into(), mark)
     }
 
-    fn session_replay(&mut self, func: u32) {
-        self.replay(&crate::session::Key::Func(func));
+    fn session_reach(&mut self, unit: kiln_oven::SessUnit) -> kiln_oven::NestedCost {
+        self.reach(&unit.into())
+    }
+
+    fn session_nested_cost(&mut self, c: kiln_oven::NestedCost) -> Option<kiln_oven::NestedCost> {
+        self.nested_cost(c)
+    }
+
+    fn session_settle(&mut self) -> kiln_oven::NestedCost {
+        self.settle()
     }
 }
 

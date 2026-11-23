@@ -1671,6 +1671,12 @@ impl Oven {
     /// Resolves global `g` (first use): returns its address. `top` is the
     /// first free register (for a nested evaluation of its initializer).
     pub(crate) fn resolve_global(&mut self, b: &mut dyn SemaBridge, g: u32, top: u32) -> u64 {
+        // An initializer an earlier run of the session evaluated (§5.1).
+        if self.sess.is_some()
+            && let Some(p) = self.session_kept_var(b, g)
+        {
+            return p;
+        }
         let kind = match self.globals[g as usize].kind {
             // A fold outside a constant context reads the enclosing
             // variable, as clang's codegen folds `(&ca)->v` in the body.
@@ -2125,6 +2131,9 @@ impl Oven {
     ) -> Result<u64, u64> {
         let p = self.placeholder(g, ty, d);
         self.globals[g as usize].state = GState::Resolved(p);
+        // In a session's run: nested work, under the translation unit's
+        // limits and recorded (spec/eval-session.md §5.1).
+        let sess = if self.sess.is_some() { self.session_var_begin(b) } else { None };
         let saved = (
             self.run.counters,
             self.mem.allocated,
@@ -2169,6 +2178,7 @@ impl Oven {
         self.ctx_depth -= 1;
         (self.mem.heap_allocs, self.mem.ctx) = heap;
         self.run.nesting -= 1;
+        let measured = (self.run.counters, self.mem.peak);
         (
             self.run.counters,
             self.mem.allocated,
@@ -2181,6 +2191,9 @@ impl Oven {
             self.run.ub_check,
             self.run.contracts_off,
         ) = saved;
+        if let Some(sv) = sess {
+            self.session_var_end(b, g, p, measured, sv);
+        }
         // The placeholder's storage now belongs to the variable.
         self.globals[g as usize].slot = 0;
         let a = self.mem.alloc_of_mut(Ptr::decode(p));

@@ -417,12 +417,12 @@ fn instantiation_diagnostics_are_reported_by_every_run() {
                 assert_eq!(r.result, first.result);
                 assert_eq!(render(sm, &r.diagnostics), shown);
             }
-            // An instantiation that fails (a nested evaluation sees no
-            // handler) fails every run the same way.
+            // An instantiation that fails (a nested evaluation's host
+            // call is refused) fails every run the same way.
             let bad = run(s, "X::checked");
             assert_eq!(bad.result, Err(RunError::Failed), "{:?}", render(sm, &bad.diagnostics));
             let shown = render(sm, &bad.diagnostics);
-            assert!(shown.iter().any(|d| d.contains("host-call handler")), "{shown:?}");
+            assert!(shown.iter().any(|d| d.contains("host call in semantic work")), "{shown:?}");
             for _ in 0..3 {
                 let r = run(s, "X::checked");
                 assert_eq!(r.result, bad.result);

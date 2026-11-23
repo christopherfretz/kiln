@@ -83,6 +83,7 @@
 //! | `subst_closures` | transient | the closures substituted in the current top-level declaration, emptied at its end (closure owners, WP-2023) |
 //! | `vararg_copying` | transient | the variadic argument being copied (`Sema::check_variadic_args`) |
 //! | `inst_outer_anchor` | transient | set inside `Sema::in_inst_context` only |
+//! | `eval_replay` | transient | set inside `EvalSession::run` only (spec/eval-session.md §5.1) |
 //! | `subst_expr_depth`, `subst_template_id`, `expansion_element_init`, `expansion_vars`, `in_typedef_instantiation`, `instantiating_friend_template`, `friend_cmp_constraints`, `friend_template_apart`, `range_for_outer_depth` | transient | set while one substitution runs |
 //! | `unevaluated`, `immediate`, `constant_full_expr`, `capture_reads_variable`, `discarding_init`, `address_operand`, `deref_after_amp`, `decltype_calls`, `typeid_operands`, `pending_odr`, `potential_caps`, `misaligned`, `deferred_call_refs`, `deferring_call_ref`, `extend_collector` | transient | the expression or full-expression being built |
 //! | `agg_error_mark`, `agg_excess`, `agg_list_end`, `designator_pending`, `init_entity`, `init_var`, `ctor_entity`, `ctor_diag_ty`, `list_param_note`, `list_ctor_active`, `ref_temp_note`, `mem_inits`, `initializing` | transient | the initialization being checked |
@@ -190,7 +191,7 @@ macro_rules! sema_fields {
                 declarator_distant_exc, after_def_prev, after_def_held, unknown_attr_held, unknown_attrs_reported, pending_param_abis, this_watch, pattern_member_access, base_annotation_packs, friend_tag,
                 friend_class_template, extraneous_tag_head, nested_tag, inst_enable_if,
                 declspec_nulls, image_texprs, bmi, extensions_silenced,
-                temp_copy_second_step, vararg_copying, inst_outer_anchor],
+                temp_copy_second_step, vararg_copying, inst_outer_anchor, eval_replay],
             scratch: [cfg_body, uninit_scratch, walk_stack, conv_walk_stack, equiv_scratch,
                 cand_scratch, deduce_scratch, complex_div_unmet],
             rebuilt: [spare_oven, classify_memo, imported_bodies_walked],

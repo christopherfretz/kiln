@@ -1,6 +1,6 @@
 # Evaluation sessions (WP-1995)
 
-Status: implemented (WP-1995). Code: `crates/kiln_sema/src/session.rs`
+Status: implemented (WP-1995; nested work, §5.1, WP-2073). Code: `crates/kiln_sema/src/session.rs`
 (the session, entries, runs, reports, diagnostic replay),
 `crates/kiln_oven/src/session.rs` (budgets, cancellation, the Oven side
 of a run), `crates/kiln_diag/src/engine.rs` (`DiagEngine::capture_begin`,
@@ -147,10 +147,12 @@ is the run's diagnostic.
 | field | meaning |
 |---|---|
 | `result` | `Ok(RunValue)`: `Void`, `Bool(b)`, `Signed(i128)`, `Unsigned(u128)` (by the return type's signedness); `Err(RunError)`, §8 |
-| `steps` | steps the run executed (spec/oven.md "Limits"), §5 |
+| `steps` | steps the run's own execution took (spec/oven.md "Limits"), §5 |
+| `nested_steps` | steps of nested evaluations charged to the run, fresh and replayed (§5.1; WP-2073) |
 | `host_calls` | handler calls the run made |
-| `peak_heap` | the run's peak live abstract memory (frame and heap bytes; spec/oven.md `peak_bytes`) |
-| `calls` | function calls the run made |
+| `peak_heap` | the run's peak live abstract memory (frame and heap bytes; spec/oven.md `peak_bytes`), charged nested peaks included (§5.1) |
+| `calls` | function calls the run's own execution made |
+| `nested_calls` | function calls of nested evaluations charged to the run (§5.1) |
 | `diagnostics` | the run's diagnostics, §7, in order |
 
 ## 5. Isolation and what a session keeps
@@ -180,7 +182,8 @@ answer whether an earlier run or this one filled them):
 - the memoization cache (spec/oven.md "Memoization"): bounded LRU of
   pure calls' scalar results. A hit charges exactly what the call
   cost (steps, calls, bytes, depth), so whether an earlier run warmed
-  it changes no counter and no budget decision. `clear_memo()` drops
+  it changes no counter and no budget decision (a hit is not taken
+  where it would cross a pending step check, §5.1). `clear_memo()` drops
   every entry and returns how many it dropped;
 - values interned in the AST by content (`std::meta::reflect_constant`
   template parameter objects, `define_static_string`/`define_static_array`
@@ -190,15 +193,152 @@ answer whether an earlier run or this one filled them):
   with the data runs see (`kept()` reports it).
 
 **Accounting is a function of the run.** `steps` counts the run's own
-execution. Semantic work a run triggers may evaluate nested constant
-expressions (an instantiated body's `static_assert`); those run under
-the translation unit's constant-expression limits
-(`-fconstexpr-steps=` and friends), counted from zero, never charged
-to the run and never cancelled by it, so the work, and so whether it
-succeeds, does not depend on which run triggered it or how much of its
-budget it had used. Together with the memo rule above, a run's steps,
-and whether it exhausts a budget, are the same on run 1 and run 1000
-and on a fresh or a used session.
+execution; nested work is charged by §5.1. A run's steps, nested steps
+and calls, and whether it exhausts a budget, are the same on run 1 and
+run 1000 and on a fresh or a used session, whatever other entries ran
+before and in whatever order (the residuals at landing, work of kinds
+that are not units yet, are listed in §5.1).
+
+### 5.1 Nested work (WP-2073)
+
+**Terms.** A *nested evaluation* is an evaluation context opened while
+a run is in progress by semantic work, not by the run's own code: every
+context `Oven::eval_nested` opens (`kiln_oven/src/lib.rs`), and the
+Oven's own initialization of a variable it reads (`eval_var_init`,
+`kiln_oven/src/value.rs`). A *unit* is a piece of kept semantic work
+that is done once per session and may open nested evaluations. The
+units at landing (`Key` in `kiln_sema/src/session.rs`):
+
+| unit key | the work | reached at |
+|---|---|---|
+| `Func(f)` | the Oven's compilation of function `f`, with the semantic work it needs: an instantiation, an implicit or defaulted member, a metafunction thunk (`SemaBridge::ensure_body`) | every call of `f` in a run (`Oven::session_compile`) |
+| `Var(g)` | the Oven's evaluation of global `g`'s initializer for a read (`eval_var_init`) | every first read of `g` in a run (`Oven::session_kept_var`) |
+| `Init(v)` | a variable's initializer instantiated and checked (`instantiate_var_spec_init`, `subst_static_member_init`) | each reference to `v` that may need its value (`note_var_reference`) |
+| `Inst(f)` | a function template specialization's definition instantiated (`instantiate_function_definition`) | each request to instantiate it, done or not (its early return, `note_used_for_instantiation`) |
+| `Meta(op, operands)` | a reflection query (`SemaBridge::meta`) | each query with the same op and operands |
+| `Nothrow(f)` | whether `f` is non-throwing, which may instantiate an exception specification (`SemaBridge::is_nothrow`) | each query, the early `known_nothrow` answer included |
+
+A unit is *reached* each time a run, or a unit's work in it, asks for
+it: the call that does it, and every later request that finds it done.
+
+**Rule 1: atomic under the translation unit's limits.** A nested
+evaluation runs to completion under the translation unit's
+constant-expression limits (`-fconstexpr-steps=` and friends, fixed for
+the session), counted from zero, never cancelled, never under the
+run's budget, and with no host handler (§6). Its outcome, and so the
+kept work, is a function of the translation unit alone. The reason is
+that semantic work cannot be rolled back: what a nested evaluation
+computes flows into kept state (an `if constexpr` branch instantiated,
+a template argument naming a specialization, a constraint choosing an
+overload, a `constexpr` variable's value), and kiln has no transaction
+over semantic work. Stopping one part-way by the run's budget or token
+would keep a failure that a later run with a larger budget would
+see; so nested work is never budget- or cancel-dependent. Nested work
+that exceeds the translation unit's own limits fails as it would in the
+translation unit: that failure is kept, and every run that reaches it,
+on a fresh or a used session, fails the same way (`RunError::Failed`
+with the same diagnostics, §7).
+
+**Rule 2: recorded once.** While a unit's work runs (in whichever run
+first reaches it), the session records with it, beside its diagnostics
+(§7): its *own cost*, the cost of the nested evaluations it opened
+itself (`NestedCost`: steps and calls summed; peak live bytes, peak
+address space and call depth, each counted from zero by rule 1, as
+maxima), and its *children*, every recorded unit reached during its
+work, in order. A child reached already done is a child all the same.
+A unit that opened nothing, reached no recorded unit and has no
+diagnostics has no record and costs nothing to track.
+
+**Rule 3: charged at the reach, once per run.** The first time a run
+reaches a recorded unit from its own code, it is charged `cost(u)`:
+`u`'s own cost plus `cost(c)` of each child `c` not yet charged in
+this run, recursively (steps and calls summed, the rest as maxima).
+Fresh work is charged the same way, from its record, when its work
+ends. A reach inside a unit's work is only recorded (as a child); its
+charge is part of the enclosing unit's. Steps and calls go to
+`nested_steps` and `nested_calls`. The run's **budget decision is made
+on its own cost plus its charged nested cost**, alike for a run that
+does the work and one that replays it:
+- `steps + nested_steps` above `budget.steps` fails the run with
+  `StepBudget` (the run's own steps may use what its nested work
+  left);
+- the address space in use at the reach plus the charged peak address
+  space above `budget.bytes` fails it with `MemoryBudget`; the live
+  bytes at the reach plus the charged peak live bytes enter
+  `peak_heap`;
+- the active calls at the reach plus the charged depth above
+  `budget.depth` fails it with `DepthLimit`.
+
+The failure is reported at the run's next step check (the next
+statement executed), with the step-limit, memory-limit or depth note
+and the call stack of that point; a charge after the run's last step
+check fails the run at its end, with the note at the entry. A
+memoized call is not taken where it would cross a pending step check
+(`c.steps + v.steps > step_stop` in a session), so a run charged over
+its budget stops at the same step whether or not an earlier run warmed
+the memo.
+
+**Why it is deterministic.** The set of units a run reaches from its
+own code is a function of the run's execution; each unit's record is
+a function of the translation unit (rule 1); a unit's children are
+what its work asks for, which does not depend on what was done before
+(a child done earlier is still reached); and charging a set of units
+charges each once, so neither order nor history changes the sum.
+Checked by `crates/kiln_parse/tests/eval_session_nested.rs`, where a
+fresh session per run is the reference:
+- **Run 1 and run N, fresh and used, A then B and B then A**, with
+  nested work inside nested work (a static member's initializer whose
+  evaluation instantiates a function that reads another static
+  member) shared by two entries, memoized calls and a diagnostic:
+  steps, `nested_steps`, calls, `nested_calls`, the result and the
+  diagnostics are identical.
+- **A budget the nested work exceeds.** The work completes under rule
+  1 and is kept; the run is charged it and fails with `StepBudget`. A
+  sequence of runs with that budget, then a budget one step short of
+  the total, then the exact total, gives the fresh session's report
+  each time; nothing is charged part-way, nothing is kept half-done,
+  nothing is redone.
+- **Depth and bytes**: nested work's depth and address space count on
+  top of the run's, alike fresh and used.
+- **The memo.** A function whose compilation was recorded stays a stub
+  while the session is open, so each of its calls goes through the
+  compile path, which reaches the record and makes every call in
+  progress impure: no memoized result skips a charge or a replay.
+
+**Reach observation.**
+- `Func`: a recorded function's real state is kept aside
+  (`SessionState::tracked`); every call reaches it and bumps
+  `run.impure`, and the first call in a run outside nested work, or
+  any call inside it, reports the reach.
+- `Var`: a global whose initializer's evaluation was recorded keeps its
+  object and is made unresolved again at the end of every run, so the
+  next run's first read reaches the record.
+- The sema units: the hooks test one `Option` (`Sema::eval_replay`,
+  set only inside a run).
+
+**Not hooked at landing (WP-2075).** A class template
+specialization's instantiation, an exception specification's
+instantiation outside `is_nothrow`, an atomic constraint's
+satisfaction and a default member initializer's instantiation are not
+units. Their work, its nested evaluations and its diagnostics, belong
+to the unit whose work first did them. Undercharged meanwhile: a later
+unit (in the same or a later run) that needs such work already done is
+charged neither its nested cost nor shown its diagnostics, so a run
+that reaches it through a different unit than a fresh session would
+reports less `nested_steps`/`nested_calls` and can miss its
+diagnostics. Other kept work that is not a unit (a default argument's
+instantiation, an alias substitution's cache, a reflection table
+entry) is the same residual (WP-2076). So is the reflection-bytes
+charge (spec/oven.md "Limits": a value already interned charges 0),
+which makes a run's peak bytes depend on what earlier runs interned
+(WP-2077). The nested limits are the translation unit's; a
+session-level setting for them is WP-2078.
+
+**Unchanged.** The translation unit's own nested evaluations, before
+any run, run under its limits and its handler, are not units and are
+never charged to a run. Without a session nothing here runs: the sema
+hooks test one `Option`, the Oven's step check and compile path are
+as before, and bench/oven counters stay identical.
 
 ## 6. Host calls
 
@@ -206,11 +346,30 @@ A run is not speculative: host calls are allowed (spec/host-calls.md
 §4 "Runs"). The handler is **given per run**, borrowed (`&mut dyn
 HostCalls`, any lifetime): the Oven reaches it through the run's bridge
 (`SemaBridge::host_calls`), not through a registered handler. Nested
-evaluations of semantic work the run triggers (§5) have no handler: a
-host call there fails the evaluation with the note `no host-call
-handler is registered`, as what they compute is kept across runs and
-must not depend on one run's handler. The translation unit's handler
-(given to the parse) is not used by runs.
+evaluations of semantic work the run triggers (§5.1) have no handler:
+a host call there is refused, as what they compute is kept across runs
+and must not depend on one run's handler. The translation unit's
+handler (given to the parse) is not used by runs.
+
+The refusal's note is `host call in semantic work a run triggered (its
+result is kept across runs)`, and the refused call bumps `run.impure`
+as every refused call does (spec/host-calls.md §5), so no call around
+it is memoized. It is a structured failure of the unit (§5.1 rule 1),
+kept and replayed like any other diagnostic (§7), so every run that
+reaches the work gets it identically, with the same `RunError` kind
+(`Failed`), on a fresh or a used session alike: a static member's
+initializer that makes a host call reports its error with that note
+once, records it, and every run that reaches the initializer replays
+it. A client that needs the handler
+calls it from the run's own code (the entry's body and what it calls),
+never from a `static_assert`, a `constexpr` variable or a template
+argument of an instantiation.
+
+Not chosen: re-doing such work with the run's handler in every run.
+The value of a nested evaluation flows into kept state that cannot be
+re-derived per run (§5.1 rule 1); kiln has no transaction over semantic
+work (the Oven's trials undo only abstract memory, spec/oven.md "Trial
+evaluation").
 
 ## 7. Diagnostics
 
@@ -232,23 +391,31 @@ duplicates of another run or of the translation unit.
   invocation.
 - **Replay.** Semantic work is kept (§5), but a fresh session would
   report its diagnostics in the first run that needs it. The session
-  records the diagnostics emitted while the Oven compiles a function
-  (its on-demand instantiation, `SemaBridge::ensure_body`) and while a
-  reflection intrinsic runs (`SemaBridge::meta`, keyed by the op and
-  its operands) or asks whether a function is non-throwing
-  (`SemaBridge::is_nothrow`, which may instantiate an exception
-  specification), and replays them, in place, in every later run the
-  first time that run reaches the same function or makes
-  the same query: a function with recorded diagnostics is set back to
-  a stub at the end of each run, so its next call in a later run comes
-  through the compile path, which replays and restores it without
-  compiling again. A replayed error fails the run exactly as the
-  original did (an invalid instantiation makes the call fail).
-  Limits: diagnostics of semantic work done by a nested evaluation
-  inside other semantic work are replayed with the outer work only;
-  a record is keyed by the query, not by the work it did, so a
-  different query that needs the same (already done) work replays
-  nothing; a replayed diagnostic has the location of its recording.
+  records the diagnostics emitted during each unit's work (§5.1), in
+  the same tree as its cost: a unit's segments are its own diagnostics
+  and its children, in order. They are replayed, in place, the first
+  time a run reaches the unit, from its own code or from another
+  unit's work; a unit reached again in the same run replays nothing.
+  Sema holds the run's recording for the run's duration
+  (`Sema::eval_replay`), so the bridges of semantic work done by a
+  nested evaluation inside other semantic work record into it too: work
+  nested inside nested work is a unit of its own, replayed wherever it
+  is reached. A replayed error fails the run exactly as the original
+  did (an invalid instantiation makes the call fail).
+- **Context notes.** A diagnostic recorded inside an instantiation
+  carries that instantiation's context notes (`in instantiation of
+  ...`, `required from here`). On replay the recorded context is
+  replaced by the context of the reach: what a fresh session would
+  print at the point the run reached the unit. Recording does not use
+  up the context notes of the diagnostics that follow.
+- **Limits.** A reflection query's record is keyed by the query
+  (below); the units its work reaches are keyed by unit, so a different
+  query, or a run's own code, that needs the same already-done unit
+  replays it. Work of the kinds that are not units at landing (§5.1,
+  WP-2075; a class instantiated by `substitute`, then needed by another
+  query) is replayed with the first unit or query that did it only
+  (WP-2160). A replayed diagnostic has the location of its recording;
+  only its context notes are those of the reach.
 - **Keys are content.** No replay key, memoization key or kept result
   depends on an address or on what earlier runs did. A reflection
   query is keyed by its op, the context it reads (whether it is a
@@ -275,9 +442,28 @@ duplicates of another run or of the translation unit.
   (lengths before elements, the whole key compared), so equal content
   hits the same record from any address and different content never
   does. The key is computed after the call and only when needed: the
-  call reported something, or some call of the same op has a record.
-  What computing it interns (a value the op did not freeze, as it
+  call reported something, did nested work or reached a recorded unit
+  (§5.1), or some call of the same op has a record. A query whose key
+  has a record and that records nothing new replays and is charged
+  that record (`Replay::end`), as any unit reached again. What
+  computing a key interns (a value the op did not freeze, as it
   failed first) is not charged to the run (`Oven::meta_uncharged`).
+- **Found and fixed by WP-2073** (each with a test in
+  `crates/kiln_parse/tests/eval_session_nested.rs`): a call memoized
+  after a recorded function was reached let a later run skip its
+  replay (the function now stays a stub, §5.1); work shared by two
+  units was replayed with the first only (`Init` and `Inst` units); an
+  initializer read under a small run budget kept its failure for every
+  later run (`eval_var_init` now runs under rule 1). An exception
+  specification resolved by one run was answered early
+  (`known_nothrow`) in the next without its replay: not reproduced
+  (sema resolves the specification at the use, inside the unit that
+  compiles the caller, so the query finds no recorded work; the tests
+  pin the behaviour for a direct call, a member pointer and a virtual
+  call), fixed all the same: every reach of a recorded unit must be
+  seen, and the early answer now reaches a recorded `Nothrow` unit.
+  The entry stub compiled before the run is armed does no semantic
+  work (`compile_call` only resolves the callee's index): not a bug.
 
 **Keys and caches a run reads or fills** (WP-2074). "Address" is a
 frame or heap encoding (slot | generation | offset), which `reset`
@@ -291,7 +477,9 @@ they key exactly.
 | key or cache | site | key holds | why it is exact |
 |---|---|---|---|
 | replay `Key::Meta` | `kiln_sema` `session.rs` `Replay::records`; `oven_bridge.rs` `meta` | content (above) | fixed by WP-2074; tests `run_built_operands_replay_by_content`, `a_run_does_not_depend_on_the_runs_before_it` |
-| replay `Key::Func` | `session.rs`; `kiln_oven` `session.rs` `noisy` | Oven function index | one index per function for the session |
+| replay `Key::Func` | `session.rs`; `kiln_oven` `session.rs` `tracked` | Oven function index | one index per function for the session |
+| replay `Key::Var` | `kiln_oven` `session.rs` `kept_vars`, `value.rs` `eval_var_init` | Oven global index | one index per global for the session |
+| replay `Key::Init`, `Key::Inst` | `kiln_sema` `templ/class.rs`, `templ/var.rs` | `DeclId` | no address |
 | replay `Key::Nothrow` | `oven_bridge.rs` `is_nothrow` | `DeclId` | no address |
 | memoization | `kiln_oven` `memo.rs` `MemoKey`; eligibility `compile.rs` (`memo =`) | function index, flags, up to 4 scalar arguments | only integer, `bool`, floating and `info` parameters, no `this`, no pointer result: a pointer or reference argument (an address) makes the function not memoizable; an `info` of an automatic variable is a handle to the running evaluation's frame, so `extract` and `constant_of` of one mark the calls in progress impure (fixed by WP-2074: a call given `^^x` was memoized by its bits and read a stale `x`); otherwise a memoized function reaches only static objects; tests `memoized_results_are_not_keyed_by_addresses`, `reflections_of_locals_are_not_memoized`, `tests/conformance/meta.reflection.extract/local-reflection-argument-memo.cpp` |
 | `substitute` memo | `kiln_sema` `meta/templ.rs` `SubstMemo` | template and argument reflection bits | the arguments are read from the range before the lookup |
@@ -324,6 +512,23 @@ every loop back-edge and call within that many steps, and before each
 host call: a `for (;;) {}` stops within a fraction of a millisecond.
 The check rides on the step-limit check (spec/oven.md "Dispatch"), so
 an evaluation without a session runs exactly the code it ran before.
+
+**Nested work (WP-2073).** A nested evaluation is never stopped by
+the token or the run's budget (§5.1 rule 1): semantic work cannot be
+rolled back, so stopping it would leave its unit half-done and keep its
+failure for every later run. Budget and cancellation take effect at
+the run's next step check after the nested work returns. **The
+cancellation latency** is therefore bounded by the remaining nested
+evaluations of the unit in progress, each capped by the translation
+unit's step limit (`-fconstexpr-steps=`): a client that cancels a run
+inside a large instantiation waits for that instantiation's
+evaluations, never for more than their count times that limit. A run
+whose charge exceeds a limit fails with `StepBudget`, `MemoryBudget` or
+`DepthLimit` (§5.1 rule 3); one cancelled during nested work fails with
+`Cancelled`, and the work stays done exactly as a fresh session would
+have done it. The Oven's own initialization of a variable it reads
+(`eval_var_init`) is a nested evaluation too and follows the same
+rule.
 
 `RunError` (`#[non_exhaustive]`), one kind per way a run ends:
 
@@ -412,6 +617,12 @@ session's translation unit is parsed without recording either.
   thread, every failure kind followed by a clean run, host calls in
   runs, diagnostics and their replay, kept memory flat, every entry
   error, a refused translation unit.
+- `crates/kiln_parse/tests/eval_session_nested.rs`: §5.1 (WP-2073):
+  each fixed bug of §7, the determinism criterion (run 1 and run N,
+  fresh and used, both orders, nested inside nested work, the memo),
+  the budget decision on own plus charged nested steps, depth and
+  bytes, cancellation, a host call refused in nested work, and nested
+  work over the translation unit's limit.
 - `crates/kiln_driver/tests/eval_session.rs`: `with_eval_session` from a
   command line (an include path and a define, a refused translation
   unit); content keys (WP-2074): a query over operands a run built

@@ -72,6 +72,12 @@ impl Oven {
         if self.host_cancelled() {
             return Err(Fault::Cancelled);
         }
+        // In an evaluation session's run, semantic work the run triggers
+        // is kept for later runs, so it may not depend on this run's
+        // handler (spec/eval-session.md §6).
+        if self.session_in_nested() {
+            return Err(Fault::Host(crate::session::NESTED_HOST_NOTE.into()));
+        }
         if self.host.handler.is_none() && b.host_calls().is_none() {
             return Err(Fault::Host("no host-call handler is registered".into()));
         }
@@ -166,8 +172,10 @@ impl Oven {
         if need > self.step_stop {
             match self.step_over(need) {
                 Ok(()) => {}
-                Err(true) => return Err(Fault::Cancelled),
-                Err(false) => return Err(Fault::Steps(self.site(pc).loc)),
+                Err(crate::session::Stop::Cancelled) => return Err(Fault::Cancelled),
+                Err(crate::session::Stop::Memory) => return Err(Fault::Memory),
+                Err(crate::session::Stop::Depth) => return Err(Fault::Depth),
+                Err(crate::session::Stop::Limit) => return Err(Fault::Steps(self.site(pc).loc)),
             }
         }
         self.run.counters.steps = before + n;

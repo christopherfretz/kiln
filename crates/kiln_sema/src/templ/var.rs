@@ -236,6 +236,9 @@ impl Sema<'_, '_> {
         if !self.push_inst_frame(FrameKind::VarTemplateInit, v, tmpl, poi) {
             return;
         }
+        // In an evaluation session's run: a unit of its own, as more than
+        // one run may need it (spec/eval-session.md §5.1).
+        let unit = self.sess_unit_begin();
         let ctx = self.ast.decls.get(v).ctx().unwrap_or(self.ast.tu);
         let pairs = self.inst_context_pairs(ctx);
         self.in_inst_context(ctx, |s| {
@@ -245,6 +248,7 @@ impl Sema<'_, '_> {
             // A failure was diagnosed; the variable is left uninitialized.
             let _ = sub.var_init(pattern, v);
         });
+        self.sess_window_end(crate::session::Key::Init(v), unit);
         self.pop_inst_frame();
     }
 

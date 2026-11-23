@@ -590,6 +590,19 @@ impl<'sm> DiagEngine<'sm> {
         }
     }
 
+    /// The records `notes` would be as the notes of a diagnostic emitted
+    /// now (to compare and replace the context notes of recorded
+    /// diagnostics, spec/eval-session.md §7).
+    pub fn note_records(&self, notes: Vec<Diag>) -> Vec<Diagnostic> {
+        notes
+            .into_iter()
+            .map(|mut n| {
+                n.set_compat(self.clang_compat);
+                Diagnostic::from_note(&n)
+            })
+            .collect()
+    }
+
     /// How many records the open capture holds (0 without one).
     pub fn captured_len(&self) -> usize {
         self.lock().capture.as_ref().map_or(0, Vec::len)
