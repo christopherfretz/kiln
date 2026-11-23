@@ -537,7 +537,21 @@ impl Sema<'_, '_> {
     /// The location of the first token of `e` (clang's `getBeginLoc`;
     /// [`kiln_ast::Ast::begin_loc`]).
     pub(crate) fn begin_loc(&self, e: ExprId) -> Loc {
-        self.ast.begin_loc(e)
+        // The last answers, while no expression has been given its own
+        // begin since ([`Sema::begin_memo`]).
+        let stamp = self.ast.templates.expr_begin.len();
+        let mut memo = self.begin_memo.get();
+        if memo.stamp != stamp {
+            memo = BeginMemo { stamp, ..BeginMemo::default() };
+        }
+        let loc = self.ast.begin_loc_known(e, &memo.known[..memo.len]);
+        if !memo.known[..memo.len].iter().any(|k| k.0 == e) {
+            memo.known[memo.next] = (e, loc);
+            memo.next = (memo.next + 1) % BEGIN_MEMO;
+            memo.len = (memo.len + 1).min(BEGIN_MEMO);
+        }
+        self.begin_memo.set(memo);
+        loc
     }
 
     /// The source range of `e` (clang `getSourceRange`) for a diagnostic:
@@ -6211,8 +6225,11 @@ impl Sema<'_, '_> {
             .map(|x| self.ast.lists.iter::<DeclId>(x.params).collect())
             .unwrap_or_default();
         // [temp.inst]/12: the default arguments this call uses are
-        // instantiated now.
-        if let Some(c) = named {
+        // instantiated now (only when it uses one: the begin of a long
+        // chain's callee is not free, WP-2201).
+        if let Some(c) = named
+            && n > have
+        {
             // Where the instantiation is required: the call's start; at
             // clang 22 a member call's member name (`getExprLoc`).
             let poi = if self.clang_compat >= 22
@@ -8351,5 +8368,29 @@ mod constant_candidates_tests {
         assert!(c.contains(id(5)) && c.contains(id(1)) && c.contains(id(9)));
         assert!(!c.contains(id(2)) && !c.contains(id(10)));
         assert!(!ConstantCandidates::new(Vec::new()).contains(id(1)));
+    }
+}
+
+/// How many answers [`Sema::begin_loc`] remembers.
+const BEGIN_MEMO: usize = 4;
+
+/// The last answers of [`Sema::begin_loc`] ([`Sema::begin_memo`]).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct BeginMemo {
+    /// The expressions and where they begin, `len` of them, the oldest
+    /// replaced first (`next`).
+    known: [(ExprId, Loc); BEGIN_MEMO],
+    len: usize,
+    next: usize,
+    /// The size of `expr_begin` when they were found: an expression
+    /// given its own begin since makes them stale.
+    stamp: usize,
+}
+
+impl Default for BeginMemo {
+    fn default() -> Self {
+        // The slots past `len` are never read.
+        let unused = (ExprId::new(1), Loc::default());
+        BeginMemo { known: [unused; BEGIN_MEMO], len: 0, next: 0, stamp: 0 }
     }
 }

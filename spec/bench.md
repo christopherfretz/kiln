@@ -98,10 +98,12 @@ text, so a generator change makes the baseline `advisory`. Generators
 
 | Generator | Source |
 |---|---|
+| `call-chain <N>` | Three expression statements of `N` member calls each (WP-2201): `x.f().f()...` returning a reference, `p->g()->g()...`, and `v.h().h()...` returning by value a class with a non-trivial destructor. 1 <= N <= 1000000. |
 | `nested-dup <N> <DEPTH> <WIDTH>` | The repeated nested template-id TU of docs/status/perf-history.md "WP-879" (byte-identical to its `gen.py N DEPTH WIDTH 1`): `N` reflection-keyed specializations of a function template and of a class template's static member, each keyed by a template-id `DEPTH` levels deep with `WIDTH` arguments per level, every level repeating the previous one twice. 1 <= N <= 100000, DEPTH <= 10, 2 <= WIDTH <= 16. Needs `-freflection`. |
 
 `bench/frontend/nested-template-ids-dup.cpp` (`nested-dup 200 6 4`, 1.3 MB;
-WP-919) is the one generated entry. Its depth stays at 6 to keep the run
+WP-919) and `bench/frontend/member-call-chain.cpp` (`call-chain 5000`,
+WP-2201) are the generated entries. The first keeps depth 6 to keep the run
 short; the 5.1 MB depth-8 TU of docs/status/perf-history.md "WP-919" has the same
 slope.
 

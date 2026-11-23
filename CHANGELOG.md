@@ -740,6 +740,13 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   operator, another constrained template or constructor, or a
   reflection query, is charged its `nested_steps`/`nested_calls` and
   shown its diagnostics, as a fresh session's run is.
+- A chain of N member calls (`x.f().f()...`, `p->f()->f()...`, by value
+  with a destructor), subscripts or overloaded `<<` compiles in time
+  linear in N, also when constant-evaluated or lowered with `-g`
+  (WP-2201, reported by a downstream user): each call walked the chain
+  below it to find where it begins, in sema, the Oven and codegen.
+  `x.f()` repeated 20,000 times took 23.6 s at `-fsyntax-only`.
+  Locations, diagnostics and dumps are unchanged.
 - Evaluation sessions: a member function of a class template
   specialization instantiated by another function's instantiation and
   compiled later in the same run is now recorded with that

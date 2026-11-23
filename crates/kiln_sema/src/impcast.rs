@@ -46,6 +46,9 @@ impl Sema<'_, '_> {
         work.clear();
         work.push((root, cc, false));
         let mut seen = 0usize;
+        // The first tokens of the calls walked: every call of a chain
+        // `x.f().f()...` begins at `x`, found once (WP-2201).
+        let mut begins = kiln_source::fx::FxHashMap::default();
         while let Some((e, cc, list)) = work.pop() {
             seen += 1;
             if seen > MAX_NODES {
@@ -98,7 +101,9 @@ impl Sema<'_, '_> {
                 _ => {}
             }
             let at = match n.kind() {
-                ExprKind::CallExpr | ExprKind::CXXMemberCallExpr => self.begin_loc(s),
+                ExprKind::CallExpr | ExprKind::CXXMemberCallExpr => {
+                    self.ast.begin_loc_memo(s, &mut begins)
+                }
                 _ => n.loc(),
             };
             // clang's work list pops the last child first.

@@ -4368,7 +4368,7 @@ impl Cg<'_> {
 
     /// clang `EmitCallExpr`; an aggregate result is written to `dest`.
     pub(crate) fn emit_call(&mut self, e: ExprId, dest: Option<Addr>) -> R<Option<V>> {
-        let outer = self.f.call_loc.replace(self.ast.begin_loc(e));
+        let outer = self.f.call_loc.replace(self.begin_loc(e));
         let r = self.emit_call_inner(e, dest);
         self.f.call_loc = outer;
         r

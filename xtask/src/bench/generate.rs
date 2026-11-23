@@ -15,6 +15,12 @@ pub enum Generator {
     /// `DEPTH` levels deep whose levels take `WIDTH` arguments and repeat
     /// the previous level twice, so the text doubles per level.
     NestedDup { n: usize, depth: u32, width: usize },
+    /// `call-chain <N>`: three expression statements of `N` member calls
+    /// each, `x.f().f()...` returning a reference, `p->g()->g()...`, and
+    /// `v.h().h()...` returning by value a class with a non-trivial
+    /// destructor (a temporary per call). WP-2201: N calls must cost
+    /// O(N).
+    CallChain { n: usize },
 }
 
 /// Bounds that keep a typo from generating gigabytes (the text grows as
@@ -22,6 +28,8 @@ pub enum Generator {
 const MAX_N: usize = 100_000;
 const MAX_DEPTH: u32 = 10;
 const WIDTH: std::ops::RangeInclusive<usize> = 2..=16;
+/// The longest `call-chain` (the text grows as `16 * N`).
+const MAX_CHAIN: usize = 1_000_000;
 
 impl Generator {
     /// Parses `<generator> <params...>`.
@@ -48,8 +56,22 @@ impl Generator {
                 let width = num("WIDTH (2..=16)", width, &|x| WIDTH.contains(&x))?;
                 Ok(Self::NestedDup { n, depth: depth as u32, width })
             }
-            "" => Err("`generate` requires a generator (nested-dup)".into()),
-            g => Err(format!("unknown generator `{g}` (nested-dup)")),
+            "call-chain" => {
+                let [n] = nums[..] else {
+                    return Err(format!(
+                        "`generate: call-chain` takes N, got `{}`",
+                        nums.join(" ")
+                    ));
+                };
+                let n = n
+                    .parse::<usize>()
+                    .ok()
+                    .filter(|x| (1..=MAX_CHAIN).contains(x))
+                    .ok_or_else(|| format!("bad `call-chain` N (1..={MAX_CHAIN}) `{n}`"))?;
+                Ok(Self::CallChain { n })
+            }
+            "" => Err("`generate` requires a generator (nested-dup, call-chain)".into()),
+            g => Err(format!("unknown generator `{g}` (nested-dup, call-chain)")),
         }
     }
 
@@ -58,6 +80,7 @@ impl Generator {
     pub fn source(&self) -> String {
         match *self {
             Self::NestedDup { n, depth, width } => nested_dup(n, depth, width),
+            Self::CallChain { n } => call_chain(n),
         }
     }
 }
@@ -111,6 +134,29 @@ fn nested_dup(n: usize, depth: u32, width: usize) -> String {
     o
 }
 
+/// The text of [`Generator::CallChain`]: 50 calls per line.
+fn call_chain(n: usize) -> String {
+    let mut o = String::from(
+        "struct X { X& f(); };\n\
+         struct P { P* g(); };\n\
+         struct V { ~V(); V h() const; };\n",
+    );
+    let chain = |o: &mut String, head: &str, call: &str, tail: &str| {
+        o.push_str(head);
+        for i in 0..n {
+            o.push_str(call);
+            if i % 50 == 49 {
+                o.push('\n');
+            }
+        }
+        o.push_str(tail);
+    };
+    chain(&mut o, "void a(X x) {\n  x", ".f()", ";\n}\n");
+    chain(&mut o, "void b(P* p) {\n  p", "->g()", ";\n}\n");
+    chain(&mut o, "void c(V v) {\n  v", ".h()", ";\n}\n");
+    o
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -121,6 +167,7 @@ mod tests {
             Generator::parse("nested-dup 200 6 4"),
             Ok(Generator::NestedDup { n: 200, depth: 6, width: 4 })
         );
+        assert_eq!(Generator::parse("call-chain 5000"), Ok(Generator::CallChain { n: 5000 }));
         for bad in [
             "",
             "nested",
@@ -130,6 +177,10 @@ mod tests {
             "nested-dup 200 11 4",
             "nested-dup 200 6 1",
             "nested-dup x 6 4",
+            "call-chain",
+            "call-chain 0",
+            "call-chain 1000001",
+            "call-chain 10 1",
         ] {
             assert!(Generator::parse(bad).is_err(), "{bad}");
         }
@@ -159,5 +210,18 @@ mod tests {
         // `python3 gen.py 200 6 4 1` (docs/status/perf-history.md "WP-879") writes the same bytes.
         assert_eq!(bench.len(), 1_273_799);
         assert_eq!(super::super::entry::source_hash(bench.as_bytes()), "fnv1a64:852b2d6b5d67e92f");
+    }
+
+    /// The `call-chain` text at N = 2.
+    #[test]
+    fn call_chain_text() {
+        let s = call_chain(2);
+        assert_eq!(
+            s,
+            "struct X { X& f(); };\nstruct P { P* g(); };\nstruct V { ~V(); V h() const; };\n\
+             void a(X x) {\n  x.f().f();\n}\n\
+             void b(P* p) {\n  p->g()->g();\n}\n\
+             void c(V v) {\n  v.h().h();\n}\n"
+        );
     }
 }

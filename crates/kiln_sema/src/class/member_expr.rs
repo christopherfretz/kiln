@@ -2936,7 +2936,9 @@ impl Sema<'_, '_> {
         // parameter takes the object's cv-qualifiers (clang
         // `TryObjectArgumentInitialization`).
         let mq = if self.kind_of(m) == DeclKind::CXXDestructor { mq | (oq & CV) } else { mq };
-        let at = self.begin_loc(base);
+        // Where the diagnostics below point: the object's first token,
+        // found only on an error (finding it walks down a postfix chain,
+        // so doing it for every call made `x.f().f()...` quadratic).
         let name = self.decl_name(m);
         let declared_here = |s: &Self| {
             s.diag(DiagId::note_entity_declared_here, s.ast.decls.get(m).loc())
@@ -2950,7 +2952,7 @@ impl Sema<'_, '_> {
         };
         if bad_ref {
             let msg = self
-                .diag(DiagId::sema_member_fn_ref_qual_mismatch, at)
+                .diag(DiagId::sema_member_fn_ref_qual_mismatch, self.begin_loc(base))
                 .arg(self.decl_name(m))
                 .arg(u8::from(rvalue))
                 .arg(u8::from(rq == RefQual::RValue))
@@ -2965,7 +2967,7 @@ impl Sema<'_, '_> {
             let cty = self.ast.decls.get(declaring).ty().unwrap_or(QualType::ERROR);
             let param = self.ast.types.qualify(cty, mq & CV);
             let msg = self
-                .diag(DiagId::sema_member_fn_object_address_space, at)
+                .diag(DiagId::sema_member_fn_object_address_space, self.begin_loc(base))
                 .arg(self.ty_arg(param))
                 .arg(self.ty_arg(obj_ty));
             self.emit(msg);
@@ -2974,7 +2976,7 @@ impl Sema<'_, '_> {
         let dropped = (oq & CV) - mq;
         if !dropped.is_empty() {
             let msg = self
-                .diag(DiagId::sema_member_fn_drops_quals, at)
+                .diag(DiagId::sema_member_fn_drops_quals, self.begin_loc(base))
                 .arg(self.decl_name(m))
                 .arg(self.ty_arg(obj_ty))
                 .arg(dropped.to_string())

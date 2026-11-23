@@ -162,6 +162,8 @@ pub(crate) struct Cg<'a> {
     pub vis_active: bool,
     /// Memoised visibility per (declaration, computation kind).
     pub lv_cache: std::cell::RefCell<FxHashMap<(DeclId, u8), crate::visibility::Lv>>,
+    /// The begins [`Cg::begin_loc`] found by long walks (WP-2201).
+    pub begin_memo: std::cell::RefCell<FxHashMap<kiln_ast::ExprId, Loc>>,
     /// Discardable definitions not yet needed: first declaration → definition.
     pub deferred: FxHashMap<DeclId, DeclId>,
     /// Each class definition's index in completion order
@@ -510,6 +512,7 @@ impl<'a> Cg<'a> {
                 || ast.attrs.has_kind(kiln_ast::attr::AttrKind::VISIBILITY)
                 || ast.attrs.has_kind(kiln_ast::attr::AttrKind::TYPE_VISIBILITY),
             lv_cache: std::cell::RefCell::default(),
+            begin_memo: std::cell::RefCell::default(),
             di: None,
         }
     }
