@@ -198,6 +198,33 @@ An `ALIGNED` `AttrNode` stores its argument in two fields:
 
 `DeclArena::cold.alignment` holds further `alignas` expressions.
 
+**Which declarations (WP-2830).** The alignment a declaration requests
+(`max_align_attr`, clang `Decl::getMaxAlignment`) is the strictest of
+its own alignment attributes and those of the declarations before it
+(`Ast::self_and_prev`; clang `mergeAlignedAttrs` copies the strictest
+earlier request onto each redeclaration), never a later declaration's,
+so no layout depends on when it is first computed. Each user asks one
+declaration: a class's layout its definition (`struct
+__attribute__((aligned(16))) C;` after a definition with `aligned(8)`
+leaves `alignof(C) == 8`); an enumeration its definition, else its
+first declaration (clang 19 `TagType::getDecl`); a typedef's sugar the
+typedef declaration it names (a field declared with an 8-aligned `R`
+stays 8-aligned after `typedef int R __attribute__((aligned(16)));`,
+and a plain `typedef int R;` after the 8-aligned one names an 8-aligned
+`R`; `Ast::layout_attributed_typedef` and codegen's
+`typedef_align_attr` walk the same declarations); a variable's
+`alignof` the declaration its name finds, and its global the definition
+(else the latest declaration; codegen `entity_var_align`). Sema folds a
+class or enumeration redeclaration after the complete definition into
+the definition itself, so it attaches no alignment attribute of such a
+redeclaration (it is checked, [dcl.align]/6 and
+`checkNewAttributesAfterDef`, then dropped; clang keeps it on a
+redeclaration layout never reads). Open: an enumeration's
+redeclarations before its definition are folded into the first
+declaration, so an `aligned` added by one applies to it (clang 19 reads
+the first declaration only, clang 22 the declaration a use names;
+WP-2840).
+
 The maximum over all redeclarations wins. A value of 0 is ignored
 ([dcl.align]/4). Packing is `PACKED` (66); `[[no_unique_address]]` is
 `FieldData::NO_UNIQUE_ADDRESS`.

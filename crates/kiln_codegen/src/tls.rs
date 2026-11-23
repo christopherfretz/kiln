@@ -362,7 +362,7 @@ impl Cg<'_> {
             fm.dso_local = dso;
             Some((Value::func(f), false))
         };
-        let align = self.var_align(first);
+        let align = self.entity_var_align(first);
         let is_ref = ast.decls.get(first).ty().is_some_and(|t| ast.types.is_reference(t));
         let tla = kiln_llvm::intrinsics::threadlocal_address(&mut self.m);
         let a = self.m.attr_set(&[Attr::Align(align)]);

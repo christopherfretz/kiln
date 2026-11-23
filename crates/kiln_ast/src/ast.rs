@@ -988,6 +988,15 @@ impl Ast {
         std::iter::successors(Some(self.latest(d)), move |&x| self.prev(x))
     }
 
+    /// `d` and the declarations of its entity before it, `d` first: the
+    /// declarations whose alignment attributes `d` carries (clang
+    /// `mergeAlignedAttrs` gives each redeclaration the strictest earlier
+    /// request, so `Decl::getMaxAlignment` of `d` never sees a later
+    /// declaration's; spec/abi.md §3.1, WP-2830).
+    pub fn self_and_prev(&self, d: DeclId) -> impl Iterator<Item = DeclId> + '_ {
+        std::iter::successors(Some(d), move |&x| self.prev(x))
+    }
+
     /// Records `d` as the definition of its entity (once).
     ///
     /// # Panics

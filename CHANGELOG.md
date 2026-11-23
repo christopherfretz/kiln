@@ -1046,6 +1046,21 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   in that lambda's closure type at each use, and a closure type whose
   context is a class inside a function mangles as a nested name, as in
   clang 19 and 22 (`_Z2tkIN2a3UlTyvE_UlvE_EEiv`) (WP-2628).
+- An `aligned` attribute on a later redeclaration no longer makes a
+  layout depend on when it is first computed (WP-2830, spec/abi.md
+  §3.1): a declaration's alignment is read from it and the declarations
+  before it (clang `mergeAlignedAttrs`), never a later one's. `struct
+  __attribute__((aligned(16))) C;` after an `aligned(8)` definition
+  leaves `alignof(C)` 8 and a containing class's size unchanged (it was
+  32 instead of 16 when first laid out after the redeclaration); a field
+  typed with a typedef keeps that typedef declaration's alignment after
+  the typedef is redeclared with another; `typedef int R
+  __attribute__((aligned(8))); typedef int R;` gives `alignof(R)` 8 (was
+  4); an enumeration is laid out from its definition; a global's
+  definition keeps its own alignment (`align 8` after `extern int v
+  __attribute__((aligned(16)));`, as clang), and `__alignof__(v)` before
+  that redeclaration is 8.
+
 - The lookup log records every lookup of an absolute name, found or not
   (`#include`, `#import`, `#include_next`, `__has_include`,
   `__has_include_next`, `#embed`, `__has_embed`, `-include`), and

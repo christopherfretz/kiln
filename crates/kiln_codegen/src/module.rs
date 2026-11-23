@@ -3917,7 +3917,7 @@ impl<'a> Cg<'a> {
             },
         };
         // clang `GetOrCreateLLVMGlobal`: `getDeclAlign(D)`.
-        let align = self.var_align(first);
+        let align = self.entity_var_align(first);
         let constant = constant_storage(ast, ty);
         // The declaration the use names (WP-2726; [`Cg::get_fn`]).
         let vis = self.decl_visibility(d, false);
@@ -4103,6 +4103,17 @@ impl<'a> Cg<'a> {
         } else {
             align
         }
+    }
+
+    /// The alignment of variable `first`'s object as a whole: its
+    /// definition's (which carries every earlier declaration's
+    /// alignment attributes), else its latest declaration's. A later
+    /// redeclaration's `aligned` does not reach the definition
+    /// ([`kiln_abi::layout::decl_align`] reads a declaration and those
+    /// before it; WP-2830).
+    pub fn entity_var_align(&mut self, first: DeclId) -> u64 {
+        let d = self.ast.definition(first).unwrap_or_else(|| self.ast.latest(first));
+        self.var_align(d)
     }
 
     /// The alignment of the storage of variable `d` (clang

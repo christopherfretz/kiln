@@ -474,7 +474,13 @@ impl<'a> Layouter<'a> {
             .unwrap_or(QualType::INT);
         let mut i = self.type_info(underlying);
         let t = self.target;
-        let attr = max_align_attr(ast, first, t, &mut |q| self.type_info(q).align);
+        // clang `getTypeInfo` of an `EnumType`: `getMaxAlignment` of the
+        // declaration `TagType::getDecl` gives, the definition (which
+        // inherits every earlier request), else the first declaration
+        // (clang 19; clang 22 reads the declaration the use names, which
+        // kiln's canonical enum type does not keep). A redeclaration after
+        // the definition never changes it (WP-2830).
+        let attr = max_align_attr(ast, def, t, &mut |q| self.type_info(q).align);
         if attr != 0 {
             i.align = attr;
         }

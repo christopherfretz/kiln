@@ -15360,9 +15360,30 @@ impl Sema<'_, '_> {
         } else if matches!(use_, TagUse::Declaration | TagUse::Definition) {
             self.merge_aligned_redecl(d, &mut attrs, use_ == TagUse::Definition);
         }
+        if use_ == TagUse::Declaration && self.folds_into_complete_def(d) {
+            // `struct __attribute__((aligned(16))) C;` after C's definition
+            // (which has an `aligned` of its own, so the attribute is kept
+            // above): clang keeps it on the redeclaration, which layout
+            // never reads (`getTypeInfo` and `ASTRecordLayout` read the
+            // definition). kiln folds the redeclaration into the definition
+            // itself, so attaching it would change the layout from then on
+            // and make the answer depend on whether the class was laid out
+            // before (WP-2830).
+            attrs.retain(|&a| self.ast.attrs.get(a).kind != AttrKind::ALIGNED);
+        }
         if !attrs.is_empty() {
             let _ = self.builder().attach_attrs(d, &attrs);
         }
+    }
+
+    /// Whether a class-head or enum-head declaration naming `d` is a
+    /// redeclaration kiln folds into `d`, `d` being its entity's complete
+    /// definition (a class's member specification is finished).
+    fn folds_into_complete_def(&self, d: DeclId) -> bool {
+        matches!(self.kind_of(d), DeclKind::CXXRecord | DeclKind::Enum)
+            && self.ast.spec_info(d).is_none()
+            && self.ast.definition(d) == Some(d)
+            && self.ast.decls.record(d).is_none_or(|r| r.defn.contains(DefinitionBits::COMPLETE))
     }
 
     /// The GNU attributes after the closing brace of class `r`'s
