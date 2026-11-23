@@ -603,6 +603,7 @@ impl SyntaxJob<'_> {
             pp_record: false,
             events: crate::front_end::SearchEvents::default(),
             overlay: None,
+            overlay_failures: Vec::new(),
         };
         let (pp, _) =
             job.build_preprocessor_with(sm, engine, interner, inputs, true, Some(&hooks))?;
@@ -795,6 +796,7 @@ impl SyntaxJob<'_> {
             let _ = writeln!(err, "{s}");
         }
         engines.done(&engine);
+        hooks.pp.overlay_failures = sm.overlay_failures().list();
     }
 }
 

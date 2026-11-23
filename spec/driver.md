@@ -1689,8 +1689,10 @@ sequence; the evaluation session (spec/eval-session.md §2) uses it too.
   is not supported by the front-end library entry`): `-verify` and
   `-include-pch` (written, or made by the PCH probe of `-include`). The
   PCH snapshot phase does not run (a snapshot PCH is never consumed).
-  With `drv_front_end_overlay_input`: an `overlay` that replaces an input
-  of a module file of the command line (below).
+  With `drv_front_end_overlay_input`: an `overlay` that replaces or
+  removes an input of a module file of the command line; with
+  `drv_front_end_overlay_creates`: an `overlay` that creates any file,
+  with a module file on the command line (below).
 - Suppressed, not refused: nothing is written but diagnostics. No
   `-o`, no dependency file (`-MD` is still lexed to the end, as for
   `-fsyntax-only`), no module file, no `-fconstexpr-report=` /
@@ -1792,27 +1794,42 @@ directories run at the same time, and a `-working-directory` of the
 command line wins (a relative one relative to `working_directory`).
 `@file`s are read from `working_directory`.
 
-`overlay` (WP-2390, an `Option<Arc<kiln_source::Overlay>>`, default
-`None`, shown by `Debug`) gives the run replacement contents for files
-that exist (spec/source.md "Overlay"): the job's source manager gets it
-before any load (`SourceManager::set_overlay`) and its header search's
-`RealFs` reads `#embed` resources through it. The run sees exactly what
-the same command sees over a copy of the tree in which the overlaid
-files hold the overlay's bytes: the same diagnostics, tokens, AST and
-files read, through every route (the main input, `#include` by any
-spelling or symbolic link, `#include_next`, `-include`, `#embed`,
-`__has_include`, `#pragma once` and include guards); buffers of
-overlaid files are `FileOrigin::Overlay`. An empty overlay is none
-(byte-identical results). The overlay belongs to the run: a later run
-in the same process without it reads the disk. Refused with the driver
-error `drv_front_end_overlay_input` (`the overlay replaces '<f>', an
-input of the module file '<m>'`), one per overlaid input, before the
-job: a module file of the command line (`-fmodule-file=`, named or not,
-or a module-file input) whose file table names an overlaid file; a
-module file found later (`-fprebuilt-module-path=`, the module cache)
-is refused at its import (`pp_module_file_overlaid`). A PCH never meets
-an overlay, since `-include-pch` is refused. There is no command-line
-flag for an overlay.
+`overlay` (WP-2390, WP-2391, an `Option<Arc<kiln_source::Overlay>>`,
+default `None`, shown by `Debug`) gives the run the files that differ
+from the disk: replaced, created and removed (spec/source.md
+"Overlay"). The job's source manager gets it before any load
+(`SourceManager::set_overlay`), and its header search, search list and
+`-fmodule-header` lookups run over `kiln_pp::OverlayFs` (a run without
+one keeps `RealFs`); an input exists if it exists in the tree the
+overlay describes (`existing_inputs`: a created main input does, a
+removed one is `no such file or directory`). The run sees exactly what
+the same command sees over a copy of the tree with the edit applied
+(replaced files holding the overlay's bytes, created files written with
+their directories, removed files unlinked): the same diagnostics,
+tokens, AST, files read, consulted paths and lookup log, through every
+route (the main input, `#include` by any spelling or symbolic link and
+with `..` out of a created directory, `#include_next`, `-include`,
+`#embed`, `__has_include`, `__has_embed`, `#pragma once` and include
+guards, a `-I` directory only the overlay makes exist); buffers of
+replaced and created files are `FileOrigin::Overlay`. An empty overlay
+is none (byte-identical results). The overlay belongs to the run: a
+later run in the same process without it reads the disk, and
+concurrent runs with different overlays each see their own. Refused
+before the job, for a module file of the command line
+(`-fmodule-file=`, named or not, or a module-file input): with the
+driver error `drv_front_end_overlay_input` (`the overlay replaces or
+removes '<f>', an input of the module file '<m>'`), one per such input,
+when its file table names a replaced or removed file; with
+`drv_front_end_overlay_creates` (`the overlay creates '<f>', which the
+module file '<m>' cannot be checked against`, naming the first created
+path), one per module file, when the overlay creates any file. A module
+file found later (`-fprebuilt-module-path=`, the module cache) is
+refused at its import (`pp_module_file_overlaid`,
+`pp_module_file_overlay_creates`). A PCH never meets an overlay, since
+`-include-pch` is refused. `FrontEndReport::overlay_failures` lists the
+entries whose lazy loader failed when the run read them (with the error
+text, in the order read): such a file is not found in the run, so a run
+with any is void. There is no command-line flag for an overlay.
 
 `front_end::std_config(std, options)` is the configuration the driver
 builds for `kiln++ -fsyntax-only -std=<std>` with no other flag

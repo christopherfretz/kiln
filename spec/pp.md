@@ -240,12 +240,25 @@ A result is a function of the key, the search list (and the
 header search last found it (`HeaderFileInfo::DirInfo`) is not part of
 it, because it follows from earlier results. Lookups of absolute names
 are not recorded. `LookupLog::check(list, embed_dirs, fs, known,
-same_cwd)` repeats every lookup in order over another list and file
-system and returns the first whose result differs, named for `-v`. A
-directory of the recorded list that the lookup searched before its
-result (and the includer's directory of a `"..."` lookup found
-elsewhere) is taken to miss again without a query; a relative one only
-when `same_cwd`. It asks
+trust)` repeats every lookup in order over another list and file
+system and returns the first whose result differs, named for `-v`.
+With `Trust::ProducerMisses { same_cwd }` a directory of the recorded
+list that the lookup searched before its result (and the includer's
+directory of a `"..."` lookup found elsewhere) is taken to miss again
+without a query; a relative one only when `same_cwd`. With
+`Trust::Nothing` every such directory is asked again (the listings
+keep it cheap). A log is a statement about one view of the file system
+(the disk plus the run's overlay, spec/source.md "Overlay"), and a run
+under an overlay records exactly what a run over the edited tree
+records: a log is replayed with `ProducerMisses` only against the view
+it was recorded under (the PCH consumer: the same files but for the
+`known` names); under another overlay, or none after one, with
+`Nothing` and an `OverlayFs` of the consumer's view. Not in the log,
+so not answerable by replay: lookups of absolute names, module lookups
+(prebuilt module files, the module cache), the main input, and a `-I`
+directory the producer dropped as nonexistent that an overlay creates
+(the consumer's own search list, built over its view, covers that
+one). It asks
 `HeaderFs::is_file` (a `stat`, no read) and, after four misses in one
 directory, reads that directory's listing once (`HeaderFs::list_dir`);
 `known` names files that are known to exist (the record's file list),

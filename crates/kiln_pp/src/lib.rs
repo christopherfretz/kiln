@@ -65,7 +65,7 @@ pub use include::{
     EmbedData, EmbedRequest, IncludeKind, IncludeRequest, IncludeResolver, MemoryResolver,
     NoIncludes, ResolvedInclude,
 };
-pub use lookups::{Found, Lookup, LookupForm, LookupLog};
+pub use lookups::{Found, Lookup, LookupForm, LookupLog, Trust};
 pub use macros::{AttrMacro, MacroDef, MacroTable};
 pub use modules::{
     DirectiveKind, DirectiveParts, ImageImport, ModuleDirective, ModuleOptions, StdModuleCache,
@@ -85,6 +85,6 @@ pub use record::{
 };
 pub use resolver::{HeaderSearch, SearchEvent, SearchObserver};
 pub use search::{
-    Characteristic, DirGroup, HeaderFs, MemoryFs, RealFs, SearchDir, SearchDirSpec, SearchList,
-    join_path, parent_dir,
+    Characteristic, DirGroup, HeaderFs, MemoryFs, OverlayFs, RealFs, SearchDir, SearchDirSpec,
+    SearchList, join_path, parent_dir,
 };

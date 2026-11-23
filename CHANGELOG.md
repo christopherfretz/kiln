@@ -30,6 +30,20 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   compile output keeps clang's shape). `FrontEndOptions::response_files`
   (default on) turns off `@file` expansion in `run_front_end` (WP-2411).
 
+- The source overlay creates and removes files (WP-2391, spec/source.md
+  "Overlay", stage 2): `Overlay::create`, `remove` and `write`, keyed for
+  created files by their deepest existing directory and the path below
+  it; one resolver answers loads, header search (`kiln_pp::OverlayFs`:
+  every `HeaderFs` query, listings with the created names, the search
+  list) and the driver's input check, so a run sees what the same
+  command sees over a copy of the tree with the edit applied;
+  `Overlay::replace_with` / `create_with` take a loader called at most
+  once per overlay, its failures in `FrontEndReport::overlay_failures`;
+  `LookupLog::check` takes a `Trust` (replaying a log under another view
+  asks every directory again). An overlay that creates any file refuses
+  module files (`drv_front_end_overlay_creates`,
+  `pp_module_file_overlay_creates`); a run without an overlay is
+  unchanged.
 - The written-reference table joins the AST and keeps the tokens
   outside a name (WP-2326, spec/ast.md §18.11): the location a
   `DeclRefExpr` or `MemberExpr` stores is its name's entry's `name_lo`

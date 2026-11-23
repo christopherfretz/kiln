@@ -22,10 +22,14 @@ drv_emit_llvm_link = Error (0) "-emit-llvm cannot be used when linking";
 // WP-1995: an evaluation session refuses a translation unit with errors.
 drv_eval_session_tu_errors = Error (1) "cannot open an evaluation session: the translation unit has {0} error(s)";
 drv_framework_dir_ignored = Warning (1) "ignoring framework directory '{0}' (kiln does not search frameworks)";
-// WP-2390 (tooling clients): `FrontEndOptions::overlay` replaces an input
-// of a module file the command line names (spec/driver.md "Front-end
-// library entry").
-drv_front_end_overlay_input = Error (2) "the overlay replaces '{0}', an input of the module file '{1}'";
+// WP-2391 (tooling clients): `FrontEndOptions::overlay` creates files, which
+// no module file the command line names can be checked against
+// (spec/driver.md "Front-end library entry").
+drv_front_end_overlay_creates = Error (2) "the overlay creates '{0}', which the module file '{1}' cannot be checked against";
+// WP-2390 (tooling clients): `FrontEndOptions::overlay` replaces (WP-2391:
+// or removes) an input of a module file the command line names
+// (spec/driver.md "Front-end library entry").
+drv_front_end_overlay_input = Error (2) "the overlay replaces or removes '{0}', an input of the module file '{1}'";
 // WP-2120 (tooling clients): `kiln_driver::front_end` refuses `-verify` and
 // `-include-pch` (and the PCH snapshot modes), which it does not run.
 drv_front_end_unsupported = Error (1) "'{0}' is not supported by the front-end library entry";

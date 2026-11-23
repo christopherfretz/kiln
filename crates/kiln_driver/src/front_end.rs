@@ -249,6 +249,12 @@ pub struct FrontEndReport<R> {
     pub driver_errors: u32,
     /// The first diagnostic of level error or fatal, in the order emitted.
     pub first_error: Option<FirstError>,
+    /// The entries of `FrontEndOptions::overlay` whose loader
+    /// ([`Overlay::replace_with`], [`Overlay::create_with`]) failed when
+    /// this run read them, each with the loader's error text, in the
+    /// order read. A file whose loader failed is not found in the run, so
+    /// a run with any is void: its diagnostics are not the tree's.
+    pub overlay_failures: Vec<(PathBuf, String)>,
 }
 
 /// The first error of a run.
@@ -371,6 +377,9 @@ pub(crate) struct PpHooks {
     pub(crate) events: SearchEvents,
     /// `FrontEndOptions::overlay`, never an empty one.
     pub(crate) overlay: Option<Arc<Overlay>>,
+    /// Set by the job: the overlay's entries whose loader failed when the
+    /// run read them (`FrontEndReport::overlay_failures`).
+    pub(crate) overlay_failures: Vec<(PathBuf, String)>,
 }
 
 /// One of header search's events as the entry keeps it: the kind, the
@@ -635,6 +644,7 @@ fn run_here<R>(
     let stderr = options.stderr.clone().unwrap_or_else(|| SharedWriter::new(std::io::sink()));
     let rules = EntryRules { pch_probe: options.pch_probe };
     let mut driver_errors = None;
+    let mut overlay_failures = Vec::new();
     let overlay = options.overlay.as_ref().filter(|o| !o.is_empty());
     prepare(&args, rules, overlay.map(|o| &**o), &host, &stderr, |job| {
         driver_errors = Some(host.errors.get());
@@ -644,9 +654,11 @@ fn run_here<R>(
             pp_record: options.pp_record,
             events,
             overlay: overlay.cloned(),
+            overlay_failures: Vec::new(),
         };
         let mut hooks = Hooks { pp, see: &mut see };
         SyntaxJob(job).run_hooked(&host, &mut hooks);
+        overlay_failures = std::mem::take(&mut hooks.pp.overlay_failures);
     });
     Ok(FrontEndReport {
         value,
@@ -655,6 +667,7 @@ fn run_here<R>(
         fatal: host.fatal.get(),
         driver_errors: driver_errors.unwrap_or_else(|| host.errors.get()),
         first_error: host.first_error(),
+        overlay_failures,
     })
 }
 
@@ -694,7 +707,7 @@ pub(crate) fn prepare<R>(
     if args.verbose {
         crate::print_version(&mut stderr.clone(), &tc, true);
     }
-    let inputs = crate::existing_inputs(args, &drv);
+    let inputs = crate::existing_inputs(args, overlay, &drv);
     let refuse = |drv: &DiagEngine<'_>| {
         if args.verify.is_some() {
             Diag::new(DiagId::drv_front_end_unsupported, Span::INVALID).arg("-verify").emit(drv);
@@ -725,13 +738,17 @@ pub(crate) fn prepare<R>(
     Some(run(job))
 }
 
-/// Refuses an `overlay` that replaces an input of a module file of the
-/// command line (spec/driver.md "Front-end library entry", WP-2390):
-/// `-fmodule-file=` (named or not) and a module-file main input. A module
-/// file holds its inputs' text as it was built (and checks them by size
-/// and hash against the disk), which the overlay's bytes are not: one
-/// `drv_front_end_overlay_input` per overlaid input. A module file that
-/// cannot be read is left to the job, which diagnoses it.
+/// Refuses an `overlay` that replaces or removes an input of a module
+/// file of the command line (spec/driver.md "Front-end library entry",
+/// WP-2390, WP-2391): `-fmodule-file=` (named or not) and a module-file
+/// main input. A module file holds its inputs' text as it was built (and
+/// checks them by size and hash against the disk), which the overlay's
+/// bytes are not: one `drv_front_end_overlay_input` per overlaid input.
+/// It records its inputs but not its lookups, so an overlay that creates
+/// any file (which could shadow an input or answer a `__has_include`)
+/// refuses every one: `drv_front_end_overlay_creates`, naming the first
+/// created path. A module file that cannot be read is left to the job,
+/// which diagnoses it.
 fn overlaid_module_inputs(args: &Args, overlay: &Overlay, drv: &DiagEngine<'_>) {
     use kiln_pp::bmi;
     let mains = args
@@ -743,6 +760,13 @@ fn overlaid_module_inputs(args: &Args, overlay: &Overlay, drv: &DiagEngine<'_>) 
     let nameless = args.nameless_module_files.iter().map(String::as_str);
     for path in mains.chain(named).chain(nameless) {
         let Ok(c) = bmi::read_file(&args.fs_path(path)) else { continue };
+        if let Some(created) = overlay.created_paths().first() {
+            Diag::new(DiagId::drv_front_end_overlay_creates, Span::INVALID)
+                .arg(created.to_string_lossy())
+                .arg(path)
+                .emit(drv);
+            continue;
+        }
         for f in c.files.iter().filter(|f| overlay.contains(&args.fs_path(&f.path))) {
             Diag::new(DiagId::drv_front_end_overlay_input, Span::INVALID)
                 .arg(&f.path)
@@ -829,6 +853,7 @@ pub fn std_config(std: &str, options: &FrontEndOptions) -> FrontEndReport<JobCon
         fatal: host.fatal.get(),
         driver_errors,
         first_error: host.first_error(),
+        overlay_failures: Vec::new(),
     }
 }
 

@@ -25,6 +25,8 @@
 //! | `source_path_style` | configuration | not stored, as `macro_prefix_map` |
 //! | `work_dir` | configuration | not stored, as `macro_prefix_map` (a lazy buffer's path is stored joined) |
 //! | `overlay` | configuration | not stored: a restored manager has none (spec/source.md "Overlay") |
+//! | `overlay_dirs` | rebuilt (lost) | the overlay's per-run directory cache, empty in a restored manager |
+//! | `overlay_failures` | rebuilt (lost) | the run's failed overlay loads, empty in a restored manager |
 //! | `gcc_names` | state | as data |
 //!
 //! `FileEntry`:
@@ -207,6 +209,8 @@ impl Snap for SourceManager {
             work_dir: _,
             gcc_names,
             overlay: _,
+            overlay_dirs: _,
+            overlay_failures: _,
         } = self;
         presumed_names.put(w);
         files.put(w);
@@ -248,6 +252,8 @@ impl Snap for SourceManager {
             work_dir: OnceLock::new(),
             gcc_names,
             overlay: OnceLock::new(),
+            overlay_dirs: Mutex::new(super::DirCache::default()),
+            overlay_failures: super::LoadFailures::default(),
         };
         if let Err(why) =
             kiln_snap::timing::timed_part("SourceManager check", || sm.check_restored())

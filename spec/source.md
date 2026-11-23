@@ -380,61 +380,159 @@ Presumed locations ([cpp.line]):
   location of the `__LINE__` token).
 
 ## Overlay
-`Overlay` (WP-2390, for tooling clients: a run that parses edited files
-without writing them; prior art clang's remapped file buffers and
-`-ivfsoverlay`) holds replacement contents for files that exist. Stage 1
-replaces the content of existing regular files only: no file is created
-or removed and no directory changes.
+`Overlay` (WP-2390, WP-2391; for tooling clients: a run that parses
+edited files without writing them; prior art clang's remapped file
+buffers and `-ivfsoverlay`) holds the files of one run that differ from
+the disk, as final states: replaced (a file that exists, with other
+contents), created (a file the disk does not have) and removed (a file
+the disk has and the run does not). The reference is the same command
+over a copy of the tree in which each replaced file holds the overlay's
+bytes, each created file exists with them (its missing parent
+directories made) and each removed file is unlinked, its directory left
+in place: a run with the overlay sees exactly what that run sees.
 
-- `Overlay::new()`, `replace(&Path, Arc<[u8]>) -> io::Result<()>`,
-  `is_empty()`, `len()`, `contains(&Path)`, `bytes_of(&Path, &Metadata)`,
-  `paths()`. `replace` resolves the path as the operating system does
-  (symbolic links followed; a relative path against the process's
-  directory) and fails unless it names an existing regular file
-  (`InvalidInput` for anything else). A second entry for the same file
-  replaces the first.
-- **Identity.** An entry is keyed by the identity of the file its path
-  names when the entry is added, as `load_file` identifies files: device
-  and inode on Unix. A file reached through another spelling, a `..`
-  path, a symbolic link or a hard link is the overlaid file, as it would
-  be in a tree in which that file held the bytes. Where the platform has
-  no inode number the key is the canonical path, as `load_file`'s
-  (best-effort: two paths the platform does not canonicalize alike are
-  two files). The entry's own path is kept for `paths()` only.
+- `Overlay::new()`; `replace(&Path, Arc<[u8]>)`, `create(&Path,
+  Arc<[u8]>)`, `write(&Path, Arc<[u8]>)` (replace if a regular file is
+  there, else create), `remove(&Path)`, each `-> io::Result<()>`;
+  `replace_with` / `create_with(&Path, Loader)` (lazy contents, below);
+  `is_empty()`, `len()`, `creates_files()`, `contains(&Path)` (true for
+  replaced, created and removed paths), `state(&Path) ->
+  Option<EntryState>` (`Replaced`, `Created`, `Removed`),
+  `bytes_of(&Path, &Metadata)`, `paths()`, `created_paths()` (sorted),
+  `load_failures()`, and the resolver `resolve(&Path, &mut DirCache) ->
+  Resolved` (`Disk { meta, replaced, redirected }`, `Created { key,
+  content }`, `CreatedDir`, `Missing`) with its two halves `on_disk`
+  (after a successful `open`/`stat`: no system call) and `absent_path`
+  (after a failed one), and `created_in(dir, &mut DirCache)`. A
+  `DirCache` is per run: each directory the resolver examines is
+  `stat`ed once.
+- Paths are resolved as the operating system resolves them (symbolic
+  links followed; a relative path against the process's directory: pass
+  absolute paths) when the entry is added, and the checks are made then:
+  - `replace`: an existing regular file, or a file this overlay creates
+    (its content changes); a removed file becomes replaced.
+    `InvalidInput` for anything else; the error of examining the path.
+  - `create`: a path that names nothing (no dangling symbolic link) whose
+    deepest existing ancestor is a directory, with only plain components
+    below it, none of them a file this overlay creates and the path not
+    an ancestor of one; or a removed file, which becomes replaced.
+    `AlreadyExists` when a regular file is there (on disk and not
+    removed, or created); `InvalidInput` for the other refusals.
+  - `remove`: a regular file on disk whose last component is not a
+    symbolic link and which has no other hard link (so that unlinking
+    the name is removing the identity), or a created file (its entry is
+    dropped); a replaced file becomes removed. `NotFound` when no
+    regular file is there (none, or already removed); `InvalidInput`
+    for the other refusals.
+- **Identity.** A replaced or removed file is keyed by the identity of
+  the file its path names when the entry is added, as `load_file`
+  identifies files: device and inode on Unix. A file reached through
+  another spelling, a `..` path, a symbolic link or a hard link is the
+  entry's file. Where the platform has no inode number the key is the
+  canonical path (best-effort: two paths the platform does not
+  canonicalize alike are two files). A created file is keyed by the
+  identity of its deepest existing ancestor directory (the anchor) and
+  the path below it (`FileKey::Created`): two spellings of one created
+  path are one file, so `#pragma once` and include guards work by
+  identity as on disk. The directories below the anchor are the
+  overlay's, implied by its created files: there are no empty created
+  directories, and a created directory's identity is distinct from every
+  directory on disk's. The entry's own path is kept for `paths()`,
+  `created_paths()` and `load_failures()` only.
+- **Resolution.** A path the disk has is the disk's (a removed file:
+  `Missing`; a replaced one: the overlay's content). A path the disk does
+  not have is resolved against the created entries: no system call
+  unless some created path has the path's last component (or the path
+  has a `..`), then one `stat` per missing ancestor up to the anchor,
+  each directory once per `DirCache`. A `..` after a created directory
+  leaves it lexically (a created directory holds no symbolic link) and
+  the result is resolved again from the start (at most 64 times); a
+  file on disk reached that way is `Disk { redirected: Some(path) }`,
+  the path to open.
 - `set_overlay(Arc<Overlay>)` on a `SourceManager`, before any load
   (only the first call has an effect; an empty overlay is none, so that
   a run with an empty overlay is byte-identical to one without);
   `overlay() -> Option<&Arc<Overlay>>`. A restored snapshot has none.
 - **Loads.** `load_file` / `load_regular_file` open, `fstat` and
   identify the file as always (the file must exist and be regular where
-  that is asked); then an overlaid identity's buffer is the overlay's
-  bytes, else the file is read. Decoding, the load report (invalid
-  UTF-8, a byte-order mark kept in the text), the one-buffer-per-identity
-  rule, the location-space limit and the buffer's name (the path as
-  first given: `__FILE__`, diagnostics) are those of the same bytes on
-  disk. `file_origin` is `FileOrigin::Overlay`; `original_bytes` is the
-  overlay's bytes. A file not overlaid is `Disk`, as without an overlay.
-  Cost: with no overlay one branch per load; with one, one map lookup.
-- `load_regular_file_expecting`: for an overlaid identity the caller's
+  that is asked); then a removed identity is not found, a replaced
+  identity's buffer is the overlay's bytes, else the file is read. Only
+  when the `open` fails does a load ask the overlay for a created file
+  (or a `..` out of a created directory, which loads what it reaches; a
+  created directory is `IsADirectory`). Decoding, the load report
+  (invalid UTF-8, a byte-order mark kept in the text), the
+  one-buffer-per-identity rule, the location-space limit and the
+  buffer's name (the path as first given: `__FILE__`, diagnostics) are
+  those of the same bytes on disk. `file_origin` is `FileOrigin::Overlay`
+  for replaced and created files (`Overlay::state` tells them apart);
+  `original_bytes` is the overlay's bytes. A file the overlay does not
+  name is `Disk`, as without an overlay. Cost: with no overlay one branch
+  per load; with one, one map lookup per load that the disk answers.
+- `load_regular_file_expecting`: for a replaced identity the caller's
   expected text (a module file's copy of the disk's) is not used; the
-  overlay's bytes are loaded and the text handed back.
-- `add_lazy_file` of an overlaid identity answers `LazyFile::Changed`:
-  the recorded length and hash are the disk's.
-- **Header search** (`kiln_pp::RealFs`): a header is loaded through the
-  source manager, so through its overlay; `RealFs::with_overlay` (the
-  driver passes the source manager's) makes `read` (`#embed`,
-  `__has_embed`) return an overlaid file's bytes. Directory queries
-  (`dir_identity`, `is_dir`, `is_file`, `list_dir`) never consult it:
-  every overlaid file exists.
+  overlay's bytes are loaded and the text handed back; a created path
+  loads as `load_file`.
+- `add_lazy_file` of a replaced identity answers `LazyFile::Changed`
+  (the recorded length and hash are the disk's), of a removed one
+  `LazyFile::Missing`. `is_regular_file(path)`: through the overlay.
+- **Lazy contents.** `replace_with` / `create_with` take a `Loader`
+  (`Box<dyn Fn() -> io::Result<Arc<[u8]>> + Send + Sync>`) in place of
+  the bytes; the path's checks and the key are taken when the entry is
+  added, only the bytes wait. `Overlay` is `Send + Sync` and shared as
+  `Arc<Overlay>` by any number of runs; a loader is called at most once
+  per overlay, by the first run that reads the entry (others reading it
+  meanwhile wait), and its result, bytes or error, is kept for the
+  overlay's life. A loader must not start a run that reads the same
+  entry. A file is read when it is loaded (an `#include`, a
+  `__has_include` that finds it: header search loads what it finds),
+  by `#embed` and by `__has_embed`; existence queries (`is_file`,
+  listings, `contains`, `state`) never read it. A failed loader's file
+  exists and cannot be read, which header search treats as not found;
+  the run's `SourceManager::overlay_failures()` (a `LoadFailures`
+  handle, which header search's `OverlayFs` notes into as well) lists
+  each failed entry the run read once, with the loader's error text, in
+  the order read (the front-end entry's `FrontEndReport::
+  overlay_failures`); `Overlay::load_failures()` lists every failure.
+- **Header search** (`kiln_pp::OverlayFs`, chosen by the driver only for
+  a run with an overlay; `RealFs` has no overlay code): each of
+  `HeaderFs`'s queries (`dir_identity`, `is_dir`, `is_file`, `list_dir`,
+  `list_dirs`, `open`, `read`) answers for the tree the overlay
+  describes, through the one resolver; a listing has the names the
+  overlay creates in the directory merged in (and keeps a removed name:
+  a listed name only permits the `open`, which answers). Header search's
+  caches (listings after misses, directory identities) are filled
+  through it, so they hold the overlay's view. The search list is built
+  over it: a directory only the overlay makes exist is kept, and `-I d
+  -I ./d` is one directory. Costs over `RealFs`: a query the disk
+  answers costs what it costs there (plus a map lookup for a file when
+  the overlay replaces or removes files); a miss costs nothing more
+  unless the overlay creates a path with its last component; a listing
+  costs one more `stat` per directory when the overlay creates files.
 - **Caches that hold a file's content.** A module file records its
   inputs' text and checks them by size and hash against the disk: an
-  imported module file whose file table names an overlaid file is
-  refused with the fatal `pp_module_file_overlaid` (`module file '<m>'
-  was built from '<f>', which the overlay replaces`), and the front-end
-  entry refuses a module file of the command line up front (spec/driver.md
-  "Front-end library entry"). A PCH is never consumed under the entry.
-  Validating these against the overlay instead is stage 3; files the
-  overlay creates or removes are stage 2.
+  imported module file whose file table names a replaced or removed
+  file is refused with the fatal `pp_module_file_overlaid` (`module file
+  '<m>' was built from '<f>', which the overlay replaces or removes`). A
+  module file records its inputs but not its lookups, so it cannot be
+  checked against a created file that would shadow an input or answer a
+  `__has_include`: under an overlay that creates any file every imported
+  module file is refused with the fatal `pp_module_file_overlay_creates`
+  (`module file '<m>' cannot be checked against '<f>', which the overlay
+  creates`, naming the first created path), `import std;` included. The
+  front-end entry refuses a module file of the command line up front
+  (spec/driver.md "Front-end library entry"). A PCH is never consumed
+  under the entry. Validating module files against the overlay instead
+  is stage 3 (WP-2392).
+- **Stated limits.** Created names match byte for byte (on a
+  case-insensitive volume a copy would also find `New.h` as `new.h`);
+  `-fkiln-source-path-style=gcc` keeps the search path for a created
+  file (no `realpath`); a symbolic link elsewhere on disk that points
+  into a created path dangles in the run (the copy would follow it); the
+  tree must not change, for the paths the overlay names, between
+  building the overlay and the end of the run; removed directories and
+  empty created directories cannot be expressed; response files,
+  ignorelists, the PCH probe, the predefines and toolchain probing read
+  the disk, and an evaluation session takes no overlay.
 - Snapshots: the overlay is configuration, not stored; an overlaid buffer
   is written with its text inline, as a lazy buffer whose recorded copy
   was used.
@@ -536,8 +634,23 @@ entries another 2^31 (`len + 1` each). Exhaustion is reported as
   spelling, a symbolic link, a hard link), refused for a missing file and
   a directory; loads take its bytes with `FileOrigin::Overlay` and the
   load report of the same bytes on disk; `load_regular_file_expecting`
-  and `add_lazy_file` of an overlaid file; an empty overlay is none. The
-  front-end runs over a copied tree: `kiln_driver` `tests/front_end_overlay.rs`.
+  and `add_lazy_file` of an overlaid file; an empty overlay is none;
+  `create` / `remove` / `write` and each refusal, the state of each
+  sequence of edits; created and removed files (and `..` out of a
+  created directory) load as in the edited tree; `resolve` of every kind
+  of path; lazy contents (one call over two source managers, a sticky
+  failure noted once per run). Header search's view (`kiln_pp`
+  `tests/overlay_fs.rs`): each `HeaderFs` query over the overlay equals
+  `RealFs` over a copy of the tree with the edit applied, path by path
+  (relative, absolute, `.`, `..`, symbolic links); header search's
+  listing caches and search list; a miss the overlay cannot have costs
+  no query; a lookup log replayed under another view. The front-end
+  runs over a copied tree: `kiln_driver` `tests/front_end_overlay.rs`
+  (replacements) and `tests/front_end_overlay_create.rs` (created and
+  removed files by every route, a created search directory, `#embed`,
+  `#pragma once` and guards, the main input, listings, `..`, consulted
+  paths, concurrent runs, module-file refusals, replacements only, lazy
+  contents over sixteen concurrent runs).
 - Location partitioning and `offset_of` round trip over many buffers.
 - Expansion/spelling mapping for nested macro expansions (macro body inside
   macro body, macro argument spelled in another expansion, macro name

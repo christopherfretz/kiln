@@ -6,18 +6,20 @@ use std::cell::RefCell;
 use std::io::Write;
 use std::path::Path;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use kiln_diag::verify::Verifier;
 use kiln_diag::{Diag, DiagEngine, DiagId, DiagOptions, MemorySink};
 use kiln_lex::Interner;
 use kiln_lex::TokKind;
 use kiln_pp::{
-    ClangFeatures, DirGroup, HeaderSearch, IfEval, IncludeKind, IncludeRequest, IncludeResolver,
-    PicModel, PpOptions, PredefConfig, Preprocessor, PrintOptions, RealFs, SearchDirSpec,
-    SearchList, bmi, build_predefines, print_macros, print_preprocessed,
+    ClangFeatures, DirGroup, HeaderFs, HeaderSearch, IfEval, IncludeKind, IncludeRequest,
+    IncludeResolver, OverlayFs, PicModel, PpOptions, PredefConfig, Preprocessor, PrintOptions,
+    RealFs, SearchDirSpec, SearchList, SearchObserver, bmi, build_predefines, print_macros,
+    print_preprocessed,
 };
 use kiln_source::activity::{self, Phase};
-use kiln_source::{FileId, Loc, SourceManager, Span};
+use kiln_source::{FileId, Loc, Overlay, SourceManager, Span};
 
 use crate::args::Args;
 use crate::deps::{DepCallbacks, DepList, on_search_event};
@@ -330,9 +332,7 @@ impl Job<'_> {
             }
         };
         let env = a.env.clone();
-        let probe = kiln_pp::MetaProbe(std::sync::Arc::new(move || {
-            crate::toolchain::gcc16_on_path_in(&env)
-        }));
+        let probe = kiln_pp::MetaProbe(Arc::new(move || crate::toolchain::gcc16_on_path_in(&env)));
         Some(kiln_pp::MetaHint { lib, probe })
     }
 
@@ -401,8 +401,7 @@ impl Job<'_> {
         engine: &DiagEngine<'_>,
         angled: bool,
     ) -> Option<FileId> {
-        let fs = RealFs::in_dir(self.args.work_dir.clone()).with_overlay(sm.overlay().cloned());
-        let mut search = HeaderSearch::new(fs, self.search_list());
+        let list = self.search_list_in(sm.overlay());
         let req = IncludeRequest {
             kind: IncludeKind::Include,
             name: self.path.to_owned(),
@@ -412,7 +411,15 @@ impl Job<'_> {
             name_span: Span::INVALID,
             directive_span: Span::INVALID,
         };
-        let found = search.resolve(sm, &req);
+        // Through the overlay, if any (spec/source.md "Overlay").
+        let wd = self.args.work_dir.clone();
+        let found = match sm.overlay() {
+            Some(o) => {
+                let fs = OverlayFs::new(wd, Arc::clone(o)).noting(sm.overlay_failures().clone());
+                HeaderSearch::new(fs, list).resolve(sm, &req)
+            }
+            None => HeaderSearch::new(RealFs::in_dir(wd), list).resolve(sm, &req),
+        };
         if found.is_none() {
             Diag::new(DiagId::drv_module_header_not_found, Span::INVALID)
                 .arg(self.path)
@@ -488,11 +495,23 @@ impl Job<'_> {
     /// `C_INCLUDE_PATH`, `CPLUS_INCLUDE_PATH`, `OBJC_INCLUDE_PATH` and
     /// `SDKROOT` (spec/driver.md "Toolchain").
     pub(crate) fn search_list(&self) -> SearchList {
+        self.search_list_in(None)
+    }
+
+    /// [`search_list`](Self::search_list) built over the tree `overlay`
+    /// describes, if any: a directory only the overlay makes exist is
+    /// kept, as in a copy of the tree with the edit applied (spec/source.md
+    /// "Overlay").
+    pub(crate) fn search_list_in(&self, overlay: Option<&Arc<Overlay>>) -> SearchList {
         let cplusplus = self.std.cplusplus;
         let header_sysroot =
             self.args.isysroot.as_deref().or(self.args.sysroot.as_deref()).unwrap_or("");
         let specs = Self::search_specs(self.args, self.toolchain, header_sysroot, cplusplus);
-        SearchList::build(&specs, cplusplus, &mut RealFs::in_dir(self.args.work_dir.clone()))
+        let wd = self.args.work_dir.clone();
+        match overlay {
+            Some(o) => SearchList::build(&specs, cplusplus, &mut OverlayFs::new(wd, Arc::clone(o))),
+            None => SearchList::build(&specs, cplusplus, &mut RealFs::in_dir(wd)),
+        }
     }
 
     /// The search list (printed for `-v`), the main file and the
@@ -504,7 +523,7 @@ impl Job<'_> {
     ) -> Option<PpInputs> {
         // The ICE breadcrumb (spec/driver.md "Internal compiler errors").
         let _phase = activity::enter(Phase::Preprocess, Loc::INVALID);
-        let list = self.search_list();
+        let list = self.search_list_in(sm.overlay());
         if self.args.verbose {
             let mut err = self.stderr.clone();
             let _ = write!(
@@ -711,31 +730,26 @@ impl Job<'_> {
         // (spec/modules.md §11.12); `-E`/`-M` import nothing.
         let cache_key = staged.then(|| (predefines.clone(), list.verbose_text()));
         sm.set_work_dir(a.work_dir.clone());
-        // `#embed` reads through the source manager's overlay, as its
-        // loads do (spec/source.md "Overlay").
-        let fs = RealFs::in_dir(a.work_dir.clone()).with_overlay(sm.overlay().cloned());
-        let mut search = HeaderSearch::new(fs, list).with_embed_dirs(a.embed_dirs.clone());
-        if a.pch.record_lookups || hooks.is_some_and(|h| h.record_lookups) {
-            search.record_lookups();
-        }
         let deps = DepList::for_args(a).map(|l| Rc::new(RefCell::new(l)));
         let events = hooks.map(|h| Rc::clone(&h.events));
-        match (&deps, events) {
+        let observer: Option<SearchObserver> = match (&deps, events) {
             (Some(d), None) => {
                 let d2 = Rc::clone(d);
-                search.set_observer(Box::new(move |_, e| on_search_event(&d2, e)));
+                Some(Box::new(move |_, e| on_search_event(&d2, e)))
             }
             (d, Some(events)) => {
                 let d2 = d.as_ref().map(Rc::clone);
-                search.set_observer(Box::new(move |_, e| {
+                Some(Box::new(move |_, e| {
                     if let Some(d2) = &d2 {
                         on_search_event(d2, e);
                     }
                     crate::front_end::on_search_event(&events, e);
-                }));
+                }))
             }
-            (None, None) => {}
-        }
+            (None, None) => None,
+        };
+        let record = a.pch.record_lookups || hooks.is_some_and(|h| h.record_lookups);
+        let resolver = include_resolver(a, sm, list, record, observer);
         let mut opts = self.pp_options_for(predefines, staged);
         opts.pp_record |= hooks.is_some_and(|h| h.pp_record);
         if !staged {
@@ -779,7 +793,7 @@ impl Job<'_> {
             return None;
         }
         let mut pp = Preprocessor::new(sm, engine, interner, opts);
-        pp.set_include_resolver(Box::new(search));
+        pp.set_include_resolver(resolver);
         let triple = self.toolchain.target.triple;
         pp.set_if_evaluator(Box::new(self.if_evaluator()));
         let features = self.clang_features();
@@ -1367,5 +1381,44 @@ impl kiln_pp::FeatureQueries for StagedFeatures {
 
     fn flt_eval_method(&self) -> i32 {
         self.0.flt_eval_method()
+    }
+}
+
+/// The job's header search over `list`, recording lookups if `record`,
+/// reporting to `observer`. A run with an overlay searches the tree it
+/// describes; one without searches the disk with no overlay code at all
+/// (spec/source.md "Overlay").
+fn include_resolver(
+    a: &Args,
+    sm: &SourceManager,
+    list: SearchList,
+    record: bool,
+    observer: Option<SearchObserver>,
+) -> Box<dyn IncludeResolver> {
+    /// Header search over `fs` with the job's settings.
+    fn search<F: HeaderFs>(
+        fs: F,
+        list: SearchList,
+        embed_dirs: Vec<String>,
+        record: bool,
+        observer: Option<SearchObserver>,
+    ) -> HeaderSearch<F> {
+        let mut search = HeaderSearch::new(fs, list).with_embed_dirs(embed_dirs);
+        if record {
+            search.record_lookups();
+        }
+        if let Some(o) = observer {
+            search.set_observer(o);
+        }
+        search
+    }
+    let embed_dirs = a.embed_dirs.clone();
+    if let Some(o) = sm.overlay() {
+        let fs =
+            OverlayFs::new(a.work_dir.clone(), Arc::clone(o)).noting(sm.overlay_failures().clone());
+        Box::new(search(fs, list, embed_dirs, record, observer))
+    } else {
+        let fs = RealFs::in_dir(a.work_dir.clone());
+        Box::new(search(fs, list, embed_dirs, record, observer))
     }
 }
