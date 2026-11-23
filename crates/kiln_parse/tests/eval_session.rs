@@ -168,7 +168,7 @@ fn run(s: &mut EvalSession<'_, '_>, name: &str) -> RunReport {
 fn ok(r: &RunReport) -> RunValue {
     assert!(r.diagnostics.is_empty(), "unexpected diagnostics: {:?}", r.diagnostics);
     match &r.result {
-        Ok(v) => *v,
+        Ok(v) => v.clone(),
         Err(e) => panic!("run failed: {e:?}"),
     }
 }
@@ -472,7 +472,8 @@ fn entry_lookup_errors() {
          consteval int ov(int) { return 2; }\n\
          int not_constexpr() { return 3; }\n\
          consteval int params(int x) { return x; }\n\
-         consteval double real() { return 1.0; }\n\
+         inline constexpr int k = 1;\n\
+         consteval const int& real() { return k; }\n\
          int var;\n\
          template <class T> consteval int tmpl() { return 4; }\n\
          consteval int undefined();\n\

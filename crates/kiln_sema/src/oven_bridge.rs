@@ -303,6 +303,34 @@ impl SemaBridge for Bridge<'_, '_, '_> {
     fn session_settle(&mut self) -> kiln_oven::NestedCost {
         self.settle()
     }
+
+    fn session_result(
+        &mut self,
+        v: ConstValueId,
+        mark: kiln_ast::consts::ConstMark,
+    ) -> Result<(), kiln_oven::ResultReadError> {
+        // Decoded before the store is truncated back to the mark: only
+        // the freezer ran above it (spec/eval-session.md §4.1).
+        let r = match self.run.as_deref() {
+            Some(run) => {
+                crate::session_value::decode(self.sema, v, run.open_decls, run.result_bytes)
+                    .map(Some)
+            }
+            None => Ok(None),
+        };
+        self.sema.ast.consts.truncate(mark);
+        let tree = r?;
+        if let Some(run) = self.run.as_deref_mut() {
+            *run.out = tree;
+        }
+        Ok(())
+    }
+
+    fn session_destroys_result(&mut self, f: DeclId) -> bool {
+        // A `constexpr` entry's result is destroyed as `constexpr R v =
+        // f();`'s would be; an immediate invocation's is not (§4).
+        !self.sema.is_immediate_fn(f)
+    }
 }
 
 impl<'a, 'sm> Sema<'a, 'sm> {

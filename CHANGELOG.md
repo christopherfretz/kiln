@@ -26,6 +26,20 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   variables, condition and for-range bindings, exception declarations,
   requires-expression parameters and init-captures, with friend
   declarations no longer overwriting the row of what they name.
+- Evaluation-session results of any result type (WP-2071,
+  spec/eval-session.md §4.1): an entry may return a class, union, array,
+  enumeration, floating-point, pointer, pointer-to-member or
+  `std::meta::info` value, and `RunReport::result` is a `RunValue` tree
+  the client owns (names as `display_string_of` spells them, `decl` only
+  for what existed at open, objects without a name in a constants table
+  `RunReport::constants` in first-reached order, one index per object),
+  read through the freezer `constexpr R v = f();` uses and capped by the
+  new `RunBudget::result_bytes` (64 MiB, `RunError::ResultTooLarge`).
+  A `constexpr` entry's result is destroyed after the read. New
+  `EvalSession::variable_value` / `variable_value_named` decode a
+  constant variable's value through the same decoder. `RunValue` is no
+  longer `Copy`; a class with a virtual base is refused for now
+  (WP-2210).
 - `constexpr` entries for evaluation sessions (WP-2072,
   spec/eval-session.md §3-§4): a session runs a parameterless
   `constexpr` function returning `void` or an integral type, not only a

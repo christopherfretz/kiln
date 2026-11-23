@@ -489,7 +489,7 @@ impl Oven {
         fb: u32,
     ) -> Result<ConstValueId, EvalFailure> {
         self.run.object = None;
-        let Some(stub) = self.compile_call(b, f, at) else {
+        let Some(stub) = self.compile_call(b, f, at, false) else {
             return Err(EvalFailure::silent(FailKind::NotConstant));
         };
         self.let_pending.clear();

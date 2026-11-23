@@ -135,7 +135,7 @@ fn run(s: &mut EvalSession<'_, '_>, sm: &SourceManager, name: &str) -> Seen {
 fn ok(r: &Seen) -> RunValue {
     assert!(r.diags.is_empty(), "unexpected diagnostics: {:?}", r.diags);
     match &r.result {
-        Ok(v) => *v,
+        Ok(v) => v.clone(),
         Err(e) => panic!("run failed: {e:?}"),
     }
 }

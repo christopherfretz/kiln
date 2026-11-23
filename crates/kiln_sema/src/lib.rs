@@ -128,6 +128,7 @@ pub mod section;
 mod selectany;
 mod self_ref;
 pub mod session;
+pub mod session_value;
 mod shadow;
 mod side_effects;
 mod sme;

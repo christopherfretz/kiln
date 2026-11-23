@@ -150,6 +150,19 @@ pub struct Pools {
     unions: Vec<UnionMember>,
 }
 
+/// The extent of a [`ConstStore`] at some point ([`ConstStore::mark`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ConstMark {
+    nodes: usize,
+    words: usize,
+    paths: usize,
+    aggs: usize,
+    bytes: usize,
+    relocs: usize,
+    padding: usize,
+    unions: usize,
+}
+
 /// The interned, append-only store of constant values (spec/ast.md §9.1).
 ///
 /// `Default` assumes 8-byte pointers; `Ast::new` uses
@@ -247,6 +260,56 @@ impl ConstStore {
             + n(&p.relocs)
             + n(&p.padding)
             + n(&p.unions)
+    }
+
+    /// The store's extent now, for [`ConstStore::truncate`].
+    pub fn mark(&self) -> ConstMark {
+        let p = &self.pools;
+        ConstMark {
+            nodes: p.nodes.len(),
+            words: p.words.len(),
+            paths: p.paths.len(),
+            aggs: p.aggs.len(),
+            bytes: p.bytes.len(),
+            relocs: p.relocs.len(),
+            padding: p.padding.len(),
+            unions: p.unions.len(),
+        }
+    }
+
+    /// Drops every value interned since `mark` was taken, with its intern
+    /// table entry: the store is as it was at the mark (an evaluation
+    /// session's result is frozen, read and dropped this way,
+    /// spec/eval-session.md §4.1). The caller guarantees that no id
+    /// above the mark is held anywhere. A mark from a larger store (taken
+    /// before an earlier truncation to a smaller one) leaves the store
+    /// unchanged.
+    pub fn truncate(&mut self, mark: ConstMark) {
+        let n = self.pools.nodes.len();
+        if mark.nodes >= n {
+            return;
+        }
+        for i in mark.nodes..n {
+            let id = ConstValueId::new(i as u32 + 1);
+            let h = self.pools.hash_of(id);
+            if let Ok(e) = self.table.find_entry(h, |&x| x == id) {
+                e.remove();
+            }
+        }
+        let p = &mut self.pools;
+        p.nodes.truncate(mark.nodes);
+        p.words.truncate(mark.words);
+        p.paths.truncate(mark.paths);
+        p.aggs.truncate(mark.aggs);
+        p.bytes.truncate(mark.bytes);
+        p.relocs.truncate(mark.relocs);
+        p.padding.truncate(mark.padding);
+        p.unions.truncate(mark.unions);
+        // The sentinel's hash slot is written when the next aggregate is
+        // appended after it.
+        if let Some(last) = p.aggs.last_mut() {
+            last.hash = 0;
+        }
     }
 
     /// Interns a scalar.
