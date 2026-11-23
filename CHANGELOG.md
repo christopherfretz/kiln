@@ -21,6 +21,15 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   holding those bytes. A module file built from an overlaid file is
   refused (`drv_front_end_overlay_input` for one the command line names,
   `pp_module_file_overlaid` at an import).
+- Evaluation sessions for tooling clients (WP-2412, WP-2413;
+  spec/eval-session.md §2, §7): `SessionFrontEnd::consulted` lists the
+  `#embed` resources and `__has_include` / `__has_embed` hits of the unit
+  with their contents, as `FrontEnd::consulted`; an exception leaving a
+  run's entry is reported with the call stack at its throw as `in call
+  to` notes under `-fconstexpr-backtrace-limit=` (session runs only;
+  compile output keeps clang's shape). `FrontEndOptions::response_files`
+  (default on) turns off `@file` expansion in `run_front_end` (WP-2411).
+
 - The written-reference table joins the AST and keeps the tokens
   outside a name (WP-2326, spec/ast.md §18.11): the location a
   `DeclRefExpr` or `MemberExpr` stores is its name's entry's `name_lo`
@@ -758,6 +767,11 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Changed
 
+- Breaking, for tooling clients (WP-2411, spec/eval-session.md §2):
+  `with_eval_session` takes its command line as words with no `@file`
+  response-file expansion; an `@x` word is an ordinary word (an input
+  named `@x`).
+
 - Breaking, for tooling clients (WP-2321, WP-2322, WP-2324, WP-2325):
   `HostCalls` no longer requires `Send`; only a registered handler is
   `Box<dyn HostCalls + Send>`, and `EvalSession::run` takes any handler
@@ -872,6 +886,12 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   packagers").
 
 ### Fixed
+
+- An evaluation-session run on a thread other than the one that
+  compiled the session checks that thread's stack guard (WP-2410,
+  spec/eval-session.md §9): it failed "stack exhausted" at its first
+  instantiation or nested evaluation, and every later run of the session
+  with it. A stack exhausted by one run no longer stops the next.
 
 - A class template's friend function template definition with a default
   template argument, instantiated after the template was declared at

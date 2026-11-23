@@ -533,6 +533,94 @@ fn a_session_moves_to_another_thread() {
     });
 }
 
+/// WP-2410: templates only a run instantiates (`E<int>`'s member
+/// functions are defined at their first call, in the run), shallow and
+/// deep: `R<T, N>` instantiates `R<T, N - 1>` from its initializer, one
+/// native recursion of the instantiator per level.
+const STACK_SRC: &str = "template <class T, int N> struct R { static constexpr int v = R<T, N - 1>::v + 1; };\n\
+template <class T> struct R<T, 0> { static constexpr int v = 0; };\n\
+template <class T> struct E {\n\
+  static consteval int shallow() { return R<T, 8>::v; }\n\
+  static consteval int shallow2() { return R<T, 16>::v; }\n\
+  static consteval int deep() { return R<T, 1000>::v; }\n\
+};\n\
+static_assert(sizeof(E<int>) > 0);\n\
+using X = E<int>;\n";
+
+/// `f` on a new thread with a `size`-byte stack and the stack guard
+/// installed on it, as the driver's compile thread has (and a client's
+/// worker may).
+fn on_guarded_thread<'s, R: Send + 's>(
+    sc: &'s std::thread::Scope<'s, '_>,
+    size: usize,
+    f: impl FnOnce() -> R + Send + 's,
+) -> R {
+    std::thread::Builder::new()
+        .stack_size(size)
+        .spawn_scoped(sc, move || {
+            kiln_sema::stack_guard::StackGuard::install(size);
+            f()
+        })
+        .expect("spawn")
+        .join()
+        .expect("join")
+}
+
+/// WP-2410 (spec/eval-session.md §9): a run checks the stack of the thread
+/// it runs on, not the one the session was compiled on. Compiled on
+/// thread A (guarded), a run on thread B that instantiates a template
+/// succeeds, then a run on A; a run on B that exhausts B's stack fails
+/// with the stack diagnostic, and the session stays usable on A and B.
+#[test]
+fn a_run_checks_the_stack_of_its_own_thread() {
+    const BIG: usize = 256 << 20;
+    const SMALL: usize = 4 << 20;
+    std::thread::scope(|outer| {
+        on_guarded_thread(outer, BIG, || {
+            session(STACK_SRC, |s, sm| {
+                let on = |size: usize, s: &mut EvalSession<'_, '_>, name: &str| {
+                    std::thread::scope(|sc| on_guarded_thread(sc, size, || run(s, name)))
+                };
+                // Compiled on A, run on B: instantiates `R<int, 1..8>`.
+                let b = on(BIG, s, "X::shallow");
+                assert_eq!(ok(&b), RunValue::Signed(8), "{:?}", render(sm, &b.diagnostics));
+                // Then on A, more instantiation.
+                let a = run(s, "X::shallow2");
+                assert_eq!(ok(&a), RunValue::Signed(16), "{:?}", render(sm, &a.diagnostics));
+                // A run that exhausts B's stack (8 MiB) fails with the
+                // stack diagnostic, as a run on the driver's thread would.
+                let deep = on(SMALL, s, "X::deep");
+                assert_eq!(deep.result, Err(RunError::Failed));
+                let text = render(sm, &deep.diagnostics).join("\n");
+                assert!(
+                    text.contains(
+                        "fatal error: kiln: stack exhausted during template instantiation"
+                    ),
+                    "{text}"
+                );
+                // The exhaustion was the run's: later runs on either
+                // thread are not stopped by it.
+                let a = run(s, "X::shallow");
+                assert_eq!(ok(&a), RunValue::Signed(8), "{:?}", render(sm, &a.diagnostics));
+                let b = on(SMALL, s, "X::shallow2");
+                assert_eq!(ok(&b), RunValue::Signed(16), "{:?}", render(sm, &b.diagnostics));
+                // The instantiation the exhaustion stopped is kept as it
+                // failed (semantic work is not rolled back, §5.1 rule 1):
+                // every run reaching it fails alike, on any thread.
+                let again = run(s, "X::deep");
+                assert_eq!(again.result, Err(RunError::Failed));
+                let again = render(sm, &again.diagnostics).join("\n");
+                assert!(again.contains("stack exhausted during template instantiation"), "{again}");
+            });
+            // A fresh session on A's stack runs the deep entry.
+            session(STACK_SRC, |s, sm| {
+                let r = run(s, "X::deep");
+                assert_eq!(ok(&r), RunValue::Signed(1000), "{:?}", render(sm, &r.diagnostics));
+            });
+        });
+    });
+}
+
 /// WP-2321 (spec/host-calls.md §3, spec/eval-session.md §6): a run's
 /// handler is borrowed for the call, so it need not be `Send`: this one
 /// shares its count with the test through an `Rc<Cell<u32>>`, and borrows

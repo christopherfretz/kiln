@@ -55,6 +55,12 @@ pub struct FrontEndOptions {
     /// to it becomes `-include-pch`, which the entry refuses. `false`:
     /// no probe, the header is included as written.
     pub pch_probe: bool,
+    /// Expand `@file` response files in the command line, as the `kiln`
+    /// executable does (spec/driver.md "Response files"). `false`: the
+    /// words are taken as given, an `@x` word is an ordinary word (an
+    /// input named `@x`), so every option that reaches the driver is one
+    /// of the words the caller passed (WP-2411).
+    pub response_files: bool,
     /// Where the driver reads its environment variables (`KILN_*`,
     /// `PATH`, `SOURCE_DATE_EPOCH`, `HOME`, `XDG_CACHE_HOME`): the
     /// process's, or a fixed set ([`Environment::fixed`]), which the
@@ -100,6 +106,7 @@ impl Default for FrontEndOptions {
             record_lookups: false,
             own_thread: true,
             pch_probe: true,
+            response_files: true,
             environment: Environment::process(),
             pp_record: false,
             written_refs: false,
@@ -116,6 +123,7 @@ impl std::fmt::Debug for FrontEndOptions {
             .field("record_lookups", &self.record_lookups)
             .field("own_thread", &self.own_thread)
             .field("pch_probe", &self.pch_probe)
+            .field("response_files", &self.response_files)
             .field("environment", &self.environment)
             .field("pp_record", &self.pp_record)
             .field("written_refs", &self.written_refs)
@@ -295,7 +303,8 @@ impl std::fmt::Display for FrontEndError {
 impl std::error::Error for FrontEndError {}
 
 /// Parses the one input of `command_line` (the arguments after the
-/// program name, `@file`s expanded) as `kiln -fsyntax-only` would and
+/// program name, `@file`s expanded unless `options.response_files` is
+/// off) as `kiln -fsyntax-only` would and
 /// calls `f` when the AST is final. `argv0` picks the driver mode as the
 /// executable's name does (`kiln++` is C++).
 ///
@@ -317,7 +326,11 @@ pub fn run_front_end<R: Send>(
     f: impl FnOnce(&FrontEnd<'_, '_>) -> R + Send,
 ) -> Result<FrontEndReport<R>, FrontEndError> {
     let base = options.base_work_dir();
-    let command_line = crate::rsp::expand_in(command_line, &base);
+    let command_line = if options.response_files {
+        crate::rsp::expand_in(command_line, &base)
+    } else {
+        command_line.to_vec()
+    };
     if !options.own_thread {
         return panic::catch_unwind(AssertUnwindSafe(|| {
             run_here(argv0, &command_line, &options, &base, f)
@@ -428,7 +441,7 @@ impl Hooks<'_> {
 /// (an `#embed` makes an earlier probe of the same path an embed),
 /// without the files the preprocessor entered. A `__has_include` hit's
 /// content is its buffer's bytes when the source manager has them.
-fn consulted(
+pub(crate) fn consulted(
     sm: &SourceManager,
     pp: &Preprocessor<'_, '_>,
     events: &[(ConsultedKind, String, Option<FileId>, Option<Content>)],

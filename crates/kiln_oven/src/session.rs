@@ -598,12 +598,18 @@ impl Oven {
             .is_some_and(|a| a.nested == 0 && a.cancel.is_cancelled())
     }
 
+    /// Whether the running evaluation is a session run's own (its
+    /// outermost context, not nested work).
+    pub(crate) fn session_run_outermost(&self) -> bool {
+        self.ctx_depth == 1
+            && self.sess.as_ref().and_then(|s| s.arm.as_ref()).is_some_and(|a| a.nested == 0)
+    }
+
     /// Records the kind of fault `fault` of the run's outermost context
     /// (from `exec`, before it is rendered).
     #[cold]
     pub(crate) fn session_note_fault(&mut self, b: &dyn SemaBridge, fault: &Fault) {
-        let Some(a) = self.sess.as_ref().and_then(|s| s.arm.as_ref()) else { return };
-        if a.nested != 0 || self.ctx_depth != 1 {
+        if !self.session_run_outermost() {
             return;
         }
         let k = match fault {

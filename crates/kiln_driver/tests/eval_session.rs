@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use kiln_diag::{DiagId, Level};
+use kiln_driver::front_end::{ConsultedKind, Content, FrontEndOptions, run_front_end};
 use kiln_driver::session::{SessionRefused, with_eval_session};
 use kiln_driver::{Io, SharedWriter};
 use kiln_parse::{CancelToken, EvalSession, HostCalls, HostError, HostOut, RunBudget, RunValue};
@@ -323,6 +324,186 @@ fn run_diagnostics_render_as_the_driver() {
             assert!(run.contains("    3 | consteval int bad() { return at(5); }\n"), "{run}");
         }
     }
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+/// WP-2411 (spec/eval-session.md §2): a session's command line is words,
+/// with no `@file` expansion. `@defs.rsp` (holding `-DV=5`) is a second
+/// input, so the line names no one C++ source; an input named `@u.cpp`
+/// is a source.
+#[test]
+fn a_sessions_words_are_not_response_files() {
+    let d = scratch(
+        "words",
+        &[
+            ("t.cpp", "consteval int f() { return V; }\n"),
+            ("defs.rsp", "-DV=5\n"),
+            ("@u.cpp", "consteval int g() { return 3; }\n"),
+        ],
+    );
+    let path = |n: &str| d.join(n).to_string_lossy().into_owned();
+    let err = Captured::default();
+    let cl = ["-std=c++26".to_owned(), format!("@{}", path("defs.rsp")), path("t.cpp")];
+    let got = with_eval_session(&kilnpp(), &cl, io(&err), |fe| fe.map(drop).err());
+    let message = "the command line does not name exactly one C++ source input".to_owned();
+    assert_eq!(got, Some(SessionRefused::CommandLine { message }));
+    let cl = [
+        "-std=c++26".to_owned(),
+        format!("-working-directory={}", d.display()),
+        "@u.cpp".to_owned(),
+    ];
+    let got = with_eval_session(&kilnpp(), &cl, io(&err), |fe| {
+        let mut fe = fe.expect("session opens");
+        let e = fe.session.entry_named("g").unwrap();
+        fe.session.run(e, &mut Seven, RunBudget::PROGRAM, &CancelToken::new()).result
+    });
+    assert_eq!(got, Ok(RunValue::Signed(3)), "{}", err.text());
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+/// WP-2412 (spec/eval-session.md §2): `SessionFrontEnd::consulted` lists
+/// the `#embed` resource and the `__has_include` / `__has_embed` hits with
+/// their contents, as `FrontEnd::consulted` does for the same command
+/// line; an included header is not listed.
+#[test]
+fn consulted_resources_are_listed() {
+    let d = scratch(
+        "consulted",
+        &[
+            ("probe.h", "int never;\n"),
+            ("used.h", "int used;\n"),
+            ("hit.bin", "xyz"),
+            ("data.bin", "AB"),
+            (
+                "t.cpp",
+                "#if __has_include(\"probe.h\") && __has_embed(\"hit.bin\")\n#endif\n\
+                 #include \"used.h\"\n\
+                 constexpr unsigned char d[] = {\n#embed \"data.bin\"\n};\n\
+                 consteval int f() { return d[0] + d[1]; }\n",
+            ),
+        ],
+    );
+    let cl = ["-std=c++26".to_owned(), d.join("t.cpp").to_string_lossy().into_owned()];
+    let err = Captured::default();
+    let (consulted, v) = with_eval_session(&kilnpp(), &cl, io(&err), |fe| {
+        let mut fe = fe.expect("session opens");
+        let e = fe.session.entry_named("f").unwrap();
+        let r = fe.session.run(e, &mut Seven, RunBudget::PROGRAM, &CancelToken::new());
+        (fe.consulted.clone(), r.result)
+    });
+    assert_eq!(v, Ok(RunValue::Signed(i128::from(b'A') + i128::from(b'B'))), "{}", err.text());
+    let kinds: Vec<(ConsultedKind, String, Option<Content>)> = consulted
+        .iter()
+        .map(|c| {
+            let name = Path::new(&c.path).file_name().unwrap().to_string_lossy().into_owned();
+            (c.kind, name, c.content)
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            (ConsultedKind::Probe, "probe.h".to_owned(), Some(Content::of(b"int never;\n"))),
+            (ConsultedKind::Probe, "hit.bin".to_owned(), Some(Content::of(b"xyz"))),
+            (ConsultedKind::Embed, "data.bin".to_owned(), Some(Content::of(b"AB"))),
+        ]
+    );
+    let mut fe_cl = vec!["-fsyntax-only".to_owned()];
+    fe_cl.extend(cl.iter().cloned());
+    let r =
+        run_front_end(&kilnpp(), &fe_cl, FrontEndOptions::default(), |fe| fe.consulted.to_vec())
+            .unwrap();
+    assert_eq!(r.value, Some(consulted));
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+/// WP-2413 (spec/eval-session.md §7): an exception leaving a run's entry
+/// is reported with the call stack it left from, innermost first, under
+/// the backtrace limit; the same exception in the translation unit's own
+/// evaluation keeps clang's shape (the throw only).
+#[test]
+fn an_uncaught_exception_has_its_call_stack() {
+    let src = "struct Err { int code; };\n\
+               constexpr int thrower(int n) { if (n == 0) throw Err{42}; return thrower(n - 1) + 1; }\n\
+               consteval int shallow() { return thrower(2); }\n\
+               consteval int deep() { return thrower(30); }\n\
+               constexpr int catcher() { try { return thrower(1); } catch (...) { throw; } }\n\
+               constexpr int rethrows() { return catcher() + 1; }\n";
+    let d = scratch(
+        "uncaught",
+        &[("t.cpp", src), ("tu.cpp", &format!("{src}constexpr int v = shallow();\n"))],
+    );
+    let t = d.join("t.cpp").to_string_lossy().into_owned();
+    let cl = ["-std=c++26".to_owned(), t.clone()];
+    let err = Captured::default();
+    let shown = with_eval_session(&kilnpp(), &cl, io(&err), |fe| {
+        let mut fe = fe.expect("session opens");
+        ["shallow", "deep", "rethrows"].map(|name| {
+            let e = fe.session.entry_named(name).unwrap();
+            let r = fe.session.run(e, &mut Seven, RunBudget::PROGRAM, &CancelToken::new());
+            assert!(matches!(r.result, Err(kiln_parse::RunError::Uncaught { .. })), "{name}");
+            fe.render(&r.diagnostics).replace(&t, "t.cpp")
+        })
+    });
+    // The diagnostics' lines, without the source excerpts.
+    let heads = |s: &str| -> Vec<String> {
+        s.lines().filter(|l| l.starts_with("t.cpp:")).map(str::to_owned).collect()
+    };
+    let throw =
+        "t.cpp:2:50: note: unhandled exception of type 'Err' with content {42} thrown from here";
+    assert_eq!(
+        heads(&shown[0]),
+        [
+            "t.cpp:3:15: error: call to consteval function 'shallow' is not a constant expression",
+            throw,
+            "t.cpp:2:66: note: in call to 'thrower(0)'",
+            "t.cpp:2:66: note: in call to 'thrower(1)'",
+            "t.cpp:3:34: note: in call to 'thrower(2)'",
+            "t.cpp:3:15: note: in call to 'shallow()'",
+        ],
+        "{}",
+        shown[0]
+    );
+    // 32 frames, the default limit of 10: the 5 innermost and outermost.
+    let mut want = vec![
+        "t.cpp:4:15: error: call to consteval function 'deep' is not a constant expression"
+            .to_owned(),
+        throw.to_owned(),
+    ];
+    want.extend((0..5).map(|n| format!("t.cpp:2:66: note: in call to 'thrower({n})'")));
+    want.push(
+        "t.cpp:2:66: note: (skipping 22 calls in backtrace; use -fconstexpr-backtrace-limit=0 to see all)"
+            .to_owned(),
+    );
+    want.extend((27..30).map(|n| format!("t.cpp:2:66: note: in call to 'thrower({n})'")));
+    want.push("t.cpp:4:31: note: in call to 'thrower(30)'".to_owned());
+    want.push("t.cpp:4:15: note: in call to 'deep()'".to_owned());
+    assert_eq!(heads(&shown[1]), want, "{}", shown[1]);
+    // A rethrow: the note at the throw, the frames of the rethrow.
+    assert_eq!(
+        heads(&shown[2]),
+        [
+            "t.cpp:6:15: error: call to constexpr function 'rethrows' is not a constant expression",
+            throw,
+            "t.cpp:6:35: note: in call to 'catcher()'",
+            "t.cpp:6:15: note: in call to 'rethrows()'",
+        ],
+        "{}",
+        shown[2]
+    );
+    // The unit's own evaluation: the throw's note only, as clang.
+    let tu = d.join("tu.cpp").to_string_lossy().into_owned();
+    let cl = ["-std=c++26".to_owned(), tu];
+    let refused = with_eval_session(&kilnpp(), &cl, io(&err), |fe| fe.map(drop).err());
+    let Some(SessionRefused::TuHasErrors { diagnostics, .. }) = refused else {
+        panic!("{refused:?}")
+    };
+    let notes: Vec<&str> =
+        diagnostics.iter().flat_map(|d| d.notes.iter()).map(|n| n.message.as_str()).collect();
+    assert!(
+        notes.contains(&"unhandled exception of type 'Err' with content {42} thrown from here"),
+        "{notes:?}"
+    );
+    assert!(!notes.iter().any(|n| n.starts_with("in call to")), "{notes:?}");
     std::fs::remove_dir_all(&d).unwrap();
 }
 

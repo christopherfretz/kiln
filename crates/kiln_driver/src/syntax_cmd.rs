@@ -593,11 +593,19 @@ impl SyntaxJob<'_> {
         engine: &'a DiagEngine<'sm>,
         interner: &'sm Arc<Interner>,
         host: Box<dyn kiln_parse::HostCalls + Send>,
-    ) -> Option<(kiln_sema::Sema<'a, 'sm>, Option<FileId>)> {
+    ) -> Option<(kiln_sema::Sema<'a, 'sm>, Option<FileId>, Vec<crate::front_end::Consulted>)> {
         let job = &self.0;
         let inputs = job.pp_inputs(sm, engine)?;
         let target = self.target(engine)?;
-        let (pp, _) = job.build_preprocessor(sm, engine, interner, inputs, true)?;
+        // Header search's events, for the consulted resources (WP-2412).
+        let hooks = crate::front_end::PpHooks {
+            record_lookups: false,
+            pp_record: false,
+            events: crate::front_end::SearchEvents::default(),
+            overlay: None,
+        };
+        let (pp, _) =
+            job.build_preprocessor_with(sm, engine, interner, inputs, true, Some(&hooks))?;
         let popts = ParseOptions {
             record_carried: false,
             record_image: false,
@@ -607,7 +615,7 @@ impl SyntaxJob<'_> {
         };
         let main = pp.main_file();
         let limits = job.args.constexpr.limits();
-        let (sema, _) = kiln_parse::parse_preprocessed_retained(
+        let (sema, pp) = kiln_parse::parse_preprocessed_retained(
             pp,
             Arc::clone(interner),
             engine,
@@ -616,7 +624,8 @@ impl SyntaxJob<'_> {
             limits,
             Some(host),
         );
-        Some((sema, main))
+        let consulted = crate::front_end::consulted(sm, &pp, &hooks.events.borrow());
+        Some((sema, main, consulted))
     }
 
     /// The end of [`Self::parse`]: module and PCH output, reports and

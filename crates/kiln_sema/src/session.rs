@@ -1029,7 +1029,11 @@ impl<'a, 'sm> EvalSession<'a, 'sm> {
             .oven
             .take()
             .unwrap_or_else(|| unreachable!("an evaluation session's Oven is out between runs"));
+        // The on-demand evaluation may instantiate: on this thread's stack
+        // (§9).
+        let guard = s.guard_enter_thread();
         let cv = s.var_constant_value(var, ty, &mut oven);
+        s.guard_leave_thread(guard);
         s.oven = Some(oven);
         let _ = diags.capture_end(mark);
         let cv = match cv {
@@ -1083,6 +1087,8 @@ impl<'a, 'sm> EvalSession<'a, 'sm> {
         self.replay.loose = NestedCost::ZERO;
         self.sema.eval_replay = Some(std::mem::take(&mut self.replay));
         let fatal = self.sema.inst.fatal;
+        // The run's semantic work checks this thread's stack (§9).
+        let guard = self.sema.guard_enter_thread();
         let saved_loc = self.sema.inst.eval_loc.replace(at);
         let mut oven =
             self.sema.oven.take().unwrap_or_else(|| {
@@ -1108,6 +1114,7 @@ impl<'a, 'sm> EvalSession<'a, 'sm> {
         }
         self.sema.inst.eval_loc = saved_loc;
         self.sema.inst.fatal = fatal;
+        self.sema.guard_leave_thread(guard);
         self.sema.inst.meta_calls.clear();
         let mut constants = Vec::new();
         let result = match out.result {

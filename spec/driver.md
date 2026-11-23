@@ -248,7 +248,9 @@ part of the PCH compatibility key (spec/pch.md).
 
 An argument `@file` is replaced by the arguments read from `file`
 before anything else is parsed (`rsp::expand`, both in `main` and in
-`run_as`), as clang's driver (`ExpansionContext::expandResponseFiles`,
+`run_as`; in the front-end library entry unless its `response_files`
+option is off, and never in an evaluation session's command line,
+WP-2411), as clang's driver (`ExpansionContext::expandResponseFiles`,
 GNU tokenizer): whitespace separates arguments, `'` and `"` quote (an
 empty pair is an empty argument), and a backslash takes the next
 character literally, also inside quotes. A nested `@file` is expanded
@@ -1732,8 +1734,14 @@ Options (`FrontEndOptions`, `#[non_exhaustive]`, `Default`): `stderr`,
 `record_lookups`, `own_thread` (default on), `pch_probe` (default on;
 off, `-include h` is the header even with `h.pch` or `h.gch` beside
 it: the driver's PCH probe, spec/driver.md "Precompiled headers", does
-not run), `environment` (an `env::Environment`,
-default the process's), and `pp_record` (default off; on, the
+not run), `response_files` (default on, as the executable: each
+`@file` word is replaced by the words read from the file, "Response
+files" above; off (WP-2411), the words are taken as given and an `@x`
+word is an ordinary word, an input named `@x`, so a client that checked
+each word knows every option that reaches the driver; test
+`front_end.rs` `response_files_can_be_turned_off`; evaluation sessions
+never expand, spec/eval-session.md §2), `environment` (an
+`env::Environment`, default the process's), and `pp_record` (default off; on, the
 preprocessor keeps its preprocessing record, spec/pp.md "Preprocessing
 record", which the closure reads as `fe.pp.record()`; WP-2110), and
 `written_refs` (default off; WP-2320; on, the command line's

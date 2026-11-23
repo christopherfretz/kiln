@@ -394,6 +394,7 @@ fn record_lookups_logs_a_missing_key() {
 fn options_default() {
     let o = FrontEndOptions::default();
     assert!(o.stderr.is_none() && !o.record_lookups && o.own_thread && o.pch_probe);
+    assert!(o.response_files);
     assert!(o.environment.is_process());
 }
 
@@ -862,6 +863,34 @@ fn command_line_working_directory_wins() {
         assert_eq!(r.errors, 0, "{wd}: {:?}", r.first_error);
         assert_eq!(r.value, Some(true));
     }
+}
+
+/// WP-2411: with `response_files` off an `@file` word is an ordinary
+/// word: `@defs.rsp` is a second input (so no single `-fsyntax-only`
+/// job), never `-DV=5`; an input named `@b.cpp` is parsed. On (the
+/// default), `@defs.rsp` is read as a response file, as the executable
+/// reads it.
+#[test]
+fn response_files_can_be_turned_off() {
+    let s = Scratch::new("no-rsp");
+    s.write("defs.rsp", b"-DV=5\n");
+    s.write("a.cpp", b"int v = V;\n");
+    s.write("@b.cpp", b"int in_b;\n");
+    let words = argv(&["-fsyntax-only", "@defs.rsp", "a.cpp"]);
+    let on = run_front_end("kiln++", &words, in_dir(&s.0), |fe| has_decl(fe.ast, "v")).unwrap();
+    assert_eq!(on.errors, 0, "{:?}", on.first_error);
+    assert_eq!(on.value, Some(true));
+    let off = || {
+        let mut o = in_dir(&s.0);
+        o.response_files = false;
+        o
+    };
+    let r = run_front_end("kiln++", &words, off(), |_| ());
+    assert!(matches!(r, Err(FrontEndError::NotOneInput)), "{r:?}");
+    let words = argv(&["-fsyntax-only", "@b.cpp"]);
+    let r = run_front_end("kiln++", &words, off(), |fe| has_decl(fe.ast, "in_b")).unwrap();
+    assert_eq!(r.errors, 0, "{:?}", r.first_error);
+    assert_eq!(r.value, Some(true));
 }
 
 /// WP-2121: the executable's `-working-directory`: inputs, `-I`, `-o`

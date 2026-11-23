@@ -15,10 +15,10 @@ use kiln_parse::{EvalSession, HostCalls, HostError, HostOut, OpenError};
 use kiln_source::{FileId, SourceManager, Span};
 
 use crate::args::{Action, Lang};
-use crate::front_end::Host;
+use crate::front_end::{Consulted, Host};
 use crate::pp_cmd::Job;
 use crate::syntax_cmd::SyntaxJob;
-use crate::{Io, codegen_cmd, make_engine, rsp};
+use crate::{Io, codegen_cmd, make_engine};
 
 /// The finished front end of a translation unit with its session
 /// (spec/eval-session.md §2). Fields may be added.
@@ -39,6 +39,12 @@ pub struct SessionFrontEnd<'a, 'sm> {
     /// unit with an error opens no session), as the engine's sink received
     /// them and printed them on standard error (WP-2324).
     pub tu_diagnostics: Vec<Diagnostic>,
+    /// The paths the unit depends on that are in no buffer of
+    /// [`SessionFrontEnd::sources`] it entered: `#embed` resources and
+    /// `__has_include` / `__has_embed` hits, with what was read there
+    /// (size and digest), in the order first met, each once; the list
+    /// `FrontEnd::consulted` gives for the same command line (WP-2412).
+    pub consulted: Vec<Consulted>,
 }
 
 impl SessionFrontEnd<'_, '_> {
@@ -134,7 +140,9 @@ impl DiagSink for Recorder {
 }
 
 /// Parses the one C++ source input of `command_line` (the driver's
-/// arguments after `argv0`) as `-fsyntax-only` would, opens an
+/// arguments after `argv0`, words already split: an `@file` word is an
+/// ordinary word, never a response file, so every option that reaches the
+/// driver is one of the words given) as `-fsyntax-only` would, opens an
 /// evaluation session on it and calls `f` with the front end, or with
 /// why there is none ([`SessionRefused`]). The command line goes through
 /// the driver's stages as the front-end library entry's does
@@ -150,10 +158,11 @@ pub fn with_eval_session<R>(
     f: impl for<'a, 'sm> FnOnce(Result<SessionFrontEnd<'a, 'sm>, SessionRefused>) -> R,
 ) -> R {
     let stderr = io.stderr;
-    let command_line = rsp::expand(command_line);
+    // The words as given: no `@file` is read (spec/eval-session.md §2,
+    // WP-2411).
     let mut args = crate::front_end::entry_args(
         argv0,
-        &command_line,
+        command_line,
         &crate::env::Environment::process(),
         &kiln_source::WorkDir::process(),
     );
@@ -235,7 +244,7 @@ where
         }
     };
     let take = || std::mem::take(&mut *records.lock().unwrap_or_else(PoisonError::into_inner));
-    let Some((sema, main)) = parsed else {
+    let Some((sema, main, consulted)) = parsed else {
         summary(&engine);
         let diagnostics = take();
         return f.take().map(|f| f(Err(SessionRefused::Stopped { diagnostics })));
@@ -249,6 +258,7 @@ where
                 main,
                 diag_options: diag_opts.clone(),
                 tu_diagnostics: take(),
+                consulted,
             };
             f.take().map(|f| f(Ok(fe)))
         }
