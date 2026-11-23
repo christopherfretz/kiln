@@ -373,14 +373,13 @@ fn failures_have_the_constexpr_variable_notes() {
                 assert_eq!(ok(&run(s, sm, "good")), RunValue::Signed(45));
             }
             let r = run(s, sm, "thrown");
-            assert_eq!(
-                r.result,
-                Err(RunError::Uncaught {
-                    type_name: "int".into(),
-                    what: None,
-                    scalars: Vec::new()
-                })
-            );
+            match &r.result {
+                Err(RunError::Uncaught { ty, what: None, scalars, value: Ok(v) }) => {
+                    assert_eq!((&*ty.display, ty.decl, scalars.len()), ("int", None, 0));
+                    assert_eq!(v.root, RunValue::Signed(7), "{v:?}");
+                }
+                other => panic!("{other:?}"),
+            }
             // Constant for one run, not for another.
             assert_eq!(ok(&run_with(s, sm, "depends", 3)), RunValue::Signed(1));
             let r = run_with(s, sm, "depends", 9);

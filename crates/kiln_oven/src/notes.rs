@@ -47,13 +47,13 @@ const NULL_DEREF_22: &str = "dereferencing a null pointer is not allowed in a co
 
 /// Delimits a raw `Loc` in a note under construction
 /// ([`Oven::render`] replaces it with `F:L:C`).
-const LOC_MARK: char = '\u{1}';
+pub(crate) const LOC_MARK: char = '\u{1}';
 
 /// `msg` with each [`LOC_MARK`]-delimited raw `Loc` written as clang
 /// prints a declaration's location in a type name (`F:L:C`), or with
 /// ` at <loc>` dropped without `sources` (as `AstNames::new` prints an
 /// unnamed class).
-fn resolve_locs(sources: Option<&kiln_source::SourceManager>, msg: &str) -> String {
+pub(crate) fn resolve_locs(sources: Option<&kiln_source::SourceManager>, msg: &str) -> String {
     let mut out = String::with_capacity(msg.len());
     let mut parts = msg.split(LOC_MARK);
     if let Some(first) = parts.next() {
@@ -502,7 +502,7 @@ impl Oven {
                 )
             }
             Fault::Quiet => (site.loc, String::new()),
-            Fault::Host(msg) => (site.loc, msg.into_string()),
+            Fault::Host(msg) | Fault::HostArg(msg) => (site.loc, msg.into_string()),
             // clang 22 note_constexpr_pointer_arith_unspecified; clang 19's
             // generic note.
             Fault::PtrArith { p, q, pointee } if self.clang_compat >= 22 => (

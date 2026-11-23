@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use kiln_diag::{DiagEngine, DiagOptions, Diagnostic, MemorySink};
 use kiln_parse::{
-    CancelToken, ConstexprLimits, EntryError, EvalSession, HostCalls, HostError, HostOut,
+    CancelToken, ConstexprLimits, Entity, EntryError, EvalSession, HostCalls, HostError, HostOut,
     OpenError, ParseOptions, RunBudget, RunError, RunReport, RunValue, ValueError,
     parse_preprocessed_retained,
 };
@@ -249,6 +249,30 @@ constexpr int raise(int n) { if (n) throw n; return 0; }\n\
 struct L { static constexpr int f() noexcept { return raise(1); } };\n\
 consteval int nothrow_exit() { return L::f(); }\n";
 
+/// `RunError::Uncaught` of type `ty` (spelled), as [`shape`] leaves it.
+fn uncaught(ty: &str, what: Option<&str>, scalars: &[u64]) -> RunError {
+    RunError::Uncaught {
+        ty: Entity { display: ty.into(), decl: None },
+        what: what.map(str::to_owned),
+        scalars: scalars.to_vec(),
+        value: Err(String::new()),
+    }
+}
+
+/// `e` with an `Uncaught`'s declaration and value dropped (compared
+/// where the tests below need them).
+fn shape(e: &RunError) -> RunError {
+    match e {
+        RunError::Uncaught { ty, what, scalars, .. } => RunError::Uncaught {
+            ty: Entity { display: Arc::clone(&ty.display), decl: None },
+            what: what.clone(),
+            scalars: scalars.clone(),
+            value: Err(String::new()),
+        },
+        e => e.clone(),
+    }
+}
+
 #[test]
 fn every_failure_kind_leaves_the_session_as_fresh() {
     let baseline = session(FAILURES, |s, _| run(s, "good").steps);
@@ -263,17 +287,7 @@ fn every_failure_kind_leaves_the_session_as_fresh() {
             ("deep", tiny.with_depth(64), None, RunError::DepthLimit, ""),
             ("spin", tiny, Some(&cancelled), RunError::Cancelled, "evaluation was cancelled"),
             ("herr", tiny, None, RunError::Host { message: "boom".into() }, "boom"),
-            (
-                "thrown",
-                tiny,
-                None,
-                RunError::Uncaught {
-                    type_name: "E".into(),
-                    what: Some("bad thing".into()),
-                    scalars: Vec::new(),
-                },
-                "",
-            ),
+            ("thrown", tiny, None, uncaught("E", Some("bad thing"), &[]), ""),
             ("leak", tiny, None, RunError::Failed, "not deallocated"),
             ("nothrow_exit", tiny, None, RunError::Failed, ""),
         ];
@@ -283,7 +297,13 @@ fn every_failure_kind_leaves_the_session_as_fresh() {
                 let token = CancelToken::new();
                 let r = s.run(e, &mut Counter::default(), budget, cancel.unwrap_or(&token));
                 let shown = render(sm, &r.diagnostics);
-                assert_eq!(r.result.as_ref().err(), Some(&want), "{name}: {shown:?}");
+                assert_eq!(
+                    r.result.as_ref().err().map(shape),
+                    Some(want.clone()),
+                    "{name}: {shown:?}"
+                );
+                // WP-2503: only the handler's own error is the host's.
+                assert_eq!(r.result.as_ref().err().map(RunError::is_host), Some(name == "herr"));
                 assert!(
                     shown.first().is_some_and(|d| d.contains("is not a constant expression")),
                     "{name}: {shown:?}"
@@ -298,6 +318,57 @@ fn every_failure_kind_leaves_the_session_as_fresh() {
             }
         }
     });
+}
+
+/// WP-2480 (spec/eval-session.md §8, spec/host-calls.md §2): a host call
+/// kiln refuses because a check of its arguments failed is
+/// `RunError::HostArgument`, and its handler is not called; the handler's
+/// own error stays `RunError::Host`. Only the second is the host's.
+#[test]
+fn an_argument_check_is_not_the_handlers_error() {
+    session(
+        "consteval u64 null_in() { return hc(2, nullptr, 1); }\n\
+         consteval u64 short_in() { u64 a[2]{1, 2}; return hc(2, a, 3); }\n\
+         consteval u64 uninit_in() { u64 a[2]; a[0] = 1; return hc(2, a, 2); }\n\
+         consteval u64 const_out() { const u64 o[1]{}; return hc(2, nullptr, 0, nullptr, 0, \
+           const_cast<u64*>(o), 1); }\n\
+         consteval u64 herr() { return hc(3); }\n\
+         consteval u64 good() { u64 a[1]{21}; return hc(2, a, 1); }\n",
+        |s, sm| {
+            let cases = [
+                ("null_in", "'in' of __builtin_kiln_host_call is null with a length of 1"),
+                (
+                    "short_in",
+                    "'in' of __builtin_kiln_host_call does not point to 3 consecutive elements",
+                ),
+                ("uninit_in", "'in' of __builtin_kiln_host_call element 1 is uninitialized"),
+                ("const_out", "'out' of __builtin_kiln_host_call designates a const object"),
+            ];
+            for _ in 0..2 {
+                for (name, message) in cases {
+                    let mut h = Counter::default();
+                    let e = s.entry_named(name).unwrap();
+                    let r = s.run(e, &mut h, RunBudget::PROGRAM, &CancelToken::new());
+                    let shown = render(sm, &r.diagnostics);
+                    assert_eq!(
+                        r.result,
+                        Err(RunError::HostArgument { message: message.into() }),
+                        "{name}: {shown:?}"
+                    );
+                    assert!(!r.result.as_ref().unwrap_err().is_host());
+                    assert_eq!((h.seen, r.host_calls), (0, 0), "{name}: the handler ran");
+                    assert!(shown.iter().any(|d| d.contains(message)), "{name}: {shown:?}");
+                }
+                let mut h = Counter::default();
+                let e = s.entry_named("herr").unwrap();
+                let r = s.run(e, &mut h, RunBudget::PROGRAM, &CancelToken::new());
+                assert_eq!(r.result, Err(RunError::Host { message: "boom".into() }));
+                assert!(r.result.as_ref().unwrap_err().is_host());
+                assert_eq!(h.seen, 1);
+                assert_eq!(ok(&run(s, "good")), RunValue::Unsigned(42));
+            }
+        },
+    );
 }
 
 #[test]
@@ -591,7 +662,7 @@ fn a_run_checks_the_stack_of_its_own_thread() {
                 // A run that exhausts B's stack (8 MiB) fails with the
                 // stack diagnostic, as a run on the driver's thread would.
                 let deep = on(SMALL, s, "X::deep");
-                assert_eq!(deep.result, Err(RunError::Failed));
+                assert_eq!(deep.result, Err(RunError::StackExhausted));
                 let text = render(sm, &deep.diagnostics).join("\n");
                 assert!(
                     text.contains(
@@ -609,7 +680,7 @@ fn a_run_checks_the_stack_of_its_own_thread() {
                 // failed (semantic work is not rolled back, §5.1 rule 1):
                 // every run reaching it fails alike, on any thread.
                 let again = run(s, "X::deep");
-                assert_eq!(again.result, Err(RunError::Failed));
+                assert_eq!(again.result, Err(RunError::StackExhausted));
                 let again = render(sm, &again.diagnostics).join("\n");
                 assert!(again.contains("stack exhausted during template instantiation"), "{again}");
             });
@@ -666,7 +737,7 @@ fn a_variable_value_checks_the_stack_of_its_own_thread() {
                 // reaching it reports the exhaustion.
                 assert_eq!(read(s, "D::v"), Err(ValueError::NotAConstant));
                 let r = run(s, "X::deep");
-                assert_eq!(r.result, Err(RunError::Failed));
+                assert_eq!(r.result, Err(RunError::StackExhausted));
                 let text = render(sm, &r.diagnostics).join("\n");
                 assert!(
                     text.contains(
@@ -750,7 +821,9 @@ fn uncaught_exceptions_carry_their_leading_scalars() {
          consteval int gap() { throw Gap(); }\n",
         |s, _| {
             let uncaught = |s: &mut EvalSession<'_, '_>, name: &str| match run(s, name).result {
-                Err(RunError::Uncaught { type_name, what, scalars }) => (type_name, what, scalars),
+                Err(RunError::Uncaught { ty, what, scalars, .. }) => {
+                    (ty.display.to_string(), what, scalars)
+                }
                 r => panic!("{name}: {r:?}"),
             };
             assert_eq!(

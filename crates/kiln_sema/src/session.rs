@@ -18,11 +18,9 @@ use kiln_ast::ids::ArgListId;
 use kiln_ast::types::TypeView;
 use kiln_ast::{DeclId, ExprId};
 use kiln_diag::{DiagEngine, DiagId, Diagnostic};
-use kiln_oven::RunRaw;
-pub use kiln_oven::{
-    CANCEL_INTERVAL, CancelToken, RELEASE_FLOOR, RunBudget, RunError, UNCAUGHT_SCALARS,
-};
+pub use kiln_oven::{CANCEL_INTERVAL, CancelToken, RELEASE_FLOOR, RunBudget, UNCAUGHT_SCALARS};
 use kiln_oven::{HostCalls, MetaOp, NestedCost, Oven, SemaBridge, SessUnit};
+use kiln_oven::{RunFault, RunRaw};
 use kiln_source::Loc;
 use kiln_source::fx::{FxHashMap, FxHashSet};
 use kiln_source::symbol::Symbol;
@@ -229,6 +227,84 @@ pub struct RunReport {
     pub diagnostics: Vec<Diagnostic>,
 }
 
+/// How a run failed (spec/eval-session.md §8): one kind per way a run
+/// ends. Every kind comes with its diagnostic (§7).
+///
+/// `#[non_exhaustive]`: later kiln versions add kinds. A kind a client
+/// does not know is kiln's failure of the run (its translation unit, the
+/// program or a limit), never the host handler's: only
+/// [`RunError::Host`] is the handler's own error ([`RunError::is_host`]),
+/// and its diagnostics say what happened.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RunError {
+    /// Not a constant expression.
+    Failed,
+    /// The budget's steps were exceeded.
+    StepBudget,
+    /// The budget's bytes of abstract memory were exceeded.
+    MemoryBudget,
+    /// The budget's nested calls were exceeded.
+    DepthLimit,
+    /// The run's [`CancelToken`] was cancelled.
+    Cancelled,
+    /// A host call's handler failed: it returned `Err` (`message` is its
+    /// message), or it wrote more results than a capacity (`message` is
+    /// the note). The one kind that is the handler's (WP-2480).
+    Host {
+        /// The handler's message, or the note.
+        message: String,
+    },
+    /// A host call refused by kiln before its handler ran: a check of
+    /// its arguments failed (spec/host-calls.md §2.2; `message` is the
+    /// note, `'<arg>' of __builtin_kiln_host_call <reason>`). The handler
+    /// was not called (WP-2480).
+    HostArgument {
+        /// The note.
+        message: String,
+    },
+    /// An exception left the entry (§8 "`Uncaught`").
+    Uncaught {
+        /// The exception object's type, fully qualified as
+        /// `display_string_of` spells it, with its class's (or
+        /// enumeration's) first declaration when that existed at open
+        /// (§4.1's rule; WP-2480).
+        ty: Entity,
+        /// Its `what()`, when it derives from `std::exception`.
+        what: Option<String>,
+        /// The values of the thrown object's first [`UNCAUGHT_SCALARS`]
+        /// non-static data members of integral or enumeration type, in
+        /// declaration order, a base class's before the class's own; a
+        /// signed value in two's complement (sign-extended to 64 bits).
+        /// Empty for an object not of class type (WP-2324).
+        scalars: Vec<u64>,
+        /// The thrown object's value as a run's result would be read
+        /// (§4.1), or why it has none: it does not freeze (a subobject
+        /// not initialized, a pointer to an object of the run, ...), its
+        /// tree exceeds the budget's `result_bytes`, or it has no form
+        /// for the client (WP-2502). Boxed: a failed run's error stays
+        /// small.
+        value: Result<Box<ValueTree>, String>,
+    },
+    /// The run's semantic work exhausted the calling thread's stack: the
+    /// fatal `sema_stack_exhausted` is among its diagnostics (§9;
+    /// WP-2500). A run that reaches work an exhaustion stopped fails so
+    /// too.
+    StackExhausted,
+    /// The result's tree would exceed the budget's `result_bytes` (§4.1).
+    ResultTooLarge,
+}
+
+impl RunError {
+    /// Whether the failure is the host handler's own ([`RunError::Host`]);
+    /// every other kind, a kind this build does not know included, is
+    /// kiln's failure of the run (WP-2503).
+    #[must_use]
+    pub fn is_host(&self) -> bool {
+        matches!(self, RunError::Host { .. })
+    }
+}
+
 /// What a session holds (spec/eval-session.md §10): heap bytes reserved.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct KeptMemory {
@@ -382,6 +458,9 @@ pub(crate) struct RunCtx<'r> {
     pub(crate) result_bytes: u64,
     /// The decoded result, when it was not read from a register.
     pub(crate) out: &'r mut Option<ValueTree>,
+    /// The value of the exception that left the entry, or why it has
+    /// none (§8, WP-2502).
+    pub(crate) thrown: &'r mut Option<Result<ValueTree, String>>,
 }
 
 /// `notes` with the last run of `from` in them replaced by `to` (nothing
@@ -1125,12 +1204,14 @@ impl<'a, 'sm> EvalSession<'a, 'sm> {
         let year = Bridge { sema: &mut self.sema, run: None }.cxx_year();
         oven.set_cxx_year(year);
         let mut tree = None;
+        let mut thrown = None;
         let out = {
             let mut ctx = RunCtx {
                 host,
                 open_decls: self.open_decls,
                 result_bytes: budget.result_bytes,
                 out: &mut tree,
+                thrown: &mut thrown,
             };
             let mut b = Bridge { sema: &mut self.sema, run: Some(&mut ctx) };
             oven.session_run(&mut b, f, at, budget, cancel)
@@ -1159,12 +1240,23 @@ impl<'a, 'sm> EvalSession<'a, 'sm> {
                 }
                 None => unreachable!("a read result is decoded by the bridge"),
             },
-            Err((kind, fail)) => {
+            Err((fault, fail)) => {
                 self.report_failed_run(f, at, fail);
-                Err(kind)
+                Err(self.run_error(fault, thrown))
             }
         };
         let diagnostics = diags.capture_end(mark);
+        // A stack exhaustion is a kind of its own (§9, WP-2500), whether
+        // this run's work tripped the guard or reached work an earlier
+        // exhaustion stopped (its replayed diagnostic).
+        let result = match result {
+            Err(RunError::Failed)
+                if diagnostics.iter().any(|d| d.id == Some(DiagId::sema_stack_exhausted)) =>
+            {
+                Err(RunError::StackExhausted)
+            }
+            r => r,
+        };
         RunReport {
             result,
             constants,
@@ -1175,6 +1267,29 @@ impl<'a, 'sm> EvalSession<'a, 'sm> {
             calls: out.calls,
             nested_calls: out.nested_calls,
             diagnostics,
+        }
+    }
+
+    /// The session's kind of the Oven's `fault` (§8); `thrown` is the
+    /// value an uncaught exception handed over.
+    fn run_error(&self, fault: RunFault, thrown: Option<Result<ValueTree, String>>) -> RunError {
+        match fault {
+            RunFault::Failed => RunError::Failed,
+            RunFault::StepBudget => RunError::StepBudget,
+            RunFault::MemoryBudget => RunError::MemoryBudget,
+            RunFault::DepthLimit => RunError::DepthLimit,
+            RunFault::Cancelled => RunError::Cancelled,
+            RunFault::Host { message } => RunError::Host { message },
+            RunFault::HostArgument { message } => RunError::HostArgument { message },
+            RunFault::Uncaught { ty, what, scalars } => RunError::Uncaught {
+                ty: crate::session_value::type_entity(&self.sema, ty, self.open_decls),
+                what,
+                scalars,
+                value: thrown
+                    .unwrap_or_else(|| Err("the value is not a constant".to_owned()))
+                    .map(Box::new),
+            },
+            RunFault::ResultTooLarge => RunError::ResultTooLarge,
         }
     }
 

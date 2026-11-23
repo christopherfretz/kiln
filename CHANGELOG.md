@@ -10,6 +10,18 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- Native stack sizing for evaluation-session workers (WP-2500,
+  spec/eval-session.md §9 "Limits that bound the native depth"): every
+  kiln limit that bounds how deep a run's semantic work recurses on the
+  native stack (`-ftemplate-depth`, the Oven's call depth, its nested
+  on-demand initializations, the parser's nesting), with its default,
+  its option and the measured stack per level in debug and release
+  builds (a reflection-driven class template chain: about 55 KiB and
+  24 KiB per level, so a 4 MiB worker stops at level 46 or 118, long
+  before `-ftemplate-depth=1024`), and how a client sizes a worker
+  against them; the ignored test `measure_native_stack_per_level`
+  re-measures it.
+
 - A per-run source overlay for tooling clients (WP-2390, spec/source.md
   "Overlay", stage 1): `kiln_source::Overlay` holds replacement bytes for
   files that exist, keyed by the identity of the file each path names
@@ -788,6 +800,24 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   The flag was an unknown argument.
 
 ### Changed
+
+- Breaking, for tooling clients (WP-2480, WP-2502, WP-2500, WP-2503;
+  spec/eval-session.md §8, §9): what a failed evaluation-session run
+  hands over. `RunError` moved from `kiln_oven` to `kiln_sema::session`
+  (still re-exported by `kiln_parse`; the Oven's own outcome is now
+  `kiln_oven::RunFault`). `RunError::Uncaught`'s `type_name: String`
+  is replaced by `ty: Entity`, the exception type spelled fully
+  qualified (`ns::v0::error`, as `display_string_of` spells it) with
+  its class's first declaration when it existed at open, and it gains
+  `value: Result<Box<ValueTree>, String>`, the thrown object's value as a
+  result would be read (or why it has none). A host call refused by
+  kiln's check of its arguments is the new `RunError::HostArgument {
+  message }` (the handler is not called); `RunError::Host` is now only
+  the handler's own error. A run that exhausts the calling thread's
+  stack is the new `RunError::StackExhausted` (was `Failed`), also when
+  it reaches work an earlier exhaustion stopped. New
+  `RunError::is_host()`: an unknown kind is kiln's failure of the run,
+  never the host's.
 
 - Breaking, for tooling clients (WP-2411, spec/eval-session.md §2):
   `with_eval_session` takes its command line as words with no `@file`

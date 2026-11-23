@@ -1127,7 +1127,8 @@ have done it. The Oven's own initialization of a variable it reads
 (`eval_var_init`) is a nested evaluation too and follows the same
 rule.
 
-`RunError` (`#[non_exhaustive]`), one kind per way a run ends:
+`RunError` (`kiln_sema::session`, re-exported by `kiln_parse`;
+`#[non_exhaustive]`), one kind per way a run ends:
 
 | kind | when |
 |---|---|
@@ -1136,12 +1137,82 @@ rule.
 | `MemoryBudget` | `budget.bytes` exceeded: an error, never an abort |
 | `DepthLimit` | `budget.depth` exceeded |
 | `Cancelled` | the token was cancelled; note `evaluation was cancelled` |
-| `Host { message }` | the handler returned `Err` (`message` is its message; note `host call failed: <message>`), or the call's checks failed (spec/host-calls.md §2; `message` is the note) |
-| `Uncaught { type_name, what, scalars }` | an exception left the entry: its type, its `what()` when it derives from `std::exception`, and `scalars` (WP-2324, below) |
+| `Host { message }` | the handler's own error: it returned `Err` (`message` is its message; note `host call failed: <message>`), or it wrote more results than a capacity (spec/host-calls.md §2.4; `message` is the note, `host call handler wrote N integers into a capacity of M`) |
+| `HostArgument { message }` | (WP-2480) kiln refused a host call before its handler ran: a check of its arguments failed (spec/host-calls.md §2.2: a null or short range, an input element not initialized or outside its lifetime, an output that is not writable; `message` is the note, `'<arg>' of __builtin_kiln_host_call <reason>`). The handler was not called |
+| `Uncaught { ty, what, scalars, value }` | an exception left the entry: its type (`ty`, below), its `what()` when it derives from `std::exception`, `scalars` (WP-2324, below) and its value (WP-2502, below) |
+| `StackExhausted` | (WP-2500) the run's semantic work exhausted the calling thread's native stack: the fatal `sema_stack_exhausted` is among its diagnostics (§9) |
 | `ResultTooLarge` | (WP-2071) the result's tree would exceed `budget.result_bytes` (§4.1); note `the result needs more than N bytes on the host (the run's result budget)` |
 
 Every kind comes with its diagnostic (§7). After any of them the
-session is usable and the next run behaves as on a fresh session.
+session is usable and the next run behaves as on a fresh session
+(but for what §9 "What it stopped stays stopped" keeps).
+
+**Whose failure (WP-2503).** Of the kinds, only `Host` is the host
+handler's own error; `RunError::is_host()` is true for it alone. Every
+other kind is kiln's failure of the run: the program (`Failed`,
+`Uncaught`, `HostArgument`: the program passed the arguments), a limit
+the client set or kiln has (`StepBudget`, `MemoryBudget`, `DepthLimit`,
+`ResultTooLarge`, `StackExhausted`) or the client's cancellation.
+`RunError` is `#[non_exhaustive]`: a later kiln adds kinds without a
+major version, so a client matches it with a wildcard arm, and **a kind
+a client built against an older kiln does not know is kiln's failure of
+the run, never the host's**: no new kind will report a handler's error
+(a handler's error is `Host`, now and later), so the wildcard arm reads
+"the run failed; the diagnostics (§7) say why", the reading of
+`Failed`. A client that only needs to tell the two apart calls
+`is_host()`, which a newer kiln answers for its new kinds too. The
+other types of the interface (`RunValue` and its tree, §4.1) are closed
+sets by design; `RunError` is open because kiln will learn new ways for
+a run to end.
+
+**`Uncaught`'s type** (WP-2480): `ty: Entity` (§4.1), the exception
+object's type ([except.throw]/3: the operand's static type with its
+top-level cv-qualifiers removed, an array or function type decayed),
+spelled fully qualified as `std::meta::display_string_of` spells it
+(`ns::v0::error`, `int`, `const char*`), and `decl`, the first
+declaration of its class or enumeration, by §4.1's rule: `Some` when
+the class existed when the session was opened, `None` for a class a run
+instantiated and for a type that is no class or enumeration. Two
+classes of one name in two namespaces differ in both. The type is the
+exception object's, not the handler's: a class derived from another
+exception class is itself (its base's members are in its value), a
+`throw r;` of a base reference to a derived object throws a copy of the
+base (the operand's static type), and `throw;` rethrows the handled
+object, of its own type, whatever the handler caught it as
+([except.handle]/16). Until WP-2480 the field was `type_name: String`,
+spelled as the note spells it, without the enclosing namespaces.
+
+**`Uncaught`'s value** (WP-2502): `value: Result<Box<ValueTree>, String>`,
+the thrown object's value as a run's result of its type would be read
+(§4.1: a `ValueTree`, the root and its constants table; the same tree
+`run` returns for an entry that returns that object and that
+`variable_value` returns for a variable holding it), read when the
+exception leaves the entry, before the failure is rendered: the value
+the note renders (`unhandled exception of type 'ns::v0::error' with
+content {2, 1}`), so a client never parses the note. For `throw;` it is
+the handled object as the handlers left it. It is frozen by the code
+that freezes a result (§4), so it is the same value and has the same
+conditions: `Err(reason)`, and no partial form, when
+- the object does not freeze as a constant: a subobject not
+  initialized, a pointer or reference to an object the run created (an
+  object of its heap, a local, the exception object itself), a pointer
+  to an immediate function (`reason` is the first note the refusal would
+  give, as for a result: `pointer to heap-allocated object is not a
+  constant expression`, `subobject 'b' is not initialized`);
+- its tree exceeds `budget.result_bytes` (`the value needs more than N
+  bytes on the host (the run's result budget)`), or it has no form for
+  the client (a type outside §3's result types: `reason` says what
+  cannot be read).
+A partial form (the representable members, the others marked) would be
+a second value model beside §4.1's, one only failed runs had: the
+`scalars` above already give a value's leading integral members whatever
+the rest holds, and `what` its message. A class derived from
+`std::exception` whose `what()` reads a string the run allocated (a
+standard library's `std::runtime_error`) has `Err` for its value and
+the string in `what`. A `throw 1;` has `Ok` with the root `Signed(1)`.
+The value changes nothing else: the scalars, the note and the run's
+counters are those of a run before WP-2502, and a run that does not end
+`Uncaught` freezes nothing.
 
 **`Uncaught`'s scalars** (WP-2324): `scalars: Vec<u64>` holds the values
 of the thrown object's first `UNCAUGHT_SCALARS` (4) non-static data
@@ -1176,6 +1247,25 @@ Test: `crates/kiln_parse/tests/eval_session.rs`
 class, a plain one with a base, a bit-field and an unnamed one, an
 empty class, a scalar, an uninitialized member).
 
+Tests (WP-2480, WP-2502, WP-2503): `crates/kiln_parse/tests/eval_session_results.rs`
+`an_uncaught_class_has_its_qualified_type_declaration_and_value`
+(`ns::v0::error` against `other::error`: qualified spelling, `decl`
+equal to that of the entry returning one, the value equal to that
+entry's result, the note's content), `a_rethrown_exception_hands_over_the_rethrown_value`
+(`throw;` after the handler changed the object, twice nested, and a new
+`throw` in a handler), `a_derived_exception_type_is_its_own` (a derived
+class with its base subobject, a `throw` through a base reference, a
+rethrow of a derived object caught as its base) and
+`an_unrepresentable_thrown_value_says_why` (a pointer to the run's
+heap, a member not initialized, a pointer to a string literal into the
+constants table); `crates/kiln_parse/tests/eval_session.rs`
+`an_argument_check_is_not_the_handlers_error` (each argument check
+against the handler's `Err`: `HostArgument` with the handler not
+called, `Host`, `is_host()`), `every_failure_kind_leaves_the_session_as_fresh`
+(`is_host()` of every kind) and, for `StackExhausted`,
+`a_run_checks_the_stack_of_its_own_thread` and
+`a_variable_value_checks_the_stack_of_its_own_thread` (§9).
+
 ## 9. Threading
 
 `EvalSession: Send` (not `Sync`): a client may move a session to a
@@ -1203,19 +1293,27 @@ recursion then overflows the thread's stack, as for any library caller,
 spec/sema-templates.md §10.3).
 
 - **Exhaustion is the run's.** When a run's work exhausts the calling
-  thread's stack, the run fails with `RunError::Failed` and the fatal
+  thread's stack, the run fails with `RunError::StackExhausted`
+  (WP-2500; `RunError::Failed` before it) and the fatal
   `sema_stack_exhausted` ("kiln: stack exhausted during template
-  instantiation; ..."), its instantiation context as notes. Within the
+  instantiation; ..."), its instantiation context as notes. The kind is
+  the diagnostic's: a run that would have failed `Failed` and has
+  `sema_stack_exhausted` among its diagnostics is `StackExhausted`; a
+  run whose evaluation failed otherwise first (a budget, a cancellation,
+  an uncaught exception) keeps that kind. Within the
   run the guard's tripped flag stays set, so the recursion unwinds and
   no further check passes. When the run ends it is restored to its
   value at the run's start, which is clear (a session opens only on a
   translation unit without a fatal error), so the next run, on any
-  thread, starts with the guard untripped.
+  thread, starts with the guard untripped. `variable_value`'s refusal
+  of a read an exhaustion stopped stays `ValueError::NotAConstant`.
 - **What it stopped stays stopped.** The instantiation the exhaustion
   cut short is kept as it failed, as any failed semantic work (§5.1
   rule 1: semantic work is not rolled back): every later run that
-  reaches it fails with the same diagnostic, on any thread and with any
-  stack; runs that do not reach it are unaffected. This is the one
+  reaches it fails with the same diagnostic and kind
+  (`StackExhausted`: the replayed diagnostic is the exhaustion's), on
+  any thread and with any stack; runs that do not reach it are
+  unaffected. This is the one
   outcome of kept work that depends on the running thread (its stack
   size), not on the translation unit alone: a fresh session on a
   thread with a larger stack does the work. A client that hits it gives
@@ -1241,6 +1339,68 @@ session runs it on A) and `a_variable_value_checks_the_stack_of_its_own_thread`
 on B and A, one exhausting a 4 MiB thread refused and later reads on
 either thread fine, a run reaching the stopped initializer reporting
 the exhaustion, a fresh session reading it on A).
+
+**Limits that bound the native depth (WP-2500).** A run's own
+evaluation keeps its call frames in the Oven's frame space, not on the
+native stack; what recurses natively is semantic work (an
+instantiation, a substitution, a nested evaluation through the bridge,
+each a level of the native recursion of the one that needed it,
+spec/sema-templates.md §10.3). Every kiln limit on how deep that
+recursion goes, with its default, the option that changes it and its
+measured native stack per level (the slope between the deepest level
+that passes under two stack sizes, so the fixed cost of the levels
+below is out; aarch64 Linux development host, the debug build with
+line tables and the `harness` profile, `opt-level = 3`, which is the
+release build's code; indicative, not a gate):
+
+| limit | default | option | debug, per level | release, per level |
+|---|---|---|---|---|
+| instantiation depth: instantiation frames on the stack (spec/sema-templates.md §10.3) | 1024 | `-ftemplate-depth=N` | class template chain (`C<N>` naming `C<N - 1>::type`): 23.6 KiB; static member chain (`R<N>::v = R<N - 1>::v + 1`, an instantiation and a nested evaluation per level): 34.8 KiB; function template chain (`g<N>()` calling `g<N - 1>()`): 42.8 KiB; the reflection chain below: 53.9 KiB | 9.6 KiB; 7.5 KiB; 11.6 KiB; 23.9 KiB |
+| the Oven's call depth: a run's own calls (`RunBudget::depth`, §8) and a nested evaluation's (the translation unit's) | 16384 in a run (`RunBudget::PROGRAM`); 512 in nested work | `RunBudget::with_depth`; `-fconstexpr-depth=N` | none: 40,000 nested calls of a recursive `constexpr` function pass under a 4 MiB stack | none (likewise) |
+| the Oven's on-demand initializations nested in one evaluation (a variable read whose initializer was never evaluated, evaluated in place; `MAX_NESTING` in crates/kiln_oven/src/value.rs) | 512 | none (a deeper read is of an unknown value) | an Oven evaluation per level, reached in practice only through an instantiation chain (counted above) | likewise |
+| the parser's nesting (parentheses, braces, declarators, ...) | none: the guard alone | `-fkiln-stack-size=` | 1.6 KiB per parenthesis | 0.8 KiB |
+| the step budget (`RunBudget::steps`, `-fconstexpr-steps=`) | 2^34 in a run; 2^20 in nested work | as named | bounds work, not depth | |
+
+The parser's nesting is not reached by a run (a run parses nothing; it
+bounds only the translation unit's parse, on the thread that opens the
+session). The other recursive walks of sema and the Oven (the result
+decoder's 256 nested types, the type printer's 400, a splice's 1024,
+the warning analyses' expression walks) are bounded by the nesting of
+a type or an expression the translation unit wrote or an instantiation
+made, so the rows above bound them.
+
+**The motivating case**, a linearly recursive class template driven
+through reflection (each level's static member's initializer
+substitutes the next level with `std::meta::substitute`, completes it
+with `static_data_members_of` and reads its member with `extract`;
+tests/support/kiln_meta.h), costs 54.9 KiB per level of a run in a
+debug build and 23.9 KiB in a release build (the table's 53.9 and 23.9
+KiB are `-fsyntax-only` of a `static_assert` over it, on the compiling
+thread). On a 4 MiB worker (the smallest `-fkiln-stack-size`, and a
+common thread size) a run reaches level 46 in a debug build and 118 in
+a release build (the compiling thread at 4 MiB: 47 and 114) and then
+fails `StackExhausted`: the 1024 levels `-ftemplate-depth` allows would
+need about 55 MiB (debug) and 25 MiB (release) of stack. Measured by
+the ignored test `measure_native_stack_per_level` in
+`crates/kiln_driver/tests/eval_session.rs` (a run per probe, each in a
+fresh session, on guarded threads of 4, 16 and 64 MiB: levels 46, 270
+and 1166 in a debug build, 118, 631 and 2685 in the `harness`
+profile); the other rows by `-fsyntax-only` of the pattern under
+`-fkiln-stack-size=16M` and `64M` with the limits raised.
+
+**Sizing a worker.** A limit whose cost per level times its default
+(plus the guard's 1 MiB red zone, `RED_ZONE`, and the stack the
+client's own frames use) exceeds the worker's stack is answered by the
+guard first: the run fails `StackExhausted`, not with the limit's own
+diagnostic, at the depth the stack allows. To have the limit answer, a
+client gives the worker `cost x limit + 1 MiB` and more (for the
+default `-ftemplate-depth=1024`: about 25 MiB for the reflection chain
+in a release build, 55 MiB in a debug one; the driver's compiling
+thread has 1 GiB, `-fkiln-stack-size`), or lowers the limit
+(`-ftemplate-depth=` on the session's command line) to what the
+stack holds. A per-level cost depends on the pattern (the table's
+spread) and on the build, so a client sizes for its own deepest
+pattern, measured as the test above measures.
 
 ## 10. Cost
 

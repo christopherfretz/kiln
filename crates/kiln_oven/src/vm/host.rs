@@ -27,9 +27,10 @@ fn int_shape(o: &Oven, t: OTy) -> Result<(u32, bool), Fault> {
     }
 }
 
-/// A failed range check of argument `arg`.
+/// A failed range check of argument `arg` (kiln's refusal, before the
+/// handler runs).
 fn bad(arg: &str, why: &str) -> Fault {
-    Fault::Host(format!("'{arg}' of __builtin_kiln_host_call {why}").into_boxed_str())
+    Fault::HostArg(format!("'{arg}' of __builtin_kiln_host_call {why}").into_boxed_str())
 }
 
 impl Oven {

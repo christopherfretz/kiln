@@ -8758,6 +8758,11 @@ instantiation report has no row for what follows the fatal).
 - With the default 1 GiB, 50,000 parentheses parse without a trip
   (debug 0.11 s); depth 100000 hits `-ftemplate-depth` in release and
   the guard (during constant evaluation, at depth ~22,500) in debug.
+- The native stack each depth limit costs per level (instantiation
+  patterns, the Oven's calls, the parser's nesting; debug and release),
+  and how a library client sizes a worker thread's stack against them:
+  spec/eval-session.md §9 "Limits that bound the native depth"
+  (WP-2500).
 - `stress/template-depth-1024.cpp` is not written; the depth-1024 bench
   entry `templates_deep.cpp` runs on the default stack.
 
