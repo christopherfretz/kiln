@@ -161,7 +161,11 @@ File kinds (clang `SrcMgr::CharacteristicKind`, WP-063):
   `is_in_system_macro(Loc)` (clang `isInSystemMacro`) is true for a macro
   location whose spelling is in a system header, stepping out of
   `<scratch space>` spellings first; `is_written_in_scratch_space(Loc)`
-  tests the presumed file name. `file_kind_marks(Loc) -> Vec<(u32,
+  tests the buffer of `expansion_loc(loc)`: an in-memory buffer
+  (`add_virtual`, `FileOrigin::Virtual`) named `<scratch space>`, not
+  the presumed name, so a file whose `#line` names `<scratch space>` is
+  not scratch space and a scratch buffer stays one under any `#line`
+  (WP-2622). `file_kind_marks(Loc) -> Vec<(u32,
   FileKind)>`: the marks in the range containing the file location, as
   (offset in the range, kind) in offset order (the declaration image
   copies them, spec/modules.md §11.11 "Location records").

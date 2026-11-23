@@ -1172,6 +1172,7 @@ pub static COLD_MAPS: &[ColdMapRoles] = &[
     cold("ColdDeclData", "compound_literal", D, E),
     cold("ColdDeclData", "init_fp", D, Role::Record("fp::FpOverride")),
     cold("ColdDeclData", "closure_owner", D, D),
+    cold("ColdDeclData", "written_ns", D, D),
 ];
 
 #[cfg(test)]

@@ -15,7 +15,7 @@ use kiln_diag::DiagId;
 use kiln_lex::{Punct, Std, TokKind, Token};
 use kiln_sema::ContractDeclKind;
 use kiln_sema::declspec::Declarator;
-use kiln_source::Loc;
+use kiln_source::{Loc, Span};
 
 use crate::class::LateToks;
 use crate::expr::prec;
@@ -111,23 +111,27 @@ impl Parser<'_, '_> {
             // result-name-introducer: attributed-identifier `:`
             // ([dcl.contract.res]/1).
             let mut result = None;
+            let mut result_span = Span::INVALID;
             if kind == ContractKind::Post
                 && let Some(name) = self.ident()
                 && (self.peek_is(1, Punct::Colon)
                     || (self.peek_is(1, Punct::LSquare) && self.peek_is(2, Punct::LSquare)))
             {
-                let nloc = self.bump().span.lo;
+                result_span = self.bump().span;
                 if self.at_cxx11_attr() {
                     let mut attrs = Vec::new();
                     self.parse_attributes(&mut attrs);
                 }
                 if self.eat(Punct::Colon).is_some() {
-                    result = Some((name, nloc));
+                    result = Some((name, result_span.lo));
                 } else {
                     self.expected_here("':'");
                 }
             }
             let sc = self.s.act_on_start_contract(kind, f, result, definition);
+            if let Some(r) = sc.result_name() {
+                self.ext_contract_result(r, result_span);
+            }
             let s = self.parse_contract_predicate(sc, loc);
             self.expect_closing(Punct::RParen, Punct::LParen, lp);
             out.push(s);

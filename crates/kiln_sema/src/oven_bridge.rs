@@ -498,11 +498,48 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             return Err(f);
         }
         let probe = self.carried_probe(e, &ctx);
+        // No local lives across the evaluation for this: `eval_const`
+        // recurses with instantiation, a frame per level (WP-2410).
+        self.clear_host_call_failed();
         let r = self.with_oven(Some(ctx.loc), |oven, b| oven.evaluate(b, e, ctx));
         if let Some(p) = probe {
             self.carried_record(&p, e, &r);
         }
+        if r.is_err() && self.host_call_failed() {
+            self.note_host_failure_in_sfinae();
+        }
         r
+    }
+
+    /// Clears [`Oven::host_failed`] (with a handler, and the Oven in).
+    fn clear_host_call_failed(&mut self) {
+        if self.host_calls
+            && let Some(o) = self.oven.as_mut()
+        {
+            o.clear_host_failed();
+        }
+    }
+
+    /// Whether a host call failed or was refused since
+    /// [`Sema::clear_host_call_failed`] ([`Oven::host_failed`]; never without
+    /// a handler, or while the Oven is out).
+    fn host_call_failed(&self) -> bool {
+        self.host_calls && self.oven.as_ref().is_some_and(|o| o.host_failed())
+    }
+
+    /// A constant evaluation just failed at a host call the handler
+    /// failed or that was refused (spec/host-calls.md §4, WP-2501): in a
+    /// SFINAE context, the error the failure is reported with is no
+    /// substitution failure but a hard error (`Sema::emit`). Whether the
+    /// handler answers is no property of the template arguments, so it
+    /// may not decide a requires-expression, a deduction or a partial
+    /// specialization's match.
+    fn note_host_failure_in_sfinae(&self) {
+        if self.inst.stack.is_sfinae()
+            && let Some(s) = self.inst.sfinae.borrow_mut().last_mut()
+        {
+            s.host_failure = true;
+        }
     }
 
     /// The characters of a `static_assert` message: its `size` and

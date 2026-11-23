@@ -182,6 +182,11 @@ pub enum ValueError {
     /// The value holds what no tree can give (an address that designates
     /// no object).
     Unreadable(String),
+    /// The on-demand work of the read exhausted the calling thread's
+    /// stack, or reached work an exhaustion stopped
+    /// ([`RunError::StackExhausted`]'s rule, spec/eval-session.md §9;
+    /// WP-2510).
+    StackExhausted,
 }
 
 impl fmt::Display for ValueError {
@@ -195,6 +200,9 @@ impl fmt::Display for ValueError {
             ValueError::WrongType => f.write_str("the variable's type is not a result type"),
             ValueError::TooLarge { cap } => write!(f, "the value needs more than {cap} bytes"),
             ValueError::Unreadable(why) => f.write_str(why),
+            ValueError::StackExhausted => {
+                f.write_str("evaluating the variable's initializer exhausted the stack")
+            }
         }
     }
 }
@@ -336,9 +344,14 @@ pub(crate) enum Key {
     /// The evaluation of the initializer of the Oven's global (by index).
     Var(u32),
     /// The instantiation of a variable's initializer (a static data
-    /// member's, a variable template specialization's).
+    /// member's, in-class or out-of-line, a variable template
+    /// specialization's), by the variable's first declaration: a
+    /// reference may name a later one (an out-of-line definition
+    /// instantiated as a redeclaration, WP-2451).
     Init(DeclId),
-    /// The instantiation of a member function's definition.
+    /// The instantiation of a function template specialization's
+    /// definition: a member function's, or a function template's own
+    /// specialization's (WP-2501).
     Inst(DeclId),
     /// A reflection intrinsic with its operands.
     Meta(MetaOp, Box<[u128]>),
@@ -1141,9 +1154,15 @@ impl<'a, 'sm> EvalSession<'a, 'sm> {
         s.inst.fatal = fatal;
         s.guard_leave_thread(guard);
         s.oven = Some(oven);
-        let _ = diags.capture_end(mark);
+        let captured = diags.capture_end(mark);
         let cv = match cv {
             Some(cv) if diags.error_count() == errors => cv,
+            // A stack exhaustion is a kind of its own, as a run's is (§9,
+            // WP-2510): the read's work tripped the guard, or reached work
+            // an earlier exhaustion stopped (its replayed diagnostic).
+            _ if captured.iter().any(|d| d.id == Some(DiagId::sema_stack_exhausted)) => {
+                return Err(ValueError::StackExhausted);
+            }
             _ => return Err(ValueError::NotAConstant),
         };
         crate::session_value::decode(s, cv, self.open_decls, result_bytes).map_err(|e| match e {

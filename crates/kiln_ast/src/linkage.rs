@@ -168,9 +168,45 @@ impl Ast {
         if self.internal_by_storage(first) || self.has_internal_linkage_attr(first) {
             return true;
         }
-        self.in_anonymous_namespace(first)
-            && !(matches!(self.decls.get(first).kind(), DeclKind::Function | DeclKind::Var)
-                && self.is_file_context(first))
+        self.in_anonymous_namespace(first) && !self.extern_c_escapes_unnamed_namespace(first)
+    }
+
+    /// Whether the function or variable `first` (a first declaration),
+    /// whose target scope is a namespace (a namespace-scope declaration or
+    /// a block-scope function or `extern` declaration,
+    /// [dcl.meaning.general]/3.5), is first declared in an `extern "C"`
+    /// context and so keeps external linkage and C language linkage in an
+    /// unnamed namespace, as in clang (`getLVForNamespaceScopeDecl`,
+    /// `getLVForLocalDecl`: "not justified by the standard wording", kept
+    /// from the model before CWG 1113). Kiln follows clang so that such a
+    /// declaration is one entity with a global `extern "C"` declaration of
+    /// the same name (as sema treats it) and keeps clang's C symbol; GCC
+    /// 16.1 gives it internal linkage (spec/ast.md §4.5).
+    pub fn extern_c_escapes_unnamed_namespace(&self, first: DeclId) -> bool {
+        matches!(self.decls.get(first).kind(), DeclKind::Function | DeclKind::Var)
+            && (self.is_file_context(first) || self.is_block_scope_extern(first))
+            && self.in_extern_c_context(first)
+    }
+
+    /// Whether `d` is a block-scope function declaration or a block-scope
+    /// `extern` variable declaration ([basic.link]/6): its semantic
+    /// context is a function and its target scope the innermost enclosing
+    /// namespace scope ([dcl.meaning.general]/3.5). Recognized by its
+    /// shape: `DeclMisc::local_extern` has no writer.
+    pub fn is_block_scope_extern(&self, d: DeclId) -> bool {
+        let Some(c) = self.semantic_parent(d) else { return false };
+        if !is_function_kind(self.decls.get(c).kind()) {
+            return false;
+        }
+        let n = self.decls.get(d);
+        n.misc().local_extern()
+            || match n.kind() {
+                DeclKind::Function => true,
+                DeclKind::Var => {
+                    self.decls.var(d).is_some_and(|v| v.spec.storage() == VarStorage::Extern)
+                }
+                _ => false,
+            }
     }
 
     /// True if `d` is lexically inside an `extern "C"` linkage
@@ -306,7 +342,12 @@ impl Ast {
     /// else (a type alias, a namespace alias, a data member, an
     /// enumerator, a parameter, a deduction guide, a closure type). A
     /// local entity has none, whatever its function; a block-scope
-    /// `extern` declaration has external linkage; a member takes its
+    /// function or `extern` declaration has the linkage of a member of
+    /// its innermost enclosing namespace ([basic.link]/6: internal in an
+    /// unnamed namespace, else external, or its first declaration's); a
+    /// function or variable first declared in an `extern "C"` context
+    /// is external even in an unnamed namespace, as in clang
+    /// ([`Ast::extern_c_escapes_unnamed_namespace`]); a member takes its
     /// class's linkage. A namespace is internal when it is unnamed or in
     /// an unnamed one, else external.
     pub fn linkage(&self, d: DeclId) -> Linkage {
@@ -347,22 +388,24 @@ impl Ast {
         let Some(c) = self.semantic_parent(d) else { return Linkage::None };
         match self.decls.get(c).kind() {
             // [basic.link]/6: a block-scope function declaration or
-            // `extern` variable whose first declaration it is has
-            // external linkage (a prior namespace-scope declaration
-            // would be `first` and decide). Recognized by its shape:
-            // `DeclMisc::local_extern` has no writer.
+            // `extern` variable whose first declaration it is (a prior
+            // declaration would be `first` and decide) declares a member
+            // of the innermost enclosing namespace ([dcl.meaning.general]/3.5),
+            // so [basic.link]/4 gives it that namespace's linkage:
+            // internal in an unnamed namespace (unless first declared in
+            // an `extern "C"` context, as in clang), else external (its
+            // function's own linkage does not matter: `static void g() {
+            // extern int v; }` declares an external `v`). A declaration
+            // attached to a named module is ill-formed, so none is module.
             k if k.is_function() => {
-                let local_extern = match self.decls.get(d).kind() {
-                    DeclKind::Function => true,
-                    DeclKind::Var => {
-                        self.decls.var(d).is_some_and(|v| v.spec.storage() == VarStorage::Extern)
-                    }
-                    _ => false,
-                };
-                if local_extern || self.decls.get(d).misc().local_extern() {
-                    Linkage::External
-                } else {
+                if !self.is_block_scope_extern(d) {
                     Linkage::None
+                } else if self.in_anonymous_namespace(d)
+                    && !self.extern_c_escapes_unnamed_namespace(d)
+                {
+                    Linkage::Internal
+                } else {
+                    Linkage::External
                 }
             }
             // [basic.link]/4: a member takes its class's linkage.
@@ -376,7 +419,13 @@ impl Ast {
 
     /// [basic.link]/3-4 for `d` (first declaration) at namespace scope.
     fn namespace_scope_linkage(&self, d: DeclId) -> Linkage {
-        if self.in_anonymous_namespace(d) || self.internal_by_declaration(d) {
+        // [basic.link]/4: a member of an unnamed namespace is internal,
+        // except a function or variable first declared in an `extern "C"`
+        // context, which is external as in clang (see
+        // `extern_c_escapes_unnamed_namespace`).
+        if (self.in_anonymous_namespace(d) && !self.extern_c_escapes_unnamed_namespace(d))
+            || self.internal_by_declaration(d)
+        {
             return Linkage::Internal;
         }
         if self.modules.active && self.module_attachment(d).is_some() && !self.is_exported(d) {

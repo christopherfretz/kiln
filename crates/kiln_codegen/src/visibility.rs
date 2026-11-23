@@ -282,8 +282,7 @@ impl Cg<'_> {
             }
         } else if k.is_function() {
             if let Some((_, s)) = ast.spec_info(first) {
-                let consider = self.consider_fn_template_vis(first, s.kind);
-                self.merge_args(&mut lv, s.args, consider, comp);
+                self.merge_fn_template(&mut lv, first, s.kind, s.template, s.args, comp);
             }
         } else if is_record_kind(k)
             && let Some((_, s)) = ast.spec_info(first)
@@ -321,8 +320,7 @@ impl Cg<'_> {
         let mut suppressor = None;
         if k.is_function() {
             if let Some((_, s)) = ast.spec_info(first) {
-                let consider = self.consider_fn_template_vis(first, s.kind);
-                self.merge_args(&mut lv, s.args, consider, comp);
+                self.merge_fn_template(&mut lv, first, s.kind, s.template, s.args, comp);
                 if s.kind == SpecKind::ExplicitSpecialization {
                     suppressor = Some(first);
                 } else if member_spec(s.template) {
@@ -449,8 +447,12 @@ impl Cg<'_> {
         lv
     }
 
-    /// The semantic context of `d` for the namespace walk: a namespace's
-    /// is the one it is (re)opened in.
+    /// The semantic context of `d` for the namespace walk (clang's
+    /// `getDeclContext()`, where each namespace definition is a context):
+    /// a namespace's is the one it is (re)opened in; a declaration's is
+    /// the namespace definition it belongs to, the opening a qualified
+    /// declarator's qualifier named or the one a function template's
+    /// explicit specialization is written in (`written_ns`), else `ctx`.
     fn parent_ctx(&self, d: DeclId) -> Option<DeclId> {
         let ast = self.ast;
         if ast.decls.get(d).kind() == DeclKind::Namespace
@@ -458,7 +460,7 @@ impl Cg<'_> {
         {
             return Some(l);
         }
-        ast.decls.get(d).ctx()
+        ast.decls.written_ns(d)
     }
 
     /// The templated declaration of template `t`.
@@ -539,6 +541,29 @@ impl Cg<'_> {
     /// specialization: implicit, or without its own attribute.
     fn consider_fn_template_vis(&self, first: DeclId, kind: SpecKind) -> bool {
         !is_explicit_inst_or_spec(kind) || !self.has_fn_attr(first, AttrKind::VISIBILITY)
+    }
+
+    /// clang `mergeTemplateLV` for the function template specialization
+    /// `first` of template `t` with arguments `args`: unless it is an
+    /// explicit specialization or instantiation with its own attribute,
+    /// the visibility of `t` itself (clang 22; clang 19 took only its
+    /// linkage), so that an explicit specialization written in another
+    /// opening of a hidden namespace, or in a `visibility("default")`
+    /// one, is hidden as its template is; then that of the arguments.
+    fn merge_fn_template(
+        &self,
+        lv: &mut Lv,
+        first: DeclId,
+        kind: SpecKind,
+        t: DeclId,
+        args: ArgListId,
+        comp: Comp,
+    ) {
+        let consider = self.consider_fn_template_vis(first, kind);
+        if consider && self.opts.clang_compat >= 22 {
+            lv.merge(self.lv(t, comp));
+        }
+        self.merge_args(lv, args, consider, comp);
     }
 
     /// clang `shouldConsiderTemplateVisibility` for a class or variable

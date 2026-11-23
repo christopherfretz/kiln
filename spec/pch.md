@@ -127,7 +127,7 @@ block holding them is read and they are ignored.
 
 ```
 "KILNSNAP"                              8 bytes, the magic
-u32 FORMAT_VERSION                      little-endian (now 157)
+u32 FORMAT_VERSION                      little-endian (now 158)
 kiln_snap stream: u64 SCHEMA_HASH, identity, lookup log
 kiln_snap stream: the roots
 ```
@@ -308,12 +308,17 @@ directory where the form tries it, and for the `_next` forms the
 directory the search continues after) and its result (not found; found
 relative to the includer; or found in search directory `D` with `D`'s
 characteristic, user, system or `extern "C"` system). A lookup of an
-absolute name does not use the search list and is not recorded (its
-file is in the record's file list). Equal keys are recorded once.
+absolute name does not use the search list; it is recorded too, with
+its result (WP-2620; a found file is also in the record's file list).
+Equal keys are recorded once.
 
 **The comparison.** The consumer compares the `include search path`
 component by text first: equal (and the working directory equal) is the
-fast path, and nothing more is checked. Otherwise, after the file check,
+fast path, and only the lookups of absolute names are repeated
+(`LookupLog::check_absolute`, one `stat` per name the record's file
+list does not have): a `__has_include("/abs/x.h")` that failed and now
+finds the file, or one that found a file now gone, refuses the snapshot
+as below. Otherwise, after the file check,
 it repeats each recorded lookup in order with its own search list (and
 its own `--embed-dir` list, working directory and file system) and
 compares the results: all equal restores; the first that differs refuses

@@ -659,8 +659,12 @@ fn a_run_checks_the_stack_of_its_own_thread() {
                 // Then on A, more instantiation.
                 let a = run(s, "X::shallow2");
                 assert_eq!(ok(&a), RunValue::Signed(16), "{:?}", render(sm, &a.diagnostics));
-                // A run that exhausts B's stack (8 MiB) fails with the
+                // A run that exhausts B's stack (4 MiB) fails with the
                 // stack diagnostic, as a run on the driver's thread would.
+                // Each level of `R` both instantiates and evaluates, so
+                // which of the two finds the stack low depends on where
+                // in a level the red zone falls (a few bytes of frame
+                // move it): the phase is either.
                 let deep = on(SMALL, s, "X::deep");
                 assert_eq!(deep.result, Err(RunError::StackExhausted));
                 let text = render(sm, &deep.diagnostics).join("\n");
@@ -720,9 +724,10 @@ using D = R<int, 1000>; using X = E<int>;\n";
 /// WP-2420 (spec/eval-session.md §9): `variable_value` checks the stack of
 /// the thread it is called on, as a run does. Compiled on thread A, a read
 /// on thread B that instantiates succeeds, then one on A; a read on a
-/// small-stack thread that exhausts it is refused (the exhaustion is
-/// diagnosed: a run reaching the same initializer reports it), and later
-/// reads on either thread are not stopped by it.
+/// small-stack thread that exhausts it is refused with
+/// `ValueError::StackExhausted` (WP-2510; the exhaustion is diagnosed: a
+/// run reaching the same initializer reports it, and so does a later read
+/// of it), and later reads on either thread are not stopped by it.
 #[test]
 fn a_variable_value_checks_the_stack_of_its_own_thread() {
     const BIG: usize = 256 << 20;
@@ -740,15 +745,16 @@ fn a_variable_value_checks_the_stack_of_its_own_thread() {
                 assert_eq!(on(BIG, s, "I8::v"), Ok(RunValue::Signed(8)));
                 // Then on A, more instantiation.
                 assert_eq!(read(s, "I16::v"), Ok(RunValue::Signed(16)));
-                // A read that exhausts the small thread's stack is refused.
-                assert_eq!(on(SMALL, s, "D::v"), Err(ValueError::NotAConstant));
+                // A read that exhausts the small thread's stack is refused
+                // as a stack exhaustion (WP-2510).
+                assert_eq!(on(SMALL, s, "D::v"), Err(ValueError::StackExhausted));
                 // The exhaustion was the read's: later reads on either
                 // thread are not stopped by it.
                 assert_eq!(read(s, "C8::v"), Ok(RunValue::Signed(8)));
                 assert_eq!(on(SMALL, s, "C16::v"), Ok(RunValue::Signed(16)));
                 // The instantiation it stopped stays failed (§9), and a run
                 // reaching it reports the exhaustion.
-                assert_eq!(read(s, "D::v"), Err(ValueError::NotAConstant));
+                assert_eq!(read(s, "D::v"), Err(ValueError::StackExhausted));
                 let r = run(s, "X::deep");
                 assert_eq!(r.result, Err(RunError::StackExhausted));
                 let text = render(sm, &r.diagnostics).join("\n");

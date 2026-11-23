@@ -4,8 +4,9 @@
 
 use std::sync::Arc;
 
-use kiln_ast::decl::DeclFlags;
+use kiln_ast::decl::{DeclFlags, DeclKind};
 use kiln_ast::decl_extents::DeclEnd;
+use kiln_ast::templates::SpecKind;
 use kiln_ast::{Ast, DeclId};
 use kiln_diag::{DiagEngine, DiagOptions, MemorySink};
 use kiln_parse::{ConstexprLimits, ParseOptions, parse_tu};
@@ -13,8 +14,9 @@ use kiln_sema::target::{Arch, Target};
 use kiln_source::symbol::Interner;
 use kiln_source::{SourceManager, Span};
 
-/// Every kind of declaration kiln parses outside a function body and
-/// outside a module unit, with no instantiation.
+/// Every kind of declaration kiln parses outside a module unit: the
+/// declarations of a function body's statements (WP-2630) and
+/// elaborated-type-specifiers that declare nothing (WP-2629) last.
 const SRC: &str = "\
 [[maybe_unused]] static const int a = 1, *b = nullptr;
 namespace n::m { int v; }
@@ -54,6 +56,24 @@ using n::m::v;
 enum class Ec : int { r, g };
 int operator\"\"_k(unsigned long long);
 void fn(int p, int = 2) try { struct Local { int l, k; }; auto [q, r] = Local{}; if (int c = 1) {} } catch (...) {}
+namespace qn { struct QS {}; enum QE { qe }; template <class> struct QV {}; }
+template <class T> struct QO { struct QI {}; };
+struct qn::QS *qp;
+enum qn::QE qe2;
+struct QO<int>::QI *qi;
+struct QF { friend struct qn::QS; friend struct QO<char>::QI; friend struct qn::QV<int>; };
+struct Fresh *fresh;
+struct Two { int t1, t2; };
+void stmts(int (&ra)[2], Two (&rb)[1]) {
+  for (int rx : ra) {}
+  for (auto [ry, rz] : rb) {}
+  try {} catch (int ce) {}
+  template for (auto ex : {1, 2}) {}
+  { __label__ ll; ll: goto ll; }
+  lab: goto lab;
+}
+template <class T> concept RC = requires (T rt) { rt; };
+int post_fn() post (res: res > 0) post (ra [[maybe_unused]] : ra != 1);
 ";
 
 fn parse(on: bool) -> (SourceManager, kiln_source::FileId, kiln_parse::ParsedTu) {
@@ -115,23 +135,57 @@ fn the_parse_trims_the_table() {
     assert_eq!(row.reserved_bytes, row.live_bytes);
 }
 
-/// Every declaration of the parse that is not implicit has a row.
+/// An implicit specialization (named or instantiated, never declared)
+/// or a member of one: no written declaration, so no row (spec/ast.md
+/// §19.1).
+fn instantiated(ast: &Ast, d: DeclId) -> bool {
+    let implicit =
+        |k: SpecKind| matches!(k, SpecKind::Undeclared | SpecKind::ImplicitInstantiation);
+    ast.spec_info(d).is_some_and(|(_, i)| implicit(i.kind))
+        || ast.member_spec_info(d).is_some_and(|(_, i)| implicit(i.kind))
+}
+
+/// Every declaration of the parse that is not implicit has a row, and
+/// no instantiation has one (a reference through a specialization's
+/// qualifier, `struct QO<int>::QI *`, made one, WP-2629).
 #[test]
 fn every_written_declaration_has_a_row() {
     let (sm, file, tu) = parse(true);
     let ast = &tu.ast;
     assert!(ast.memory().rows.iter().any(|r| r.name == "decl_extents"));
     let mut missing = Vec::new();
+    let mut extra = Vec::new();
+    // A copy of a written declaration made by instantiation (a
+    // specialization's locals and parameters, an expansion statement's
+    // copies of its body, a satisfaction check's requires-expression
+    // parameters) has its pattern's kind and location and no row.
+    let written: std::collections::HashSet<_> = (1..=ast.decls.len() as u32)
+        .map(DeclId::new)
+        .filter(|&d| ast.decl_extent(d).is_some())
+        .map(|d| (ast.decls.get(d).kind(), ast.decls.get(d).loc()))
+        .collect();
     for d in (1..=ast.decls.len() as u32).map(DeclId::new) {
         let n = ast.decls.get(d);
         if n.has(DeclFlags::IMPLICIT)
             || n.has(DeclFlags::INJECTED)
             || d == ast.tu
             || sm.line_col(n.loc()).is_none_or(|lc| lc.file != file)
+            // An implicit function's parameters, and a requires-expression's
+            // body (the scope of its parameters): declared by nothing
+            // written (spec/ast.md §19.1).
+            || n.ctx().is_some_and(|c| ast.decls.get(c).has(DeclFlags::IMPLICIT))
+            || n.kind() == DeclKind::RequiresExprBody
         {
             continue;
         }
+        if instantiated(ast, d) {
+            if ast.decl_extent(d).is_some() {
+                extra.push(format!("{:?}@{:?}", n.kind(), sm.line_col(n.loc())));
+            }
+            continue;
+        }
         match ast.decl_extent(d) {
+            None if written.contains(&(n.kind(), n.loc())) => {}
             None => missing.push(format!("{:?}@{:?}", n.kind(), sm.line_col(n.loc()))),
             Some(e) => {
                 assert!(e.full.lo.is_valid() && e.full.hi.is_valid(), "{:?}", n.kind());
@@ -141,6 +195,7 @@ fn every_written_declaration_has_a_row() {
         }
     }
     assert!(missing.is_empty(), "declarations without a row: {missing:#?}");
+    assert!(extra.is_empty(), "instantiations with a row: {extra:#?}");
 }
 
 #[test]
@@ -297,4 +352,41 @@ fn an_explicit_instantiation_row_keeps_its_attributes() {
     let dump = table.dump(ast, &sm, Some(file));
     assert!(dump.contains(" attr=Weak@4:32-4:36"), "{dump}");
     assert!(dump.contains(" attr=Visibility@5:25-5:45"), "{dump}");
+}
+
+/// An elaborated-type-specifier naming a class declared elsewhere, even
+/// through a specialization's qualifier, leaves the definition's row
+/// alone and adds none (WP-2629); one that declares the class has its
+/// row. A label, a GNU local label and a postcondition's result name
+/// have rows, a label declared by `__label__` and then defined two
+/// (WP-2630).
+#[test]
+fn references_declare_nothing_and_statement_declarations_have_rows() {
+    let (sm, _, tu) = parse(true);
+    let ast = &tu.ast;
+    let t = &ast.decl_extents;
+    let rows = |d: DeclId| -> Vec<(&str, &str)> {
+        t.rows_of(d).map(|e| (text(&sm, e.full), text(&sm, e.name))).collect()
+    };
+    let one = |name: &str, kind: &str| -> Vec<Vec<(&str, &str)>> {
+        find_all(ast, name, kind).into_iter().map(rows).filter(|r| !r.is_empty()).collect()
+    };
+    assert_eq!(one("QS", "CXXRecord"), [[("struct QS {};", "QS")]]);
+    assert!(t.get(find(ast, "QS", "CXXRecord")).is_some_and(|e| !e.qual.is_valid()));
+    assert_eq!(one("QE", "Enum"), [[("enum QE { qe };", "QE")]]);
+    assert_eq!(one("QI", "CXXRecord"), [[("struct QI {};", "QI")]]);
+    assert_eq!(one("Fresh", "CXXRecord"), [[("struct Fresh *fresh;", "Fresh")]]);
+    assert_eq!(one("ll", "Label"), [[("__label__ ll;", "ll"), ("ll:", "ll")]]);
+    assert_eq!(one("lab", "Label"), [[("lab:", "lab")]]);
+    assert_eq!(one("res", "ContractResultName"), [[("res:", "res")]]);
+    assert_eq!(one("ra", "ContractResultName"), [[("ra [[maybe_unused]] :", "ra")]]);
+    for (name, kind, full) in [
+        ("rx", "Var", "int rx"),
+        ("ce", "Var", "int ce"),
+        ("ex", "Var", "auto ex"),
+        ("rt", "ParmVar", "T rt"),
+        ("ry", "Binding", "auto [ry, rz]"),
+    ] {
+        assert_eq!(one(name, kind), [[(full, name)]], "{kind} '{name}'");
+    }
 }

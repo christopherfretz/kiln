@@ -363,6 +363,11 @@ impl Sema<'_, '_> {
         if !self.push_inst_frame(crate::templ::stack::FrameKind::FunctionSpec, f, tmpl, poi) {
             return;
         }
+        // In an evaluation session's run: a unit of its own, as a member
+        // function's is, so a later run that calls the specialization
+        // (not the function whose instantiation needed it) replays its
+        // diagnostics (spec/eval-session.md §5.1, WP-2501).
+        let unit = self.sess_unit_begin();
         if let Some((i, _)) = self.ast.spec_info(f) {
             self.ast.templates.update_spec(i, |s| {
                 if s.point_of_instantiation == Loc::INVALID {
@@ -463,6 +468,7 @@ impl Sema<'_, '_> {
             s.act_on_finish_function_def(f, b, rbrace);
         });
         self.replay_dependent_access(pdef, f);
+        self.sess_window_end(crate::session::Key::Inst(f), unit);
         self.pop_inst_frame();
     }
 }
@@ -1518,6 +1524,18 @@ impl Sema<'_, '_> {
     ) -> DeclId {
         let lexical = self.ctx;
         let f = self.builder().function_spec_redecl(s, lexical, name_loc, ty, fspec);
+        // Its namespace definition is the one it is written in or its
+        // qualifier names, not its template's (clang's `DeclContext` of a
+        // function template specialization; spec/ast.md §4.2
+        // `written_ns`, WP-2626).
+        if d.qualifier.is_some() {
+            self.note_written_ns(f, d.qualifier);
+        } else {
+            let ns = self.ast.redecl_context(lexical);
+            if self.kind_of(ns) == DeclKind::Namespace {
+                self.ast.decls.set_written_ns(f, ns);
+            }
+        }
         let params: Vec<crate::declspec::ParamInfo> =
             d.function_params().map(<[crate::declspec::ParamInfo]>::to_vec).unwrap_or_default();
         let (defaults, _) = self.merge_default_args(None, false, &params, true);

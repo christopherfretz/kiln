@@ -3221,6 +3221,20 @@ impl Sema<'_, '_> {
 
     // -- declarations ------------------------------------------------------------
 
+    /// Records the namespace definition the declaration `x` of a
+    /// declarator qualified by `q` belongs to: a namespace qualifier names
+    /// the latest opening, the one its lookup found (clang
+    /// `computeDeclContext` of the nested-name-specifier), where `q` and
+    /// `x`'s `ctx` are the first (spec/ast.md §4.2 `written_ns`, WP-2725).
+    pub(crate) fn note_written_ns(&mut self, x: DeclId, q: Option<DeclId>) {
+        if let Some(q) = q
+            && self.kind_of(q) == DeclKind::Namespace
+        {
+            let ns = self.ast.latest(q);
+            self.ast.decls.set_written_ns(x, ns);
+        }
+    }
+
     /// The context a declarator declares into, and its lexical context.
     pub(crate) fn decl_contexts(&self, d: &Declarator) -> (DeclId, DeclId) {
         if let Some(q) = d.qualifier {
@@ -6306,6 +6320,7 @@ impl Sema<'_, '_> {
             self.error(DiagId::sema_auto_fn_virtual, vloc);
         }
         let f = self.builder().function(h, fkind, ty, spec, prev_ok);
+        self.note_written_ns(f, d.qualifier);
         if let Some(p) = attr_prev {
             self.after_def_prev = Some((f, p));
         }
@@ -8118,6 +8133,7 @@ impl Sema<'_, '_> {
         h.lexical = Some(lexical);
         self.mark_pattern_next();
         let v = self.builder().var(h, ty, spec, prev_ok);
+        self.note_written_ns(v, d.qualifier);
         if let Some(p) = attr_prev {
             self.after_def_prev = Some((v, Some(p)));
         }

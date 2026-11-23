@@ -475,6 +475,40 @@ fn a_host_call_in_nested_work_fails_every_run_alike() {
     }
 }
 
+/// WP-2501 (spec/host-calls.md §4): a host call refused in nested work
+/// inside a SFINAE context (the requires-expression of `has<int>`, which
+/// only a run instantiates) is the refusal's hard error, with the
+/// requirement's context note, never a substitution failure: `XR::f`
+/// returned `false` and `XR::g` `true` before. Every run that reaches it
+/// fails alike, in either order.
+const HOST_SFINAE_SRC: &str = "template <u64 N> struct K {};\n\
+template <class T> consteval bool has() { return requires { typename K<hc(1) + sizeof(T)>; }; }\n\
+template <class T> struct R { static consteval bool f() { return has<T>(); }\n\
+  static consteval bool g() { return !has<T>(); } };\n\
+static_assert(sizeof(R<int>) > 0);\n\
+using XR = R<int>;\n";
+
+#[test]
+fn a_host_call_refused_in_a_requires_expression_is_an_error() {
+    let f = fresh(HOST_SFINAE_SRC, &["XR::f", "XR::g"]);
+    for x in &f {
+        assert_eq!(x.result, Err(RunError::Failed), "{x:?}");
+        assert!(has(x, NESTED_HOST_NOTE), "{x:?}");
+        assert!(has(x, "in instantiation of requirement here"), "{x:?}");
+        assert!(has(x, "non-type template argument is not a constant expression"), "{x:?}");
+    }
+    for order in [["XR::f", "XR::g"], ["XR::g", "XR::f"]] {
+        session(HOST_SFINAE_SRC, |s, sm| {
+            for _ in 0..2 {
+                for n in order {
+                    let want = &f[usize::from(n == "XR::g")];
+                    assert_eq!(&run(s, sm, n), want, "{n} in order {order:?}");
+                }
+            }
+        });
+    }
+}
+
 /// The note of a host call refused in nested work (spec/eval-session.md §6).
 const NESTED_HOST_NOTE: &str = "a host call cannot be evaluated here: this expression is \
 evaluated when the code is instantiated, not when it runs";

@@ -41,7 +41,12 @@ fn record(mut fs: MemoryFs, main: &str, dirs: &[(&str, DirGroup)]) -> LookupLog 
     let log = pp.take_lookup_log().expect("recorded");
     drop(pp);
     let diags: Vec<String> = sink.take().iter().map(|d| d.message.clone()).collect();
-    assert!(diags.iter().all(|d| d.contains("Clang extension")), "{diags:?}");
+    assert!(
+        diags
+            .iter()
+            .all(|d| d.contains("Clang extension") || d.contains("#include_next in primary")),
+        "{diags:?}"
+    );
     log
 }
 
@@ -194,11 +199,141 @@ fn embed_lookups_are_repeated() {
     );
 }
 
+/// The absolute names of [`absolute_tree`]'s `/p/h.h`, each form found
+/// and not found.
+const ABS_MAIN: &str = "\
+#include \"/abs/inc.h\"
+#include </abs/ang.h>
+#if __has_include(\"/abs/gone.h\") || __has_include(</abs/inc.h>)
+#endif
+#include_next \"/abs/nx.h\"
+#if __has_include_next(\"/abs/gone.h\")
+#endif
+#include <n.h>
+const char d[] = {
+#embed \"/abs/d.bin\"
+};
+#if __has_embed(</abs/none.bin>)
+#endif
+";
+
+/// A tree whose `/p/h.h` looks up absolute names in every form: found
+/// (`/abs/inc.h`, `/abs/ang.h`, `/abs/nx.h`, `/abs/d.bin`) and not
+/// (`/abs/gone.h`, `/abs/none.bin`); `/a/n.h` asks
+/// `__has_include_next` of a name that exists, which continues after
+/// `/a` and so finds nothing without asking.
+fn absolute_tree() -> MemoryFs {
+    MemoryFs::new()
+        .with_file("/p/h.h", ABS_MAIN)
+        .with_file("/abs/inc.h", "\n")
+        .with_file("/abs/ang.h", "\n")
+        .with_file("/abs/nx.h", "\n")
+        .with_file("/abs/d.bin", "Z")
+        .with_file("/a/n.h", "#if __has_include_next(\"/abs/inc.h\")\n#error found\n#endif\n")
+        .with_dir("/extra")
+}
+
+/// WP-2620 (spec/pp.md "Lookup log", [cpp.include]/2, [cpp.cond]/5,
+/// [cpp.embed]): every lookup of an absolute name is recorded, found or
+/// not, with the name as written, and repeated by `check` and
+/// `check_absolute`: a name that appears, one that goes, or one that
+/// becomes a directory is a difference, under any trust.
 #[test]
-fn absolute_names_are_not_recorded() {
-    let fs = MemoryFs::new().with_file("/p/h.h", "#include \"/a/v.h\"\n").with_file("/a/v.h", "\n");
-    let log = record(fs, "/p/h.h", &[]);
-    assert!(log.lookups.is_empty());
+fn absolute_names_are_recorded_and_repeated() {
+    use kiln_pp::{Found, LookupForm};
+    let dirs: &[(&str, DirGroup)] = &[("/a", A)];
+    let log = record(absolute_tree(), "/p/h.h", dirs);
+    let abs: Vec<(&str, LookupForm, bool, &Found)> = log
+        .lookups
+        .iter()
+        .filter(|l| l.name.starts_with('/'))
+        .map(|l| (l.name.as_str(), l.form, l.angled, &l.found))
+        .collect();
+    let embed = |p: &str| Found::Embed { path: p.to_owned() };
+    let (inc, next, emb) = (LookupForm::Include, LookupForm::Next, LookupForm::Embed);
+    let (miss, hit) = (Found::Missing, Found::Absolute);
+    assert_eq!(
+        abs,
+        [
+            ("/abs/inc.h", inc, false, &hit),
+            ("/abs/ang.h", inc, true, &hit),
+            ("/abs/gone.h", inc, false, &miss),
+            ("/abs/inc.h", inc, true, &hit),
+            ("/abs/nx.h", inc, false, &hit),
+            ("/abs/inc.h", next, false, &miss),
+            ("/abs/d.bin", emb, false, &embed("/abs/d.bin")),
+            ("/abs/none.bin", emb, true, &miss),
+        ]
+    );
+    // No includer's directory; only the `_next` continuing after `/a`
+    // names a directory.
+    for l in log.lookups.iter().filter(|l| l.name.starts_with('/')) {
+        assert_eq!(l.includer, None, "{l:?}");
+        assert_eq!(l.after.is_some(), l.form == next, "{l:?}");
+    }
+    assert!(log.absolute());
+    assert_eq!(log.validate(), Ok(()));
+    // Unchanged: every check answers so, over another list too.
+    assert_eq!(check(&log, &mut absolute_tree(), dirs), Ok(()));
+    assert_eq!(check(&log, &mut absolute_tree(), &[("/extra", A), ("/a", A)]), Ok(()));
+    assert_eq!(log.check_absolute(&mut absolute_tree(), &|_| false), Ok(()));
+
+    // Each change, under each check.
+    let without = |gone: &str| {
+        let mut fs = MemoryFs::new();
+        for (p, t) in [
+            ("/p/h.h", ABS_MAIN),
+            ("/abs/inc.h", "\n"),
+            ("/abs/ang.h", "\n"),
+            ("/abs/nx.h", "\n"),
+            ("/abs/d.bin", "Z"),
+            ("/a/n.h", "\n"),
+        ] {
+            if p != gone {
+                fs.add_file(p, t.as_bytes());
+            }
+        }
+        fs.with_dir("/extra")
+    };
+    let cases: Vec<(MemoryFs, &str)> = vec![
+        (
+            absolute_tree().with_file("/abs/gone.h", "\n"),
+            "lookup of \"/abs/gone.h\" now finds '/abs/gone.h' (was not found)",
+        ),
+        (
+            absolute_tree().with_file("/abs/none.bin", ""),
+            "lookup of #embed </abs/none.bin> now finds '/abs/none.bin' (was not found)",
+        ),
+        (without("/abs/inc.h"), "lookup of \"/abs/inc.h\" now finds nothing (was '/abs/inc.h')"),
+        (without("/abs/ang.h"), "lookup of </abs/ang.h> now finds nothing (was '/abs/ang.h')"),
+        (without("/abs/nx.h"), "lookup of \"/abs/nx.h\" now finds nothing (was '/abs/nx.h')"),
+        (
+            without("/abs/d.bin"),
+            "lookup of #embed \"/abs/d.bin\" now finds nothing (was '/abs/d.bin')",
+        ),
+        (
+            absolute_tree().with_dir("/abs/gone.h"),
+            "lookup of \"/abs/gone.h\" now finds '/abs/gone.h' (was not found)",
+        ),
+    ];
+    for (i, (fs, why)) in cases.into_iter().enumerate() {
+        // A directory at a missing name is still no header: unchanged.
+        let why = if i == 6 { None } else { Some(why.to_owned()) };
+        let l = list(&mut fs.clone(), dirs);
+        for trust in [SAME_CWD, Trust::ProducerMisses { same_cwd: false }, Trust::Nothing] {
+            let got = log.check(&l, &["/res".to_owned()], &mut fs.clone(), &|_| false, trust);
+            assert_eq!(got.err(), why, "{trust:?}");
+        }
+        assert_eq!(log.check_absolute(&mut fs.clone(), &|_| false).err(), why);
+    }
+    // A known file is not asked about: `check_absolute` of an unchanged
+    // tree whose hits are all known asks only the two misses.
+    let mut f = absolute_tree();
+    let before = f.queries();
+    let known = |p: &str| p.starts_with("/abs/") && !p.contains("gone") && !p.contains("none");
+    assert_eq!(log.check_absolute(&mut f, &known), Ok(()));
+    let (o, s, n) = f.queries();
+    assert_eq!((o - before.0) + (s - before.1) + (n - before.2), 2);
 }
 
 /// Known files and repeated names cost no queries; many misses in one
@@ -346,10 +481,11 @@ fn hostile_logs_are_validated_and_repeat_without_panic() {
             if rng.below(8) == 0 { u32::MAX } else { rng.below(list.len() + 1) as u32 };
         let lookups: Vec<Lookup> = (0..rng.below(6))
             .map(|_| {
-                let found = match rng.below(4) {
+                let found = match rng.below(5) {
                     0 => Found::Missing,
                     1 => Found::Includer,
                     2 => Found::Dir { dir: idx(&mut rng), characteristic: chars[rng.below(3)] },
+                    3 => Found::Absolute,
                     _ => Found::Embed { path: strings[rng.below(strings.len())].clone() },
                 };
                 Lookup {
@@ -372,6 +508,7 @@ fn hostile_logs_are_validated_and_repeat_without_panic() {
         // never a panic (each query is a map lookup: no hang).
         let mut fs = tree();
         let _ = check(&log, &mut fs, DIRS);
+        let _ = log.check_absolute(&mut fs, &|_| false);
         let _ = log.absolute();
     }
     assert!(valid > 500 && refused > 500, "valid {valid}, refused {refused}");

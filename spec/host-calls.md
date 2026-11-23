@@ -182,6 +182,32 @@ and is evaluated once where the program says. Kiln's entry points
     rolled back;
   - the `enable_if` condition (`evaluate_with_params`).
 
+**A failed call decides nothing in a SFINAE context** (WP-2501). A
+call that ran in an allowed evaluation (a template argument, an array
+bound, a constraint's atom) and failed with the handler's error, its
+results over a capacity, no handler, or an evaluation session's refusal
+(spec/eval-session.md §6: outside a run, and in a run's nested work) is
+flagged (`Oven::host_failed`; a range check of the arguments,
+§2.2, is not: that is the program's own fault). When the evaluation
+that failed so was in a SFINAE context (a requires-expression's
+requirement, a function template's deduction, a partial
+specialization's match, a constraint's substitution), its error is not
+a substitution failure but a hard error, printed with the failure's
+note (`host call failed: …`, the session's refusal note) and the
+context notes, the requirement's (`in instantiation of requirement
+here`) or the deduction's among them (spec/sema-templates.md §5.7):
+whether the handler answers is no property of the template arguments,
+so a refused call never makes a requires-expression `false` or skips a
+candidate. An `if constexpr` condition is no SFINAE context; it was
+already the same error. Tests:
+`tests/conformance/ext.kiln.host_call/host-call-sfinae.cpp`,
+`crates/kiln_driver/tests/eval_session.rs`
+`a_refused_host_call_is_no_substitution_failure` (the session's
+translation unit, refused) and
+`crates/kiln_parse/tests/eval_session_nested.rs`
+`a_host_call_refused_in_a_requires_expression_is_an_error` (a run's
+nested work).
+
 Consequences, by construct:
 - A function definition never calls the handler when it is parsed. In
   a `consteval` or `constexpr` function, `const unsigned long long n =

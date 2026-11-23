@@ -201,6 +201,64 @@ impl Parser<'_, '_> {
         self.ext_bindings_inner(v);
     }
 
+    /// The label `l` its labeled statement declares ([stmt.label]/1): its
+    /// row runs from `begin` (its attribute-specifier-seq, or else its
+    /// identifier `name`) to the last token consumed (the `:`, or the GNU
+    /// attributes after it). A label declared by `__label__` before
+    /// ([`Self::ext_local_labels`]) gets a second row; a redefinition (an
+    /// error) leaves the first definition's row alone (WP-2630).
+    pub(crate) fn ext_label(&mut self, l: DeclId, begin: Loc, name: Span) {
+        if !self.ext_on() {
+            return;
+        }
+        match self.s.ast.decl_extents.get(l).map(|e| e.end) {
+            Some(DeclEnd::Other) => return,
+            Some(_) => self.ext_redecl(l),
+            None => {}
+        }
+        let full = Span::new(begin, self.prev_end());
+        if let Some(e) = self.ext_row(l) {
+            e.full = full;
+            e.own = full;
+            e.name = name;
+            e.end = DeclEnd::Other;
+        }
+    }
+
+    /// The labels of a GNU local label declaration (`__label__ a, b;`)
+    /// that began at `begin` and ends at the last token consumed: each
+    /// shares the declaration's range, its own part its identifier
+    /// (WP-2630).
+    pub(crate) fn ext_local_labels(&mut self, labels: &[(DeclId, Span)], begin: Loc) {
+        if !self.ext_on() {
+            return;
+        }
+        for &(l, name) in labels {
+            if let Some(e) = self.ext_row(l) {
+                e.own = name;
+                e.name = name;
+            }
+        }
+        let decls: Vec<DeclId> = labels.iter().map(|&(l, _)| l).collect();
+        self.ext_finish(&decls, begin);
+    }
+
+    /// The result name `r` of a postcondition ([dcl.contract.res]/1): its
+    /// row is its result-name-introducer, from the identifier `name` to
+    /// the `:` just consumed (WP-2630).
+    pub(crate) fn ext_contract_result(&mut self, r: DeclId, name: Span) {
+        if !self.ext_on() {
+            return;
+        }
+        let full = Span::new(name.lo, self.prev_end());
+        if let Some(e) = self.ext_row(r) {
+            e.full = full;
+            e.own = full;
+            e.name = name;
+            e.end = DeclEnd::Other;
+        }
+    }
+
     /// The init-captures of lambda `id` ([expr.prim.lambda.capture]/6),
     /// as written in `intro`: each declares a variable as if by `auto
     /// name initializer`, so its row has its name, and its own and full

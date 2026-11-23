@@ -411,3 +411,51 @@ fn a_log_replayed_under_another_view() {
         Ok(())
     );
 }
+
+/// WP-2620 (spec/pp.md "Lookup log"): a lookup of an absolute name
+/// under an overlay is recorded as the overlay's view answers it: a
+/// created header found, a removed one missing, as a run over the
+/// edited tree records them. The log repeats unchanged over that view
+/// and differs over the disk.
+#[test]
+fn absolute_names_under_an_overlay() {
+    use kiln_pp::{Found, LookupForm};
+    let t = Tree::new("absolute");
+    t.write("abs/old.h", b"old\n");
+    let (old, new) = (t.0.join("abs/old.h"), t.0.join("abs/new.h"));
+    let mut o = Overlay::new();
+    o.remove(&old).unwrap();
+    o.create(&new, Arc::from(&b"new\n"[..])).unwrap();
+    let o = Arc::new(o);
+    let sm = SourceManager::new();
+    sm.set_work_dir(t.work_dir());
+    sm.set_overlay(Arc::clone(&o));
+    let mut fs = OverlayFs::new(t.work_dir(), Arc::clone(&o));
+    let list = two_dirs(&mut fs);
+    let mut hs = HeaderSearch::new(fs, list);
+    hs.record_lookups();
+    let (old, new) = (old.to_str().unwrap(), new.to_str().unwrap());
+    assert!(hs.resolve(&sm, &include(new, false)).is_some());
+    let mut probe = include(old, false);
+    probe.kind = IncludeKind::HasInclude;
+    assert!(hs.resolve(&sm, &probe).is_none());
+    let log = hs.take_lookup_log().unwrap();
+    let got: Vec<(&str, LookupForm, &Found)> =
+        log.lookups.iter().map(|l| (l.name.as_str(), l.form, &l.found)).collect();
+    assert_eq!(
+        got,
+        [(new, LookupForm::Include, &Found::Absolute), (old, LookupForm::Include, &Found::Missing)]
+    );
+    let mut view = OverlayFs::new(t.work_dir(), Arc::clone(&o));
+    assert_eq!(log.check_absolute(&mut view, &|_| false), Ok(()));
+    let mut real = RealFs::in_dir(t.work_dir());
+    assert_eq!(
+        log.check_absolute(&mut real, &|_| false),
+        Err(format!("lookup of \"{new}\" now finds nothing (was '{new}')"))
+    );
+    let list = two_dirs(&mut real);
+    assert_eq!(
+        log.check(&list, &[], &mut real, &|p| p == new, Trust::ProducerMisses { same_cwd: true }),
+        Err(format!("lookup of \"{old}\" now finds '{old}' (was not found)"))
+    );
+}

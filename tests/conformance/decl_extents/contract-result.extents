@@ -1,0 +1,9 @@
+Function 'f'  full=9:1-9:25 ; own=9:5-9:24 name=9:5-9:6 'f' specs-end=9:4
+ContractResultName 'r'  full=9:15-9:17 - name=9:15-9:16 'r'
+ParmVar 'a'  full=10:7-10:18 - own=10:17-10:18 name=10:17-10:18 'a' specs-end=10:16
+Function 'g'  full=10:1-10:56 ; own=10:5-10:55 name=10:5-10:6 'g' specs-end=10:4
+ContractResultName 'res'  full=10:26-10:30 - name=10:26-10:29 'res'
+ContractResultName 'r2'  full=10:46-10:49 - name=10:46-10:48 'r2'
+CXXRecord 'M'  full=11:1-13:3 ; own=11:1-13:2 name=11:8-11:9 'M' body=11:10-13:2
+CXXMethod 'M::h'  full=12:3-12:41 } own=12:7-12:41 name=12:7-12:8 'h' body=12:28-12:41 specs-end=12:6
+ContractResultName 'M::r'  full=12:17-12:19 - name=12:17-12:18 'r'

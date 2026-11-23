@@ -185,6 +185,17 @@ struct DeclNode {        // 28 bytes
 - The lexical context is stored in a sparse map `lexical_ctx: FxHashMap<
   DeclId, DeclId>` only when it differs from `ctx` (out-of-line member
   definitions, friends, local externs): flag `HAS_LEXICAL_CTX`.
+- The namespace definition a namespace-scope declaration belongs to
+  (clang's `getDeclContext()`, each `namespace N { }` a context of its
+  own) is `ctx` unless the sparse map `written_ns` (memory row
+  `written_ns`; snapshots carry it) says otherwise: for a qualified
+  declarator naming a namespace (`int n::f() {}`), whose `ctx` is the
+  first definition of `n`, the latest one when it is declared (what the
+  qualifier's lookup found); for an explicit specialization of a
+  function template, whose `ctx` is its template's, the definition it is
+  written in or its qualifier names (WP-2725, WP-2626).
+  `DeclArena::written_ns(d)` reads it, `set_written_ns` records it.
+  Codegen's visibility walk starts there (spec/codegen.md §8).
 - Source range: the begin location (decl-specifiers start) is in the
   payload of kinds that need it for diagnostics; the end is computed.
 - Identifier namespace (IDNS: ordinary / tag / member / namespace / label
@@ -490,7 +501,27 @@ translation unit, when sema is gone) ask one computation:
   module and not exported, else external. A member takes its class's
   linkage. A local entity has none, except a block-scope function
   declaration or `extern` variable, which has its first declaration's
-  ([basic.link]/6; external when it is the first). A namespace is
+  ([basic.link]/6). When it is the first, it declares a member of the
+  innermost enclosing namespace ([dcl.meaning.general]/3.5), so
+  [basic.link]/4 makes it internal in a function of an unnamed namespace
+  (`namespace { void g() { extern int v; } }`; WP-2623) and external
+  otherwise, whatever its function's linkage (`static void g() { extern
+  int v; }` declares an external `v`). **`extern "C"` in an unnamed
+  namespace** (WP-2624): a function or variable whose target scope is a
+  namespace (a block-scope `extern` one included) and whose first
+  declaration is in an `extern "C"` context keeps external linkage (and
+  C language linkage) in an unnamed namespace. This follows clang
+  (`getLVForNamespaceScopeDecl`, `getLVForLocalDecl`), not the letter of
+  [basic.link]/4 as CWG 1113 and CWG 1603 left it (every name in an
+  unnamed namespace is internal, and [dcl.link]/1, /4 then give it no
+  language linkage), which GCC 16.1 follows (internal; a local symbol
+  that keeps the C name; distinct from a global `extern "C"` entity of
+  the same name). Kiln takes clang's model because its sema already does
+  (such a declaration is one entity with a global `extern "C"`
+  declaration of the same name, CWG 14), and its symbol is clang's (an
+  unmangled external name). `Ast::extern_c_escapes_unnamed_namespace`
+  owns the exception; `Ast::linkage`, `Ast::is_extern_c` and the
+  mangler's `has_internal_linkage` all read it. A namespace is
   internal when unnamed or inside an unnamed one. Anything else (an
   alias, a data member, an enumerator, a parameter, a deduction guide, a
   closure type, a using-declaration or shadow) has none. Reflection's
@@ -504,7 +535,8 @@ translation unit, when sema is gone) ask one computation:
   `extern "C"` function has it), it is no class member, no member-like
   constrained friend ([dcl.link]/5) and has no internal linkage. A
   function or variable in an unnamed namespace first declared in an
-  `extern "C"` context keeps it, as in clang. In C every function and
+  `extern "C"` context keeps it, as in clang (above), a block-scope
+  `extern` one in an `extern "C"` function included. In C every function and
   variable with linkage has it.
 - `Ast::language_linkage(d) -> LanguageLinkage { Cxx, C, None }` is
   [dcl.link] for tooling clients: `C` when `is_extern_c(d)` (and `d`
@@ -518,7 +550,11 @@ translation unit, when sema is gone) ask one computation:
   in an `extern "C"` block is `Cxx` ([dcl.link]/5).
 
 Nothing is stored: each query walks the context chain (bounded) and
-reads the payloads. Tests: `crates/kiln_parse/tests/using_linkage.rs`.
+reads the payloads. Tests: `crates/kiln_parse/tests/using_linkage.rs`,
+`tests/conformance/basic.link/local-extern-unnamed-namespace-ir.cpp`,
+`tests/conformance/dcl.link/extern-c-unnamed-namespace-ir.cpp`,
+`tests/conformance/meta.reflection.queries/linkage-block-scope-extern.cpp`,
+`tests/conformance/meta.reflection.queries/linkage-extern-c-unnamed-namespace.cpp`.
 
 ## 5. Expressions
 ### 5.1 Header
@@ -1080,7 +1116,8 @@ lists its specializations in creation order (dump order, ast-dump.md §5).
 
 ### 8.5 Definition-context operator lookup sets (WP-2021)
 A unary, binary or compound-assignment operator expression with a
-type-dependent operand, built in a template, keeps the non-member
+type-dependent operand, built in a template, and a fold-expression (its
+operator; WP-2625), keeps the non-member
 operator functions the unqualified lookup of its operator name (and of
 its rewritten forms' names for `==`, `!=`, `<`, `>`, `<=`, `>=`,
 [over.match.oper]/3.4) found at the definition ([temp.dep.candidate]/1,
@@ -1115,7 +1152,8 @@ unqualified lookup (spec/sema-templates.md §3.5 "Operators"). The set is
   `templ.oper_sets`, `templ.oper_cands`, `templ.oper_index`.
 
 Tests: `crates/kiln_parse/tests/sema_facts.rs`
-(`dependent_operator_definition_set`), `oper_lookup.rs` unit tests,
+(`dependent_operator_definition_set`, `fold_operator_definition_set`),
+`oper_lookup.rs` unit tests,
 `tests/conformance/module.interface/image-oper-lookup-run.cpp`.
 
 ## 9. Constant values
@@ -1362,12 +1400,38 @@ struct UnionMember { at: u32, field: DeclId }       // active member of the unio
 | cache | content |
 |---|---|
 | `ConstantExpr.b` | value of a constant expression (§5.5) |
-| `VarData.eval` | `NotEvaluated → Evaluating → Value(id) / NotConstant`; `Evaluating` detects self-reference; used for `constexpr`/`constinit` vars, `const` integral vars usable in constant expressions, and static-storage constant initialization (codegen emits the value) |
+| `VarData.eval` | `NotEvaluated → Evaluating → Value(id) / NotConstant`; `Evaluating` detects self-reference; used for `constexpr`/`constinit` vars, `const` integral vars usable in constant expressions, and static-storage constant initialization (codegen emits the value); when it is written: below |
 | `EnumConstant` payload | value (`Int`) |
 | `TemplateArg::Value` | the converted non-type argument (spec/types.md §8.3) |
 | `TemplateParamObject` | the object's value |
 | `IfStmt` | `if constexpr` via its `ConstantExpr`; `if consteval` needs no value |
 | `Annotation` attr | annotation value (M6) |
+
+**When `VarData.eval` is written** (WP-2504). Every constant
+initializer sema checks is evaluated when it is checked, and the
+result is written then, once: `Value(id)` or `NotConstant`. The checks
+are a `constexpr` (or `constexpr` structured binding's) initializer
+(`check_constexpr_init`), an in-class initializer of a non-inline
+`const` integral or enumeration static data member
+(`check_in_class_static_init`: `struct S { static const int x = 1; };`),
+and a `const` non-volatile integral or enumeration variable with static
+storage (`fix_const_int_init`: a namespace-scope one, an out-of-line
+static data member definition, `const int S::y = 2;`). The check runs
+where the initializer is: at the declaration, or, for a member of a
+class template specialization or a variable template specialization,
+when the initializer is instantiated (at its first use, at the end of
+the translation unit, or by an evaluation session's on-demand read). So
+the two forms of a `const` static data member agree: each has its value
+from its check (before WP-2504 the in-class form was evaluated by its
+check but the value dropped). A dependent initializer (a template's
+pattern) is not evaluated and stays `NotEvaluated`. A later use never
+writes `eval`: an Oven that reads a variable still `NotEvaluated` (one
+no check covers: a non-`const` one read by a lax fold, an initializer
+not yet instantiated) evaluates its initializer into its own global
+object, which that Oven keeps, and leaves `eval` as it is. A module or
+precompiled header image carries `eval` as written
+(`crates/kiln_parse/tests/eval_session_results.rs`
+`evaluated_values_are_written_when_checked`).
 
 ### 9.3 Printing values
 `ConstStore::print(id, &StringPool, &dyn PrintEnv, &PrintOptions, &mut
@@ -3661,7 +3725,8 @@ body, without re-lexing. `kiln_ast::decl_extents`; the field
   `template void t(short);`, `template int v<int>;`,
   `template void S<long>::m();`, `template int S<long>::sm;`, an
   explicit instantiation of a constructor) and an `extern template`
-  declaration of any of these. A row is keyed by (`DeclId`, ordinal):
+  declaration of any of these, and a label's definition (`l:`) after a
+  GNU local label declaration of it (`__label__ l;`, WP-2630). A row is keyed by (`DeclId`, ordinal):
   the *n*th declaration of the entity written under that `DeclId` is its
   *n*th row, in source order, and no later declaration overwrites an
   earlier one's row. `get(d)` (and `Ast::decl_extent(d)`) is `d`'s last
@@ -3672,12 +3737,23 @@ body, without re-lexing. `kiln_ast::decl_extents`; the field
   class template specialization): the explicitly instantiated
   specialization when nothing declared it before, else the explicit
   specialization it names (which then has a row before it).
-- **No row**: implicit declarations (special members, implicit
-  deduction guides, builtins, injected class names, a lambda's closure
-  type and its members), instantiations and their members (a client
-  maps a specialization to its pattern with `template_info` and reads
-  the pattern's row), the parameter a `(void)` clause makes and drops,
-  and the declarations an error recovery skipped.
+- **No row**: implicit declarations (special members and their
+  parameters, implicit deduction guides, builtins, injected class names,
+  a lambda's closure type and its members, a requires-expression's body,
+  the scope of its parameters), instantiations and their members (a
+  client maps a specialization to its pattern with `template_info` and
+  reads the pattern's row) and every other copy a substitution makes of
+  a written declaration (an instantiated function's parameters and
+  locals, an expansion statement's copies of its body per element,
+  [stmt.expand], a satisfaction check's requires-expression parameters),
+  the parameter a `(void)` clause makes and drops, and the declarations
+  an error recovery skipped. An elaborated-type-specifier that names a
+  class or enumeration declared elsewhere declares nothing and adds no
+  row ([dcl.type.elab]), qualified or not, and also when its qualifier
+  names a class template specialization whose member lookup instantiates
+  (`struct O<int>::S *p;`: the member is an instantiation, WP-2629); one
+  that declares its class (`struct S *p;` with `S` undeclared,
+  `friend class F;` with `F` undeclared) has the class's row.
   An explicit specialization and an explicit instantiation are written
   declarations: the row is the specialization's (or the member's, for
   `template void S<long>::m();`), its range that of the declaration that
@@ -3687,8 +3763,9 @@ body, without re-lexing. `kiln_ast::decl_extents`; the field
   explicit instantiation of a function template without template
   arguments (`template void t(short);`, the specialization deduced,
   [temp.explicit]/8) has the name `t`. A friend declaration naming a
-  specialization that has a row (`friend struct Q<int>;`) declares
-  nothing new and adds none (§19.5).
+  specialization (`friend struct Q<int>;`) declares nothing new and
+  adds none, whether the specialization has a row or is implicit
+  (§19.5).
 - **Read access** (all on `DeclExtents`): `is_on()`, `get(d)` (the last
   row), `rows_of(d)` (every row, in source order), `iter()` (every row,
   by declaration in `DeclId` order and a declaration's rows in source
@@ -3774,8 +3851,14 @@ variable of a range-based for or expansion statement ([stmt.ranged],
 [stmt.expand]), up to its declarator: the range after `:` is not
 part of it), init-captures (from their first token, `&`, `...` or the
 name, to the initializer's last; the variable [expr.prim.lambda.capture]/6
-declares), a requires-expression's parameters, access specifiers
-(`public:`), and a declaration an error cut short. The optional `;` after an in-class member function definition
+declares), a requires-expression's parameters, a label (from its
+attribute-specifier-seq, or else its identifier, to the `:`, or to the
+last GNU attribute after it: `l: __attribute__((unused));`), a
+postcondition's result name (its result-name-introducer, from the
+identifier to the `:`, [dcl.contract.res]), access specifiers
+(`public:`), and a declaration an error cut short. A GNU local label
+declaration (`__label__ a, b;`) ends at its `;`; each label's `own` and
+`name` are its identifier (WP-2630). The optional `;` after an in-class member function definition
 is not part of it.
 
 ### 19.4 Namespaces
@@ -3808,7 +3891,10 @@ H::h(G&);`, `friend B::~B();`) declares nothing new: the earlier
 declaration keeps its row (WP-1932; the identifier-accounting test of
 §18.8 found the overwrite); so does one naming a class template
 specialization with a row (`friend struct Q<int>;` after `template <>
-struct Q<int> {};`, WP-2470). The `Friend` has its own row either way.
+struct Q<int> {};`, WP-2470), and one naming an implicit specialization
+or a member of one (`friend struct V<int>;`, `friend struct
+O<char>::S;`) adds none (WP-2629). The `Friend` has its own row either
+way.
 
 ### 19.6 Locations, speculation, PCH, modules
 
@@ -3971,14 +4057,17 @@ Tests: `crates/kiln_ast/src/decl_extents.rs` (row sizes, off records
 nothing, set and share, `semi`/`prefix`, truncation, lambda names,
 module rows only when on, the trimmed capacity),
 `crates/kiln_parse/tests/decl_extents.rs` (the API on parsed source,
-capacity equal to length after the parse),
+capacity equal to length after the parse; `every_written_declaration_has_a_row`:
+every declaration of a source of every kind has a row but implicit
+declarations and copies, and no instantiation has one),
 `crates/kiln_driver/src/snap_tests.rs` (`snapshot_round_trip_decl_extents`)
 and `tests/conformance/decl_extents/` (one per case of §19.2-§19.6,
 macros, templates, a PCH and module-image round trips:
 `module-image.cpp`/`module-replay.cpp` for an image without a preamble,
 `module-bodies-image.cpp`/`module-bodies-replay.cpp` for the
 declarations inside bodies, a partition, attributes, `export import`
-and a header unit).
+and a header unit; `elaborated-refs.cpp`, `stmt-decls.cpp` and
+`contract-result.cpp` for WP-2629/WP-2630).
 
 ## 20. Public tables for tooling clients (WP-2024)
 

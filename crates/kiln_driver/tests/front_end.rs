@@ -390,6 +390,53 @@ fn record_lookups_logs_a_missing_key() {
     assert_eq!(r.value, Some(true), "no log unless asked");
 }
 
+/// WP-2620 (spec/pp.md "Lookup log", [cpp.include]/2): a lookup of an
+/// absolute name is recorded, found or not, with `-include` among the
+/// forms; `check_absolute` repeats them over the disk and names a
+/// header that appeared, or one that went.
+#[test]
+fn record_lookups_logs_absolute_names() {
+    let s = Scratch::new("abs-lookups");
+    let pre = s.write("pre.h", b"#define PRE 1\n");
+    let h = s.write("h.h", b"int h;\n");
+    let (absent, none) = (s.path("absent.h"), s.path("none.bin"));
+    let text = format!(
+        "#include \"{h}\"\n#if __has_include(\"{absent}\") || __has_embed(\"{none}\")\n#error\n#endif\nstatic_assert(PRE);\n"
+    );
+    let main = s.write("main.cpp", text.as_bytes());
+    let cl = argv(&["-fsyntax-only", "-Wno-everything", "-include", &pre, &main]);
+    let mut o = quiet();
+    o.record_lookups = true;
+    let r = run_front_end("kiln++", &cl, o, |fe| fe.lookups.cloned()).unwrap();
+    assert_eq!(r.errors, 0, "{r:?}");
+    let log = r.value.flatten().expect("a lookup log");
+    let got: Vec<(&str, LookupForm, &Found)> = log
+        .lookups
+        .iter()
+        .filter(|l| l.name.starts_with('/'))
+        .map(|l| (l.name.as_str(), l.form, &l.found))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            (pre.as_str(), LookupForm::Include, &Found::Absolute),
+            (h.as_str(), LookupForm::Include, &Found::Absolute),
+            (absent.as_str(), LookupForm::Include, &Found::Missing),
+            (none.as_str(), LookupForm::Embed, &Found::Missing),
+        ]
+    );
+    let check = || log.check_absolute(&mut kiln_pp::RealFs::new(), &|_| false);
+    assert_eq!(check(), Ok(()));
+    s.write("absent.h", b"\n");
+    assert_eq!(
+        check(),
+        Err(format!("lookup of \"{absent}\" now finds '{absent}' (was not found)"))
+    );
+    std::fs::remove_file(&absent).unwrap();
+    std::fs::remove_file(&pre).unwrap();
+    assert_eq!(check(), Err(format!("lookup of \"{pre}\" now finds nothing (was '{pre}')")));
+}
+
 #[test]
 fn options_default() {
     let o = FrontEndOptions::default();

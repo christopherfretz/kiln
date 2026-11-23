@@ -9,6 +9,10 @@
 //! `#include_next` continues after), the search list and the file system.
 //! So a consumer whose list gives every recorded key the recorded result
 //! looks up the same files the prefix did, in the same order.
+//!
+//! A lookup of an absolute name (WP-2620) does not use the search list:
+//! its result is a function of the file system alone, and it is always
+//! asked again ([`LookupLog::check_absolute`]).
 
 use std::collections::{HashMap, HashSet};
 
@@ -46,11 +50,15 @@ pub enum Found {
         /// Its characteristic.
         characteristic: Characteristic,
     },
-    /// An `#embed` resource read from `path`.
+    /// An `#embed` resource read from `path` (for an absolute name, the
+    /// name itself).
     Embed {
         /// The path it was read from.
         path: String,
     },
+    /// Found at the name as written: an absolute name, opened as is
+    /// (WP-2620).
+    Absolute,
 }
 
 /// One recorded lookup: its key and its result.
@@ -139,6 +147,7 @@ impl LookupLog {
         let abs = |i: u32| self.dir(i).starts_with('/');
         self.lookups.iter().all(|l| match &l.found {
             Found::Missing => true,
+            Found::Absolute => l.name.starts_with('/'),
             Found::Includer => l.includer.is_some_and(abs),
             Found::Dir { dir, .. } => abs(*dir),
             Found::Embed { path } => path.starts_with('/'),
@@ -197,6 +206,7 @@ impl LookupLog {
             Found::Includer => Res::Includer,
             Found::Dir { dir, characteristic } => Res::Dir(self.dir(*dir), *characteristic),
             Found::Embed { path } => Res::Embed(path),
+            Found::Absolute => Res::Absolute,
         }
     }
 
@@ -207,6 +217,7 @@ impl LookupLog {
             Res::Includer => Some(join_path(l.includer.map_or(".", |i| self.dir(i)), &l.name)),
             Res::Dir(d, _) => Some(join_path(d, &l.name)),
             Res::Embed(path) => Some((*path).to_owned()),
+            Res::Absolute => Some(l.name.clone()),
         }
     }
 
@@ -238,13 +249,7 @@ impl LookupLog {
         known: &dyn Fn(&str) -> bool,
         trust: Trust,
     ) -> Result<(), String> {
-        let mut p = Prober {
-            fs,
-            known,
-            files: HashMap::new(),
-            dirs: HashMap::new(),
-            listings: HashMap::new(),
-        };
+        let mut p = Prober::new(fs, known);
         // The position of each directory of `list`, by name.
         let index: HashMap<&str, usize> =
             list.dirs().iter().enumerate().map(|(i, d)| (d.path.as_str(), i)).collect();
@@ -281,6 +286,10 @@ impl LookupLog {
             }
         }
         for l in &self.lookups {
+            if is_absolute(l) {
+                self.repeat_absolute(l, &mut p)?;
+                continue;
+            }
             let now = match l.form {
                 LookupForm::Include | LookupForm::Next => {
                     let start = match (l.form, l.after) {
@@ -350,6 +359,41 @@ impl LookupLog {
         Ok(())
     }
 
+    /// Repeats only the lookups of absolute names, in order, over `fs`
+    /// (WP-2620): what [`LookupLog::check`] repeats of them, for a
+    /// consumer that takes every other lookup as recorded (the PCH
+    /// consumer with the producer's search list and working directory).
+    /// An absolute name's result depends on the file system alone, so a
+    /// miss is asked again whatever the trust: one `stat` each, none for
+    /// a `known` file.
+    ///
+    /// # Errors
+    /// The first lookup that finds something else, as `-v` names it.
+    pub fn check_absolute(
+        &self,
+        fs: &mut dyn HeaderFs,
+        known: &dyn Fn(&str) -> bool,
+    ) -> Result<(), String> {
+        let mut p = Prober::new(fs, known);
+        self.lookups
+            .iter()
+            .filter(|l| is_absolute(l))
+            .try_for_each(|l| self.repeat_absolute(l, &mut p))
+    }
+
+    /// Repeats the lookup `l` of an absolute name: opened as is (an
+    /// `#include_next` that continues after a directory finds nothing
+    /// and asks nothing), by `#embed` too.
+    fn repeat_absolute(&self, l: &Lookup, p: &mut Prober<'_>) -> Result<(), String> {
+        let now = match l.form {
+            LookupForm::Include if p.file(&l.name) => Res::Absolute,
+            LookupForm::Embed if p.file(&l.name) => Res::Embed(&l.name),
+            LookupForm::Include | LookupForm::Embed | LookupForm::Next => Res::Missing,
+        };
+        let was = self.result(&l.found);
+        if now == was { Ok(()) } else { Err(self.difference(l, &was, &now)) }
+    }
+
     /// Repeats the `#embed` lookup `l` over `embed_dirs` (an embed does
     /// not use the search list).
     fn embed(&self, l: &Lookup, embed_dirs: &[String], p: &mut Prober<'_>) -> Result<(), String> {
@@ -385,7 +429,7 @@ impl LookupLog {
                 Some(&j) => j,
                 None => return 0..0,
             },
-            Found::Includer | Found::Embed { .. } => return 0..0,
+            Found::Includer | Found::Embed { .. } | Found::Absolute => return 0..0,
         };
         start.min(end)..end
     }
@@ -445,6 +489,12 @@ enum Res<'a> {
     Includer,
     Dir(&'a str, Characteristic),
     Embed(&'a str),
+    Absolute,
+}
+
+/// Whether `l` looks up an absolute name, which is opened as is.
+fn is_absolute(l: &Lookup) -> bool {
+    l.name.starts_with('/')
 }
 
 /// A search directory's listing in [`LookupLog::check`].
@@ -474,7 +524,11 @@ struct Prober<'f> {
     listings: HashMap<String, Listing>,
 }
 
-impl Prober<'_> {
+impl<'f> Prober<'f> {
+    fn new(fs: &'f mut dyn HeaderFs, known: &'f dyn Fn(&str) -> bool) -> Prober<'f> {
+        Prober { fs, known, files: HashMap::new(), dirs: HashMap::new(), listings: HashMap::new() }
+    }
+
     /// Whether the search directory `dir` may hold a name whose first
     /// component is `first` (lowercased; `None` when a listing cannot
     /// tell): `false` only when `dir`'s listing has no such entry. The

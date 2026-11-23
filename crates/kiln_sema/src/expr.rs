@@ -2837,6 +2837,14 @@ impl Sema<'_, '_> {
         // clang `BuildDeclarationNameExpr`: "Only create DeclRefExpr's for
         // valid Decl's" (an invalid variable's uses raise no more errors).
         if matches!(n.kind(), DeclKind::Var | DeclKind::ParmVar) && n.has(DeclFlags::INVALID) {
+            // A variable whose initializer an earlier unit of an
+            // evaluation session instantiated and left invalid: the
+            // reference reaches its record, so the diagnostics that
+            // explain the error are replayed (spec/eval-session.md §5.1,
+            // WP-2451).
+            if self.eval_replay.is_some() {
+                self.sess_reach_at(&crate::session::Key::Init(self.ast.first(d)), loc);
+            }
             return self.recover_err(&[], loc);
         }
         self.check_sve_use(d, loc);

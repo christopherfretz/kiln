@@ -19,6 +19,12 @@ mod snap;
 
 /// Exclusive end of the file-location space (`[1, 2^31)`).
 const FILE_SPACE_END: u64 = 1 << 31;
+
+/// The name of the token-paste and stringizing buffers
+/// ([`SourceManager::is_written_in_scratch_space`]; `kiln_diag`'s
+/// `SCRATCH_BUFFER_NAME`).
+const SCRATCH: &str = "<scratch space>";
+
 /// Exclusive end of the macro-location space (`[2^31, 2^32)`).
 const MACRO_SPACE_END: u64 = 1 << 32;
 
@@ -1403,11 +1409,15 @@ impl SourceManager {
         self.file_kind(loc).is_system()
     }
 
-    /// Whether `loc` was written in a token-paste or stringizing buffer,
-    /// `<scratch space>` (clang `isWrittenInScratchSpace`: the presumed
-    /// file name of `loc`).
+    /// Whether `loc` (its expansion location) was written in a
+    /// token-paste or stringizing buffer, `<scratch space>` (clang
+    /// `isWrittenInScratchSpace`). Decided by the buffer's identity, an
+    /// in-memory buffer ([`add_virtual`](Self::add_virtual)) of that
+    /// name, never by the presumed name, which `#line` sets in any file
+    /// (WP-2622).
     pub fn is_written_in_scratch_space(&self, loc: Loc) -> bool {
-        self.presumed_line_col(loc).is_some_and(|p| p.file_name == "<scratch space>")
+        self.find_file(self.expansion_loc(loc))
+            .is_some_and(|(_, f, _)| matches!(f.origin, Origin::Virtual) && &*f.name == SCRATCH)
     }
 
     /// Whether `loc` is a macro location spelled in a system header

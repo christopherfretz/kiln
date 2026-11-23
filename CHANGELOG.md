@@ -27,6 +27,11 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   `token_range_split`), so an expression ending at the first `>` of a
   `>>`, `>=`, `>>=` or `>>>` ends where sema says.
 
+- `ValueError::StackExhausted` for an evaluation session's
+  `variable_value` (WP-2510, spec/eval-session.md §9): a read whose
+  initializer exhausts the stack of the thread it runs on is refused as
+  a stack exhaustion, as `RunError::StackExhausted` refuses a run, not
+  as `NotAConstant`.
 - Native stack sizing for evaluation-session workers (WP-2500,
   spec/eval-session.md §9 "Limits that bound the native depth"): every
   kiln limit that bounds how deep a run's semantic work recurses on the
@@ -993,6 +998,87 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- The lookup log records every lookup of an absolute name, found or not
+  (`#include`, `#import`, `#include_next`, `__has_include`,
+  `__has_include_next`, `#embed`, `__has_embed`, `-include`), and
+  `LookupLog::check` and the new `LookupLog::check_absolute` ask each
+  again (WP-2620): a failed `__has_include("/abs/x.h")` whose file then
+  appeared was neither in the log nor seen by `check`, and a PCH
+  snapshot was restored with the stale answer, also with the producer's
+  search path, where only the absolute lookups are now repeated.
+- A header unit imported from an in-memory buffer is keyed by the
+  buffer's name as given, with no file-system call (WP-2621): its name
+  was canonicalized against the working directory, so a host file of
+  that name, or a header-unit module file built from one, stood for the
+  buffer. No key is computed when no module file names a header unit.
+- Scratch space (`is_written_in_scratch_space`) is the `<scratch space>`
+  buffer itself, not a presumed name (WP-2622): a file with `#line 1
+  "<scratch space>"` had its own tokens taken for pasted ones.
+- A block-scope function declaration or `extern` variable in a function
+  of an unnamed namespace has internal linkage for `Ast::linkage` and
+  reflection's `has_internal_linkage` ([basic.link]/4, /6), as its symbol
+  already had (WP-2623).
+- A function or variable of an unnamed namespace first declared in an
+  `extern "C"` context has external linkage for `Ast::linkage` too (it
+  said internal while the mangler said external), as in clang; a
+  block-scope `extern` declaration in an `extern "C"` function of an
+  unnamed namespace now gets clang's unmangled external symbol instead
+  of a `_ZN12_GLOBAL__N_1` one and a stray `-Wundefined-internal`
+  (WP-2624).
+- A host call that the handler fails or that is refused (no handler, an
+  evaluation session's refusal outside a run or in a run's nested work,
+  results over a capacity) inside a SFINAE context is a hard error, not
+  a substitution failure (WP-2501, spec/host-calls.md §4): a
+  requires-expression no longer evaluates to `false`, a deduction no
+  longer drops the candidate and a partial specialization no longer
+  fails to match because a handler did not answer. The error prints
+  with the host call's note and the context notes ("in instantiation of
+  requirement here", ...).
+- An evaluation session replays the diagnostics of an out-of-line static
+  data member definition and of a variable template specialization's
+  initializer that a `variable_value` read instantiated on demand
+  (WP-2451, WP-2452, spec/eval-session.md §5): the read's work is a unit
+  keyed by the variable's first declaration, and a later run that names
+  the definition the read left invalid reaches it, so the run fails with
+  the read's first diagnostic, as a fresh session's run does. A function
+  template's own specialization instantiated in a run is a unit too, as
+  a member function's definition is: a later run that calls it replays
+  its diagnostics (WP-2501).
+- An in-class `static const` integral or enumeration data member's
+  checked initializer value is the variable's evaluated value, as the
+  out-of-line definition's constant-initialization check records it
+  (WP-2504, spec/ast.md §9.2): a later read reuses it instead of
+  evaluating the initializer again.
+- Declaration extents: an elaborated-type-specifier whose qualifier
+  names a class template specialization (`struct O<int>::S *p;`,
+  `friend struct O<char>::S;`) no longer gives the instantiated member a
+  row with the specifier's name and qualifier, and a friend declaration
+  naming an implicit specialization (`friend struct n::V<int>;`) adds no
+  row: a specifier that names a class declared elsewhere records
+  nothing (WP-2629).
+- Declaration extents: a label (`l:`, from its attributes to the `:`), a
+  GNU local label declaration (`__label__ l;`, the label's first row,
+  its definition the second) and a postcondition's result name
+  (`post (r: ...)`, its result-name-introducer) have rows; range-for,
+  exception-declaration, expansion-statement and requires-expression
+  parameter rows are pinned by tests (WP-2630).
+- A fold-expression's operator takes the non-member candidates the
+  unqualified lookup at the template's definition found, as a dependent
+  binary operator does (WP-2625; [temp.dep.candidate]/1): an operator
+  declared after the definition outside the operands' associated
+  namespaces is no longer found by an instantiation (clang's "neither
+  visible in the template definition nor found by argument-dependent
+  lookup"), and tooling clients read the fold's set as a binary
+  operator's. Module images carry it.
+- Visibility of a namespace-scope symbol follows the namespace
+  definition its declaration belongs to, as clang's: an explicit
+  specialization of a function template written in another definition
+  of its namespace takes that definition's attribute, and (clang 22) its
+  template's visibility (WP-2626); a qualified definition (`int n::f()
+  {}`) takes the attribute of the definition of `n` its qualifier's
+  lookup found, the latest one, not the first's (WP-2725); an undefined
+  reference takes the visibility of the declaration the use names, the
+  most recent one visible there, not the first's (WP-2726).
 - A global `operator new` or `operator delete` declared after a class
   template whose pattern befriends it is one function with the implicit
   declaration and the instantiated friend, before or after the

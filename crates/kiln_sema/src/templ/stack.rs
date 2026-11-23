@@ -942,6 +942,12 @@ pub struct SfinaeState {
     /// on (§5.7): a specialization that is formed keeps them for its
     /// first use ([`Sema::emit_suppressed_diags`]).
     pub warnings: Vec<Diag>,
+    /// A constant evaluation in this context failed at a host call the
+    /// handler failed or that was refused (spec/host-calls.md §4,
+    /// WP-2501): the next error emitted in it is no substitution failure
+    /// but a hard error (clang's `SFINAE_Report`); the context's end
+    /// drops an unspent mark.
+    pub host_failure: bool,
 }
 
 #[cfg(test)]

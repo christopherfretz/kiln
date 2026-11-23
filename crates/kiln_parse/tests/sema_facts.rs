@@ -189,6 +189,35 @@ fn dependent_operator_definition_set() {
     assert!(ol.set_count() < ol.len(), "equal sets are interned once");
 }
 
+/// [temp.variadic]/11, [temp.dep.candidate]/1: a fold-expression keeps
+/// the set its operator's unqualified lookup found at the definition, as
+/// a dependent binary operator does, for tooling clients (spec/ast.md
+/// §8.5; WP-2625); its rewritten forms' names too (`!=` from `==`).
+#[test]
+fn fold_operator_definition_set() {
+    let (ast, i) = parse(
+        "namespace N { struct S {}; }\n\
+         N::S operator+(N::S, N::S);\n\
+         bool operator==(N::S, N::S);\n\
+         template <class... X> auto f(X... a) { return (a + ...); }\n\
+         template <class... X> bool g(X... a) { return (... != a); }\n\
+         template <class... X> auto h(X... a) { return (1 * ... * a); }\n\
+         N::S operator*(int, N::S);\n",
+    );
+    let sets: Vec<Vec<String>> = exprs(&ast)
+        .filter(|&e| ast.exprs.get(e).kind() == ExprKind::CXXFoldExpr)
+        .map(|e| {
+            let cs = ast.dependent_oper_candidates(e).expect("a fold records its set");
+            cs.iter().map(|c| name(&ast, &i, c.decl)).collect()
+        })
+        .collect();
+    assert_eq!(
+        sets,
+        [vec!["operator+".to_owned()], vec!["operator==".to_owned()], vec![]],
+        "`+`; `!=` finds its rewritten form's `==`; `*` declared after the definition"
+    );
+}
+
 /// [basic.scope.scope]/5 (P2169): a non-static data member `_` is
 /// name-independent unless it is a member of an anonymous union (or
 /// anonymous struct), also in an instantiation; a member of a named

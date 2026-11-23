@@ -748,14 +748,11 @@ pub fn has_internal_linkage(ast: &Ast, d: DeclId) -> bool {
     if internal_by_storage(ast, first) || ast.has_internal_linkage_attr(first) {
         return true;
     }
-    // A namespace-scope function or variable of an unnamed namespace
-    // first declared in an `extern "C"` context keeps external linkage
-    // (clang `getLVForNamespaceScopeDecl`).
-    if in_anon_ns(ast, first)
-        && !(matches!(ast.decls.get(first).kind(), DeclKind::Function | DeclKind::Var)
-            && is_file_context(ast, first)
-            && in_extern_c_context(ast, first))
-    {
+    // A function or variable of an unnamed namespace (a block-scope
+    // `extern` one included) first declared in an `extern "C"` context
+    // keeps external linkage (clang `getLVForNamespaceScopeDecl`,
+    // `getLVForLocalDecl`; `Ast::linkage` gives the same answer).
+    if in_anon_ns(ast, first) && !ast.extern_c_escapes_unnamed_namespace(first) {
         return true;
     }
     // A local entity has no linkage unless its function is inline or a

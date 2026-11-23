@@ -197,6 +197,7 @@ const COLD_MAP_NAMES: &[&str] = &[
     "typedef_for_anon",
     "union_field",
     "using_shadows",
+    "written_ns",
 ];
 
 /// A cold map is its name and its entries (spec/ast.md "Snapshots"): the

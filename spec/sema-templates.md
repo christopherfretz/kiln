@@ -1899,7 +1899,13 @@ records the unqualified lookup of its operator name, and for `==`, `!=`,
 ([over.match.oper]/3.4), at the definition (the `Ast`'s
 `templates.oper_lookups`, keyed by the dependent expression and interned by
 content, spec/ast.md §8.5, WP-2021; `=`, `[]`, `()` and `->` have no
-non-member candidates and record nothing). A module image carries the set
+non-member candidates and record nothing). A fold-expression records the
+set of its operator the same way (`act_fold`, WP-2625; clang's
+`CXXFoldExpr` callee): the instantiation combines the elements, and
+rebuilds a fold over an unexpanded slice, with it (`fold_combine`),
+since a fold instantiates to the operator expressions
+([temp.variadic]/11), which take their definition-context candidates. A
+module image carries the set
 with the expression (spec/modules.md §11.11), so an importer's
 instantiation uses the module's definition-context set. When the substituter rebuilds the
 expression it passes that set to `oper_set` (`Sema::oper_override`) in
@@ -4798,7 +4804,15 @@ member is an error at its instantiation
 **What SFINAE mode does** (clang `SFINAETrap` +
 `Sema::EmitCurrentDiagnostic`):
 - An *error* is captured, not emitted; the first one is kept. It also
-  makes the current substitution return `SubstFail`.
+  makes the current substitution return `SubstFail`. Except the error
+  reporting a constant evaluation that failed at a host call the
+  handler failed or that was refused (spec/host-calls.md §4, WP-2501):
+  `eval_const` marks the innermost SFINAE context
+  (`SfinaeState::host_failure`, when `Oven::host_failed` is set after a
+  failed evaluation), and the next error in that context prints with
+  its context notes, as a `SFINAE_Report` error does
+  (`Sema::host_failure_escapes`); an unspent mark ends with the
+  context. No snapshot holds it: the SFINAE stack is empty at rest.
 - Warnings and remarks are held back in `SfinaeState.warnings` (WP-392).
   What counts is the diagnostic's class, not its mapped severity: a
   warning that `-Werror` turns into an error is held back like any

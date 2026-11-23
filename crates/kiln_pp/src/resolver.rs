@@ -125,16 +125,27 @@ impl<F: HeaderFs> HeaderSearch<F> {
         self.recorder = Some(r);
     }
 
-    /// Records the lookup `req` and its result `r` (an absolute name is
-    /// not recorded: it does not use the search list).
+    /// Records the lookup `req` and its result `r`. An absolute name
+    /// (WP-2620) is recorded with no includer's directory and, found,
+    /// as [`Found::Absolute`]: it is opened as is; an `_next` form that
+    /// continues after a directory finds none, and is recorded as
+    /// [`LookupForm::Next`].
     fn record(&mut self, sm: &SourceManager, req: &IncludeRequest, r: Option<&ResolvedInclude>) {
         let Some(rec) = self.recorder.as_mut() else { return };
-        if req.name.starts_with('/') {
-            return;
-        }
         let next = matches!(req.kind, IncludeKind::IncludeNext | IncludeKind::HasIncludeNext);
         let from = if next { req.lookup_from } else { None };
         let after = from.and_then(|i| self.list.dirs().get(i as usize)).map(|d| rec.dir(&d.path));
+        if req.name.starts_with('/') {
+            rec.add(Lookup {
+                name: req.name.clone(),
+                form: if from.is_some() { LookupForm::Next } else { LookupForm::Include },
+                angled: req.angled,
+                includer: None,
+                after,
+                found: if r.is_some() { Found::Absolute } else { Found::Missing },
+            });
+            return;
+        }
         let includer = (!req.angled && from.is_none())
             .then(|| rec.dir(req.includer.map_or(".", |f| parent_dir(sm.file_name(f)))));
         let found = match r {
@@ -155,13 +166,11 @@ impl<F: HeaderFs> HeaderSearch<F> {
         });
     }
 
-    /// Records the embed lookup `req` and the path it read, if any.
+    /// Records the embed lookup `req` and the path it read, if any (an
+    /// absolute name with no includer's directory: it is read as is).
     fn record_embed(&mut self, sm: &SourceManager, req: &EmbedRequest, path: Option<&str>) {
         let Some(rec) = self.recorder.as_mut() else { return };
-        if req.name.starts_with('/') {
-            return;
-        }
-        let includer = if req.angled {
+        let includer = if req.angled || req.name.starts_with('/') {
             None
         } else {
             req.includer.map(|f| rec.dir(parent_dir(sm.file_name(f))))

@@ -194,6 +194,7 @@ unit tests/conformance/basic.link/exposure-member-init-default-arg-accepted.cpp 
 unit tests/conformance/basic.link/exposure-names-tu-local-accepted.cpp becfdacb2f8817a4
 unit tests/conformance/basic.link/exposure-overload-set-accepted.cpp 47b5256e5241bc17 DeclRefExpr=1/11 ImplicitCastExpr=1/10
 unit tests/conformance/basic.link/exposure-template-head-accepted.cpp 177424e49329b7bb ConceptSpecializationExpr=5/6 DeclRefExpr=3/7 ImplicitCastExpr=3/9
+unit tests/conformance/basic.link/local-extern-unnamed-namespace-ir.cpp bfc40e1e5449f8ff DeclRefExpr=1/15 ImplicitCastExpr=1/11
 unit tests/conformance/basic.link/unused-file-scope-variable.cpp 9fdf2cbd3b4f6fe7 CXXConstructExpr=2/2 ImplicitValueInitExpr=1/1
 unit tests/conformance/basic.lookup.argdep/address-of-overload-set-template.cpp 855a225b8546d11f
 unit tests/conformance/basic.lookup.argdep/address-of-overload-set.cpp b89bb35a3d8169ec
@@ -1001,6 +1002,7 @@ unit tests/conformance/dcl.inline/p1-inline-variable-accepted.cpp 360a20d389c40a
 unit tests/conformance/dcl.link/across-namespaces.cpp 35cb5e058e33ddd2
 unit tests/conformance/dcl.link/concatenated-language-string-run.cpp 88e5f84a13651c2f
 unit tests/conformance/dcl.link/extern-c-runtime-function-redeclaration.cpp 34569bc2f2d86ffd
+unit tests/conformance/dcl.link/extern-c-unnamed-namespace-ir.cpp 08fb7d0a46f0ff3e
 unit tests/conformance/dcl.link/extern-cxx-namespace-reopened-in-extern-c.cpp 249486034cdedf72
 unit tests/conformance/dcl.link/gnu-attributes-before-linkage-spec.cpp 66bfd9c6c125b2d9
 unit tests/conformance/dcl.link/namespace-first-defined-in-extern-c-reopened.cpp f6b999ef38decf99
@@ -1090,6 +1092,7 @@ unit tests/conformance/dcl.type.pack.index/functional-cast-run.cpp 8053f74282beb
 unit tests/conformance/dcl.typedef/alias-elaborated-specialization.cpp 309148cc9d4eca58
 unit tests/conformance/dcl.typedef/typedef-after-class-same-name-ok.cpp 36b741f3d81ad1d1 CXXConstructExpr=3/3
 unit tests/conformance/decl_extents/bodies.cpp ed72bf13c4a4821f
+unit tests/conformance/decl_extents/elaborated-refs.cpp 4310e0721c13564c
 unit tests/conformance/decl_extents/full-range.cpp ae4efd278546c5d6
 unit tests/conformance/decl_extents/groups.cpp c9274c652797d158 CXXConstructExpr=1/1 ImplicitValueInitExpr=2/2
 unit tests/conformance/decl_extents/macros.cpp 8b9d93de817524e0 IntegerLiteral=1/1

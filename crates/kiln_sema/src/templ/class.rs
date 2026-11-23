@@ -1878,7 +1878,7 @@ impl Sema<'_, '_> {
             && !self.inst.member_defs.contains(&v)
             && self.might_be_constant_var(v)
         {
-            self.sess_reach_at(&crate::session::Key::Init(v), loc);
+            self.sess_reach_at(&crate::session::Key::Init(self.ast.first(v)), loc);
         }
         if !deferred && !self.inst.member_defs.contains(&v) {
             if self.is_var_spec(v) && self.var_pattern_def(v).is_none() {
@@ -2098,6 +2098,11 @@ impl Sema<'_, '_> {
         if !self.push_inst_frame(FrameKind::StaticDataMember, v, pdef, poi) {
             return;
         }
+        // In an evaluation session's run or on-demand read: a unit of its
+        // own, as the in-class initializer's is (spec/eval-session.md
+        // §5.1; WP-2451), so a later run that reaches it replays its
+        // diagnostics.
+        let unit = self.sess_unit_begin();
         let pn = *self.ast.decls.get(pdef);
         let lexical = self.ast.decls.lexical_ctx(pdef).unwrap_or(self.ast.tu);
         let mut ty = self.ast.decls.get(v).ty().unwrap_or(QualType::ERROR);
@@ -2174,6 +2179,7 @@ impl Sema<'_, '_> {
             // A failure was diagnosed; the variable is left uninitialized.
             let _ = sub.var_init(pdef, d);
         });
+        self.sess_window_end(crate::session::Key::Init(self.ast.first(v)), unit);
         self.pop_inst_frame();
     }
 
@@ -2243,7 +2249,7 @@ impl Sema<'_, '_> {
             // A failure was diagnosed; the variable is left uninitialized.
             let _ = sub.var_init(pattern, v);
         });
-        self.sess_window_end(crate::session::Key::Init(v), unit);
+        self.sess_window_end(crate::session::Key::Init(self.ast.first(v)), unit);
         self.pop_inst_frame();
     }
 

@@ -133,7 +133,7 @@ pub(crate) const MAGIC: [u8; 8] = *b"KILNSNAP";
 /// driver warning id; version 7 (WP-1433) a new AST cold map
 /// (`offsetof_layout`); version 8 (WP-1426) the SME diagnostic ids and
 /// attribute kinds and the 32-bit `FuncInfo`.
-pub(crate) const FORMAT_VERSION: u32 = 157;
+pub(crate) const FORMAT_VERSION: u32 = 158;
 /// The length of the magic and the format version.
 pub(crate) const HEADER_LEN: usize = 12;
 
@@ -684,19 +684,24 @@ pub(crate) fn find(
     let validated = started.elapsed();
     // WP-1403: another search list (or working directory) gives the same
     // prefix when every lookup the prefix performed finds what it found.
-    if !same_list {
-        let known: std::collections::HashSet<&str> =
-            rec.files.iter().map(|f| f.spelled.as_str()).collect();
-        let checked = lookups.check(
+    // WP-2620: with the same list, the lookups of absolute names are
+    // still repeated (their misses are not the search list's).
+    let known: std::collections::HashSet<&str> =
+        rec.files.iter().map(|f| f.spelled.as_str()).collect();
+    let mut fs = kiln_pp::RealFs::in_dir(args.work_dir.clone());
+    let repeated = if same_list {
+        lookups.check_absolute(&mut fs, &|p| known.contains(p))
+    } else {
+        lookups.check(
             &list,
             &args.embed_dirs,
-            &mut kiln_pp::RealFs::in_dir(args.work_dir.clone()),
+            &mut fs,
             &|p| known.contains(p),
             kiln_pp::Trust::ProducerMisses { same_cwd },
-        );
-        if let Err(why) = checked {
-            return Err(Refusal::configuration(format!("{SEARCH_PATH}: {why}")));
-        }
+        )
+    };
+    if let Err(why) = repeated {
+        return Err(Refusal::configuration(format!("{SEARCH_PATH}: {why}")));
     }
     if timing() {
         let looked = started.elapsed();
