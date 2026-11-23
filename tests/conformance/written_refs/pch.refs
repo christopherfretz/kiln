@@ -1,0 +1,34 @@
+refs_pch.h:8:28-8:29  expr  'x' -> pch_ns::Pt::x@refs_pch.h:7:7 in=pch_ns::Pt::get@refs_pch.h:8:7
+refs_pch.h:10:10-10:12  type  'Pt' -> pch_ns::Pt@refs_pch.h:6:8 in=p@refs_pch.h:10:13
+refs_pch.h:10:25-10:26  expr  'p' -> p@refs_pch.h:10:13 in=pch_ns::norm@refs_pch.h:10:5
+refs_pch.h:10:27-10:30  member  'get' -> pch_ns::Pt::get@refs_pch.h:8:7 in=pch_ns::norm@refs_pch.h:10:5
+refs_pch.h:10:35-10:43  expr  'from_pch' -> pch_ns::from_pch@refs_pch.h:5:10 in=pch_ns::norm@refs_pch.h:10:5
+refs_pch.h:11:32-11:33  type  'T' -> T@refs_pch.h:11:17 in=t@refs_pch.h:11:34
+refs_pch.h:11:46-11:50  expr  'norm' -> (dependent) in=pch_ns::measure@refs_pch.h:11:24
+refs_pch.h:11:46-11:50  expr  'norm' -> pch_ns::norm@refs_pch.h:10:5 spec=pch_ns::measure<pch_ns::Pt>@refs_pch.h:11:24 how=both adl-ns=pch_ns@refs_pch.h:4:11 adl-cls=pch_ns::Pt@refs_pch.h:6:8
+refs_pch.h:11:51-11:52  expr  't' -> t@refs_pch.h:11:34 in=pch_ns::measure@refs_pch.h:11:24
+refs_pch.h:11:56-11:57  expr  't' -> t@refs_pch.h:11:34 in=pch_ns::measure@refs_pch.h:11:24
+refs_pch.h:11:58-11:61  member  'get' -> (dependent) in=pch_ns::measure@refs_pch.h:11:24
+refs_pch.h:11:58-11:61  member  'get' -> pch_ns::Pt::get@refs_pch.h:8:7 spec=pch_ns::measure<pch_ns::Pt>@refs_pch.h:11:24
+refs_pch.h:13:3-13:4  type  'T' -> T@refs_pch.h:12:17 in=pch_ns::Box::value@refs_pch.h:13:5
+refs_pch.h:14:3-14:4  type  'T' -> T@refs_pch.h:12:17 in=pch_ns::Box::get@refs_pch.h:14:5
+refs_pch.h:14:26-14:31  expr  'value' -> pch_ns::Box::value@refs_pch.h:13:5 in=pch_ns::Box::get@refs_pch.h:14:5
+refs_pch.h:18:17-18:23  using-directive  'pch_ns' -> pch_ns@refs_pch.h:4:11 in=outer@refs_pch.h:17:11
+refs_pch.h:19:18-19:20  type  'Pt' -> pch_ns::Pt@refs_pch.h:6:8 in=p@refs_pch.h:19:21 udir=pch_ns@refs_pch.h:18:1
+refs_pch.h:19:33-19:37  expr  'norm' -> pch_ns::norm@refs_pch.h:10:5 in=outer::twice@refs_pch.h:19:12 how=both udir=pch_ns@refs_pch.h:18:1 adl-ns=pch_ns@refs_pch.h:4:11 adl-cls=pch_ns::Pt@refs_pch.h:6:8
+refs_pch.h:19:38-19:39  expr  'p' -> p@refs_pch.h:19:21 in=outer::twice@refs_pch.h:19:12
+10:1-10:7  nns  'pch_ns' -> pch_ns@refs_pch.h:4:11 in=boxed@10:18
+10:9-10:12  template  'Box' -> pch_ns::Box@refs_pch.h:12:27 q=10:1 in=boxed@10:18
+12:10-12:11  expr  'v' -> v@11:19 in=after_pch@11:5
+12:14-12:20  nns  'pch_ns' -> pch_ns@refs_pch.h:4:11 in=after_pch@11:5
+12:22-12:30  expr  'from_pch' -> pch_ns::from_pch@refs_pch.h:5:10 q=12:14 in=after_pch@11:5
+12:33-12:39  nns  'pch_ns' -> pch_ns@refs_pch.h:4:11 in=after_pch@11:5
+12:41-12:48  expr  'measure' -> pch_ns::measure<pch_ns::Pt>@refs_pch.h:11:24 found=pch_ns::measure@refs_pch.h:11:24 q=12:33 in=after_pch@11:5
+12:49-12:55  nns  'pch_ns' -> pch_ns@refs_pch.h:4:11 in=after_pch@11:5
+12:57-12:59  type  'Pt' -> pch_ns::Pt@refs_pch.h:6:8 q=12:49 in=after_pch@11:5
+12:60-12:61  expr  'v' -> v@11:19 in=after_pch@11:5
+12:66-12:71  nns  'outer' -> outer@refs_pch.h:17:11 in=after_pch@11:5
+12:73-12:78  expr  'twice' -> outer::twice@refs_pch.h:19:12 q=12:66 in=after_pch@11:5
+12:80-12:81  expr  'v' -> v@11:19 in=after_pch@11:5
+12:86-12:91  expr  'boxed' -> boxed@10:18 in=after_pch@11:5
+12:92-12:95  member  'get' -> pch_ns::Box<int>::get@refs_pch.h:14:5 in=after_pch@11:5

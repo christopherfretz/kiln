@@ -1023,8 +1023,9 @@ found) twice:
   is the consumer's, spec/pch.md "Identity"). Neither build passes the report
   options an `oven:`, `inst-report:`, `written-refs:`, `decl-extents:` or `pp-record:` test otherwise
   gets: no budget or dump is checked, and the option would be the
-  consumer's alone (the written-reference table is not carried in a
-  snapshot, spec/ast.md §18.5).
+  consumer's alone (a producer without `-fkiln-written-refs` carries no
+  written-reference table, and a consumer that records lists the prefix
+  as unrecorded, spec/ast.md §18.10.3).
 
 **The synthetic prefix** (`--pch-diff-synthetic`, WP-1395). A test of a
 compared kind with no `#include` (or `#import`) line anywhere, which is

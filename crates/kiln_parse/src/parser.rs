@@ -1908,22 +1908,17 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             });
             return true;
         }
-        let ty = if self.ident().is_some() {
+        let (ty, link) = if self.ident().is_some() {
             self.parse_pack_index_scope(loc)
         } else {
-            self.parse_decltype_specifier().1
+            (self.parse_decltype_specifier().1, RefQualifier::NONE)
         };
         if !self.at(Punct::ColonColon) {
             return false;
         }
         let qual = ty.and_then(|t| self.s.act_on_nested_name_decltype(t, loc));
-        self.decltype_scope = Some(DecltypeScope {
-            level: self.replay.len(),
-            pos: self.pos,
-            qual,
-            loc,
-            link: RefQualifier::NONE,
-        });
+        self.decltype_scope =
+            Some(DecltypeScope { level: self.replay.len(), pos: self.pos, qual, loc, link });
         true
     }
 
@@ -1969,22 +1964,30 @@ impl<'a, 'sm> Parser<'a, 'sm> {
     }
 
     /// At a `T ... [ expression ] ::` ([`Parser::pack_index_scope_end`]),
-    /// parses the pack-index-specifier up to the `::`. `None` after an
+    /// parses the pack-index-specifier up to the `::`, with the
+    /// written-reference link of the pack's name `T` (role `nns`, the
+    /// next component's qualifier; spec/ast.md §18.4). No type after an
     /// error.
-    fn parse_pack_index_scope(&mut self, loc: Loc) -> Option<QualType> {
+    fn parse_pack_index_scope(&mut self, loc: Loc) -> (Option<QualType>, RefQualifier) {
         let Some((_, NameClass::Type(ty, d), name)) = self.scan_name(self.pos) else {
-            return None;
+            return (None, RefQualifier::NONE);
         };
-        self.bump();
+        let name_span = self.bump().span;
         self.s.mark_type_referenced(d);
         self.s.check_type_name_access(name, None, d, loc);
-        match self.parse_pack_index(loc) {
+        let link = if self.s.records_written_refs() {
+            self.s.note_written_nns_decl(name_span, Some(d), RefQualifier::NONE)
+        } else {
+            RefQualifier::NONE
+        };
+        let ty = match self.parse_pack_index(loc) {
             Ok(Some((ellipsis, index, _))) => {
                 let ty = self.s.act_pack_indexing_type_named(ty, name, loc, ellipsis, index);
                 (!self.s.is_error_type(ty)).then_some(ty)
             }
             _ => None,
-        }
+        };
+        (ty, link)
     }
 
     /// The index of the last `::` of the qualified name at token `i`

@@ -696,6 +696,11 @@ pub struct Args {
     /// `-fkiln-dump-written-refs` (`-fsyntax-only` and codegen): record the
     /// written-reference table and print it (spec/ast.md §18.6).
     pub dump_written_refs: bool,
+    /// `-fkiln-written-refs`: record the written-reference table
+    /// (spec/ast.md §18) without printing it, for a PCH or module-file
+    /// producer whose consumers record (§18.10); `-fkiln-dump-written-refs`
+    /// sets it too. Not part of either identity.
+    pub written_refs: bool,
     /// `-fkiln-decl-extents`: record the declaration-extent table
     /// (spec/ast.md §19) for a tooling client; `-fkiln-dump-decl-extents`
     /// sets it too. Part of a precompiled header's identity (a snapshot
@@ -2082,7 +2087,11 @@ impl Args {
             }
             "-fdump-vtable-layouts" => self.dump_vtable_layouts = true,
             "-fkiln-dump-cfg" => self.dump_cfg = true,
-            "-fkiln-dump-written-refs" => self.dump_written_refs = true,
+            "-fkiln-dump-written-refs" => {
+                self.written_refs = true;
+                self.dump_written_refs = true;
+            }
+            "-fkiln-written-refs" => self.written_refs = true,
             "-fkiln-decl-extents" => self.decl_extents = true,
             "-fkiln-dump-decl-extents" => {
                 self.decl_extents = true;

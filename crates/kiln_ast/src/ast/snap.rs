@@ -20,7 +20,7 @@
 //! | `contract_sites` | state | as data |
 //! | `symbols` | state (shared) | the `Arc<Interner>`: written once per snapshot through sharing, so the restored AST shares the interner with whatever else in the same snapshot holds it |
 //! | `inst` | state | the instantiation meter, as data |
-//! | `written_refs` | transient | not written; read back empty and off (spec/ast.md §18.5: PCH carriage is stage 5) |
+//! | `written_refs` | own section | not in this encoding: `Sema`'s root writes it right after, as one length-prefixed section ([`Ast::put_written_refs`], spec/ast.md §18.10.1); read back empty and off here |
 //! | `decl_extents` | state | as data, then checked against the decl arena (spec/ast.md §19.6); the consumer sets recording from its own options, which the PCH identity makes the producer's |
 
 use std::sync::Arc;

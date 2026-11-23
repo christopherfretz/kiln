@@ -1234,6 +1234,30 @@ impl Sema<'_, '_> {
         )
     }
 
+    /// The type the first type-name `F` of a pseudo-destructor-name
+    /// `p->[S::]F::~Q` names, looked up as
+    /// [`Sema::act_on_member_destructor_q`] looks it up (in `S`, else
+    /// where the expression is; the typename-specifier `S::F` for a
+    /// dependent `S`), for the written-reference table (spec/ast.md
+    /// §18.4). `None` when it names no type (diagnosed by the access).
+    pub fn pseudo_destructor_first_type(
+        &mut self,
+        qual: Option<crate::using::Qualifier>,
+        fname: kiln_source::symbol::Symbol,
+    ) -> Option<QualType> {
+        if let Some(sq) = qual
+            && self.is_dependent_ctx(sq.ctx)
+        {
+            return Some(self.ast.types.dependent_name(TagKeyword::None, sq.nns, fname));
+        }
+        let found = match qual {
+            Some(q) => self.lookup_qualified(q.ctx, fname, LookupKind::Ordinary),
+            None => self.lookup_name(fname, LookupKind::Ordinary),
+        };
+        let named = self.type_named_by(&found);
+        self.injected_named(named).map(|(t, _)| t)
+    }
+
     /// The template-name `name` of `~name<args>` in a pseudo-destructor
     /// name `p->[S::]F::~name<args>` ([basic.lookup.qual.general]/4.2-4.4):
     /// looked up in `S` when present (4.2), else where the expression is

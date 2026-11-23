@@ -131,7 +131,7 @@ pub(crate) const MAGIC: [u8; 8] = *b"KILNSNAP";
 /// driver warning id; version 7 (WP-1433) a new AST cold map
 /// (`offsetof_layout`); version 8 (WP-1426) the SME diagnostic ids and
 /// attribute kinds and the 32-bit `FuncInfo`.
-pub(crate) const FORMAT_VERSION: u32 = 142;
+pub(crate) const FORMAT_VERSION: u32 = 144;
 /// The length of the magic and the format version.
 pub(crate) const HEADER_LEN: usize = 12;
 
@@ -168,6 +168,10 @@ fn excluded(args: &Args) -> Args {
         dump_vtable_layouts: d.dump_vtable_layouts,
         dump_cfg: d.dump_cfg,
         dump_written_refs: d.dump_written_refs,
+        // The written-reference table is carried when the producer
+        // recorded it and read when the consumer does (spec/ast.md
+        // §18.10.1): either side may differ.
+        written_refs: d.written_refs,
         dump_decl_extents: d.dump_decl_extents,
         pp_record: d.pp_record,
         dump_pp_record: d.dump_pp_record,
@@ -1061,6 +1065,9 @@ impl crate::pp_cmd::Job<'_> {
             return None;
         }
         restore.timer.mark("Preprocessor");
+        // The files the snapshot's prefix loaded: a written-reference
+        // table restored without entries names them (spec/ast.md §18.10.1).
+        let prefix_files = u32::try_from(sm.file_count()).unwrap_or(u32::MAX);
         let entered = pp.enter_next_main_file(main).and_then(|()| {
             if restore.includes.is_empty() {
                 Ok(())
@@ -1092,6 +1099,7 @@ impl crate::pp_cmd::Job<'_> {
             restore.failed = Some(format!("Sema: {e}"));
             return None;
         }
+        sema.ast.written_refs.set_prefix_files(prefix_files);
         if restore.reader.remaining() != 0 {
             restore.failed = Some(format!("{} trailing bytes", restore.reader.remaining()));
             return None;

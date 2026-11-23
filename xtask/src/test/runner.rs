@@ -1298,8 +1298,9 @@ impl Test<'_> {
         if spec.inst_report.is_some() && reports {
             cmd.arg("-fkiln-instantiation-report=json");
         }
-        // The table is not carried in PCH snapshots (spec/ast.md §18.5):
-        // the PCH differential checks no dump.
+        // The PCH differential checks no dump: it compares the two
+        // compiles' results (the table through a snapshot has its own
+        // tests, spec/ast.md §18.10.5).
         if spec.written_refs.is_some() && reports {
             cmd.arg("-fkiln-dump-written-refs");
         }

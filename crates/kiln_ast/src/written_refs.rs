@@ -19,8 +19,12 @@ use crate::ids::{DeclId, ExprId, QualType};
 use crate::mem::MemRow;
 use crate::types::TypeNames;
 
+#[path = "written_refs_carry.rs"]
+mod carry;
+pub use carry::{CARRY_SCHEMA_HASH, WrittenRefsSection};
+
 /// The id of a table entry (index + 1).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, kiln_snap::Snap)]
 pub struct WrittenRefId(NonZeroU32);
 
 impl WrittenRefId {
@@ -39,7 +43,7 @@ impl WrittenRefId {
 /// The syntactic role of a written name (spec/ast.md §18.4). The full
 /// set; stage 1 fills `Expr`, `Member` and `Nns`, stage 2 `Type`,
 /// `Template`, `Base` and `MemInit`, stage 3 the declarative roles.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, kiln_snap::Snap)]
 #[repr(u8)]
 pub enum RefRole {
     /// An id-expression, enumerator, `&f`, `case E:`, lambda capture.
@@ -80,6 +84,30 @@ pub enum RefRole {
 }
 
 impl RefRole {
+    /// Every role, in declaration order (`r as u8` is its index).
+    pub const ALL: [RefRole; 15] = [
+        RefRole::Expr,
+        RefRole::Member,
+        RefRole::Type,
+        RefRole::Template,
+        RefRole::Nns,
+        RefRole::Base,
+        RefRole::MemInit,
+        RefRole::UsingDecl,
+        RefRole::UsingDirective,
+        RefRole::NamespaceAlias,
+        RefRole::Elaborated,
+        RefRole::SpecTarget,
+        RefRole::Concept,
+        RefRole::Designator,
+        RefRole::Redecl,
+    ];
+
+    /// The role whose `as u8` is `b` (a module image's byte).
+    pub fn from_u8(b: u8) -> Option<RefRole> {
+        Self::ALL.get(usize::from(b)).copied()
+    }
+
     /// The role as the dump spells it.
     pub const fn spelling(self) -> &'static str {
         match self {
@@ -104,7 +132,7 @@ impl RefRole {
 
 /// The `qualifier` link of an entry: none, the global scope (a leading
 /// `::`), or the entry of the component to the name's left.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, kiln_snap::Snap)]
 pub struct RefQualifier(u32);
 
 /// [`RefQualifier`] decoded.
@@ -148,7 +176,7 @@ pub const REF_UNRESOLVED: u8 = 2;
 pub const REF_MEMBER: u8 = 4;
 
 /// How lookup found a written name (spec/ast.md §18.7.2, WP-2130).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, kiln_snap::Snap)]
 #[repr(u8)]
 pub enum RefLookup {
     /// No entity: a dependent name or a failed resolution.
@@ -171,6 +199,23 @@ pub enum RefLookup {
 }
 
 impl RefLookup {
+    /// Every kind, in declaration order (`k as u8` is its index).
+    pub const ALL: [RefLookup; 8] = [
+        RefLookup::None,
+        RefLookup::Unqualified,
+        RefLookup::Qualified,
+        RefLookup::Member,
+        RefLookup::Adl,
+        RefLookup::Both,
+        RefLookup::Builtin,
+        RefLookup::Injected,
+    ];
+
+    /// The kind whose `as u8` is `b` (a module image's byte).
+    pub fn from_u8(b: u8) -> Option<RefLookup> {
+        Self::ALL.get(usize::from(b)).copied()
+    }
+
     /// The kind as the dump spells it.
     pub const fn spelling(self) -> &'static str {
         match self {
@@ -187,13 +232,13 @@ impl RefLookup {
 }
 
 /// The id of an interned argument-dependent set (index + 1).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, kiln_snap::Snap)]
 pub struct AdlSetId(NonZeroU32);
 
 /// The associated namespaces, classes and enumerations of an
 /// argument-dependent lookup ([basic.lookup.argdep]/3) in discovery order
 /// (spec/ast.md §18.7.4), interned as one list.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, kiln_snap::Snap)]
 pub struct AdlSet {
     list: Box<[DeclId]>,
     namespaces: u32,
@@ -237,14 +282,14 @@ impl AdlSet {
 
 /// The side row of an entry with more provenance than its `how`
 /// (spec/ast.md §18.7.1).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, kiln_snap::Snap)]
 struct RefExtra {
     udir: Option<DeclId>,
     adl: Option<AdlSetId>,
 }
 
 /// One written name (spec/ast.md §18.2; 28 bytes).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kiln_snap::Snap)]
 pub struct WrittenRef {
     /// The name as written: start of its first token to the end of its
     /// last token, in kiln token locations.
@@ -336,12 +381,41 @@ pub struct WrittenRefs {
     /// function template specialization's signature is substituted
     /// (§18.9.2): its declaration exists before its frame's entity says.
     spec_key: Option<(u32, DeclId)>,
+    /// Stage 5 (§18.10): the sources whose names this table has no
+    /// entries for although it is on.
+    unrecorded: Vec<Unrecorded>,
+}
+
+/// Source the table has no entries for although it is on (spec/ast.md
+/// §18.10.3): parsed by a compilation that did not record, and brought
+/// in from its snapshot or module image.
+#[derive(Clone, Debug, PartialEq, Eq, kiln_snap::Snap)]
+pub enum Unrecorded {
+    /// The prefix of a precompiled header whose snapshot was made with
+    /// recording off: no name parsed before the snapshot has an entry,
+    /// and no dependent name of its templates has a per-specialization
+    /// row. Every file whose [`FileId::index`] is below `files` was
+    /// loaded by the prefix (the restoring compilation's own files
+    /// follow).
+    Prefix {
+        /// The number of files the snapshot's source manager held.
+        files: u32,
+    },
+    /// A module unit built from a declaration image written with
+    /// recording off: no name written in its files has an entry, and no
+    /// dependent name of its templates has a per-specialization row.
+    Module {
+        /// The module's name (`M`, `M:P`).
+        module: String,
+        /// The unit's files (the image's file table, the main file first).
+        files: Box<[FileId]>,
+    },
 }
 
 /// A pattern node a dependent entry was made from (spec/ast.md §18.9.4):
 /// an expression, or a dependent type at the location of its name (kiln's
 /// types are interned and carry no location).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, kiln_snap::Snap)]
 pub enum PatternNode {
     /// A dependent name expression (`DependentScopeDeclRefExpr`,
     /// `CXXDependentScopeMemberExpr`, a dependent overload set).
@@ -352,7 +426,7 @@ pub enum PatternNode {
 }
 
 /// The id of a per-specialization entry (index + 1).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, kiln_snap::Snap)]
 pub struct SpecRefId(NonZeroU32);
 
 impl SpecRefId {
@@ -374,7 +448,7 @@ pub const SPEC_DEAD: u8 = 0x80;
 
 /// What one dependent name of a template pattern resolved to in one
 /// specialization (spec/ast.md §18.9; 24 bytes).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, kiln_snap::Snap)]
 pub struct SpecRef {
     /// The pattern's entry (in the main table, `DEPENDENT`).
     pub entry: WrittenRefId,
@@ -410,6 +484,31 @@ impl WrittenRefs {
     /// Turns recording on or off (entries already made stay).
     pub fn set_on(&mut self, on: bool) {
         self.on = on;
+    }
+
+    /// The sources this table has no entries for although it is on
+    /// (§18.10.3): empty when every name the compilation saw was recorded.
+    pub fn unrecorded(&self) -> &[Unrecorded] {
+        &self.unrecorded
+    }
+
+    /// Notes that the names of `u` were not recorded (nothing when off:
+    /// an unrecorded table exposes nothing).
+    pub fn note_unrecorded(&mut self, u: Unrecorded) {
+        if self.on {
+            self.unrecorded.push(u);
+        }
+    }
+
+    /// Narrows the last [`Unrecorded::Prefix`] row to the `files` the
+    /// snapshot's source manager held, once the restoring compilation
+    /// knows it (it enters its own files around the restore).
+    pub fn set_prefix_files(&mut self, files: u32) {
+        if let Some(Unrecorded::Prefix { files: f }) =
+            self.unrecorded.iter_mut().rev().find(|u| matches!(u, Unrecorded::Prefix { .. }))
+        {
+            *f = files;
+        }
     }
 
     /// The number of entries.
@@ -596,6 +695,11 @@ impl WrittenRefs {
     #[inline]
     pub fn has_pattern_nodes(&self) -> bool {
         !self.spec_nodes.is_empty()
+    }
+
+    /// Every pattern node and its entry, in no particular order.
+    pub fn pattern_nodes(&self) -> impl Iterator<Item = (PatternNode, WrittenRefId)> + '_ {
+        self.spec_nodes.iter().map(|(&n, &id)| (n, id))
     }
 
     /// The dependent entry made from the pattern node `n`.
@@ -921,6 +1025,29 @@ impl WrittenRefs {
         (live, reserved)
     }
 
+    /// The dump's first lines: the sources whose names were not recorded
+    /// (§18.10.3).
+    fn dump_unrecorded(&self, sm: &SourceManager, out: &mut String) {
+        for u in &self.unrecorded {
+            match u {
+                Unrecorded::Prefix { files } => {
+                    let _ = writeln!(out, "unrecorded  precompiled prefix ({files} files)");
+                }
+                Unrecorded::Module { module, files } => {
+                    let main = files.first().map_or("?", |&f| {
+                        let n = sm.file_name(f);
+                        n.rsplit(['/', '\\']).next().unwrap_or(n)
+                    });
+                    let _ = writeln!(
+                        out,
+                        "unrecorded  module {module} ({main}, {} files)",
+                        files.len()
+                    );
+                }
+            }
+        }
+    }
+
     /// The dump (spec/ast.md §18.6): one line per entry.
     pub fn dump(&self, ast: &crate::Ast, sm: &SourceManager, main: Option<FileId>) -> String {
         let names = crate::diag_names::DiagNames::new(ast, Some(sm), 22).closures_as_lambda();
@@ -962,6 +1089,7 @@ impl WrittenRefs {
             out.push_str(&pos(ast.decls.get(d).loc()));
         };
         let mut out = String::new();
+        self.dump_unrecorded(sm, &mut out);
         // The per-specialization entries of each pattern entry (§18.9.5).
         let mut by_entry: HashMap<WrittenRefId, Vec<&SpecRef>> = HashMap::new();
         for (_, r) in self.specs() {
