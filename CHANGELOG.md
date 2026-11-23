@@ -21,6 +21,14 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   `front_end::std_config(std, options)` gives the configuration of
   `-std=<std>` with no other flag; the tables an `Ast` holds have
   (hidden) public paths.
+- A working directory for the front end (WP-2121): `-working-directory
+  <dir>` (clang's option) and `FrontEndOptions::working_directory` resolve
+  every relative path of a compile (inputs, header search, `-include`,
+  `#embed`, module files, PCH, `-o` / `-MF`, sanitizer lists) against a
+  directory without changing the process's, so library entries in
+  different directories can run at the same time; names as written
+  (`__FILE__`, diagnostics, dependency files) stay relative.
+  The command line's option wins over the library one.
 - Location utilities for tooling clients that rewrite source text
   (WP-2150): `SourceManager::editable_range` / `editable_file_range` give
   the file characters a range written through macros stands for when

@@ -744,6 +744,15 @@ pub struct Args {
     /// (the default), or a library entry's own set (spec/driver.md
     /// "Front-end library entry"). Not a command-line option.
     pub env: crate::env::Environment,
+    /// `-working-directory <dir>` / `-working-directory=<dir>` (the last
+    /// one), as written: the directory relative paths open against
+    /// (spec/driver.md "Working directory").
+    pub working_directory: Option<String>,
+    /// The working directory in effect: `-working-directory` resolved
+    /// against the process's current directory (the executable) or the
+    /// library entry's own ([`Args::resolve_work_dir`]); without either,
+    /// the process's, nothing joined. Not a command-line option.
+    pub work_dir: kiln_source::WorkDir,
     /// A library entry's job (spec/driver.md "Front-end library entry",
     /// spec/eval-session.md §2): nothing is written outside the call, and
     /// the `std` module cache is only read (a valid entry is used, no
@@ -1322,6 +1331,7 @@ const SEPARATE_OR_EQ: &[&str] = &[
     "-std",
     "--std",
     "-dumpdir",
+    "-working-directory",
 ];
 
 /// Options taking a separate value only (`-include-pch foo`; clang's
@@ -1598,7 +1608,25 @@ impl Args {
         if a.debug.compress.is_none() {
             a.debug.compress = a.asm_check().1;
         }
+        a.resolve_work_dir(&kiln_source::WorkDir::process());
         a
+    }
+
+    /// Sets [`Args::work_dir`] for a run whose own working directory is
+    /// `base`: `-working-directory` joined onto `base` (the option wins; a
+    /// relative one is relative to `base`), else `base`.
+    pub fn resolve_work_dir(&mut self, base: &kiln_source::WorkDir) {
+        self.work_dir = match &self.working_directory {
+            Some(d) => base.resolve(std::path::Path::new(d)).unwrap_or_else(|_| base.clone()),
+            None => base.clone(),
+        };
+        self.sanitize.work_dir = self.work_dir.clone();
+    }
+
+    /// The path to open for `path`, a path of the command line: joined
+    /// onto [`Args::work_dir`] when relative.
+    pub fn fs_path<'p>(&self, path: &'p str) -> std::borrow::Cow<'p, std::path::Path> {
+        self.work_dir.join_str(path)
     }
 
     /// The `-Wa,` / `-Xassembler` values clang's integrated assembler
@@ -1841,6 +1869,7 @@ impl Args {
             "-dumpdir" => self.coverage.dumpdir = Some(v_owned),
             "--sysroot" => self.sysroot = Some(v_owned),
             "-resource-dir" => self.resource_dir = Some(v_owned),
+            "-working-directory" => self.working_directory = Some(v_owned),
             "-target" | "--target" => self.target = Some(v_owned),
             "-target-feature" => self.target_features.push(v_owned),
             "-std" | "--std" => {
@@ -2865,6 +2894,29 @@ mod tests {
         );
         let bad = parse("-fclang-compat=20 t.cpp");
         assert_eq!(bad.errors, [ArgError::UnsupportedValue("-fclang-compat=".into(), "20".into())]);
+    }
+
+    /// WP-2121: `-working-directory <dir>` / `=<dir>` (clang's driver
+    /// option); unset, nothing is joined (the executable is unchanged).
+    #[test]
+    fn working_directory_option() {
+        use kiln_source::WorkDir;
+        let a = parse("t.cpp");
+        assert_eq!((a.working_directory, a.work_dir), (None, WorkDir::process()));
+        for cl in ["-working-directory /w t.cpp", "-working-directory=/w t.cpp"] {
+            let a = parse(cl);
+            assert_eq!(a.errors, [], "{cl}");
+            assert_eq!(a.working_directory.as_deref(), Some("/w"));
+            assert_eq!(a.work_dir.dir(), Some(std::path::Path::new("/w")));
+            assert_eq!(a.sanitize.work_dir, a.work_dir);
+            assert_eq!(a.fs_path("inc/h.h"), std::path::Path::new("/w/inc/h.h"));
+            assert_eq!(a.fs_path("/abs.h"), std::path::Path::new("/abs.h"));
+        }
+        // Resolved against a library entry's directory, relative or not.
+        let mut a = parse("-working-directory=sub t.cpp");
+        a.resolve_work_dir(&WorkDir::at(std::path::Path::new("/base")).unwrap());
+        assert_eq!(a.work_dir.dir(), Some(std::path::Path::new("/base/sub")));
+        assert!(!parse("-working-directory").errors.is_empty());
     }
 
     #[test]

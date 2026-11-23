@@ -11,7 +11,7 @@
 //! and a panic returned as [`FrontEndError::Panicked`].
 use std::cell::{Cell, RefCell};
 use std::panic::{self, AssertUnwindSafe};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -25,7 +25,7 @@ use kiln_sema::Oven;
 use kiln_sema::stack_guard::StackGuard;
 use kiln_sema::target::Target;
 use kiln_source::symbol::Interner;
-use kiln_source::{FileId, SourceManager, Span};
+use kiln_source::{FileId, SourceManager, Span, WorkDir};
 
 use crate::args::{Action, Args, ModuleHeaderJob};
 use crate::env::Environment;
@@ -36,7 +36,7 @@ use crate::{Engines, EntryRules, SharedWriter};
 
 /// How one run behaves. `Default` is: diagnostics discarded, no lookup
 /// log, a thread of its own, the PCH probe on, the process environment,
-/// no preprocessing record.
+/// no preprocessing record, the process's working directory (read once).
 #[non_exhaustive]
 #[derive(Clone)]
 #[allow(clippy::struct_excessive_bools, reason = "independent switches")]
@@ -65,6 +65,17 @@ pub struct FrontEndOptions {
     /// "Preprocessing record"): the closure reads it as
     /// `fe.pp.record()`. Off by default (WP-2110).
     pub pp_record: bool,
+    /// The directory every relative path of the run opens against (the
+    /// main input, `-I` and the other search directories, `-include`,
+    /// `#embed`, module files, `@file`s), as clang's `-working-directory`
+    /// (spec/driver.md "Working directory"): a value of the run, the
+    /// process's current directory is never changed, so runs in different
+    /// directories may run at the same time. `None`: the process's current
+    /// directory, read once when the run starts. A relative directory is
+    /// relative to the process's. A `-working-directory` of the command
+    /// line wins, a relative one relative to this one. Names as written
+    /// (`__FILE__`, diagnostics, `#line`) stay relative.
+    pub working_directory: Option<PathBuf>,
 }
 
 impl Default for FrontEndOptions {
@@ -76,6 +87,7 @@ impl Default for FrontEndOptions {
             pch_probe: true,
             environment: Environment::process(),
             pp_record: false,
+            working_directory: None,
         }
     }
 }
@@ -89,6 +101,7 @@ impl std::fmt::Debug for FrontEndOptions {
             .field("pch_probe", &self.pch_probe)
             .field("environment", &self.environment)
             .field("pp_record", &self.pp_record)
+            .field("working_directory", &self.working_directory)
             .finish()
     }
 }
@@ -284,10 +297,11 @@ pub fn run_front_end<R: Send>(
     options: FrontEndOptions,
     f: impl FnOnce(&FrontEnd<'_, '_>) -> R + Send,
 ) -> Result<FrontEndReport<R>, FrontEndError> {
-    let command_line = crate::rsp::expand(command_line);
+    let base = options.base_work_dir();
+    let command_line = crate::rsp::expand_in(command_line, &base);
     if !options.own_thread {
         return panic::catch_unwind(AssertUnwindSafe(|| {
-            run_here(argv0, &command_line, &options, f)
+            run_here(argv0, &command_line, &options, &base, f)
         }))
         .unwrap_or_else(|p| Err(FrontEndError::Panicked(payload_text(&*p))));
     }
@@ -298,7 +312,7 @@ pub fn run_front_end<R: Send>(
             .stack_size(size)
             .spawn_scoped(s, || {
                 StackGuard::install(size);
-                run_here(argv0, &command_line, &options, f)
+                run_here(argv0, &command_line, &options, &base, f)
             })
             .map_err(FrontEndError::Thread)?;
         h.join().unwrap_or_else(|p| Err(FrontEndError::Panicked(payload_text(&*p))))
@@ -539,12 +553,32 @@ fn structural_checks(args: &Args) -> Result<(), FrontEndError> {
     Ok(())
 }
 
+impl FrontEndOptions {
+    /// The run's working directory before the command line's
+    /// `-working-directory`: [`FrontEndOptions::working_directory`], else
+    /// the process's current directory, read now. Read once per run.
+    fn base_work_dir(&self) -> WorkDir {
+        match &self.working_directory {
+            Some(d) => WorkDir::at(d).unwrap_or_else(|_| WorkDir::of_process()),
+            None => WorkDir::of_process(),
+        }
+    }
+}
+
 /// The arguments of a library entry's command line: the driver's parse,
-/// in `env`, writing nothing outside the call.
-pub(crate) fn entry_args(argv0: &str, command_line: &[String], env: &Environment) -> Args {
+/// in `env`, writing nothing outside the call, its relative paths
+/// resolved against `work_dir` (then the command line's
+/// `-working-directory`).
+pub(crate) fn entry_args(
+    argv0: &str,
+    command_line: &[String],
+    env: &Environment,
+    work_dir: &WorkDir,
+) -> Args {
     let mut args = Args::parse_as(argv0, command_line);
     args.env = env.clone();
     args.no_side_outputs = true;
+    args.resolve_work_dir(work_dir);
     args
 }
 
@@ -553,9 +587,10 @@ fn run_here<R>(
     argv0: &str,
     command_line: &[String],
     options: &FrontEndOptions,
+    base: &WorkDir,
     f: impl FnOnce(&FrontEnd<'_, '_>) -> R,
 ) -> Result<FrontEndReport<R>, FrontEndError> {
-    let args = entry_args(argv0, command_line, &options.environment);
+    let args = entry_args(argv0, command_line, &options.environment, base);
     structural_checks(&args)?;
     crate::crash_for_testing(&args);
     let host = Host::new(options.stderr.clone());
@@ -689,7 +724,7 @@ pub struct JobConfig {
 /// `options.record_lookups` do not apply.
 pub fn std_config(std: &str, options: &FrontEndOptions) -> FrontEndReport<JobConfig> {
     let cl = ["-fsyntax-only".to_owned(), format!("-std={std}"), "std-config.cpp".to_owned()];
-    let args = entry_args("kiln++", &cl, &options.environment);
+    let args = entry_args("kiln++", &cl, &options.environment, &options.base_work_dir());
     let host = Host::new(options.stderr.clone());
     let diag_opts = crate::diag_options(&args);
     let dsm = SourceManager::new();

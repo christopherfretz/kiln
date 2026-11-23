@@ -654,9 +654,7 @@ impl CodegenJob<'_> {
                     ),
                     flags: a.debug.record_command_line.then(|| recorded_command_line(a)),
                     ..a.debug.options(
-                        &std::env::current_dir()
-                            .map(|d| d.display().to_string())
-                            .unwrap_or_default(),
+                        &a.work_dir.current().map(|d| d.display().to_string()).unwrap_or_default(),
                         a.debug.split().then(|| dwo_name(a, job.path)),
                     )
                 },
@@ -798,7 +796,7 @@ pub(crate) fn print_ir(module: Module) -> String {
 /// The codegen coverage options of the compile of `input` (WP-941).
 fn coverage_options(a: &Args, input: &str) -> kiln_codegen::CoverageOptions {
     let c = &a.coverage;
-    let cwd = std::env::current_dir().map(|d| d.display().to_string()).unwrap_or_default();
+    let cwd = a.work_dir.current().map(|d| d.display().to_string()).unwrap_or_default();
     let gcov = c.gcov().then(|| {
         let (notes, data) =
             c.gcov_files(input, a.output.as_deref(), Phase::of(a) == Phase::Link, &cwd);
@@ -2262,7 +2260,7 @@ fn execute(
                     // The frontend's own text is written as is: no UTF-8
                     // re-validation of a (`-g`: mostly metadata) module.
                     if let (Some(t), Dest::File(f)) = (&text, dest)
-                        && let Err(e) = write_output(Some(f), t, &mut io.stdout)
+                        && let Err(e) = write_output(&args.work_dir, Some(f), t, &mut io.stdout)
                     {
                         report_output_error(diag_opts, &io.stderr, f, &e);
                         failed = true;
@@ -2301,8 +2299,12 @@ fn execute(
                 skip_piped = ir.is_none();
                 failed |= ir.is_none();
                 if let (Some(text), Dest::File(f)) = (&ir, dest)
-                    && let Err(e) =
-                        write_output(Some(f), &String::from_utf8_lossy(text), &mut io.stdout)
+                    && let Err(e) = write_output(
+                        &args.work_dir,
+                        Some(f),
+                        &String::from_utf8_lossy(text),
+                        &mut io.stdout,
+                    )
                 {
                     report_output_error(diag_opts, &io.stderr, f, &e);
                     failed = true;
@@ -2513,7 +2515,7 @@ fn run_in_process(
     }
     if outcome == Outcome::Compiled {
         let written = match obj {
-            Some(o) => std::fs::write(o, &out).map_err(|e| (o, e.to_string())),
+            Some(o) => std::fs::write(args.fs_path(o), &out).map_err(|e| (o, e.to_string())),
             None => io
                 .stdout
                 .write_all(&out)
@@ -2544,9 +2546,9 @@ fn not_done(
 ) -> HodStep {
     use crate::hod::Outcome;
     if let Some(o) = obj
-        && Path::new(o).exists()
+        && args.fs_path(o).exists()
     {
-        let _ = std::fs::remove_file(o);
+        let _ = std::fs::remove_file(args.fs_path(o));
     }
     match outcome {
         Outcome::Compiled => HodStep::Done,
@@ -2635,7 +2637,7 @@ fn preprocess_asm(
         );
         return false;
     }
-    if let Err(e) = write_output(Some(dest), &r.output, &mut io.stdout) {
+    if let Err(e) = write_output(&args.work_dir, Some(dest), &r.output, &mut io.stdout) {
         report_output_error(diag_opts, &io.stderr, dest, &e);
         return false;
     }
@@ -2645,7 +2647,7 @@ fn preprocess_asm(
             crate::deps::DepDest::Main => "-".to_owned(),
             crate::deps::DepDest::File(f) => f,
         };
-        if let Err(e) = write_output(Some(&path), &text, &mut io.stdout) {
+        if let Err(e) = write_output(&args.work_dir, Some(&path), &text, &mut io.stdout) {
             report_output_error(diag_opts, &io.stderr, &path, &e);
             return false;
         }

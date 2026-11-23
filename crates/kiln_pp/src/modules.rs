@@ -727,7 +727,7 @@ impl Preprocessor<'_, '_> {
         for dir in &o.prebuilt_paths {
             for ext in ["pcm", "cppm", "ixx", "cpp"] {
                 let p = dir.join(format!("{stem}.{ext}"));
-                if p.is_file() {
+                if self.sm.work_dir().join(&p).is_file() {
                     return Some((p, Found::Prebuilt));
                 }
             }
@@ -743,7 +743,7 @@ impl Preprocessor<'_, '_> {
             && let Some(d) = &o.std_dir
         {
             let p = d.join(format!("{name}.cppm"));
-            if p.is_file() {
+            if self.sm.work_dir().join(&p).is_file() {
                 return Some((p, Found::StdDir));
             }
         }
@@ -789,16 +789,18 @@ impl Preprocessor<'_, '_> {
         let cached = self.cached_std(key, &source);
         let path = cached.as_ref().map_or(source, |c| c.path.clone());
         let shown = path.display().to_string();
-        match bmi::sniff(&path) {
+        match bmi::sniff(&self.sm.work_dir().join(&path)) {
             bmi::Sniffed::Kiln => {
                 // Named in a dependency file as clang names it: a
                 // prebuilt-path find joined onto the working directory
                 // as spelled, `./` kept (clang `getPrebuiltModuleFileName`
                 // then `makeAbsolute`), the cache's already absolute.
                 let dep_path = match found {
-                    Found::Prebuilt if path.is_relative() => {
-                        std::env::current_dir().map_or_else(|_| path.clone(), |cwd| cwd.join(&path))
-                    }
+                    Found::Prebuilt if path.is_relative() => self
+                        .sm
+                        .work_dir()
+                        .current()
+                        .map_or_else(|_| path.clone(), |cwd| cwd.join(&path)),
                     _ => path.clone(),
                 };
                 self.callbacks.module_file_read(&ModuleFileRead {
@@ -806,7 +808,7 @@ impl Preprocessor<'_, '_> {
                     module: key,
                     cache_inputs: cached.as_ref().map(|c| c.inputs.as_slice()),
                 });
-                let read = bmi::read_file(&path);
+                let read = bmi::read_file(&self.sm.work_dir().join(&path));
                 let Some(c) = self.load_capsule(&shown, read, Some(key), span) else { return };
                 self.begin_capsule_unit(key.to_owned(), shown, c, span);
             }
@@ -1130,9 +1132,10 @@ impl Preprocessor<'_, '_> {
             let id = if let Some(t) = f.text {
                 self.sm.add_virtual(f.name, t.to_owned()).map_err(|e| e.to_string())?
             } else {
-                let (mp, name) = (path.to_owned(), f.name.to_owned());
+                let mp = self.sm.work_dir().join_str(path).into_owned();
+                let name = f.name.to_owned();
                 let copy: LazyCopy = Box::new(move || {
-                    let c = bmi::read_file(Path::new(&mp)).ok()?;
+                    let c = bmi::read_file(&mp).ok()?;
                     c.files.into_iter().find(|c| c.path == name).map(|c| c.text)
                 });
                 match self.sm.add_lazy_file(f.name, Path::new(f.path), f.len, f.hash, Some(copy)) {
@@ -1448,7 +1451,7 @@ impl Preprocessor<'_, '_> {
                 module: &unit,
                 cache_inputs: None,
             });
-            let read = bmi::read_file(Path::new(&path));
+            let read = bmi::read_file(&self.sm.work_dir().join_str(&path));
             let Some(c) = self.load_capsule(&path, read, Some(&unit), span) else { return };
             if c.kind != UnitKind::HeaderUnit {
                 let d = Diag::new(DiagId::pp_module_file_wrong_module, span)
@@ -1474,7 +1477,7 @@ impl Preprocessor<'_, '_> {
         if m.opts.scan || m.opts.text {
             return None;
         }
-        let unit = header_unit_key(self.sm.file_name(file));
+        let unit = header_unit_key_in(self.sm.file_name(file), self.sm.work_dir());
         let given = m.opts.module_files.iter().rev().find(|(n, _)| *n == unit);
         if let Some((_, p)) = given {
             return Some((unit, p.display().to_string()));
@@ -1634,9 +1637,15 @@ impl Preprocessor<'_, '_> {
 /// `path`: `"` plus its canonical path (absolute when it cannot be
 /// canonicalised), so every spelling that finds the same file finds it.
 pub fn header_unit_key(path: &str) -> String {
+    header_unit_key_in(path, &kiln_source::WorkDir::process())
+}
+
+/// [`header_unit_key`] of a `path` relative to `work_dir`.
+pub fn header_unit_key_in(path: &str, work_dir: &kiln_source::WorkDir) -> String {
     let p = Path::new(path);
-    let full = std::fs::canonicalize(p)
-        .or_else(|_| std::path::absolute(p))
+    let full = work_dir
+        .canonicalize(p)
+        .or_else(|_| work_dir.absolute(p))
         .unwrap_or_else(|_| p.to_path_buf());
     format!("\"{}", full.display())
 }

@@ -89,8 +89,19 @@ fn file_name(path: &str) -> &str {
 /// or the default one); with `phase` [`Phase::Link`] it is the object
 /// file name the input compiles to.
 pub fn path(args: &Args, phase: Option<Phase>, input: &str, output: &str) -> String {
+    let named = path_as_named(args, phase, input, output);
+    // Written in the working directory (spec/driver.md "Working
+    // directory"); the process's joins nothing.
+    match args.fs_path(&named) {
+        std::borrow::Cow::Borrowed(_) => named,
+        std::borrow::Cow::Owned(p) => p.display().to_string(),
+    }
+}
+
+/// [`path`] as the command line names it.
+fn path_as_named(args: &Args, phase: Option<Phase>, input: &str, output: &str) -> String {
     if let Some(p) = &args.time_trace.path {
-        if std::path::Path::new(p).is_dir() {
+        if args.fs_path(p).is_dir() {
             let sep = if p.ends_with('/') { "" } else { "/" };
             return format!("{p}{sep}{}", json_name(file_name(output)));
         }

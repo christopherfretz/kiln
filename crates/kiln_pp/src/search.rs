@@ -12,7 +12,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use kiln_source::{FileId, SourceManager};
+use kiln_source::{FileId, SourceManager, WorkDir};
 
 /// The group a search directory was given in (clang
 /// `frontend::IncludeDirGroup`).
@@ -353,7 +353,7 @@ pub trait HeaderFs {
 }
 
 /// The entry names of the directory `path`, or `None`.
-fn read_names(path: &str) -> Option<Vec<String>> {
+fn read_names(path: &Path) -> Option<Vec<String>> {
     let mut names = Vec::new();
     for e in std::fs::read_dir(path).ok()? {
         names.push(e.ok()?.file_name().to_string_lossy().into_owned());
@@ -361,8 +361,11 @@ fn read_names(path: &str) -> Option<Vec<String>> {
     Some(names)
 }
 
-/// The real file system. Relative paths are relative to the process's
-/// working directory.
+/// The real file system. Relative paths are relative to its working
+/// directory ([`RealFs::in_dir`]; by default the process's, as the
+/// operating system resolves them): only the path opened is joined, every
+/// name header search builds stays as written (spec/driver.md "Working
+/// directory").
 ///
 /// Every query is one system call or a short fixed sequence (clang's
 /// `FileManager`): a directory is one `stat`; a header is one `open`
@@ -370,29 +373,51 @@ fn read_names(path: &str) -> Option<Vec<String>> {
 /// device and inode) and its reads; a directory listing is one `open`,
 /// its `getdents` and a `close`. Nothing is canonicalized.
 #[derive(Clone, Debug, Default)]
-pub struct RealFs;
+pub struct RealFs {
+    work_dir: WorkDir,
+}
+
+impl RealFs {
+    /// The disk, relative paths resolved against the process's current
+    /// directory.
+    pub fn new() -> RealFs {
+        RealFs::default()
+    }
+
+    /// The disk, relative paths resolved against `work_dir`.
+    pub fn in_dir(work_dir: WorkDir) -> RealFs {
+        RealFs { work_dir }
+    }
+
+    /// The path to open for `path`.
+    fn disk<'p>(&self, path: &'p str) -> std::borrow::Cow<'p, Path> {
+        self.work_dir.join_str(path)
+    }
+}
 
 impl HeaderFs for RealFs {
     fn dir_identity(&mut self, path: &str) -> Option<String> {
-        let m = std::fs::metadata(path).ok().filter(std::fs::Metadata::is_dir)?;
-        dir_key(path, &m)
+        let disk = self.disk(path);
+        let m = std::fs::metadata(&disk).ok().filter(std::fs::Metadata::is_dir)?;
+        dir_key(&disk, &m)
     }
 
     fn is_dir(&mut self, path: &str) -> bool {
-        std::fs::metadata(path).is_ok_and(|m| m.is_dir())
+        std::fs::metadata(self.disk(path)).is_ok_and(|m| m.is_dir())
     }
 
     fn is_file(&mut self, path: &str) -> bool {
-        std::fs::metadata(path).is_ok_and(|m| m.is_file())
+        std::fs::metadata(self.disk(path)).is_ok_and(|m| m.is_file())
     }
 
     fn list_dir(&mut self, path: &str) -> Option<Vec<String>> {
-        read_names(path)
+        read_names(&self.disk(path))
     }
 
     fn list_dirs(&mut self, paths: &[&str]) -> Vec<Option<Vec<String>>> {
         /// At most this many reads at once.
         const THREADS: usize = 8;
+        let paths: Vec<std::borrow::Cow<'_, Path>> = paths.iter().map(|p| self.disk(p)).collect();
         if paths.len() < 2 {
             return paths.iter().map(|p| read_names(p)).collect();
         }
@@ -413,11 +438,17 @@ impl HeaderFs for RealFs {
     }
 
     fn open(&mut self, sm: &SourceManager, path: &str) -> Option<FileId> {
+        // The buffer is named `path`: the source manager joins its own
+        // working directory, which is this one.
+        debug_assert!(
+            self.work_dir.dir().is_none() || sm.work_dir() == &self.work_dir,
+            "header search and its source manager have different working directories"
+        );
         sm.load_regular_file(Path::new(path)).ok()
     }
 
     fn read(&mut self, path: &str) -> Option<Vec<u8>> {
-        let mut f = std::fs::File::open(path).ok()?;
+        let mut f = std::fs::File::open(self.disk(path)).ok()?;
         let m = f.metadata().ok().filter(std::fs::Metadata::is_file)?;
         kiln_source::read_open_file(&mut f, &m).ok()
     }
@@ -427,14 +458,14 @@ impl HeaderFs for RealFs {
 /// `DirectoryEntry`s, which `FileManager` unifies by `UniqueID`).
 #[cfg(unix)]
 #[allow(clippy::unnecessary_wraps)] // the non-Unix twin can fail
-fn dir_key(_path: &str, m: &std::fs::Metadata) -> Option<String> {
+fn dir_key(_path: &Path, m: &std::fs::Metadata) -> Option<String> {
     use std::os::unix::fs::MetadataExt;
     Some(format!("{}:{}", m.dev(), m.ino()))
 }
 
 /// A directory's identity: its canonical path, where there is no inode.
 #[cfg(not(unix))]
-fn dir_key(path: &str, _m: &std::fs::Metadata) -> Option<String> {
+fn dir_key(path: &Path, _m: &std::fs::Metadata) -> Option<String> {
     std::fs::canonicalize(path).ok().map(|c| c.to_string_lossy().into_owned())
 }
 

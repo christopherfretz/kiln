@@ -406,7 +406,8 @@ pub fn report(argv0: &str, command_line: &[String]) -> i32 {
 /// `-fcrash-diagnostics-dir=`, else `$TMPDIR`, else `/tmp`.
 fn reproducer_dir(args: &Args) -> PathBuf {
     if let Some(d) = &args.crash_diagnostics_dir {
-        return PathBuf::from(d);
+        // In the working directory (spec/driver.md "Working directory").
+        return args.fs_path(d).into_owned();
     }
     match std::env::var_os("TMPDIR") {
         Some(d) if !d.is_empty() => PathBuf::from(d),
@@ -443,6 +444,8 @@ fn shell_quote(s: &str) -> String {
 /// The reproducer's run script: a header, then the command line with
 /// the input replaced by the preprocessed file (when there is one).
 fn run_script(argv0: &str, expanded: &[String], input: Option<&str>, ii: Option<&Path>) -> String {
+    // The process's directory, where the command line ran (its own
+    // `-working-directory`, if any, is in it).
     let cwd = std::env::current_dir().map_or_else(|_| "?".to_owned(), |d| d.display().to_string());
     // The program as invoked (its name picks the driver mode), absolute
     // when it was given as a relative path.

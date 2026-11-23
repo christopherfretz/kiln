@@ -46,7 +46,7 @@ pub(crate) fn write(
     }
     let text = fragment(args, tc, jobs);
     // `-MJ -` is a file named `-`, as clang's.
-    let r = std::fs::write(path, &text).map_err(|e| {
+    let r = std::fs::write(args.fs_path(path), &text).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             "No such file or directory".to_owned()
         } else {
@@ -62,7 +62,7 @@ pub(crate) fn write(
 
 /// The fragment text of `jobs`.
 pub(crate) fn fragment(args: &Args, tc: &Toolchain, jobs: &[CdbJob<'_>]) -> String {
-    let dir = std::env::current_dir().map(|d| d.display().to_string()).unwrap_or_default();
+    let dir = args.work_dir.current().map(|d| d.display().to_string()).unwrap_or_default();
     let exe = std::env::current_exe().map(|e| e.display().to_string()).unwrap_or_default();
     let rest = render_args(&args.argv);
     let mut out = String::new();

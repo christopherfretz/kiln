@@ -279,7 +279,8 @@ fn identity_and_list(
     let mut out: Vec<(String, String)> = Vec::new();
     let mut add = |name: &str, text: String| out.push((name.to_owned(), text));
     add("kiln build", format!("kiln {} {}", bmi::KILN_VERSION, bmi::kiln_sha()));
-    add(WORKING_DIRECTORY, std::env::current_dir().unwrap_or_default().display().to_string());
+    // The job's working directory (spec/driver.md "Working directory").
+    add(WORKING_DIRECTORY, args.work_dir.current().unwrap_or_default().display().to_string());
     add("language", format!("{std:?}"));
     let (features, _) = crate::features::resolve(args, &tc.target);
     add("target", format!("{}\n{features:?}", tc.target.triple));
@@ -678,7 +679,7 @@ pub(crate) fn find(
         let checked = lookups.check(
             &list,
             &args.embed_dirs,
-            &mut kiln_pp::RealFs,
+            &mut kiln_pp::RealFs::in_dir(args.work_dir.clone()),
             &|p| known.contains(p),
             same_cwd,
         );

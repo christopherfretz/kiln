@@ -32,6 +32,9 @@ pub struct Command {
     /// running the command reports that instead of `unable to execute`
     /// (spec/driver.md "LLVM discovery").
     pub missing_llvm: Option<LlvmError>,
+    /// The directory it runs in: the toolchain's working directory
+    /// ([`Toolchain::work_dir`]); `None`, the process's.
+    pub dir: Option<PathBuf>,
 }
 
 impl Command {
@@ -42,7 +45,8 @@ impl Command {
             Err(e) if program.is_none() => Some(e.clone()),
             _ => None,
         };
-        Command { tool, program, args: Vec::new(), missing_llvm }
+        let dir = tc.work_dir.dir().map(std::path::Path::to_path_buf);
+        Command { tool, program, args: Vec::new(), missing_llvm, dir }
     }
 
     /// Appends an argument.
@@ -91,22 +95,23 @@ impl Command {
             Diag::new(DiagId::drv_unable_to_execute, Span::INVALID).arg(self.tool.name()).emit(drv);
             return false;
         };
-        let (status, out, err) = match spawn_and_wait(program, &self.args, input) {
-            Ok(r) => r,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                Diag::new(DiagId::drv_unable_to_execute, Span::INVALID)
-                    .arg(program.display())
-                    .emit(drv);
-                return false;
-            }
-            Err(e) => {
-                Diag::new(DiagId::drv_cannot_execute, Span::INVALID)
-                    .arg(program.display())
-                    .arg(e)
-                    .emit(drv);
-                return false;
-            }
-        };
+        let (status, out, err) =
+            match spawn_and_wait(program, &self.args, input, self.dir.as_deref()) {
+                Ok(r) => r,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    Diag::new(DiagId::drv_unable_to_execute, Span::INVALID)
+                        .arg(program.display())
+                        .emit(drv);
+                    return false;
+                }
+                Err(e) => {
+                    Diag::new(DiagId::drv_cannot_execute, Span::INVALID)
+                        .arg(program.display())
+                        .arg(e)
+                        .emit(drv);
+                    return false;
+                }
+            };
         let _ = stdout.write_all(&out);
         let _ = stdout.flush();
         if !err.is_empty() {
@@ -138,8 +143,13 @@ pub(crate) fn spawn_and_wait(
     program: &std::path::Path,
     args: &[String],
     input: Option<&[u8]>,
+    dir: Option<&std::path::Path>,
 ) -> std::io::Result<(std::process::ExitStatus, Vec<u8>, Vec<u8>)> {
-    let mut child = Process::new(program)
+    let mut process = Process::new(program);
+    if let Some(d) = dir {
+        process.current_dir(d);
+    }
+    let mut child = process
         .args(args)
         .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())
@@ -201,6 +211,7 @@ mod tests {
             program: program.map(PathBuf::from),
             args: args.iter().map(|a| (*a).to_owned()).collect(),
             missing_llvm: None,
+            dir: None,
         }
     }
 

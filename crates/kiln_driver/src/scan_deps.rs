@@ -495,7 +495,7 @@ fn context_hash(args: &[String], inputs: &[&str]) -> String {
 /// Writes `text` to `path` (standard output without one); false after
 /// reporting an error.
 fn write_or_report(path: Option<&str>, text: &str, io: &mut Io, prog: &str) -> bool {
-    match crate::write_output(path, text, &mut io.stdout) {
+    match crate::write_output(&kiln_source::WorkDir::process(), path, text, &mut io.stdout) {
         Ok(()) => true,
         Err(e) => {
             let _ =
