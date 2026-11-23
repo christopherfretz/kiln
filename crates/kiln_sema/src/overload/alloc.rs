@@ -144,8 +144,7 @@ impl Sema<'_, '_> {
                 return AllocFns { fns, templates, in_class: true, naming: Some(def), via };
             }
         }
-        let tu = self.ast.tu;
-        let found: Vec<DeclId> = self.ast.lookup_local(tu, name).iter().collect();
+        let found = self.global_op_lookup(name);
         let fns = found
             .iter()
             .copied()

@@ -5409,18 +5409,22 @@ impl Sema<'_, '_> {
         };
         // A replaceable global allocation or deallocation function
         // redeclares the implicit one ([new.delete]/2).
-        let global_new_delete = d.op_name.is_some_and(|op| {
-            !method
-                && !friend
-                && self.kind_of(self.ast.redecl_context(ctx)) != DeclKind::Namespace
-                && matches!(
-                    op,
-                    OverloadedOperator::New
-                        | OverloadedOperator::ArrayNew
-                        | OverloadedOperator::Delete
-                        | OverloadedOperator::ArrayDelete
-                )
-        });
+        let global_new_delete = !method
+            && !friend
+            && self.kind_of(self.ast.redecl_context(ctx)) != DeclKind::Namespace
+            && is_global_alloc_op(d.op_name);
+        // A friend naming a global `operator new`/`delete` redeclares the
+        // implicit ones too ([basic.stc.dynamic.general]/2): they are
+        // declared before its redeclaration lookup, as clang does
+        // (WP-2540; a friend in a templated class still redeclares
+        // nothing until instantiated).
+        if friend
+            && !method
+            && is_global_alloc_op(d.op_name)
+            && self.kind_of(self.ast.redecl_context(ctx)) == DeclKind::TranslationUnit
+        {
+            self.declare_global_new_delete();
+        }
         // A qualified friend of a namespace function in a templated class
         // whose own head or type is dependent is matched only when the class
         // is instantiated: its template parameters are a level deeper than
@@ -10539,6 +10543,9 @@ impl Sema<'_, '_> {
         if unnamed_template {
             self.error(DiagId::sema_template_unnamed_class, loc);
         }
+        // The class-key of a mismatched redeclaration becomes the previous
+        // declaration's (below).
+        let mut keyword = keyword;
         let mut prev = None;
         let mut redefined = false;
         // A name of another kind (`kind_conflict`): the tag is declared
@@ -10611,6 +10618,20 @@ impl Sema<'_, '_> {
                         // clang's recovery: the tag found is the one named.
                         self.mark_type_referenced(p);
                         return p;
+                    }
+                    // clang's recovery (`ActOnTag`): a declaration with the
+                    // class-key of another class kind redeclares the class
+                    // as declared (`struct w; union w;` is one entity, not
+                    // two; WP-2547).
+                    if let Some(r) = self.ast.decls.record(p)
+                        && !is_enum
+                    {
+                        prev = Some(p);
+                        keyword = match r.tag {
+                            TagKind::Union => TagKeyword::Union,
+                            TagKind::Class => TagKeyword::Class,
+                            TagKind::Struct => TagKeyword::Struct,
+                        };
                     }
                 }
             }
@@ -15796,4 +15817,19 @@ impl Sema<'_, '_> {
         };
         self.emit(self.diag(id, loc));
     }
+}
+
+/// Whether `op` names an allocation or deallocation function
+/// ([basic.stc.dynamic.general]/2): `operator new`, `new[]`, `delete` or
+/// `delete[]`.
+fn is_global_alloc_op(op: Option<OverloadedOperator>) -> bool {
+    matches!(
+        op,
+        Some(
+            OverloadedOperator::New
+                | OverloadedOperator::ArrayNew
+                | OverloadedOperator::Delete
+                | OverloadedOperator::ArrayDelete
+        )
+    )
 }

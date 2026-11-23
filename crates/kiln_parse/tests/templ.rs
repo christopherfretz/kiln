@@ -136,3 +136,39 @@ fn nested_template_ids_scan_memo() {
     p.assert_dump("TypeAliasDecl D 'W<W<W<");
     p.assert_dump("BinaryOperator 'bool' '>'");
 }
+
+/// [temp.explicit]/4, [temp.names]/3 (WP-2547): an unqualified `v<...>` in
+/// an explicit instantiation outside the namespace of the class template
+/// `a::v` is not a template-name there; the suggested `a::v` is
+/// instantiated (with the namespace error) and nothing named `b::v` is
+/// declared: the only class `v` is the pattern, and the four specializations
+/// are of `a::v`.
+#[test]
+fn explicit_instantiation_typo_declares_nothing() {
+    let p = parse(
+        "namespace a { template <class T> struct v {}; }\n\
+         namespace b {\n\
+         struct M {};\n\
+         struct N {};\n\
+         template struct v<M>;\n\
+         extern template struct v<N>;\n\
+         template class v<int>;\n\
+         template union v<long>;\n\
+         b::v *y;\n\
+         }\n",
+    );
+    for line in [5, 6, 7, 8] {
+        p.assert_diag(&format!("{line}:"));
+    }
+    p.assert_diag("no template named 'v'; did you mean 'a::v'?");
+    p.assert_diag("explicit instantiation of 'a::v' must occur in namespace 'a'");
+    p.assert_diag("9:4 error: no type named 'v' in namespace 'b'");
+    let is_v = |l: &&str| l.split_whitespace().any(|w| w == "v");
+    let records: Vec<&str> =
+        p.dump.lines().filter(|l| l.contains("-CXXRecordDecl ")).filter(is_v).collect();
+    assert_eq!(records.len(), 1, "one class `v` (the pattern):\n{}", p.dump);
+    let specs =
+        p.dump.lines().filter(|l| l.contains("-ClassTemplateSpecializationDecl ")).filter(is_v);
+    assert_eq!(specs.count(), 4, "{}", p.dump);
+    assert!(!p.diags.iter().any(|d| d.contains("ambiguous")), "{}", p.diags.join("\n"));
+}

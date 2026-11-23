@@ -976,6 +976,24 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- A global `operator new` or `operator delete` declared after a class
+  template whose pattern befriends it is one function with the implicit
+  declaration and the instantiated friend, before or after the
+  instantiation (WP-2540): it was chained to the pattern's friend, which
+  declares nothing, and a new-expression could call that friend. A friend
+  allocation function declares the implicit ones (so a `::`-qualified
+  friend `operator new[]` is valid), and a friend `main` in a class
+  template no longer makes `int main(int, char **)` a conflicting
+  declaration.
+- An unqualified `v<...>` that ordinary lookup does not find, in an
+  explicit instantiation or specialization, an elaborated type or a
+  friend, no longer declares a class `v` (WP-2547): it is clang's "no
+  template named 'v'; did you mean 'a::v'?" followed by the
+  namespace-placement error for `a::v`, or "explicit instantiation of
+  undeclared template struct 'w'" when no template resembles it. An
+  explicit instantiation whose class-key does not match the template is
+  a tag mismatch, and `union w;` after `struct w;` redeclares the same
+  class rather than making `w` ambiguous.
 - Parameter attributes follow clang across declarations and templates
   (WP-2476): a redeclaration's parameter inherits the previous
   declaration's `nonnull`, `annotate`, `carries_dependency` and Swift ABI

@@ -400,7 +400,14 @@ impl Parser<'_, '_> {
         }
         let i = self.pos() + 1;
         if let Some((end, _, class, _)) = self.scan_name_at(i) {
+            // An unqualified name that names nothing but typo-corrects to a
+            // class template is that template's explicit specialization
+            // (clang's `TNK_Undeclared_template` recovery; WP-2547).
+            let corrected = class == NameClass::Undeclared
+                && end == i + 1
+                && self.ident_of(self.tok_at(i)).is_some_and(|n| self.s.has_class_template_typo(n));
             return !matches!(class, NameClass::TypeTemplate(_))
+                && !corrected
                 && end > i
                 && self.ident_of(self.tok_at(end - 1)).is_some()
                 && self.tok_at(end).kind == TokKind::Punct(Punct::Less);

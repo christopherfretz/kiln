@@ -2599,7 +2599,12 @@ argument deduction not allowed in function prototype"); the ids
     class templates, specializations and references to specializations
     (named `'B<float>'`, as clang 19 does), and the instantiation of a
     dependent `struct T::X`. A reference recovers to the declaration it
-    found. Test: `dcl.type.elab/wrong-tag-kind.cpp`.
+    found; a declaration `union w;` of a class first declared `struct w`
+    redeclares it with the earlier class-key (clang's `ActOnTag`; WP-2547:
+    it was a second entity, so a later `w` was ambiguous; an `enum`
+    against a class is still a new entity). Tests:
+    `dcl.type.elab/wrong-tag-kind.cpp`,
+    `dcl.type.elab/class-key-mismatch-same-entity.cpp`.
   - *`enum class E` as a reference or friend* (no enum-base). The error
     `reference to enumeration must use 'enum' not 'enum class'`
     (`-Welaborated-enum-class`, an error by default) is reported at the
@@ -8427,7 +8432,8 @@ clang's `ActOnCXXNew`/`BuildCXXNew` and `ActOnCXXDelete` for non-class
 and aggregate element types.
 - **Implicit global operators** ([basic.stc.dynamic.general]/2):
   `declare_global_new_delete` runs once, the first time a new- or
-  delete-expression, a declaration of a global `operator new`/`delete`,
+  delete-expression, a declaration of a global `operator new`/`delete`
+  (a friend one too, even in a class template's pattern, as clang),
   or an unqualified or `::`-qualified id-expression naming one
   (`::operator new(n)`, WP-158) needs it (clang's
   `DeclareGlobalNewDelete`). It declares, as implicit
@@ -8450,7 +8456,24 @@ and aggregate element types.
 - **User declarations** of a global `operator new`/`delete`
   (`act_on_global_new_delete_decl`) redeclare a matching implicit one; a
   deallocation function without an exception specification is
-  implicitly `noexcept` ([except.spec]/11).
+  implicitly `noexcept` ([except.spec]/11). The previous declaration is
+  found by redeclaration lookup in the global namespace
+  (`global_op_redecl_candidates`, WP-2540): it includes friends that
+  only ADL finds ([namespace.memdef]/3), but not a friend in a class
+  template's pattern (`is_dependent_friend_fn`), which declares nothing
+  until the class is instantiated ([temp.inst]/4, [temp.friend]/1). So
+  a global declaration after `template <class T> struct A { friend
+  void *operator new(size_t); };` redeclares the implicit one (and, once
+  `A<int>` exists, its instantiated friend, which chained onto the
+  implicit one): one entity, before or after the instantiation. The
+  same rule keeps such a friend `main` from making a later `int
+  main(int, char **)` a conflicting redeclaration ([basic.start.main]/3,
+  `main_overload_prev`). New-expressions, delete-expressions and
+  `__builtin_operator_new`/`delete` find the global functions by
+  ordinary lookup (`global_op_lookup`), which never sees a pattern's
+  friend. `tests/conformance/temp.friend/global-alloc-friend-in-template.cpp`,
+  `ir-global-alloc-friend-in-template.cpp`,
+  `class.friend/global-alloc-qualified-friend.cpp`.
 - **The allocated type** ([expr.new]/1-2): not a function type, a
   reference or an incomplete type; `auto` is deduced from a single
   parenthesized or braced argument (`new auto(x)`; `new auto*(p)`

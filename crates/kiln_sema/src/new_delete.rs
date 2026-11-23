@@ -210,10 +210,32 @@ impl Sema<'_, '_> {
         self.ast.types.elaborated(TagKeyword::None, Some(n), t)
     }
 
+    /// The global `operator op` declarations a declaration of one
+    /// redeclares (redeclaration lookup, [basic.lookup.general]/1,
+    /// [basic.scope.scope]/4): the translation unit's entries, hidden
+    /// friends included ([namespace.memdef]/3), but not a friend
+    /// declared in a templated class, which declares nothing until the
+    /// class is instantiated ([temp.inst]/4, [temp.friend]/1;
+    /// `is_dependent_friend_fn`). WP-2540: a global `operator new`
+    /// declared after `template<class T> struct A { friend void
+    /// *operator new(size_t); };` was chained to the pattern's friend.
+    pub(crate) fn global_op_redecl_candidates(&self, op: OverloadedOperator) -> Vec<DeclId> {
+        let tu = self.ast.tu;
+        let found = self.ast.lookup_local(tu, DeclName::operator(op));
+        found.iter().filter(|&f| !self.is_dependent_friend_fn(f)).collect()
+    }
+
+    /// The declarations named `name` that ordinary lookup in the global
+    /// scope finds ([basic.lookup.qual.general], [expr.new]/12): not a
+    /// hidden friend, a templated class's above all ([namespace.memdef]/3).
+    pub(crate) fn global_op_lookup(&self, name: DeclName) -> Vec<DeclId> {
+        let tu = self.ast.tu;
+        self.ast.lookup_local(tu, name).iter_ordinary().collect()
+    }
+
     /// The global `operator op` whose parameter types are `params`.
     fn find_global_op(&self, op: OverloadedOperator, params: &[QualType]) -> Option<DeclId> {
-        let tu = self.ast.tu;
-        self.ast.lookup_local(tu, DeclName::operator(op)).iter().find(|&f| {
+        self.global_op_redecl_candidates(op).into_iter().find(|&f| {
             self.ast.decls.get(f).kind() == DeclKind::Function
                 && self.fn_params(f).is_some_and(|(ps, variadic)| {
                     !variadic
@@ -255,8 +277,7 @@ impl Sema<'_, '_> {
         {
             ty = self.with_basic_noexcept(ty);
         }
-        let tu = self.ast.tu;
-        let cands = self.ast.lookup_local(tu, DeclName::operator(op)).to_vec();
+        let cands = self.global_op_redecl_candidates(op);
         let prev = cands.into_iter().find(|&p| {
             let pty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
             self.same_ignoring_exc_spec(pty, ty)

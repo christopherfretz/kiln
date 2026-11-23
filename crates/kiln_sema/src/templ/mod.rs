@@ -303,6 +303,12 @@ pub struct TemplState {
     /// taken by the parser after the declarator
     /// ([`Sema::take_explicit_inst_named`]).
     pub(crate) explicit_inst_named: Option<DeclId>,
+    /// The class template a typo correction just put in place of an
+    /// undeclared name before `<` ([`Sema::correct_class_template_typo`];
+    /// WP-2547), taken by the class template-id it heads: an explicit
+    /// instantiation of it is held to the C++11 namespace rule, as clang
+    /// recovers.
+    pub(crate) typo_corrected: Option<DeclId>,
     /// The `template<>` of `template<> template<class U> struct
     /// A<int>::B ...` ([temp.expl.spec]/16): the declaration under the
     /// inner head specializes member template `B` of the implicitly

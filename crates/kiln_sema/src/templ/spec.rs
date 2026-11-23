@@ -187,6 +187,7 @@ impl Sema<'_, '_> {
     /// The explicit instantiation ended.
     pub fn act_explicit_inst_end(&mut self) {
         self.templ.explicit_inst = None;
+        self.templ.typo_corrected = None;
     }
 
     /// `class-key X<args>` with `X` naming class template `tmpl`
@@ -212,6 +213,7 @@ impl Sema<'_, '_> {
     ) -> Result<(Option<DeclId>, QualType), ()> {
         let range = Span::new(name_loc, r_angle.with_offset(1));
         let tmpl = self.ast.first(tmpl);
+        let corrected = self.templ.typo_corrected.take() == Some(tmpl);
         let locs = std::mem::take(&mut self.templ.arg_locs);
         let declares = matches!(use_, TagUse::Definition | TagUse::Declaration);
         let form = if !declares {
@@ -252,8 +254,10 @@ impl Sema<'_, '_> {
         };
         let name = self.template_name_for(tmpl);
         // [dcl.type.elab]/3: a specialization's class-key agrees with the
-        // primary's (clang `ActOnClassTemplateSpecialization`).
-        if matches!(form, TagForm::Partial | TagForm::ExplicitSpec)
+        // primary's (clang `ActOnClassTemplateSpecialization`), and so does
+        // an explicit instantiation's (clang `ActOnExplicitInstantiation`;
+        // WP-2547).
+        if matches!(form, TagForm::Partial | TagForm::ExplicitSpec | TagForm::ExplicitInst { .. })
             && let Some(pat) = self.pattern_of(tmpl)
             && !self.tag_matches(pat, keyword)
         {
@@ -275,7 +279,15 @@ impl Sema<'_, '_> {
             }
             TagForm::ExplicitInst { declaration } => {
                 let n = self.decl_name(tmpl);
-                self.check_explicit_inst_scope(tmpl, n, qualifier.is_some(), name_loc);
+                // A typo-corrected name was not found by lookup: clang's
+                // C++11 rule for an unqualified name applies whatever the
+                // standard (WP-2547).
+                self.check_explicit_inst_scope_as(
+                    tmpl,
+                    n,
+                    (qualifier.is_some(), corrected),
+                    name_loc,
+                );
                 let spec =
                     self.act_on_explicit_class_inst(tmpl, args, &locs, declaration, name_loc)?;
                 Ok((Some(spec), self.spec_tag_type(keyword, name, args, spec)))
@@ -480,6 +492,20 @@ impl Sema<'_, '_> {
         qualified: bool,
         loc: Loc,
     ) {
+        self.check_explicit_inst_scope_as(pattern, name, (qualified, false), loc);
+    }
+
+    /// [`Sema::check_explicit_inst_scope`]; `corrected`: the unqualified
+    /// name was a typo correction ([`Sema::correct_class_template_typo`]),
+    /// which lookup did not find, so the C++11-C++20 rule for an
+    /// unqualified name applies in every standard (clang's recovery).
+    fn check_explicit_inst_scope_as(
+        &mut self,
+        pattern: DeclId,
+        name: String,
+        (qualified, corrected): (bool, bool),
+        loc: Loc,
+    ) {
         if self.inst.stack.len() != self.templ.explicit_depth {
             return;
         }
@@ -497,7 +523,8 @@ impl Sema<'_, '_> {
         let ok = if qualified {
             self.encloses(cur, orig)
         } else {
-            self.std >= kiln_lex::Std::Cxx23 || self.in_enclosing_namespace_set(cur, orig)
+            self.std >= kiln_lex::Std::Cxx23 && !corrected
+                || self.in_enclosing_namespace_set(cur, orig)
         };
         if ok {
             return;
