@@ -881,8 +881,22 @@ impl AttrNode {
     /// function type it reaches was built (WP-1827).
     pub const IN_CHUNK: u8 = 16;
 
+    /// [`AttrKind::ALIGN_VALUE`] flag (bit 2): `align_value(N)` of a
+    /// value-dependent `N`, so `a` is the expression (an `ExprId`), not
+    /// the alignment; substituted and checked when the declaration is
+    /// instantiated (clang `instantiateDependentAlignValueAttr`, WP-2476).
+    pub const ALIGN_VALUE_DEPENDENT: u8 = 4;
+
     /// Implicit flag (bit 0): added by sema, not written.
     pub const IMPLICIT: u8 = 1;
+
+    /// Inherited flag (bit 1, any kind): a copy of an attribute of a
+    /// previous declaration that this redeclaration inherited (clang
+    /// `Attr::isInherited`, `-ast-dump`'s `Inherited`): a parameter's
+    /// from the corresponding parameter of the previous declaration
+    /// (clang `mergeParamDeclAttributes`, WP-2476), and an inherited asm
+    /// label.
+    pub const INHERITED: u8 = 2;
 
     /// Checked flag (bit 6, any kind; bits 2-5 are per-kind, `diagnose_if`
     /// uses bit 5): the checks of the declaration the
@@ -897,7 +911,8 @@ impl AttrNode {
     /// translation unit is done (an implicit one is built checked); an
     /// argument that depends on a template parameter keeps its deferred
     /// form under its own per-kind flag (`PRIORITY_DEPENDENT`,
-    /// `MODE_DEFERRED`, `SPACE_DEPENDENT`) until instantiation. Read it
+    /// `MODE_DEFERRED`, `SPACE_DEPENDENT`, `ALIGN_VALUE_DEPENDENT`) until
+    /// instantiation. Read it
     /// with [`AttrNode::is_checked`] or [`AttrArena::is_checked`].
     pub const CHECKED: u8 = 64;
 

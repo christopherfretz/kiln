@@ -1981,6 +1981,11 @@ impl Sema<'_, '_> {
                     if (i != 0 || !(declares_fn || d.lambda)) && self.inst.stack.is_empty() {
                         self.note_declarator_nested_params(params, &ptys);
                     }
+                    // Their attributes, on their own declarations
+                    // (spec/sema.md §4.5 "Parameter attributes").
+                    if i != 0 || !(declares_fn || d.lambda) {
+                        self.nested_param_attrs(params);
+                    }
                     if !abis.is_empty() {
                         // The declaration's attributes go to the
                         // function chunk nearest the name (clang
@@ -6228,6 +6233,17 @@ impl Sema<'_, '_> {
             prev_ok = None;
             invalid_redecl = true;
         }
+        // A `noescape` mismatch: the C++ function types differ (clang's
+        // `ExtParameterInfo`; spec/sema.md §4.5 "Parameter attributes").
+        if let Some(p) = prev_ok
+            && self.noescape_conflicts(p, &params)
+        {
+            let msg = self.diag(DiagId::sema_conflicting_types, d.name_loc()).arg(fname.clone());
+            let msg = self.note_prev(msg, p, false);
+            self.emit(msg);
+            prev_ok = None;
+            invalid_redecl = true;
+        }
         let mut h = DeclHead::new(ctx, dname, d.name_loc());
         h.lexical = Some(lexical);
         if friend {
@@ -6351,6 +6367,9 @@ impl Sema<'_, '_> {
             self.constexpr_begin_locs.insert(f, ds.loc);
         }
         self.create_params(f, &params, &defaults);
+        if let Some(p) = prev_ok {
+            self.merge_param_attrs(f, p);
+        }
         self.defer_late_noexcept(f, d);
         if delayed_prev && let Some(p) = prev_ok {
             self.delayed_exc_equiv.push((f, p));
@@ -6584,6 +6603,31 @@ impl Sema<'_, '_> {
             .collect()
     }
 
+    /// Checks the attributes of parameter-declaration `p` and attaches
+    /// those it keeps to its declaration `pd` (clang
+    /// `ProcessDeclAttributes` on the `ParmVarDecl`): a function's own
+    /// parameter ([`Sema::create_params`]) or one of a function type
+    /// inside a declarator (`Sema::nested_param_attrs`).
+    pub(crate) fn attach_param_attrs(&mut self, pd: DeclId, p: &ParamInfo) {
+        if p.attrs.is_empty() {
+            return;
+        }
+        let mut attrs = p.attrs.clone();
+        self.take_annotations(pd, &mut attrs);
+        let range = Span::new(p.range.0, p.range.1);
+        self.check_param_nonnull_attrs(p.ty, range, &mut attrs);
+        // `cleanup` / `internal_linkage` / `returns_twice` on a
+        // parameter: ignored with a warning; `tls_model`: an error.
+        self.check_cleanup_attrs(pd, &mut attrs);
+        self.check_internal_linkage_attrs(pd, &mut attrs);
+        self.check_tls_model_attrs(pd, &mut attrs);
+        self.check_code_model_attrs(pd, &mut attrs);
+        attrs.retain(|&a| self.keep_param_attr(pd, a));
+        self.check_param_pass_object_size(p.ty, p.range.0, &mut attrs);
+        self.ast.attrs.mark_checked(&attrs);
+        let _ = self.builder().attach_attrs(pd, &attrs);
+    }
+
     /// Whether a parameter keeps attribute `a` ([`Sema::create_params`]):
     /// the subject rules of the attributes valid on other declarations.
     fn keep_param_attr(&mut self, pd: DeclId, a: AttrId) -> bool {
@@ -6689,21 +6733,10 @@ impl Sema<'_, '_> {
             if p.invalid {
                 self.ast.decls.set_flags(pd, DeclFlags::INVALID);
             }
-            if !p.attrs.is_empty() {
-                let mut attrs = p.attrs.clone();
-                self.take_annotations(pd, &mut attrs);
-                let range = Span::new(p.range.0, p.range.1);
-                self.check_param_nonnull_attrs(p.ty, range, &mut attrs);
-                // `cleanup` / `internal_linkage` / `returns_twice` on a
-                // parameter: ignored with a warning; `tls_model`: an error.
-                self.check_cleanup_attrs(pd, &mut attrs);
-                self.check_internal_linkage_attrs(pd, &mut attrs);
-                self.check_tls_model_attrs(pd, &mut attrs);
-                self.check_code_model_attrs(pd, &mut attrs);
-                attrs.retain(|&a| self.keep_param_attr(pd, a));
-                self.check_param_pass_object_size(p.ty, p.range.0, &mut attrs);
-                self.ast.attrs.mark_checked(&attrs);
-                let _ = self.builder().attach_attrs(pd, &attrs);
+            // A substituted parameter already carries its pattern's
+            // attributes, checked there (`Substituter::param_attrs`).
+            if !self.ast.decls.get(pd).has(DeclFlags::HAS_ATTRS) {
+                self.attach_param_attrs(pd, p);
             }
             match p.default_arg {
                 // Replayed in the complete-class context through

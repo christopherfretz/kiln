@@ -113,6 +113,7 @@ mod nullability;
 mod oven_bridge;
 pub mod overload;
 mod packed;
+mod param_attrs;
 pub mod pragma_attr;
 mod pragma_names;
 pub mod pragma_pack;

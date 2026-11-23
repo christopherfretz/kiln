@@ -369,6 +369,16 @@ impl Sema<'_, '_> {
                 };
                 a = u32::try_from(pos).unwrap_or(0);
             }
+            AttrKind::ALIGN_VALUE
+                if let [AttrArg::Expr(e)] = args
+                    && self.is_dependent_arg(&args[0]) =>
+            {
+                // A value-dependent alignment is kept with its expression,
+                // checked when the declaration is instantiated (clang
+                // `AddAlignValueAttr` skips it; WP-2476).
+                flags = AttrNode::ALIGN_VALUE_DEPENDENT;
+                a = e.raw();
+            }
             AttrKind::XRAY_LOG_ARGS | AttrKind::ALIGN_VALUE | AttrKind::CODE_ALIGN => {
                 let [arg] = args else { return count(self, "1") };
                 let v = match self.arg_int(arg) {
@@ -747,7 +757,8 @@ impl Sema<'_, '_> {
             }
             AttrKind::ALIGN_VALUE => {
                 let typedef = matches!(kind, DeclKind::Typedef | DeclKind::TypeAlias);
-                if !(var || kind == DeclKind::ParmVar || kind == DeclKind::Field || typedef) {
+                // clang's subjects `Var, TypedefName`: not a field.
+                if !(var || kind == DeclKind::ParmVar || typedef) {
                     return wrong(self, false, "variables and typedefs");
                 }
                 // A typedef's underlying type (clang `TypedefNameDecl::

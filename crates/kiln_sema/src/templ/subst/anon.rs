@@ -259,6 +259,44 @@ impl Substituter<'_, '_, '_> {
         if nodes.is_empty() || ast.attrs.of_decl(spec) != kiln_ast::ids::ListId::EMPTY {
             return;
         }
+        let mut out = self.subst_attr_nodes(spec, def, nodes);
+        self.instantiated_pure_const(spec, &mut out);
+        let _ = self.sema.builder().attach_attrs(spec, &out);
+    }
+
+    /// The attributes of pattern parameter `p` for its instantiation
+    /// `np` (clang `SubstParmVarDecl` → `InstantiateAttrs`, WP-2476):
+    /// each copied, inherited ones too, with a dependent argument
+    /// substituted ([`Self::subst_attr_nodes`]); not a `mode` (applied
+    /// to the substituted type, `Sema::apply_pattern_mode`) or a
+    /// visibility. Fresh nodes for every call, so the elements of an
+    /// expanded pack have their own.
+    pub(crate) fn param_attrs(&mut self, np: DeclId, p: DeclId) -> Vec<AttrId> {
+        let ast = &self.sema.ast;
+        if !ast.decls.get(p).has(DeclFlags::HAS_ATTRS) {
+            return Vec::new();
+        }
+        let nodes: Vec<(AttrId, AttrNode)> = ast
+            .lists
+            .iter::<AttrId>(ast.attrs.of_decl(p))
+            .map(|a| (a, *ast.attrs.get(a)))
+            .filter(|(_, n)| {
+                !matches!(n.kind, AttrKind::VISIBILITY | AttrKind::TYPE_VISIBILITY | AttrKind::MODE)
+            })
+            .collect();
+        self.subst_attr_nodes(np, p, nodes)
+    }
+
+    /// Fresh copies of the attribute `nodes` of pattern declaration `def`
+    /// for its instantiation `spec`, each dependent argument substituted
+    /// (clang `InstantiateAttrs`); one whose substitution fails is
+    /// dropped (diagnosed).
+    fn subst_attr_nodes(
+        &mut self,
+        spec: DeclId,
+        def: DeclId,
+        nodes: Vec<(AttrId, AttrNode)>,
+    ) -> Vec<AttrId> {
         let mut out = Vec::new();
         for (id, node) in nodes {
             if node.kind == AttrKind::ALIGNED {
@@ -340,10 +378,20 @@ impl Substituter<'_, '_, '_> {
                     continue;
                 }
             }
+            if node.kind == AttrKind::ALIGN_VALUE
+                && node.flags & AttrNode::ALIGN_VALUE_DEPENDENT != 0
+            {
+                // clang `instantiateDependentAlignValueAttr` (WP-2476).
+                let Some(e) = ExprId::from_raw(node.a) else { continue };
+                let Ok(e) = self.expr(e) else { continue };
+                if let Some(n) = self.sema.instantiate_align_value(node, e) {
+                    out.push(self.sema.ast.attrs.push(n));
+                }
+                continue;
+            }
             out.push(self.sema.ast.attrs.push(node));
         }
-        self.instantiated_pure_const(spec, &mut out);
-        let _ = self.sema.builder().attach_attrs(spec, &out);
+        out
     }
 
     /// A `const` / `pure` function whose substituted result is `void`

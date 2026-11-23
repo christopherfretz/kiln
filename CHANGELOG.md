@@ -968,6 +968,22 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- Parameter attributes follow clang across declarations and templates
+  (WP-2476): a redeclaration's parameter inherits the previous
+  declaration's `nonnull`, `annotate`, `carries_dependency` and Swift ABI
+  attributes (`lifetimebound` too from clang 22), shown `Inherited` by
+  `-fdump-ast`, so a definition gets a prior declaration's `nonnull` and
+  `llvm.var.annotation`; a call's `-fsanitize=nonnull-attribute` check,
+  `maybe_undef` freeze and `noescape` read the declaration the call
+  names, not every redeclaration; in C++ declarations that differ in a
+  parameter's `noescape` are `conflicting types` (C forms the composite
+  type); a template's parameter attributes are all instantiated (only the
+  Swift ABI ones were), with a dependent `align_value(N)` checked at
+  instantiation (a substitution failure when not a power of two); the
+  parameters of a function type inside a declarator have their attributes
+  checked; `aligned(N)` on a parameter aligns its storage; `align_value`
+  on a non-static data member is ignored with a warning, as clang, instead
+  of accepted.
 - `EvalSession::variable_value` instantiates on demand a static data
   member's initializer that nothing instantiated (an in-class `constexpr`
   member of a class template specialization, an out-of-line `const` one),

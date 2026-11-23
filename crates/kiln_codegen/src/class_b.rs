@@ -586,19 +586,40 @@ impl Cg<'_> {
         None
     }
 
-    /// The parameter declarations of the redeclarations of `d`, by
-    /// position.
-    pub(crate) fn redecl_params(&self, d: DeclId) -> Vec<Vec<DeclId>> {
+    /// Whether parameter `i` of declaration `d` itself carries `k` (its
+    /// own attributes and those it inherited from the previous
+    /// declaration, spec/sema.md §4.5 "Parameter attributes"; clang
+    /// `getParamDecl(i)->hasAttr<...>()` on the declaration called or
+    /// emitted).
+    pub(crate) fn own_param_has(&self, d: DeclId, i: usize, k: K) -> bool {
         let ast = self.ast;
-        ast.redecls_of(d)
-            .filter_map(|r| ast.decls.function(r))
-            .map(|f| ast.lists.iter::<DeclId>(f.params).collect())
-            .collect()
+        ast.decls
+            .function(d)
+            .and_then(|f| ast.lists.at::<DeclId>(f.params, i))
+            .is_some_and(|p| self.has_fn_attr(p, k))
     }
 
-    /// Whether parameter `i` of some redeclaration of `d` carries `k`.
-    fn param_has(&self, params: &[Vec<DeclId>], i: usize, k: K) -> bool {
-        params.iter().filter_map(|p| p.get(i)).any(|&p| self.has_fn_attr(p, k))
+    /// Whether parameter `i` of declaration `d` is `noescape` in `d`'s
+    /// function type (clang's `ExtParameterInfo`): its own parameter's,
+    /// in every declaration up to `d`. In C++ every declaration agrees
+    /// (a mismatch is "conflicting types"); a C redeclaration has the
+    /// composite type, `noescape` only where both are (clang
+    /// `mergeExtParameterInfo`).
+    fn noescape_param(&self, d: DeclId, i: usize) -> bool {
+        let ast = self.ast;
+        let mut cur = Some(d);
+        let mut n = 0;
+        while let Some(x) = cur {
+            if !self.own_param_has(x, i, K::NOESCAPE) {
+                return false;
+            }
+            n += 1;
+            if n > 4096 {
+                break;
+            }
+            cur = ast.prev(x);
+        }
+        true
     }
 
     /// Adds `attr` to IR parameter `at` of `params`.
@@ -614,13 +635,12 @@ impl Cg<'_> {
     /// `ExtParameterInfo`), on a declaration, a definition and a direct
     /// call of `d` with signature `sig`.
     pub(crate) fn class_b_params(&mut self, d: DeclId, sig: &Sig, params: &mut [AttrSetId]) {
-        let ps = self.redecl_params(d);
-        if ps.is_empty() {
+        if self.ast.decls.function(d).is_none() {
             return;
         }
         for (i, (slot, _)) in Self::arg_slots(sig).into_iter().enumerate() {
             if let Some(at) = slot
-                && self.param_has(&ps, i, K::NOESCAPE)
+                && self.noescape_param(d, i)
             {
                 self.add_param_attr(params, at, Attr::Flag(AttrKind::NoCapture));
             }
@@ -715,10 +735,16 @@ impl Cg<'_> {
             if (fn_nn || self.has_fn_attr(p, K::NONNULL)) && !self.opts.null_pointer_is_valid {
                 self.add_param_attr(params, at, Attr::Flag(AttrKind::NonNull));
             }
-            let av = self.fn_attr(p, K::ALIGN_VALUE).or_else(|| {
-                let td = self.typedef_of(ast.decls.get(p).ty()?)?;
-                self.fn_attr(td, K::ALIGN_VALUE)
-            });
+            // Not inherited from another declaration (clang's
+            // `AlignValueAttr` is no `InheritableParamAttr`); a still
+            // dependent one is a pattern's.
+            let av = self
+                .fn_attr(p, K::ALIGN_VALUE)
+                .or_else(|| {
+                    let td = self.typedef_of(ast.decls.get(p).ty()?)?;
+                    self.fn_attr(td, K::ALIGN_VALUE)
+                })
+                .filter(|n| n.flags & AttrNode::ALIGN_VALUE_DEPENDENT == 0);
             if let Some(n) = av {
                 self.add_param_attr(params, at, Attr::Align(u64::from(n.a)));
             }
@@ -843,8 +869,7 @@ impl Cg<'_> {
     /// Whether parameter `i` of `d` is `maybe_undef` (clang `EmitCall`
     /// freezes the argument).
     pub(crate) fn maybe_undef_param(&self, d: DeclId, i: usize) -> bool {
-        let ps = self.redecl_params(d);
-        self.param_has(&ps, i, K::MAYBE_UNDEF)
+        self.own_param_has(d, i, K::MAYBE_UNDEF)
     }
 
     /// clang `AssumeAlignedAttrEmitter`: after a call of `d` returning

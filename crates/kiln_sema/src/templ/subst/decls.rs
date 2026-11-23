@@ -4,6 +4,7 @@
 //! from a decl-specifier and a declarator rebuilt out of the pattern
 //! declaration with substituted types.
 
+use kiln_ast::attr::AttrKind;
 use kiln_ast::decl::{
     ConstexprKind, DeclFlags, DeclKind, EnumData, FieldData, FnStorage, FriendTarget, ParamData,
     TlsKind, VarStorage,
@@ -11,7 +12,7 @@ use kiln_ast::decl::{
 use kiln_ast::ids::TemplateParamListId;
 use kiln_ast::names::DeclNameKind;
 use kiln_ast::types::{TagKeyword, TypeView};
-use kiln_ast::{DeclId, QualType};
+use kiln_ast::{AttrId, DeclId, QualType};
 use kiln_source::Loc;
 use kiln_source::symbol::Symbol;
 
@@ -526,10 +527,10 @@ impl Substituter<'_, '_, '_> {
             let depth = pd.map_or(0, |x| x.flags & ParamData::SCOPE_DEPTH_MASK);
             let t = pd.and_then(|x| x.original_ty).unwrap_or_else(|| self.decl_ty(p));
             let name = n.name().as_ident().filter(|_| !n.name().is_empty()).map(|s| (s, n.loc()));
-            // Its Swift parameter ABI, re-checked on the substituted type
-            // (clang `SubstParmVarDecl` → `AddParameterABIAttr`, in the
-            // immediate context).
-            let abi_attrs = self.sema.param_abi_attrs(p);
+            // Its attributes are instantiated onto each new parameter
+            // (`Substituter::param_attrs`); its Swift parameter ABI is
+            // re-checked on the substituted type (clang `SubstParmVarDecl`
+            // → `AddParameterABIAttr`, in the immediate context).
             if pd.is_some_and(|x| x.flags & ParamData::PACK != 0)
                 && let Some(pat) = crate::templ::pack::type_pattern(self.sema, t)
             {
@@ -555,7 +556,8 @@ impl Substituter<'_, '_, '_> {
                         );
                         self.sema.unowned_params.insert(np);
                         self.locals.insert(p, DeclOrPack::Decl(np));
-                        out.push(subst_param_info(name, ty, loc, np, None));
+                        let attrs = self.instantiate_param_attrs(np, p)?;
+                        out.push(ParamInfo { attrs, ..subst_param_info(name, ty, loc, np, None) });
                         continue;
                     }
                 };
@@ -569,7 +571,7 @@ impl Substituter<'_, '_, '_> {
                         self.sema.builder().prototype_param(ctx, n.name(), loc, ty, idx, depth);
                     self.sema.unowned_params.insert(np);
                     decls.push(np);
-                    let mut attrs = abi_attrs.clone();
+                    let mut attrs = self.instantiate_param_attrs(np, p)?;
                     if !self.sema.check_param_abi_attrs(ty, &mut attrs) {
                         return Err(SubstFail);
                     }
@@ -593,10 +595,6 @@ impl Substituter<'_, '_, '_> {
             self.declarator_name = outer_name;
             let declared = self.sema.apply_pattern_mode(p, ty?);
             let ty = self.param_type(declared, n.loc())?;
-            let mut attrs = abi_attrs;
-            if !self.sema.check_param_abi_attrs(ty, &mut attrs) {
-                return Err(SubstFail);
-            }
             // Created now, so that the rest of the signature (a trailing
             // return type, the exception specification) refers to it
             // ([basic.scope.param]); the function adopts it.
@@ -607,6 +605,10 @@ impl Substituter<'_, '_, '_> {
                 self.sema.builder().prototype_param(ctx, n.name(), n.loc(), ty, idx, eo | depth);
             self.sema.unowned_params.insert(np);
             self.locals.insert(p, DeclOrPack::Decl(np));
+            let mut attrs = self.instantiate_param_attrs(np, p)?;
+            if !self.sema.check_param_abi_attrs(ty, &mut attrs) {
+                return Err(SubstFail);
+            }
             // The type as declared is kept only while still dependent (a
             // member template of a partially instantiated class), for the
             // next substitution's invalid-type check (§5.7.2); clang's
@@ -626,6 +628,28 @@ impl Substituter<'_, '_, '_> {
             });
         }
         Ok(out)
+    }
+
+    /// The attributes of pattern parameter `p` instantiated onto `np`
+    /// ([`Substituter::param_attrs`]), attached; its Swift parameter ABI
+    /// attributes, which the function type records
+    /// ([`Sema::info_with_param_abis`]). An argument whose substitution
+    /// fails fails the substitution (clang's `InstantiateAttrs` in the
+    /// immediate context: `align_value(N)` with `N` not a power of two).
+    fn instantiate_param_attrs(&mut self, np: DeclId, p: DeclId) -> SubstResult<Vec<AttrId>> {
+        let errs = (self.sema.diags.error_count(), self.sema.sfinae_errors());
+        let attrs = self.param_attrs(np, p);
+        if (self.sema.diags.error_count(), self.sema.sfinae_errors()) != errs {
+            return Err(SubstFail);
+        }
+        if !attrs.is_empty() {
+            self.sema.ast.attrs.mark_checked(&attrs);
+            let _ = self.sema.builder().attach_attrs(np, &attrs);
+        }
+        Ok(attrs
+            .into_iter()
+            .filter(|&a| self.sema.ast.attrs.get(a).kind == AttrKind::SWIFT_PARAM_ABI)
+            .collect())
     }
 
     /// The occurrence rule of pattern declaration `d`'s type at `loc`

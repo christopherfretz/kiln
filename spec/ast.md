@@ -965,7 +965,7 @@ translation unit every attribute in a declaration's list or an
 node no list reaches (one a check replaced or dropped) may not be. An
 argument that depends on a template parameter keeps its deferred form
 under its per-kind flag (`PRIORITY_DEPENDENT`, `MODE_DEFERRED`,
-`SPACE_DEPENDENT`) until instantiation. The bit lives in the existing
+`SPACE_DEPENDENT`, `ALIGN_VALUE_DEPENDENT`) until instantiation. The bit lives in the existing
 flags byte: the node stays 16 B, and the PCH snapshot and the module
 image carry it with the flags unchanged in layout.
 
