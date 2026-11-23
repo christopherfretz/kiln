@@ -88,7 +88,7 @@ struct MemInitRec {
 struct PatInit {
     /// The constructor's record.
     rec: u32,
-    /// The `:`.
+    /// The `:`, [`NONE`] when no ctor-initializer is written.
     colon: u32,
     inits: Vec<MemInitRec>,
 }
@@ -103,14 +103,16 @@ pub(super) struct PatInits {
 
 impl Writer<'_, '_, '_> {
     /// Lists the pattern mem-initializers of constructor `d`, record `i`
-    /// (a definition in a class template), if it has any.
+    /// (a definition in a class template), if it has a record (every
+    /// pattern constructor has one, the empty list included).
     pub(super) fn pattern_mem_inits(&mut self, d: DeclId, i: u32) -> W<()> {
         let s = self.s;
         let Some(p) = s.ast.pattern_mem_inits(d) else { return Ok(()) };
         if p.failed {
             return Err("a mem-initializer that failed its definition-time check");
         }
-        let colon = self.loc(p.colon)?;
+        // No ctor-initializer: `NONE` (an image location's "invalid").
+        let colon = p.colon.map_or(Ok(NONE), |c| self.loc(c))?;
         let mut inits = Vec::with_capacity(p.inits.len());
         for m in &p.inits {
             let id = match m.id {
@@ -425,8 +427,8 @@ impl Sema<'_, '_> {
                     init,
                 });
             }
-            let rec =
-                PatternMemInits { colon: main.get(c.colon), failed: false, inits: list.into() };
+            let colon = (c.colon != NONE).then(|| main.get(c.colon));
+            let rec = PatternMemInits { colon, failed: false, inits: list.into() };
             let _ = self.builder().set_pattern_mem_inits(ctor, rec);
         }
     }

@@ -288,8 +288,10 @@ pub struct PartialSpecInfo {
 /// ([`Ast::ctor_inits`]).
 #[derive(Clone, Debug, PartialEq, Eq, kiln_snap::Snap)]
 pub struct PatternMemInits {
-    /// The `:` that begins the ctor-initializer.
-    pub colon: Loc,
+    /// The `:` that begins the ctor-initializer; `None` when the
+    /// definition has no ctor-initializer (`S() {}`: the record is then
+    /// the empty list, and says so).
+    pub colon: Option<Loc>,
     /// A mem-initializer failed its definition-time check (diagnosed):
     /// the instantiations add no implicit initializers. An identifier the
     /// definition could not resolve stays in `inits`

@@ -1001,6 +1001,15 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Changed
 
+- `PatternMemInits::colon` is an `Option<Loc>` and every constructor
+  definition in a template has a record, the empty list included
+  (WP-3200, spec/ast.md §8.6): `S() {}` is a record with `colon: None`
+  and no mem-initializers, so a tooling client tells it from a
+  constructor that is no pattern on the `Ast` alone.
+  `Sema::act_on_mem_initializers` takes the `:` as `Option<Loc>`.
+  Instantiation is unchanged. PCH snapshot format 171, module image
+  version 94.
+
 - String identity (WP-3000, spec/ast.md §5.8.1): a source-location
   string is one object per (content, role, declaration the use is
   evaluated in), and reflection's and contract sites' strings are

@@ -996,13 +996,13 @@ impl Parser<'_, '_> {
             }
             if ctor {
                 self.trace(|_| format!("mem_initializers({count})"));
-                self.s.act_on_mem_initializers(f, &[], colon);
+                self.s.act_on_mem_initializers(f, &[], Some(colon));
             } else {
                 self.s.error(DiagId::parse_only_constructors_take_base_inits, colon);
             }
         } else if ctor {
             self.trace(|_| "mem_initializers(0)".to_owned());
-            self.s.act_on_mem_initializers(f, &[], self.loc());
+            self.s.act_on_mem_initializers(f, &[], None);
         }
         if !self.at(Punct::LBrace) {
             if !had_colon {

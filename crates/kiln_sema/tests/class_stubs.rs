@@ -52,7 +52,7 @@ fn calls_every_class_makes_are_silent() {
     with_sema(|s, sink| {
         let (r, f) = open_class(s, TagKind::Struct);
         s.act_on_base_specifiers(r, &[]);
-        s.act_on_mem_initializers(f, &[], L);
+        s.act_on_mem_initializers(f, &[], None);
         s.act_on_finish_record_definition(r, true);
         s.act_on_finish_class_contexts(r);
         assert_eq!(messages(sink), Vec::<String>::new());
@@ -75,7 +75,7 @@ fn class_features_once_stubbed_are_silent() {
             pack_expansion: false,
         };
         // WP-067b: ctor-initializers are implemented; `x` names nothing.
-        s.act_on_mem_initializers(f, &[init], L);
+        s.act_on_mem_initializers(f, &[init], Some(L));
         assert_eq!(
             messages(sink),
             vec![

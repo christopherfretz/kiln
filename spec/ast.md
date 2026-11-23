@@ -119,7 +119,7 @@ After a node is created its header and side record are immutable, except:
 | lookup tables, specialization maps, `layouts`, `virtuals`, `vtables`, `consts`, `types` | insert-only | sema / Oven / `kiln_abi` |
 | cold `member_overload` `template_args` (§5.10) | once, when the parser reaches the template-id after the overloaded access | sema |
 | `templates.oper_lookups` (§8.5) | insert-only; one set per dependent operator expression, at its creation | sema / module-image importer |
-| `templates.pattern_mem_inits` (§8.6) | once per constructor definition in a template, at the end of its ctor-initializer | sema / module-image importer |
+| `templates.pattern_mem_inits` (§8.6) | once per constructor definition in a template, at the end of its ctor-initializer (before the body when it has none) | sema / module-image importer |
 | `WrittenRefs` entries (§18) | append-only; `entity`/`found` of an overloaded name patched once by overload resolution; `enclosing` narrowed by declaration claims | parser / sema |
 
 **Instantiation adds nodes, never rewrites patterns**: substituting a
@@ -1239,10 +1239,26 @@ reads that record and nothing else:
   `Ast::pattern_mem_inits(ctor) -> Option<&PatternMemInits>`; written
   once (`AstBuilder::set_pattern_mem_inits`) at the end of the
   ctor-initializer by Sema and by the module-image importer.
-- `PatternMemInits { colon, failed, inits }`: the `:`; `failed` when a
-  mem-initializer failed its definition-time check (diagnosed; the
-  instantiations then add no implicit initializers, [class.base.init]/9
-  is not applied after an error); the mem-initializers in written order.
+- `PatternMemInits { colon, failed, inits }`: `colon` is `Some` of the
+  `:` that begins the ctor-initializer, `None` when the definition has
+  none (`S() {}`, WP-3200); `failed` when a mem-initializer failed its
+  definition-time check (diagnosed; the instantiations then add no
+  implicit initializers, [class.base.init]/9 is not applied after an
+  error); the mem-initializers in written order.
+- Every such constructor definition has a record, the empty list
+  included (WP-3200): `S() {}` has `colon == None` and no
+  mem-initializers, so a client tells "no ctor-initializer written" from
+  a constructor that is no pattern (no record) on the `Ast` alone. The
+  parser tells Sema which it is (`Sema::act_on_mem_initializers` takes
+  `Option<Loc>`); `None` is never inferred from an empty list. The
+  instantiation of the empty list is unchanged: the implicit
+  initializers are added ([class.base.init]/9). The exception is an
+  `INVALID` constructor definition: it gets a record only when a
+  mem-initializer failed (`failed`, no list), as before. The cost is one
+  cold-map entry with an empty list per pattern constructor: for
+  `#include <bits/stdc++.h>` (libstdc++, `-std=c++26`) 1531 records, 108
+  of them empty (1423 before), and the memory row `pattern_mem_inits`
+  at 180 KB live of 43 MB.
 - `PatternMemInit { id, loc, end, pack_expansion, init }`: `loc` is the
   first token of the mem-initializer-id (its qualifier included), `end`
   its last token (`)`, `}`, or the `...` of a pack expansion); the written
@@ -1272,7 +1288,11 @@ Why this shape: the record is the syntax a tooling client needs (which
 entity each mem-initializer names, where, and with which expressions)
 and nothing semantic, so it is the same for every instantiation and
 survives a snapshot as plain data; a cold map keyed by the constructor
-costs nothing for the constructors that are no patterns. A constructor
+costs nothing for the constructors that are no patterns. The empty
+list is a record too because a tooling client must see that the
+definition writes no ctor-initializer without reading the source again
+(the client request), and an absent record already means "no pattern".
+A constructor
 that is no pattern (a non-template class's non-template constructor, or
 any instantiation) does not get a record: its resolved initializers,
 implicit ones included, are `ColdDeclData::ctor_inits` (§2.4,
@@ -1280,8 +1300,10 @@ implicit ones included, are `ColdDeclData::ctor_inits` (§2.4,
 `INVALID` keeps no list.
 
 Carriage: PCH snapshots carry the map with the `Ast` (§17; snapshot
-format 166). Module images carry the record with the constructor
-(spec/modules.md §11; image version 89): a `Member` by its name, looked
+format 166, 171 since `colon` is an `Option`). Module images carry the
+record with the constructor, the empty one included, `colon: None` as
+the location `NONE` (spec/modules.md §11; image version 89, 94 since
+WP-3200): a `Member` by its name, looked
 up again in the importing class; a braced list decomposed and rebuilt; an
 image is refused (the source fallback) for a designated clause and for a
 failed record.
@@ -1296,8 +1318,8 @@ the written arguments only, so matching clang would need a second,
 resolved list per pattern constructor.
 
 Tests: `crates/kiln_parse/tests/pattern_mem_inits.rs` (every kind, a
-failed and an unresolved one, the record after a prefix snapshot
-round trip), `crates/kiln_driver/tests/front_end.rs`
+failed and an unresolved one, the empty list of every kind of pattern
+constructor, the record after a prefix snapshot round trip), `crates/kiln_driver/tests/front_end.rs`
 (`pattern_mem_inits_through_a_module_image`).
 
 ### 8.7 Pattern syntax and the AST (WP-3027)

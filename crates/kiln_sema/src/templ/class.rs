@@ -2488,7 +2488,7 @@ impl Substituter<'_, '_, '_> {
         if sub.sema.kind_of(f) == DeclKind::CXXConstructor {
             // The pattern's ctor-initializer, substituted and checked
             // as the parser's would be (spec/sema-class.md §4.9).
-            inits_failed = sub.ctor_initializer(f, pdef, lbrace);
+            inits_failed = sub.ctor_initializer(f, pdef);
         }
         let b = sub.body(body);
         let discarded = std::mem::take(&mut sub.discarded);

@@ -1301,6 +1301,7 @@ template <class T> struct Braced { T x; int a[2]; Braced() : x{1}, a{1, {2}} {} 
 template <class T> struct MemTmpl { T x; template <class U> MemTmpl(U u) : x(u) {} };
 template <class T> struct Outer { struct Inner { T v; Inner() : v() {} }; };
 struct NonTmpl { int v; template <class U> NonTmpl(U u) : v(u) {} };
+template <class T> struct Empty { T m; Empty() {} template <class U> Empty(U) {} };
 ";
 
 /// The shape of a braced list: its clauses' kinds, nested lists in braces.
@@ -1336,7 +1337,8 @@ fn pattern_inits_of(ast: &Ast, sm: &kiln_source::SourceManager) -> Vec<String> {
         .filter_map(|d| {
             let p = ast.pattern_mem_inits(d)?;
             let class = ast.decls.get(d).ctx().map_or("", ident);
-            let mut s = format!("{class} {}{}", lc(p.colon), if p.failed { " failed" } else { "" });
+            let colon = p.colon.map_or_else(|| "no-colon".to_owned(), lc);
+            let mut s = format!("{class} {colon}{}", if p.failed { " failed" } else { "" });
             for m in &p.inits {
                 let id = match m.id {
                     PatternMemInitId::Member(f) => {
@@ -1386,7 +1388,10 @@ fn pattern_mem_inits_through_a_module_image() {
     let r = run_front_end("kiln++", &cl, quiet(), |fe| pattern_inits_of(fe.ast, fe.sm)).unwrap();
     assert_eq!(r.errors, 0, "{:?}", r.first_error);
     let direct = r.value.unwrap();
-    assert_eq!(direct.len(), 11, "{direct:#?}");
+    // Two of them empty (`Empty() {}` and its constructor template,
+    // WP-3200).
+    assert_eq!(direct.len(), 13, "{direct:#?}");
+    assert_eq!(direct.iter().filter(|r| r.ends_with(" no-colon")).count(), 2, "{direct:#?}");
     let pcm = s.path("m.pcm");
     let out =
         Command::new(std::path::Path::new(env!("CARGO_BIN_EXE_kiln")).with_file_name("kiln++"))

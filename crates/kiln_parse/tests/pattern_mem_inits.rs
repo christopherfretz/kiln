@@ -4,7 +4,9 @@
 //! written order the mem-initializer-id as the definition resolved it,
 //! the written range, the pack expansion and the initializer's
 //! expressions; a constructor that is no pattern has its resolved list
-//! (`Ast::ctor_inits`) instead. The same record after a prefix snapshot
+//! (`Ast::ctor_inits`) instead. A pattern constructor without a
+//! ctor-initializer has a record too: no `:` and no mem-initializers
+//! (WP-3200). The same record after a prefix snapshot
 //! round trip (a PCH); the module-image round trip is
 //! `kiln_driver/tests/front_end.rs` (`pattern_mem_inits_through_a_module_image`).
 
@@ -41,6 +43,7 @@ template <class T> struct MemTmpl { T x; template <class U> MemTmpl(U u) : x(u) 
 template <class T> struct Outer { struct Inner { T v; Inner() : v() {} }; };
 struct NonTmpl { int v; template <class U> NonTmpl(U u) : v(u) {} };
 struct Plain { int v; Plain() : v(1) {} };
+template <class T> struct Empty { T m; Empty() {} };
 ";
 
 fn ident(ast: &Ast, d: DeclId) -> &str {
@@ -86,7 +89,8 @@ fn list(ast: &Ast, sm: &SourceManager, e: ExprId) -> String {
 fn describe(ast: &Ast, sm: &SourceManager, d: DeclId) -> String {
     let names = DiagNames::new(ast, Some(sm), 19);
     let Some(p) = ast.pattern_mem_inits(d) else { return "none".to_owned() };
-    let mut out = format!(": {}{}", lc(sm, p.colon), if p.failed { " failed" } else { "" });
+    let colon = p.colon.map_or_else(|| "none".to_owned(), |c| lc(sm, c));
+    let mut out = format!(": {colon}{}", if p.failed { " failed" } else { "" });
     for m in &p.inits {
         let id = match m.id {
             PatternMemInitId::Member(f) => {
@@ -246,7 +250,8 @@ fn pattern_mem_inits_through_a_prefix_snapshot() {
         p.sema.snap_put(&mut w).expect("the prefix is at rest");
         (w.into_bytes(), before, described)
     };
-    assert_eq!(before.len(), 12, "every pattern constructor of SRC");
+    assert_eq!(before.len(), 13, "every pattern constructor of SRC, `Empty() {{}}` included");
+    assert!(before.iter().any(|(_, p)| p.colon.is_none() && p.inits.is_empty()));
     let mut r = Reader::new(&bytes);
     let sm: SourceManager = r.get().expect("source manager");
     let interner: Arc<Interner> = r.get().expect("interner");
@@ -257,4 +262,69 @@ fn pattern_mem_inits_through_a_prefix_snapshot() {
     assert_eq!(records(&s.ast), before);
     let after: Vec<String> = before.iter().map(|&(d, _)| describe(&s.ast, &sm, d)).collect();
     assert_eq!(after, described);
+}
+
+/// Every pattern constructor definition has a record, the empty list
+/// included (spec/ast.md §8.6, WP-3200; [class.base.init]/1: the
+/// ctor-initializer is optional): no `:` (`colon == None`) and no
+/// mem-initializers when none is written, whatever kind of pattern it is
+/// (a class template's constructor, a constructor template, a member
+/// class's, an out-of-class definition, a function-try-block), beside
+/// the same constructors with a ctor-initializer, as before. A
+/// constructor that is no pattern still has no record. Compiles with
+/// clang 19 and 22.
+#[test]
+fn a_pattern_constructor_without_a_ctor_initializer_has_an_empty_record() {
+    const EMPTY: &str = "\
+template <class T> struct S { T m; S() {} S(int) : m() {} };
+template <class T> struct C { T m; template <class U> C(U) {} };
+struct NC { int v; template <class U> NC(U) {} };
+template <class T> struct O { struct I { T v; I() {} }; };
+template <class T> struct Out { Out(); };
+template <class T> Out<T>::Out() {}
+template <class T> struct Tr { Tr() try {} catch (...) {} };
+template <class T> struct Del { Del(int); Del() : Del(0) {} };
+template <class... Bs> struct P : Bs... { P() {} P(int a) : Bs(a)... {} };
+struct N { int v; N() {} };
+";
+    with_ast(EMPTY, |ast, sm, errors| {
+        assert_eq!(errors, 0);
+        let s = ctors(ast, "S");
+        assert_eq!(s.len(), 2, "both constructors of S have a record");
+        let (empty, written) = (ast.pattern_mem_inits(s[0]).unwrap(), &describe(ast, sm, s[1]));
+        assert_eq!(empty.colon, None);
+        assert!(empty.inits.is_empty() && !empty.failed);
+        assert_eq!(written, ": 1:50\n  member Field m [1:52..1:54] ()@1:53..1:54");
+        let got: Vec<String> = ["C", "NC", "I", "Out", "Tr", "Del", "P"]
+            .iter()
+            .map(|c| {
+                let all: Vec<String> =
+                    ctors(ast, c).into_iter().map(|d| describe(ast, sm, d)).collect();
+                format!("{c} {}", all.join(" | "))
+            })
+            .collect();
+        let want = [
+            "C : none",
+            "NC : none",
+            "I : none",
+            "Out : none",
+            "Tr : none",
+            "Del : 8:49\n  type 'Del<T>' as Del [8:51..8:56] (IntegerLiteral)@8:54..8:56",
+            "P : none | : 9:59\n  type 'Bs' [9:61..9:66] ... (DeclRefExpr)@9:63..9:65",
+        ];
+        assert_eq!(got, want, "\n{}", got.join("\n"));
+        // No pattern: no record, the resolved list as before.
+        let n: Vec<DeclId> = ast
+            .decls
+            .ids()
+            .filter(|&d| {
+                ast.decls.get(d).kind() == DeclKind::CXXConstructor
+                    && ast.decls.get(d).ctx().is_some_and(|c| ident(ast, c) == "N")
+                    && ast.decls.function(d).is_some_and(|f| f.body.is_some())
+            })
+            .collect();
+        assert_eq!(n.len(), 1);
+        assert!(ast.pattern_mem_inits(n[0]).is_none());
+        assert!(ast.ctor_inits(n[0]).all(|c| !c.is_written()));
+    });
 }

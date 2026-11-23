@@ -414,7 +414,7 @@ impl Sema<'_, '_> {
             if sub.sema.kind_of(f) == DeclKind::CXXConstructor {
                 // A constructor template's ctor-initializer, as a class
                 // template member's (`templ/class.rs`).
-                inits_failed = sub.ctor_initializer(f, pdef, lbrace);
+                inits_failed = sub.ctor_initializer(f, pdef);
             }
             let b = sub.body(body);
             let discarded = std::mem::take(&mut sub.discarded);

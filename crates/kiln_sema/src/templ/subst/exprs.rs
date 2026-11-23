@@ -3024,12 +3024,13 @@ impl Substituter<'_, '_, '_> {
     /// pattern definition `pdef`: the pattern's list (spec/ast.md §8.6)
     /// substituted and handed to `act_on_mem_initializer` as the parser
     /// would hand it (clang `InstantiateMemInitializers`), then ended at
-    /// its `:` (`lbrace`, the body's `{`, when it has none). True if a
-    /// mem-initializer failed (substitution or initialization).
-    pub(crate) fn ctor_initializer(&mut self, f: DeclId, pdef: DeclId, lbrace: Loc) -> bool {
+    /// its `:` (`None` when it has none: the empty list, or no record for
+    /// an invalid pattern). True if a mem-initializer failed (substitution
+    /// or initialization).
+    pub(crate) fn ctor_initializer(&mut self, f: DeclId, pdef: DeclId) -> bool {
         let rec = self.sema.ast.pattern_mem_inits(pdef).cloned();
         let (inits, colon, failed) =
-            rec.map_or((Box::default(), lbrace, false), |r| (r.inits, r.colon, r.failed));
+            rec.map_or((Box::default(), None, false), |r| (r.inits, r.colon, r.failed));
         for info in &*inits {
             // Unresolved at the definition: reported there (`failed`).
             if matches!(info.id, kiln_ast::templates::PatternMemInitId::Ident(_)) {
