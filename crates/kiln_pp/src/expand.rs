@@ -984,6 +984,9 @@ impl Preprocessor<'_, '_> {
         cx: &PasteCx,
     ) -> PpTok {
         let start = lhs.tok.span.lo;
+        // The builtin-macro literal table: the first operand that is (or
+        // was pasted from) a builtin's result (WP-2821).
+        let mut mark = None;
         let mut buf = std::mem::take(&mut self.paste_buf);
         // While recording: the operands' locations before pasting.
         let mut invalid = false;
@@ -1019,6 +1022,11 @@ impl Preprocessor<'_, '_> {
             }
             if let Some(r) = self.record.as_deref_mut() {
                 r.op(rhs.tok.span.lo);
+            }
+            if self.builtin_lits.is_some() && mark.is_none() {
+                mark = [start, rhs.tok.span.lo]
+                    .into_iter()
+                    .find(|&l| self.builtin_literal_of(l).is_some());
             }
             let Some(t) = res else {
                 invalid = true;
@@ -1058,6 +1066,9 @@ impl Preprocessor<'_, '_> {
         self.rec_entry(l, lhs.tok.span.lo, EntryKind::Paste, self.rec_cur);
         if let Some(r) = self.record.as_deref_mut() {
             r.made_ops(l, invalid, false);
+        }
+        if let Some(m) = mark {
+            self.inherit_builtin_literal(l, &[m]);
         }
         lhs.tok.span = Span::new(l, l.with_offset(len));
         lhs
@@ -1124,7 +1135,13 @@ impl Preprocessor<'_, '_> {
         } else {
             TokKind::StringLit(Encoding::Ordinary)
         };
-        PpTok::new(self.scratch_tok(&s, kind, span, name, EntryKind::Stringize))
+        let r = self.scratch_tok(&s, kind, span, name, EntryKind::Stringize);
+        if self.builtin_lits.is_some() && r.span.lo != span.lo {
+            let ops: Vec<Loc> =
+                toks.iter().take_while(|t| !t.is_eof()).map(|t| t.tok.span.lo).collect();
+            self.inherit_builtin_literal(r.span.lo, &ops);
+        }
+        PpTok::new(r)
     }
 
     /// A token spelled `text` in a scratch buffer, expanded at `exp`; `rec`
@@ -1442,6 +1459,28 @@ impl Preprocessor<'_, '_> {
         }
         let mut r = PpTok::new(self.scratch_tok(&text, kind, at, name_span, EntryKind::Builtin));
         self.rec_cur = old;
+        // The builtin-macro literal table (WP-2821): the builtins whose
+        // value is a property of the place, order or time of the
+        // expansion, or of the target; not the feature queries.
+        if r.tok.span.lo.is_macro()
+            && r.tok.span.lo != at.lo
+            && matches!(
+                b,
+                Builtin::Line
+                    | Builtin::File
+                    | Builtin::BaseFile
+                    | Builtin::FileName
+                    | Builtin::Date
+                    | Builtin::Time
+                    | Builtin::Timestamp
+                    | Builtin::IncludeLevel
+                    | Builtin::Counter
+                    | Builtin::FltEvalMethod
+            )
+            && let Some(lits) = self.builtin_lits.as_deref_mut()
+        {
+            lits.insert(r.tok.span.lo, b);
+        }
         r.set_flag(TokFlags::START_OF_LINE, t.has(TokFlags::START_OF_LINE));
         r.set_flag(TokFlags::LEADING_SPACE, t.has(TokFlags::LEADING_SPACE));
         Some(r)

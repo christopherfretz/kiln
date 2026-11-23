@@ -1,0 +1,29 @@
+Dumping lits:
+NamespaceDecl lits
+|-VarDecl line 'int' cinit
+| `-IntegerLiteral 'int' 17 from __LINE__
+|-VarDecl line_user 'int' cinit
+| `-IntegerLiteral 'int' 18 from __LINE__
+|-VarDecl line_arg 'int' cinit
+| `-IntegerLiteral 'int' 19 from __LINE__
+|-VarDecl counter 'int' cinit
+| `-IntegerLiteral 'int' 0 from __COUNTER__
+|-VarDecl level 'int' cinit
+| `-IntegerLiteral 'int' 0 from __INCLUDE_LEVEL__
+|-VarDecl name 'const char *' cinit
+| `-ImplicitCastExpr 'const char *' <ArrayToPointerDecay>
+|   `-StringLiteral 'const char[31]' lvalue "builtin-literal-provenance.cpp" from __FILE_NAME__
+|-VarDecl name_concat 'const char *' cinit
+| `-ImplicitCastExpr 'const char *' <ArrayToPointerDecay>
+|   `-StringLiteral 'const char[33]' lvalue "<builtin-literal-provenance.cpp>" from __FILE_NAME__
+|-VarDecl line_string 'const char *' cinit
+| `-ImplicitCastExpr 'const char *' <ArrayToPointerDecay>
+|   `-StringLiteral 'const char[3]' lvalue "24" from __LINE__
+|-VarDecl line_pasted 'int' cinit
+| `-IntegerLiteral 'int' 125 from __LINE__
+|-VarDecl written 'int' cinit
+| `-IntegerLiteral 'int' 42
+`-VarDecl macro_name 'const char *' cinit
+  `-ImplicitCastExpr 'const char *' <ArrayToPointerDecay>
+    `-StringLiteral 'const char[9]' lvalue "__LINE__"
+

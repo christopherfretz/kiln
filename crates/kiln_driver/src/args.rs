@@ -723,6 +723,10 @@ pub struct Args {
     /// `-fkiln-dump-pp-record=source-order`: the dump, with each
     /// condition's reads in source order ([`kiln_pp::DumpOptions`]).
     pub dump_pp_record_source_order: bool,
+    /// `-fkiln-builtin-literals`: keep the builtin-macro literal table
+    /// (`PpOptions::builtin_literals`, spec/ast.md §22): which builtin
+    /// macro each literal came from, shown by `-fdump-ast`.
+    pub builtin_literals: bool,
     /// `-fkiln-cfg-stats` (`-fsyntax-only` and codegen): one line per analysed
     /// function body with its graph's size and build time
     /// (spec/sema.md §7.5.1).
@@ -2111,6 +2115,7 @@ impl Args {
             }
             "-fkiln-dump-expr-extents" => self.dump_expr_extents = true,
             "-fkiln-pp-record" => self.pp_record = true,
+            "-fkiln-builtin-literals" => self.builtin_literals = true,
             "-fkiln-dump-pp-record" => self.dump_pp_record = true,
             "-fkiln-dump-pp-record=source-order" => {
                 self.dump_pp_record = true;

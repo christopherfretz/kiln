@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use kiln_diag::{DiagId, Level};
 use kiln_driver::front_end::{ConsultedKind, Content, FrontEndOptions, run_front_end};
-use kiln_driver::session::{SessionRefused, with_eval_session};
+use kiln_driver::session::{SessionRefused, StackPhase, with_eval_session};
 use kiln_driver::{Io, SharedWriter};
 use kiln_parse::{CancelToken, EvalSession, HostCalls, HostError, HostOut, RunBudget, RunValue};
 
@@ -229,6 +229,133 @@ fn a_refusal_renders_after_the_call() {
     // The other cases' text.
     let (r, _) = refused(&["-std=c++99x"], "errors.cpp");
     assert_eq!(r.rendered(), "invalid value 'c++99x' in '-std=c++99x'");
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+/// WP-2827 (spec/eval-session.md §2 "Refusal", spec/diag.md §10.4): a
+/// refused unit's diagnostics come back as data a client keeps after the
+/// call: per diagnostic its id, severity, message, option and caret
+/// location (buffer, offset, presumed file, line and column), with its
+/// notes (attached and macro-expansion ones), the fields of its JSON
+/// object. Units with an error; a warning and an error; an error with a
+/// note; an error in a macro's expansion; and `#line`, which the presumed
+/// location follows.
+#[test]
+fn a_refusal_is_data() {
+    let dir = scratch(
+        "refused-data",
+        &[
+            ("error.cpp", "int x = ;\n"),
+            ("warning.cpp", "#warning \"careful\"\nint a = ;\n"),
+            ("note.cpp", "int a;\ndouble a;\n"),
+            ("macro.cpp", "#define BAD (1 +)\nint c = BAD;\n"),
+            ("line.cpp", "#line 40 \"renamed.cpp\"\nint x = ;\n"),
+        ],
+    );
+    let path = |name: &str| dir.join(name).to_string_lossy().into_owned();
+    let refused = |file: &str| {
+        let err = Captured::default();
+        let cl = ["-std=c++26".to_owned(), path(file)];
+        let got = with_eval_session(&kilnpp(), &cl, io(&err), |fe| fe.map(drop).err());
+        got.expect("refused")
+    };
+    // One error.
+    let refusal = refused("error.cpp");
+    assert!(matches!(&refusal, SessionRefused::TuHasErrors { errors: 1, .. }), "{refusal:?}");
+    assert_eq!(refusal.stack_exhausted(), None);
+    let [rec] = refusal.records() else { panic!("{refusal:?}") };
+    assert_eq!((rec.id, rec.level), (Some(DiagId::parse_expected_expression), Level::Error));
+    assert_eq!(rec.message, "expected expression");
+    assert!(rec.notes.is_empty(), "{rec:?}");
+    let at = rec.location.as_ref().expect("a location");
+    assert!(at.presumed_file.ends_with("error.cpp"), "{at:?}");
+    assert_eq!((at.line, at.column, at.offset), (1, 9, 8));
+    // A warning, then an error: both, in order, each at its place.
+    let refusal = refused("warning.cpp");
+    let [warn, rec] = refusal.records() else { panic!("{refusal:?}") };
+    assert_eq!((warn.id, warn.level), (Some(DiagId::pp_warning_directive), Level::Warning));
+    assert_eq!(warn.message, "\"careful\"");
+    assert_eq!(warn.option.as_deref(), Some("-W#warnings"));
+    assert_eq!(warn.location.as_ref().map(|l| (l.line, l.column)), Some((1, 2)));
+    assert_eq!(rec.level, Level::Error);
+    assert_eq!(rec.location.as_ref().map(|l| (l.line, l.column, l.offset)), Some((2, 9, 27)));
+    // An error with its note, located at the earlier declaration.
+    let refusal = refused("note.cpp");
+    let [rec] = refusal.records() else { panic!("{refusal:?}") };
+    assert_eq!(rec.level, Level::Error);
+    assert!(rec.message.starts_with("redefinition of 'a'"), "{rec:?}");
+    assert_eq!(rec.location.as_ref().map(|l| (l.line, l.column)), Some((2, 8)));
+    let [note] = rec.notes.as_slice() else { panic!("{rec:?}") };
+    assert_eq!((note.level, note.message.as_str()), (Level::Note, "previous definition is here"));
+    assert_eq!(note.location.as_ref().map(|l| (l.line, l.column, l.offset)), Some((1, 5, 4)));
+    assert!(note.notes.is_empty());
+    // An error inside a macro's expansion: the caret where the rendering
+    // puts it, the expansion note after it.
+    let refusal = refused("macro.cpp");
+    let [rec] = refusal.records() else { panic!("{refusal:?}") };
+    let ids: Vec<_> = rec.notes.iter().map(|note| note.id).collect();
+    assert_eq!(ids, [Some(DiagId::diag_expanded_from_macro)], "{rec:?}");
+    assert_eq!(rec.location.as_ref().map(|l| (l.line, l.column)), Some((2, 9)));
+    assert_eq!(rec.notes[0].location.as_ref().map(|l| (l.line, l.column)), Some((1, 17)));
+    assert_eq!(rec.notes[0].message, "expanded from macro 'BAD'");
+    // `#line`: the presumed file and line, the raw column and offset.
+    let refusal = refused("line.cpp");
+    let [rec] = refusal.records() else { panic!("{refusal:?}") };
+    let at = rec.location.as_ref().expect("a location");
+    assert_eq!((at.presumed_file.as_str(), at.line, at.column), ("renamed.cpp", 40, 9));
+    // The text form is the records' rendering, as before.
+    assert!(
+        refusal.rendered().contains("renamed.cpp:40:9: error: expected expression"),
+        "{}",
+        refusal.rendered()
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// WP-2827 (spec/eval-session.md §2 "Refusal"): a unit the native-stack
+/// guard stopped says so, with the phase, without the client reading the
+/// rendered `fatal error: kiln: stack exhausted during parsing` (the
+/// 50000 parentheses of `tests/stress/stack-guard-parens.cpp` on an 8 MiB
+/// guarded thread); a unit another fatal error stopped, and one with
+/// errors, do not.
+#[test]
+fn a_stack_trip_is_flagged() {
+    const SIZE: usize = 8 << 20;
+    let file = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/stress/stack-guard-parens.cpp");
+    let cl = ["-std=c++26".to_owned(), file.to_owned()];
+    let r = std::thread::scope(|sc| {
+        std::thread::Builder::new()
+            .stack_size(SIZE)
+            .spawn_scoped(sc, || {
+                kiln_sema::stack_guard::StackGuard::install(SIZE);
+                let err = Captured::default();
+                with_eval_session(&kilnpp(), &cl, io(&err), |fe| fe.map(drop).err())
+            })
+            .expect("spawn")
+            .join()
+            .expect("join")
+    });
+    let r = r.expect("refused");
+    assert!(matches!(&r, SessionRefused::Stopped { .. }), "{r:?}");
+    assert_eq!(r.stack_exhausted(), Some(StackPhase::Parsing));
+    let last = r.records().last().expect("records");
+    assert_eq!((last.id, last.level), (Some(DiagId::sema_stack_exhausted), Level::Fatal));
+    assert_eq!(StackPhase::of_record(last.id, &last.message), Some(StackPhase::Parsing));
+    assert!(r.rendered().contains("stack exhausted during parsing"), "{}", r.rendered());
+    // Another fatal error, and errors only.
+    let d = scratch(
+        "not-stack",
+        &[("fatal.cpp", "#include \"missing.h\"\n"), ("errors.cpp", "int a = ;\n")],
+    );
+    for (name, stopped) in [("fatal.cpp", true), ("errors.cpp", false)] {
+        let err = Captured::default();
+        let cl = ["-std=c++26".to_owned(), d.join(name).to_string_lossy().into_owned()];
+        let r = with_eval_session(&kilnpp(), &cl, io(&err), |fe| fe.map(drop).err());
+        let r = r.expect("refused");
+        assert_eq!(matches!(&r, SessionRefused::Stopped { .. }), stopped, "{r:?}");
+        assert_eq!(r.stack_exhausted(), None, "{r:?}");
+        assert!(!r.records().is_empty());
+    }
     std::fs::remove_dir_all(&d).unwrap();
 }
 

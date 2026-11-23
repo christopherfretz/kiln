@@ -34,8 +34,9 @@ use crate::{Engines, EntryRules, SharedWriter};
 
 /// How one run behaves. `Default` is: diagnostics discarded, no lookup
 /// log, a thread of its own, the PCH probe on, the process environment,
-/// no preprocessing record, no written-reference table, the process's
-/// working directory (read once), no overlay.
+/// no preprocessing record, no written-reference table, no builtin-macro
+/// literal table, the process's working directory (read once), no
+/// overlay.
 #[non_exhaustive]
 #[derive(Clone)]
 #[allow(clippy::struct_excessive_bools, reason = "independent switches")]
@@ -76,6 +77,11 @@ pub struct FrontEndOptions {
     /// `fe.ast.written_refs`, with the content `-fkiln-dump-written-refs`
     /// prints for the same input. Off by default (WP-2320).
     pub written_refs: bool,
+    /// Record which builtin macro each literal came from (the
+    /// builtin-macro literal table, spec/ast.md §22), as
+    /// `-fkiln-builtin-literals` on the command line does: the closure
+    /// reads it as `fe.ast.literal_builtin(e)`. Off by default (WP-2821).
+    pub builtin_literals: bool,
     /// The directory every relative path of the run opens against (the
     /// main input, `-I` and the other search directories, `-include`,
     /// `#embed`, module files, `@file`s), as clang's `-working-directory`
@@ -110,6 +116,7 @@ impl Default for FrontEndOptions {
             environment: Environment::process(),
             pp_record: false,
             written_refs: false,
+            builtin_literals: false,
             working_directory: None,
             overlay: None,
         }
@@ -127,6 +134,7 @@ impl std::fmt::Debug for FrontEndOptions {
             .field("environment", &self.environment)
             .field("pp_record", &self.pp_record)
             .field("written_refs", &self.written_refs)
+            .field("builtin_literals", &self.builtin_literals)
             .field("working_directory", &self.working_directory)
             .field("overlay", &self.overlay)
             .finish()
@@ -631,6 +639,7 @@ fn run_here<R>(
     // the module cache's key of a module built in process (a module file
     // carries the table its producer recorded, spec/ast.md §18.10.2).
     args.written_refs |= options.written_refs;
+    args.builtin_literals |= options.builtin_literals;
     structural_checks(&args)?;
     crate::crash_for_testing(&args);
     let host = Host::new(options.stderr.clone());

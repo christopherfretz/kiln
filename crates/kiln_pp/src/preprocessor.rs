@@ -435,6 +435,10 @@ pub struct Preprocessor<'a, 'd> {
     /// being read, and the header-unit import row it made (`u32::MAX`).
     pub(crate) rec_import_at: Loc,
     pub(crate) rec_hu: u32,
+    /// The builtin-macro literal table ([`PpOptions::builtin_literals`],
+    /// WP-2821): the macro location of each token a builtin macro made
+    /// (or `##` or `#` made from one), with the builtin. `None` when off.
+    pub(crate) builtin_lits: Option<Box<FxHashMap<Loc, crate::Builtin>>>,
 }
 
 impl std::fmt::Debug for Preprocessor<'_, '_> {
@@ -531,7 +535,11 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             rec_inc: u32::MAX,
             rec_import_at: Loc::INVALID,
             rec_hu: u32::MAX,
+            builtin_lits: None,
         };
+        if pp.opts.builtin_literals {
+            pp.builtin_lits = Some(Box::default());
+        }
         if pp.opts.pp_record {
             pp.record = Some(Box::new(crate::record::PpRecord::new(pp.syms.va_opt)));
         }
@@ -670,6 +678,57 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
     /// (spec/pp.md "Preprocessing record").
     pub fn record(&self) -> Option<&crate::record::PpRecord> {
         self.record.as_deref()
+    }
+
+    /// Whether the builtin-macro literal table is kept
+    /// ([`PpOptions::builtin_literals`]).
+    pub fn builtin_literals_on(&self) -> bool {
+        self.builtin_lits.is_some()
+    }
+
+    /// The builtin macro that made the token at `loc` (a location as the
+    /// token was delivered), if the table is kept and the token is a
+    /// builtin's result (`__LINE__`, `__FILE__`, ...: spec/pp.md "Builtin
+    /// macros"), or was pasted (`##`) or stringized (`#`) from operands
+    /// one of which was (the first such operand's builtin). Follows the
+    /// token's spelling chain, so a result substituted for a macro
+    /// parameter is found too.
+    pub fn builtin_literal_of(&self, loc: Loc) -> Option<crate::Builtin> {
+        let t = self.builtin_lits.as_deref()?;
+        if t.is_empty() {
+            return None;
+        }
+        let mut loc = loc;
+        while loc.is_macro() {
+            if let Some(&b) = t.get(&loc) {
+                return Some(b);
+            }
+            let next = self.sm.immediate_spelling_loc(loc);
+            if next == loc {
+                break;
+            }
+            loc = next;
+        }
+        None
+    }
+
+    /// The number of entries of the builtin-macro literal table (0 when
+    /// off).
+    pub fn builtin_literal_count(&self) -> usize {
+        self.builtin_lits.as_deref().map_or(0, FxHashMap::len)
+    }
+
+    /// Enters `made`, a token made from operands `ops` (by `##` or `#`),
+    /// in the builtin-macro literal table when one of them is in it.
+    pub(crate) fn inherit_builtin_literal(&mut self, made: Loc, ops: &[Loc]) {
+        if self.builtin_lits.is_none() || !made.is_macro() {
+            return;
+        }
+        if let Some(b) = ops.iter().find_map(|&l| self.builtin_literal_of(l))
+            && let Some(t) = self.builtin_lits.as_deref_mut()
+        {
+            t.insert(made, b);
+        }
     }
 
     /// Enters `file` as the main source file: pushes it, then the

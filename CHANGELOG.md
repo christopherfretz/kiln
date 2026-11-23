@@ -10,6 +10,28 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- A refused evaluation session's diagnostics as data (WP-2827,
+  spec/eval-session.md §2, spec/diag.md §10.4):
+  `SessionRefused::TuHasErrors` and `Stopped` carry `records`
+  (`kiln_diag::DiagRecord`: id, severity, message, group, option, caret
+  location as buffer and offset plus presumed file, line and column, and
+  the notes), which outlive the call (`SessionRefused::records()`,
+  `kiln_diag::diag_records`, `SessionFrontEnd::records`); `Stopped`
+  carries `stack_exhausted`, the phase when the native-stack guard
+  stopped the unit (`SessionRefused::stack_exhausted()`,
+  `StackPhase::of_record`), so a client no longer reads the rendered
+  line to recognise a stack trip.
+- Builtin-macro literal provenance (WP-2821, spec/ast.md §22, spec/pp.md
+  "Builtin macros"): with `-fkiln-builtin-literals`
+  (`FrontEndOptions::builtin_literals`, `PpOptions::builtin_literals`)
+  a tooling client reads which builtin macro a literal came from with
+  `Ast::literal_builtin`: `__LINE__`, `__FILE__`, `__FILE_NAME__`,
+  `__BASE_FILE__`, `__COUNTER__`, `__INCLUDE_LEVEL__`, `__DATE__`,
+  `__TIME__`, `__TIMESTAMP__` and `__FLT_EVAL_METHOD__`, written
+  directly, through a user macro, as a macro argument, or pasted and
+  stringized into the literal, any piece of a concatenated string
+  included. `-fdump-ast` appends ` from <name>` to such a literal. Off
+  by default and free when off.
 - `Ast::exception_spec_computed` (WP-2505, spec/ast.md §4.2): a tooling
   client tells an explicitly defaulted function's written exception
   specification (`S() noexcept(false) = default;`) from one computed

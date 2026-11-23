@@ -4432,3 +4432,86 @@ macro cases: an argument, a whole invocation, a part of a body, a
 pasted token) and `cargo xtask extents` (stage 1 in `ci`); the xtask
 test `the_none_table_is_the_baselines_kinds` holds the table of 21.3 to
 exactly the kinds of the baseline.
+
+## 22. Builtin-macro literals (WP-2821)
+
+A tooling client that compares or rewrites literals must not treat the
+value of `__LINE__` or `__FILE__` as one written in the source: moving
+the file or inserting a line above changes it. The builtin-macro literal
+table says which builtin macro a literal came from
+(`kiln_ast::builtin_literals`).
+
+### 22.1 What is recorded
+
+`BuiltinMacro` names the builtins whose result is one literal token
+whose value is a property of the place, order, time or target of the
+expansion ([cpp.predefined], clang's extensions): `__LINE__`,
+`__FILE__`, `__FILE_NAME__`, `__BASE_FILE__`, `__COUNTER__`,
+`__INCLUDE_LEVEL__`, `__DATE__`, `__TIME__`, `__TIMESTAMP__` and
+`__FLT_EVAL_METHOD__`. The feature queries (`__has_include`,
+`__has_builtin`, `__has_cpp_attribute`, `__is_target_*`,
+`__building_module`, ...) are not: their value is a function of their
+written operand and the configuration, and they live almost only in
+`#if` (the preprocessing record keeps their values, spec/pp.md
+"Preprocessing record"). `_Pragma` makes no literal.
+
+A literal is marked when one of its tokens is
+
+- a recorded builtin's result: written directly, reached through a user
+  macro (`#define L __LINE__`), or substituted for a macro parameter
+  after pre-expansion (`F(__LINE__)`, at any depth);
+- made by `##` ([cpp.concat]) from operands one of which is marked
+  (`CAT(1, __LINE__)` through an expanding indirection gives `125`), or
+  by `#` ([cpp.stringize]) from an operand that holds a marked token
+  (`STR(__LINE__)` through an indirection gives `"24"`): the token takes
+  the first marked operand's builtin.
+
+A string literal of several pieces ([lex.string.concat]) is marked when
+any piece is, with the first marked piece's builtin. `STR2(__LINE__)`
+without the indirection stringizes the name, `"__LINE__"`, and is not
+marked; nor is a pasted `CAT(4, 2)`.
+
+### 22.2 How it is kept
+
+Off by default. With `PpOptions::builtin_literals` (the driver's
+`-fkiln-builtin-literals`, `FrontEndOptions::builtin_literals`) the
+preprocessor keeps a map from the macro location of each token it made
+for a recorded builtin, a paste or a stringizing of a marked operand
+(each such token has an expansion entry of its own) to the builtin;
+`Preprocessor::builtin_literal_of(loc)` follows a token's
+immediate-spelling chain through argument relocations to it. The map is
+keyed by those locations, not by the scratch spelling, which is shared
+between equal texts. The parser asks it for the tokens of each integer,
+floating, character and string literal (and so of a user-defined
+literal's) and enters the literal in `Ast::builtin_literals`, keyed by
+the literal's own location (its first token), which an instantiated copy
+keeps. Off, nothing is allocated and each literal costs one branch.
+
+### 22.3 Reading it
+
+`Ast::literal_builtin(e)` gives the builtin of an `IntegerLiteral`,
+`FloatingLiteral`, `CharacterLiteral`, `StringLiteral` or
+`UserDefinedLiteral`, `None` for any other expression, a written
+literal, and every literal of a unit compiled without the option.
+`BuiltinMacro::name` spells the macro; `BuiltinLiterals::iter` lists the
+table.
+
+### 22.4 Snapshots, modules
+
+The table is the unit's own: a snapshot (PCH) writes neither the AST's
+table nor the preprocessor's map (both are restored empty, the
+consumer's options deciding whether its own literals are recorded), and
+a module file carries none, so a literal from a precompiled header or an
+imported module's image is not marked. `-fkiln-builtin-literals` is
+outside the PCH identity and off in a module built in process.
+
+### 22.5 The dump
+
+`-fdump-ast` appends ` from <name>` to a marked literal's line
+(`IntegerLiteral 'int' 17 from __LINE__`); without the table nothing
+changes. Tests: `crates/kiln_parse/tests/builtin_literals.rs` (every
+builtin directly; `__LINE__`, `__FILE__` and `__COUNTER__` through a user
+macro and as arguments; pasted into an integer, a suffixed and a
+floating literal; stringized; a middle and a last string piece; written
+literals; off by default), and
+`tests/conformance/cpp.predefined/builtin-literal-provenance.cpp`.

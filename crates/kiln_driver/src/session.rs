@@ -9,9 +9,12 @@ use std::io::Write as _;
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use kiln_diag::{Diag, DiagEngine, DiagId, DiagOptions, DiagSink, Diagnostic, Format, Level};
+use kiln_diag::{
+    Diag, DiagEngine, DiagId, DiagOptions, DiagRecord, DiagSink, Diagnostic, Format, Level,
+};
 use kiln_lex::Interner;
 use kiln_parse::{EvalSession, HostCalls, HostError, HostOut, OpenError};
+pub use kiln_sema::stack_guard::StackPhase;
 use kiln_source::{FileId, SourceManager, Span};
 
 use crate::args::{Action, Lang};
@@ -60,6 +63,17 @@ impl SessionFrontEnd<'_, '_> {
     pub fn render(&self, records: &[Diagnostic]) -> String {
         kiln_diag::render_diagnostics(self.sources, &self.diag_options, records)
     }
+
+    /// `records` as data ([`kiln_diag::diag_records`] with
+    /// [`SessionFrontEnd::diag_options`], spec/diag.md §10.4): per
+    /// diagnostic its id, severity, message, group, option, caret
+    /// location (buffer and offset, presumed file, line and column) and
+    /// notes, the content of its `-fdiagnostics-format=json` object,
+    /// usable after the session ends (WP-2827).
+    #[must_use]
+    pub fn records(&self, records: &[Diagnostic]) -> Vec<DiagRecord> {
+        kiln_diag::diag_records(self.sources, &self.diag_options, records)
+    }
 }
 
 /// Why [`with_eval_session`] opened no session (spec/eval-session.md §2
@@ -91,6 +105,10 @@ pub enum SessionRefused {
         /// error, in the command line's format (text or JSON), without
         /// the summary line: usable after the call returns (WP-2332).
         rendered: String,
+        /// `diagnostics` as data, usable after the call returns
+        /// ([`SessionFrontEnd::records`]; spec/eval-session.md §2,
+        /// WP-2827).
+        records: Vec<DiagRecord>,
     },
     /// The front end stopped: a fatal error other than the error limit's
     /// (a header not found, an internal limit such as the include depth),
@@ -102,6 +120,12 @@ pub enum SessionRefused {
         diagnostics: Vec<Diagnostic>,
         /// `diagnostics` rendered as for [`SessionRefused::TuHasErrors`].
         rendered: String,
+        /// `diagnostics` as data, as for [`SessionRefused::TuHasErrors`].
+        records: Vec<DiagRecord>,
+        /// The native-stack guard tripped (`-fkiln-stack-size`), in this
+        /// phase: the fatal error is `sema_stack_exhausted` (WP-2827).
+        /// `None`: another fatal error stopped the unit.
+        stack_exhausted: Option<StackPhase>,
     },
     /// The front end panicked (the payload as text): the panic is caught,
     /// as `run_front_end`'s `FrontEndError::Panicked` is, and the closure
@@ -122,6 +146,35 @@ impl SessionRefused {
             | SessionRefused::Stopped { rendered, .. } => rendered,
         }
     }
+
+    /// The unit's diagnostics as data (spec/eval-session.md §2,
+    /// WP-2827): those of a unit with errors or a stopped one, empty for
+    /// a command line or a panic.
+    #[must_use]
+    pub fn records(&self) -> &[DiagRecord] {
+        match self {
+            SessionRefused::TuHasErrors { records, .. }
+            | SessionRefused::Stopped { records, .. } => records,
+            SessionRefused::CommandLine { .. } | SessionRefused::Panicked(_) => &[],
+        }
+    }
+
+    /// The phase in which the native-stack guard stopped the unit, if it
+    /// did (WP-2827): a client tells a stack trip, the host's limit,
+    /// from an error of the program without reading the rendered text.
+    #[must_use]
+    pub fn stack_exhausted(&self) -> Option<StackPhase> {
+        match self {
+            SessionRefused::Stopped { stack_exhausted, .. } => *stack_exhausted,
+            _ => None,
+        }
+    }
+}
+
+/// The stack-guard phase of a stopped unit's `diagnostics`: its
+/// `sema_stack_exhausted`'s, if it has one.
+fn stack_phase(diagnostics: &[Diagnostic]) -> Option<StackPhase> {
+    diagnostics.iter().find_map(|d| StackPhase::of_record(d.id, &d.message))
 }
 
 /// The message of [`SessionRefused::CommandLine`] for a command line
@@ -272,7 +325,10 @@ where
         summary(&engine);
         let diagnostics = take();
         let rendered = kiln_diag::render_diagnostics(&sm, &diag_opts, &diagnostics);
-        return f.take().map(|f| f(Err(SessionRefused::Stopped { diagnostics, rendered })));
+        let records = kiln_diag::diag_records(&sm, &diag_opts, &diagnostics);
+        let stack_exhausted = stack_phase(&diagnostics);
+        let refused = SessionRefused::Stopped { diagnostics, rendered, records, stack_exhausted };
+        return f.take().map(|f| f(Err(refused)));
     };
     match EvalSession::open(sema) {
         Ok(session) => {
@@ -308,15 +364,18 @@ where
             // The text the driver printed for them, which outlives `sm`
             // (WP-2332).
             let rendered = kiln_diag::render_diagnostics(&sm, &diag_opts, &diagnostics);
+            // The same records as data (WP-2827).
+            let records = kiln_diag::diag_records(&sm, &diag_opts, &diagnostics);
             // The error limit's fatal error stops a unit that has errors;
             // any other stops the front end.
             let stopped = diagnostics
                 .iter()
                 .any(|d| d.level == Level::Fatal && d.id != Some(DiagId::diag_too_many_errors));
             let refused = if stopped {
-                SessionRefused::Stopped { diagnostics, rendered }
+                let stack_exhausted = stack_phase(&diagnostics);
+                SessionRefused::Stopped { diagnostics, rendered, records, stack_exhausted }
             } else {
-                SessionRefused::TuHasErrors { errors, diagnostics, rendered }
+                SessionRefused::TuHasErrors { errors, diagnostics, rendered, records }
             };
             f.take().map(|f| f(Err(refused)))
         }

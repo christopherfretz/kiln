@@ -2447,6 +2447,15 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 self.line.push(' ');
                 ast.strings.write_literal(exprs.string_lit(e), &mut self.line);
             }
+            _ => {}
+        }
+        // The builtin-macro literal table (spec/ast.md §22.5): empty
+        // unless recorded, so no other dump changes.
+        if let Some(b) = ast.literal_builtin(e) {
+            self.line.push_str(" from ");
+            self.line.push_str(b.name());
+        }
+        match kind {
             ExprKind::PredefinedExpr => {
                 self.line.push(' ');
                 self.line.push_str(exprs.predefined_kind(e).spelling());

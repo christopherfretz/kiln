@@ -139,6 +139,32 @@ drop(session); session.into_sema() -> Sema;
   `a_refusal_renders_after_the_call` (a unit with errors, one in an
   included header, and a stopped one, read after the call; the text is
   the start of what standard error got; the JSON format).
+  **Records as data, the stack guard** (WP-2827). `TuHasErrors` and
+  `Stopped` also carry **`records`**: the same diagnostics as
+  `kiln_diag::DiagRecord`s (spec/diag.md §10.4), each with its id,
+  severity, message, display group, option suffix, caret location
+  (`RecordLocation`: the buffer's `FileId` and byte offset, the presumed
+  file name, line and byte column, as the text header prints them) and
+  its notes (attached and macro-expansion ones, as the rendering shows
+  them), which hold no source-manager location and outlive the call;
+  `SessionRefused::records()` gives them (empty for `CommandLine` and
+  `Panicked`). `Stopped` carries **`stack_exhausted`**: the phase
+  (`StackPhase`: parsing, template instantiation, constant evaluation)
+  when the fatal error that stopped the unit is the native-stack
+  guard's `sema_stack_exhausted` (spec/sema-templates.md §10.3; read
+  back from its record's message by `StackPhase::of_record`), `None`
+  for any other stop; `SessionRefused::stack_exhausted()` is `None` for
+  every other case. A client tells a stack trip, the host's limit
+  (`-fkiln-stack-size`), from an error of the program without reading
+  the rendered text. The records are made once, when the unit is
+  refused, by the layout the rendering uses; an opened session's own
+  warnings (`tu_diagnostics`) and a run's diagnostics become records
+  with `SessionFrontEnd::records`. Tests:
+  `crates/kiln_driver/tests/eval_session.rs` `a_refusal_is_data` (an
+  error; a warning and an error; an error with a note; an error in a
+  macro's expansion; `#line`) and `a_stack_trip_is_flagged` (the
+  parenthesis stress test on an 8 MiB guarded thread; a missing header;
+  errors only).
   A unit with errors or a stopped one also gets
   `drv_eval_session_tu_errors` ("cannot open an evaluation session: the
   translation unit has N error(s)") on standard error. Test:

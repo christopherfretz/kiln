@@ -275,6 +275,7 @@ impl Job<'_> {
         o.meta_hint = self.meta_hint();
         o.predefines = predefines;
         o.pp_record = a.pp_record || a.dump_pp_record;
+        o.builtin_literals = a.builtin_literals;
         if let Some(epoch) = time::reproducible_epoch(a.reproducible_time, &a.env) {
             let (date, t, stamp) = time::spellings(epoch);
             o.reproducible_time = Some((date, t));

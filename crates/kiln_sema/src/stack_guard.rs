@@ -48,6 +48,37 @@ pub enum StackPhase {
     ConstantEvaluation = 2,
 }
 
+impl StackPhase {
+    /// Every phase, in selector order.
+    pub const ALL: [StackPhase; 3] =
+        [StackPhase::Parsing, StackPhase::Instantiation, StackPhase::ConstantEvaluation];
+
+    /// The phase as the diagnostic names it (`"template instantiation"`).
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            StackPhase::Parsing => "parsing",
+            StackPhase::Instantiation => "template instantiation",
+            StackPhase::ConstantEvaluation => "constant evaluation",
+        }
+    }
+
+    /// The phase of a reported `sema_stack_exhausted` with message
+    /// `message` (a record keeps its rendered message, not its selector):
+    /// the phase whose rendering is that message. `None` for any other id
+    /// or message (WP-2827).
+    #[must_use]
+    pub fn of_record(id: Option<DiagId>, message: &str) -> Option<StackPhase> {
+        if id != Some(DiagId::sema_stack_exhausted) {
+            return None;
+        }
+        StackPhase::ALL.into_iter().find(|&p| {
+            Diag::new(DiagId::sema_stack_exhausted, Span::INVALID).arg(p as u32).message()
+                == message
+        })
+    }
+}
+
 /// A thread's stack: where it starts and how big it is (size 0: no guard,
 /// every check passes).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -233,6 +264,19 @@ impl Sema<'_, '_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// WP-2827: a record's phase is read back from its message.
+    #[test]
+    fn phase_of_a_record() {
+        for p in StackPhase::ALL {
+            let d = Diag::new(DiagId::sema_stack_exhausted, Span::INVALID).arg(p as u32);
+            let m = d.message();
+            assert!(m.contains(p.name()), "{m}");
+            assert_eq!(StackPhase::of_record(Some(DiagId::sema_stack_exhausted), &m), Some(p));
+            assert_eq!(StackPhase::of_record(None, &m), None);
+        }
+        assert_eq!(StackPhase::of_record(Some(DiagId::sema_stack_exhausted), "other"), None);
+    }
 
     /// P4 (c): the remaining stack is the size less the distance from the
     /// base, in either direction, never negative.

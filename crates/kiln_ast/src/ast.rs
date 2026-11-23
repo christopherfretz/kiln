@@ -108,6 +108,11 @@ pub struct Ast {
     /// `token_end`, as clang measures it. Always recorded; written into
     /// snapshots and carried in module images.
     pub split_greaters: kiln_source::fx::FxHashSet<kiln_source::Loc>,
+    /// The builtin-macro literal table (§22, WP-2821): which builtin
+    /// macro each literal came from, filled by the parser only when the
+    /// preprocessor keeps its table (`PpOptions::builtin_literals`);
+    /// read with [`Ast::literal_builtin`]. Transient in snapshots.
+    pub builtin_literals: crate::builtin_literals::BuiltinLiterals,
     symbols: Arc<Interner>,
     inst: InstantiationMeter,
 }
@@ -504,6 +509,7 @@ impl Ast {
             written_refs: crate::written_refs::WrittenRefs::default(),
             decl_extents: crate::decl_extents::DeclExtents::default(),
             split_greaters: kiln_source::fx::FxHashSet::default(),
+            builtin_literals: crate::builtin_literals::BuiltinLiterals::default(),
             symbols,
             inst: InstantiationMeter::default(),
         }
@@ -1739,6 +1745,9 @@ impl Ast {
             r.push(row);
         }
         if let Some(row) = self.decl_extents.mem_row() {
+            r.push(row);
+        }
+        if let Some(row) = self.builtin_literals.mem_row() {
             r.push(row);
         }
         r.push(MemRow::new(

@@ -38,6 +38,7 @@
 //! | `name_gate` | at rest | must be off (`-fkiln-bmi-image` is not supported with snapshots) |
 //! | `record` | carried apart | not a field of this root: the driver writes it after every root ([`Preprocessor::snap_put_record`], spec/pp.md "Preprocessing record", stage 4) when the producer recorded; a restore marks the consumer's record `RESTORED` until [`Preprocessor::snap_restore_record`] replaces it |
 //! | `rec_cur`, `rec_builtin`, `rec_pragma`, `rec_inc`, `rec_import_at`, `rec_hu` | transient, at rest | the row being built: none between files |
+//! | `builtin_lits` | configuration + transient | kept when the consumer's options ask; the producer's entries are not carried (spec/ast.md §22.4) |
 
 use kiln_source::fx::{FxHashMap, FxHashSet};
 use std::collections::{HashMap, HashSet};
@@ -320,6 +321,7 @@ impl Preprocessor<'_, '_> {
             rec_inc: _,
             rec_import_at: _,
             rec_hu: _,
+            builtin_lits: _,
         } = self;
         macros.put(w);
         pushed.put(w);

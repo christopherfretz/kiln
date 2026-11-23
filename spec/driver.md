@@ -131,6 +131,7 @@ linker prints its version; Meson's linker probe, WP-920), and `-c
 | `-fkiln-dump-expr-extents` | kiln: with `-fsyntax-only` (to the output, after a declaration-extent dump): prints the written extent of every expression of the written bodies and initializers, one line per node in the spec/ast.md §21.4 layout (the input of `cargo xtask extents`, spec/harness.md "Expression extents"); records nothing, part of neither identity; a PCH producer with it takes two passes |
 | `-fkiln-dump-pp-record` | kiln: records the preprocessing record (spec/pp.md "Preprocessing record"; off otherwise) and prints it, one line per entry: with `-E` in place of the preprocessed text, after one `tok` line per output token at a macro location; with `-fsyntax-only` (to the output, after a written-reference dump) or codegen (to standard output, before the IR), the entries only. A PCH producer with it (or with `-fkiln-pp-record`) takes two passes and carries the header's record in its snapshot, which a recording consumer goes on from; a snapshot built without it leaves the consumer's record `restored`, with a `-v` note (spec/pp.md "Preprocessing record", stage 4; WP-2113). `=source-order` prints each condition's reads in source order (WP-2301). The harness's `pp-record:` directive runs it (spec/harness.md; WP-2110) |
 | `-fkiln-pp-record` | kiln: records the preprocessing record and drops it (to measure its cost; WP-2110). No output changes, except the `pp.record` row of `-fkiln-memory-report` |
+| `-fkiln-builtin-literals` | kiln: keeps the builtin-macro literal table (spec/ast.md §22, WP-2821): which builtin macro (`__LINE__`, `__FILE__`, ...) each literal came from, directly, through macros, pasted or stringized. `-fdump-ast` then appends ` from <name>` to a marked literal; otherwise no output changes, except the `builtin_literals` row of `-fkiln-memory-report`. Outside the PCH identity; a snapshot and a module file carry no table |
 | `-fkiln-cfg-max-elems=N` | kiln: the element budget of one body's graph (default 33554432); a body over it builds no graph and its CFG-based warnings are skipped (spec/sema.md §7.5.1). A value that is not an integer is `invalid integral value` |
 | `-fkiln-outline-expansions=N` | kiln: the size threshold, in AST nodes summed over the elements, above which an expansion statement's elements are emitted as separate internal helpers at `-O1` and above (default 2048; `0` disables; spec/landed/codegen/WP-793.md). A value that is not an integer is `invalid integral value` |
 | `-fdump-record-layouts`, `-fdump-record-layouts-complete` | the record layouts (`spec/abi.md` §6, §8.4): to the output with `-fsyntax-only`, to standard output before the IR or object with codegen, as clang (WP-1745); unused by `-E` (clang's preprocessor job has no Sema) |
@@ -1757,7 +1758,10 @@ dump, line for line (`front_end.rs` test `written_refs_equal_the_dump`).
 Like the flag it is part of no PCH identity (the entry refuses
 `-include-pch`), and a module the run builds in process from the
 module cache's source is built with the table (the cache's key holds
-it, spec/ast.md §18.10.2). Under a fixed environment the driver reads
+it, spec/ast.md §18.10.2). `builtin_literals` (default off; WP-2821; on,
+the command line's `-fkiln-builtin-literals`) keeps the builtin-macro
+literal table, spec/ast.md §22: the closure reads it as
+`fe.ast.literal_builtin(e)`. Under a fixed environment the driver reads
 every variable it consults from it and never from the process:
 `KILN_RESOURCE_DIR`, `KILN_LLVM_DIR` and the LLVM search's variables,
 `KILN_BACKEND` / `KILN_HOD`, `PATH` (the GCC driver's and hod's search),

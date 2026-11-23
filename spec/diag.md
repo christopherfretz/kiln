@@ -985,6 +985,25 @@ records in a file, §9.6). The engine's summary line (§7.5) is not a
 record and is not rendered. `impl DiagSink for Box<S>` lets an engine
 own the boxed sink directly.
 
+### 10.4 Records as data (WP-2827)
+
+`diag_records(sm, opts, records)` turns records a caller holds into
+`DiagRecord`s, one per record, with exactly the content of the §10.1
+object `-fdiagnostics-format=json` prints for it under `opts`' macro
+backtrace limit and clang level (the same `layout` computes both): `id`
+(`Option<DiagId>`), `level`, `message`, `group`, `option`, `location`
+and `notes` (the entries after the head: attached notes and the derived
+macro-expansion notes, each a `DiagRecord` without notes of its own).
+`location` (`RecordLocation`, `None` for a locationless one) is the
+caret's file location (clang's `getFileLoc`) as the buffer's `FileId`
+and byte `offset`, with `presumed_file`, `line` (presumed, as the text
+header) and `column` (raw byte column). Nothing in a record refers to
+the source manager's location space, so a record outlives it (the
+`FileId` names a buffer of that source manager, for a client that kept
+its own map of them). `spans` and `fixits` are not carried. Used by
+evaluation sessions' refusals (spec/eval-session.md §2). Tests:
+`crates/kiln_driver/tests/eval_session.rs` `a_refusal_is_data`.
+
 ## 11. Verify mode (`-verify`)
 
 `kiln_diag::verify` is a port of clang 19's `VerifyDiagnosticConsumer`
