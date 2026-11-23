@@ -386,6 +386,33 @@ impl PtrBase {
     }
 }
 
+/// The members of unions a constant pointer's designator path enters,
+/// other than each union's default member: an interned list of
+/// `FieldDecl`s, outermost first ([`ConstStore::push_union_path`],
+/// [`ConstStore::union_path`]; spec/ast.md §9.1 "Union paths"). Equal
+/// lists have equal ids. [`UnionPath::NONE`] (the empty list) is every
+/// pointer that crosses no union, or enters each by its default member.
+///
+/// [`ConstStore::push_union_path`]: super::ConstStore::push_union_path
+/// [`ConstStore::union_path`]: super::ConstStore::union_path
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default, kiln_snap::Snap)]
+pub struct UnionPath(pub(crate) u32);
+
+impl UnionPath {
+    /// No union member off its union's default.
+    pub const NONE: UnionPath = UnionPath(0);
+
+    /// Whether this is [`UnionPath::NONE`].
+    pub const fn is_none(self) -> bool {
+        self.0 == 0
+    }
+
+    /// The raw id (0 for [`UnionPath::NONE`]), for encodings.
+    pub const fn to_raw(self) -> u32 {
+        self.0
+    }
+}
+
 /// A scalar constant value.
 ///
 /// Every scalar carries its type, which must be the **canonical,
@@ -452,6 +479,12 @@ pub enum Scalar<'a> {
         /// of its complete object, whose past-ness `offset` already
         /// implies, and for every pointer into its object.
         past: bool,
+        /// The members of unions the designator path enters that are not
+        /// their union's default member (spec/ast.md §9.1 "Union paths"):
+        /// `&u.b` of `union { int a; int b; } u` names `b`, `&u.a` none.
+        /// Part of the value's identity ([temp.type]/2.4). Canonical:
+        /// built by [`canonical_union_path`](super::canonical_union_path).
+        unions: UnionPath,
     },
     /// A non-null pointer to member.
     MemberPtr {

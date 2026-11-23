@@ -424,8 +424,9 @@ impl Printer<'_> {
                 out.push('0');
             }
             Scalar::Null { .. } => out.push_str("nullptr"),
-            Scalar::Pointer { ty, base, offset, designated, .. } => {
-                self.pointer(ty, base, offset, designated, out);
+            Scalar::Pointer { ty, base, offset, designated, unions, .. } => {
+                let sel = self.store.union_path(unions);
+                self.pointer(ty, base, offset, designated, sel, out);
             }
             Scalar::MemberPtr { member, .. } => {
                 out.push('&');
@@ -500,6 +501,7 @@ impl Printer<'_> {
         base: PtrBase,
         offset: u64,
         designated: Option<QualType>,
+        sel: &[DeclId],
         out: &mut String,
     ) {
         let (pointee, reference) = match self.env.shape(ty) {
@@ -588,7 +590,7 @@ impl Printer<'_> {
                     out.push('&');
                 }
                 self.env.decl_name(d, out);
-                self.designator(self.env.decl_type(d), offset, pointee, out);
+                self.designator(self.env.decl_type(d), offset, pointee, sel, out);
             }
             PtrBase::Const(c) => {
                 self.lost();
@@ -596,23 +598,25 @@ impl Printer<'_> {
                     out.push('&');
                 }
                 let _ = write!(out, "#c{}", c.index());
-                self.designator(Some(self.store.ty(c)), offset, pointee, out);
+                self.designator(Some(self.store.ty(c)), offset, pointee, sel, out);
             }
         }
     }
 
     /// Appends the designator (`[2].x`) of byte `offset` in an object of
-    /// type `ty`, or `+offset` if it cannot be recovered.
+    /// type `ty`, entering the union members union path `sel` names, or
+    /// `+offset` if it cannot be recovered.
     fn designator(
         &self,
         ty: Option<QualType>,
         offset: u64,
         pointee: Option<QualType>,
+        sel: &[DeclId],
         out: &mut String,
     ) {
         let mut d = String::new();
         if let Some(ty) = ty
-            && self.walk(ty, offset, pointee, &mut d)
+            && self.walk(ty, offset, pointee, sel, &mut d)
         {
             out.push_str(&d);
             return;
@@ -623,18 +627,29 @@ impl Printer<'_> {
         }
     }
 
-    fn walk(&self, ty: QualType, offset: u64, pointee: Option<QualType>, d: &mut String) -> bool {
-        self.walk_at(ty, offset, pointee, d, 0)
+    fn walk(
+        &self,
+        ty: QualType,
+        offset: u64,
+        pointee: Option<QualType>,
+        sel: &[DeclId],
+        d: &mut String,
+    ) -> bool {
+        self.walk_at(ty, offset, pointee, sel, d, 0)
     }
 
     /// [`Self::walk`] at nesting `depth`. Several members can share an
     /// offset (an empty base, a `[[no_unique_address]]` member): each is
-    /// tried until one holds `pointee`.
+    /// tried until one holds `pointee`. A union is entered by the member
+    /// union path `sel` names, else by its default member
+    /// ([`super::union_path_member`], spec/ast.md §9.1 "Union paths"),
+    /// before the others.
     fn walk_at(
         &self,
         mut ty: QualType,
         mut offset: u64,
         pointee: Option<QualType>,
+        sel: &[DeclId],
         d: &mut String,
         depth: u32,
     ) -> bool {
@@ -657,21 +672,28 @@ impl Printer<'_> {
                     offset -= i * stride;
                     ty = elem;
                 }
-                Shape::Record { members, .. } => {
-                    let hits = members.iter().filter(|m| {
+                Shape::Record { members, union } => {
+                    let first = if union {
+                        super::union_path_member(self.env, &members, offset, pointee, sel)
+                    } else {
+                        None
+                    };
+                    let hits = first.into_iter().chain(members.iter().filter(|m| {
                         let at = m.offset_bits / 8;
                         m.bit_width.is_none()
                             && m.offset_bits % 8 == 0
                             && at <= offset
                             && (offset < at + m.size || (offset == at && m.size == 0))
-                    });
+                            && first.is_none_or(|f| f.field != m.field)
+                    }));
                     let len = d.len();
                     for m in hits {
                         if !m.name.is_empty() {
                             d.push('.');
                             d.push_str(&m.name);
                         }
-                        if self.walk_at(m.ty, offset - m.offset_bits / 8, pointee, d, depth + 1) {
+                        let at = offset - m.offset_bits / 8;
+                        if self.walk_at(m.ty, at, pointee, sel, d, depth + 1) {
                             return true;
                         }
                         d.truncate(len);

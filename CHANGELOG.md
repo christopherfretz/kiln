@@ -736,6 +736,17 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   instantiation (WP-2072, spec/eval-session.md §7), so a later run that
   calls it first is charged its nested work and replays its diagnostics,
   as a fresh session's run is.
+- Constant pointers and references to two members of one union at the
+  same offset with the same type (`&u.a` and `&u.b` of `union { int a;
+  int b; } u`) are distinct (WP-2200, spec/ast.md §9.1 "Union paths"):
+  as template arguments they are different arguments ([temp.type]/2.4),
+  mangle as clang 22 does (`soiL_Z1uE_0E`), print as the member they
+  name and substitute as it (a read of the inactive one is diagnosed);
+  this holds through nested unions, array members, `void *` round trips,
+  pointers formed in a constant evaluation and pointers held by a class
+  value. A pointer that enters no union costs nothing more. PCH format
+  141, module image 74, carried-constants section version 5. Reported
+  by a downstream user.
 - Evaluation sessions key the diagnostics a reflection query records by
   the content of its operands, not by their addresses (WP-2074,
   spec/eval-session.md §7): a `substitute` over a vector a run built, a

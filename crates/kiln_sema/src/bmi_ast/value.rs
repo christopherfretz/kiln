@@ -55,6 +55,7 @@ use super::{
     TAG_REFLECTION, TAG_TYPED, file_index, loc_key, read_plain,
 };
 use crate::Sema;
+use kiln_ast::consts::UnionPath;
 
 /// Nesting deeper than this is not decoded (the writer's keys stop well
 /// before it).
@@ -192,7 +193,17 @@ impl Sema<'_, '_> {
                 };
                 let offset = r.var().ok()?;
                 let designated = if flags & 2 != 0 { Some(self.wire_ty(t, r, d)?) } else { None };
-                Scalar::Pointer { ty, base, offset, designated, past: flags & 1 != 0 }
+                let unions = if flags & 4 != 0 {
+                    let n = r.var_count(1).ok()?;
+                    let mut path = Vec::with_capacity(n);
+                    for _ in 0..n {
+                        path.push(self.wire_ent(t, r, d)?);
+                    }
+                    self.ast.consts.push_union_path(&path).ok()?
+                } else {
+                    UnionPath::NONE
+                };
+                Scalar::Pointer { ty, base, offset, designated, past: flags & 1 != 0, unions }
             }
             TAG_MEMBER_POINTER => {
                 if !member_pointer {

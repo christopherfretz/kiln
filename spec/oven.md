@@ -3245,11 +3245,36 @@ in the granule's pointer mark byte that a `void *` tag used
 designator together; the mark byte and `Undo::Gran` are unchanged).
 The 253 interned upper words are shared with the `void *` tags; a
 pointer stored past them (`PTR_SPILL`) keeps its `void *` tag in
-`Memory::vspill` and drops its designator, and so does a pointer stored
-to static memory (a `constexpr` variable, a thawed constant, a copy into
-one: `Memory::strip_static_desigs`), whose marks a PCH snapshot keeps
-while `Oven::udesig` is rebuilt. A pointer without a tag is checked by
+`Memory::vspill` and drops its designator. A pointer stored to static
+memory (a `constexpr` variable, a thawed constant, a copy into one)
+keeps it since WP-2200 (before, `Memory::strip_static_desigs` dropped
+it), so `constexpr int *p = &u.b;` still designates `b` where `p` is
+read: a snapshot keeps `Oven::udesig`'s levels as data with the static
+marks that name them (validated: each level's parent is an earlier tag,
+its union type in the type table, and every interned upper word's
+designator half an existing tag). A pointer without a tag is checked by
 offset and type as before (WP-233's `union_alts`).
+
+*Freeze and thaw* (WP-2200). A frozen pointer keeps the union members
+its designator names as the constant's union path (spec/ast.md §9.1
+"Union paths"), so `&u.a` and `&u.b` are different constants, template
+arguments ([temp.type]/2.4) and symbols: `Oven::ptr_of` maps each level
+of a nonzero tag to its member's `FieldDecl` and keeps those that are
+not the union's default member (`consts::canonical_union_path`, the
+rule printing, mangling and substitution read back); an untagged
+pointer, and every pointer that crosses no union, freezes with no path
+and no extra work. A pointer subobject of a frozen aggregate is frozen
+with the tag its granule's mark holds. Thawing (`thaw_ptr`) builds the
+tag again (`UnionDesigs::extend`) from every union member the
+designator enters (`consts::union_members_entered`: the path's members,
+and the default member at every other union on the way), so a pointer
+read from a constant designates the member it was formed from (a read
+through it of another active member is "read of member 'b' of union
+with active member 'a'"), and so does a pointer derived from it: with
+`constexpr S2 *pt = &v.t;` of `union V { S1 s; S2 t; }`, `&pt->x` is
+`&v.t.x` (whose default member for an `int` would be `s`). The walk runs
+only for a pointer with a path or into an allocation holding a union
+(`flags::HAS_UNION`); every other thawed pointer pays one flag test.
 
 *Propagation.* The tag travels with the register (copies, calls,
 returns, a reference bound to the member, a conversion to `void *` and

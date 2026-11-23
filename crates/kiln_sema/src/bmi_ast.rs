@@ -726,8 +726,9 @@ const VERSIONED: u32 = u32::MAX;
 /// "Encoding"): 2 adds instantiation keys, 3 the values of tags 5 to 9
 /// (WP-1047), 4 string literal, temporary and label pointer bases and
 /// alias template specialization, data member specification and
-/// annotation reflections (WP-1160).
-const VERSION: u32 = 4;
+/// annotation reflections (WP-1160), 5 a pointer's union path (pointer
+/// flag 4, WP-2200).
+const VERSION: u32 = 5;
 
 fn put_u32(out: &mut Vec<u8>, v: u32) {
     out.extend_from_slice(&v.to_le_bytes());
@@ -1249,6 +1250,7 @@ mod tests {
 
     /// One hand-built value of each WP-1047 tag (spec/modules.md §11.11
     /// "Encoding"), as an entry's bytes.
+    #[allow(clippy::too_many_lines, reason = "one hand-built value per form")]
     fn wire_values() -> Vec<Vec<u8>> {
         use inst::{
             BASE_CONST, BASE_DECL, BASE_LABEL, BASE_STRING, BASE_TEMPORARY, BASE_TYPE_INFO,
@@ -1335,6 +1337,13 @@ mod tests {
         put_value(&mut v, &Carried::Int { signed: true, width: 32, words: vec![42].into() });
         put_var(&mut v, 0);
         v.extend_from_slice(&int);
+        out.push(v);
+        // WP-2200: `&u.b`, entering union member `b` (not the default).
+        let mut v = vec![TAG_POINTER, 4, BASE_DECL];
+        decl_ent(&mut v, "u", 17);
+        put_var(&mut v, 0);
+        put_var(&mut v, 1);
+        decl_ent(&mut v, "b", 31);
         out.push(v);
         // `^^Ptr<int>` (an alias template specialization), a data member
         // specification `{.name = "x", .alignment = 8}` with one
@@ -1468,9 +1477,9 @@ mod tests {
             decode(&trailing),
             Err(SectionError("carried constants: trailing bytes".into()))
         );
-        let mut v5 = b.clone();
-        v5[4..8].copy_from_slice(&5u32.to_le_bytes());
-        assert_eq!(decode(&v5).unwrap_err(), bad::<()>("unsupported section version").unwrap_err());
+        let mut v6 = b.clone();
+        v6[4..8].copy_from_slice(&6u32.to_le_bytes());
+        assert_eq!(decode(&v6).unwrap_err(), bad::<()>("unsupported section version").unwrap_err());
         let paths_len = 4 + (4 + 6) + (4 + 3);
         let insts_at = 8 + paths_len;
         // The first key's entity tag.

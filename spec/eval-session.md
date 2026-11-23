@@ -383,10 +383,12 @@ element (by index); an
 path designates that is no array element (`&x + 1` for a scalar `x`:
 an empty path; `&s.a + 1`: `[Member("a")]`). The designator comes from
 the frozen pointer by the designator recovery the constant printer
-uses (the base's type and the offset): a pointer into a union whose
-members share an offset and a type reads as the first such member
-until WP-2200 gives `Scalar::Pointer` its union-member selections,
-which the path then follows. A pointer to the run's result object
+uses (the base's type, the offset and the pointer's union path,
+spec/ast.md §9.1 "Union paths"): at each union the path enters the
+member the union path names, else the union's default member, so of
+members that share an offset and a type `&u.b` reads as `[Member("b")]`
+and `&u.a` as `[Member("a")]`, through nested unions and array elements
+alike, as the translation unit's own constants print them. A pointer to the run's result object
 itself has no object a host could name: like a pointer to any object
 of the run, the freezer refuses it.
 

@@ -1874,7 +1874,8 @@ entries  u32 count (at least 1), then each entry:
          unsigned LEB128 varint (at most 10 bytes), `ty` a type and `ent`
          an entity as in "Instantiation keys":
          5 member null:    u8 NullKind (a null pointer to member)
-         6 pointer:        u8 flags (bit 0 past the end, bit 1 designated),
+         6 pointer:        u8 flags (bit 0 past the end, bit 1 designated,
+                           bit 2 (version 5, WP-2200) union path),
                            u8 base, then
                              0 declaration (a variable): ent
                              1 function: ent
@@ -1890,7 +1891,10 @@ entries  u32 count (at least 1), then each entry:
                                then if 1: ty, value (its value)
                              7 label: ent the label, at (the
                                `&&label` expression's position)
-                           var byte offset, [ty designated subobject]
+                           var byte offset, [ty designated subobject],
+                           [var count (at least 1), count x ent: the
+                           union path's members, outermost first
+                           (spec/ast.md §9.1 "Union paths")]
          7 member pointer: u8 flags (bit 0 function, bit 1 derived),
                            ent member, var count, count x ent path
          8 reflection:     u8 reflectee tag (`Reflectee::tag`), then
@@ -1925,18 +1929,20 @@ entries  u32 count (at least 1), then each entry:
 ```
 
 A value part 1 could carry keeps part 1's bytes (tags 0-4), also inside
-an aggregate+ or a key; tags 5-10 appear only in version 3 and 4
-sections, and the pointer bases 5-7 and reflection forms above marked
-version 4 only in version 4 sections.
+an aggregate+ or a key; tags 5-10 appear only in version 3 to 5
+sections, the pointer bases 5-7 and reflection forms above marked
+version 4 only in version 4 and 5 sections, and pointer flag bit 2 only
+in version 5 sections.
 Values nest at most 48 levels, like keys (an entry's value has no length cap).
 
 - **Versioned.** Version 1 (WP-985) had no marker, version or
   instantiation table, and no `inst` field; its first word is the path
   count, never `0xffffffff`. The reader reads version 1 as written (every
-  entry at index 0) and rejects any version but 1 to 4 (`unsupported
+  entry at index 0) and rejects any version but 1 to 5 (`unsupported
   section version`). Version 2 (WP-1046) is version 3 without tags 5-10
   and the `U` entity; version 3 (WP-1047) is version 4 without the forms
-  marked version 4 above. Only carried keys are written: an instantiation key
+  marked version 4 above; version 4 is version 5 without pointer flag
+  bit 2. Only carried keys are written: an instantiation key
   no kept entry uses is dropped and the rest renumbered.
 - **Deterministic.** Paths are in first-use order and entries in
   first-evaluation order (no hash-map iteration), so the same inputs give
@@ -5345,7 +5351,7 @@ refused top-level declaration in source order, "refused: <example>:
 <reason>", for per-header tables.
 
 **Versioning and the fingerprint.** The section starts with its own
-format word (`IMAGE_VERSION = 62` since WP-2090, which adds the `extents` section of declaration extents; 61 for WP-2025, whose shadow records carry the record of the using-declaration that introduced them (the `using` word, `NONE` for none; `Ast::using_shadows`); 58 for WP-2023, whose lambda records carry the closure's owner (an eighth word, `NONE` when it is the closure's context); 56 for WP-2021, whose expression records widen the cold-annotation mask to 32 bits and carry a dependent operator expression's definition-context lookup set (`COLD_OPER`); 52 for WP-1923, which carries floating-point pragma states (a body section's `fp` table and the `fp_inits` section); 51 for WP-1791, whose predefined builtin types grow to 95 with the FP8 types; 48 for WP-1863, whose `no_sanitize` attribute words carry the `coverage` bit (bit 31); 47 for WP-1859, which adds the `nested` section of written function-type parameters; 46 for WP-1824, whose variable records carry thread storage duration (bits 3-4 of the specifier bits); 45 for WP-1806, whose attribute section gains the `xexprs` and `words` runs and whose function types carry Swift parameter ABIs; 44 for WP-1811, whose type records carry an address space (`ExtQual`) and a value-dependent one; 43 for WP-1740, whose builtin template stub kind 12 is `__builtin_common_type`; 42 before it; 41 for WP-1667 (its commit names the bump, not what it covers), 40 for WP-1630 and WP-1631, whose template state records `spec_own_header` and `ctad_class_params`, 39 for WP-1590, WP-1594 and WP-1573, a new expression flag and the Oven snapshot's table, 38 for WP-1517, whose variable specifier bits carry whether `inline` is implied (bit 13), 37 for WP-1505, whose splice expressions record a written `template` keyword, 36 for WP-1426, whose function type bits widen to u32, 35 for WP-1369, 34 for WP-1368, 33 for WP-1358, 32 for WP-1360, 31 for WP-1350, 30 for WP-1353, 29 for WP-1352, 28 for WP-1345, 27 for WP-1344, 26 for WP-1343, 25 for WP-1342, 24 for WP-1314, 23 for WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
+format word (`IMAGE_VERSION = 74` since WP-2200, whose pointer constants (`ConstRec::Ptr`) end with their union path: a count and the field records of the union members it enters, outermost first (spec/ast.md §9.1 "Union paths"); 62 for WP-2090, which adds the `extents` section of declaration extents; 61 for WP-2025, whose shadow records carry the record of the using-declaration that introduced them (the `using` word, `NONE` for none; `Ast::using_shadows`); 58 for WP-2023, whose lambda records carry the closure's owner (an eighth word, `NONE` when it is the closure's context); 56 for WP-2021, whose expression records widen the cold-annotation mask to 32 bits and carry a dependent operator expression's definition-context lookup set (`COLD_OPER`); 52 for WP-1923, which carries floating-point pragma states (a body section's `fp` table and the `fp_inits` section); 51 for WP-1791, whose predefined builtin types grow to 95 with the FP8 types; 48 for WP-1863, whose `no_sanitize` attribute words carry the `coverage` bit (bit 31); 47 for WP-1859, which adds the `nested` section of written function-type parameters; 46 for WP-1824, whose variable records carry thread storage duration (bits 3-4 of the specifier bits); 45 for WP-1806, whose attribute section gains the `xexprs` and `words` runs and whose function types carry Swift parameter ABIs; 44 for WP-1811, whose type records carry an address space (`ExtQual`) and a value-dependent one; 43 for WP-1740, whose builtin template stub kind 12 is `__builtin_common_type`; 42 before it; 41 for WP-1667 (its commit names the bump, not what it covers), 40 for WP-1630 and WP-1631, whose template state records `spec_own_header` and `ctad_class_params`, 39 for WP-1590, WP-1594 and WP-1573, a new expression flag and the Oven snapshot's table, 38 for WP-1517, whose variable specifier bits carry whether `inline` is implied (bit 13), 37 for WP-1505, whose splice expressions record a written `template` keyword, 36 for WP-1426, whose function type bits widen to u32, 35 for WP-1369, 34 for WP-1368, 33 for WP-1358, 32 for WP-1360, 31 for WP-1350, 30 for WP-1353, 29 for WP-1352, 28 for WP-1345, 27 for WP-1344, 26 for WP-1343, 25 for WP-1342, 24 for WP-1314, 23 for WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
 slice, 3 for S3, 2 for S2; rejected if different). The file
 header's kiln version and the flags fingerprint (§11.4) already reject a
 file made by another kiln or under other flags. `-fkiln-bmi-image` is

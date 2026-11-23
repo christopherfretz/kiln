@@ -846,7 +846,8 @@ pub(crate) struct Memory {
     /// The register tag bits (`v >> 64`) of the pointers stored to
     /// memory with any, interned: the `void *` designated type
     /// (`kbc::VOID_TAG`, a type + 1, low half) and the union member
-    /// designator (`vm/udesig.rs`, high half; never in static memory).
+    /// designator (`vm/udesig.rs`, high half; WP-2200: in static memory
+    /// too, a snapshot keeping `Oven::udesig`).
     /// Pointer mark `PTR_TAGGED + i` is `vtags[i]`. Append-only for the
     /// translation unit (a rolled-back or copied mark stays valid) and at
     /// most `PTR_SPILL - PTR_TAGGED` long.
@@ -1008,28 +1009,15 @@ impl Memory {
         }
     }
 
+    /// The interned pointer-mark tags (a snapshot restore checks their
+    /// union designator halves against the restored table).
+    pub fn void_tags(&self) -> impl Iterator<Item = u64> + '_ {
+        self.vtags.iter().copied()
+    }
+
     /// The spilled tag of granule `g` of `sp` (a type + 1, or 0).
     fn spilled(&self, sp: Sp, g: u64) -> u32 {
         self.vspill.get(&vkey(sp, g)).map_or(0, |t| t.0 + 1)
-    }
-
-    /// Drops the union member designators (`vm/udesig.rs`) from the
-    /// pointer marks of the `n` granules from granule `g` of the static
-    /// space, just copied there from another space: a snapshot keeps
-    /// static memory but not the designator table.
-    #[cold]
-    fn strip_static_desigs(&mut self, g: u64, n: u64) {
-        for i in g..g + n {
-            let m = self.stat.ptr[i as usize];
-            if m < PTR_TAGGED || m == PTR_SPILL {
-                continue;
-            }
-            let tag = self.vtags[usize::from(m - PTR_TAGGED)];
-            if tag >> 32 != 0 {
-                let mark = self.set_void_tag(Sp::Static, i * GRAN, u64::from(tag as u32));
-                self.stat.ptr[i as usize] = mark;
-            }
-        }
     }
 
     /// Copies the spilled tags among `n` granules from granule `sg` of
@@ -1786,9 +1774,6 @@ impl Memory {
             let (sg, dg) = ((src / GRAN) as usize, (dst / GRAN) as usize);
             d.ptr[dg..dg + n as usize].copy_from_slice(&s.ptr[sg..sg + n as usize]);
             self.copy_spilled(dst_sp, dst / GRAN, src_sp, src / GRAN, n);
-            if dst_sp == Sp::Static {
-                self.strip_static_desigs(dst / GRAN, n);
-            }
         }
     }
 

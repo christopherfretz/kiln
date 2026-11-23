@@ -4283,16 +4283,14 @@ impl Oven {
             s.set(Phase::Memory);
         }
         // A pointer keeps its `void *` tag (`kbc::VOID_TAG`) and its union
-        // member designator (`vm/udesig.rs`) in its mark; static memory,
-        // which a snapshot keeps, the `void *` tag only.
+        // member designator (`vm/udesig.rs`) in its mark, in static memory
+        // too (a snapshot keeps the designators, WP-2200).
         let mark = if !is_ptr {
             0
         } else if v >> 64 == 0 {
             1
         } else {
-            let hi = (v >> 64) as u64;
-            let hi = if st == Sp::Static { u64::from(hi as u32) } else { hi };
-            self.mem.set_void_tag(st, abs, hi)
+            self.mem.set_void_tag(st, abs, (v >> 64) as u64)
         };
         let sp = self.mem.space_mut(st);
         sp.write(abs, len, v);

@@ -43,13 +43,17 @@ mod float;
 pub mod fltstr;
 mod print;
 mod snap;
+mod upath;
 mod value;
 
 pub use float::{format_float, format_float_clang, format_float_gcc, to_f64};
 pub use print::{IntStyle, Member, NoEnv, PrintEnv, PrintOptions, PrintStyle, Shape};
+pub use upath::{
+    canonical_union_path, union_default_member, union_members_entered, union_path_member,
+};
 pub use value::{
     ByteImage, ByteRange, ConstError, ConstValue, FloatKind, IntBits, MemberKind, NullKind,
-    PtrBase, Reloc, Scalar, ShadowKind, ShadowRun, UnionMember, ValueKind,
+    PtrBase, Reloc, Scalar, ShadowKind, ShadowRun, UnionMember, UnionPath, ValueKind,
 };
 
 use std::fmt;
@@ -101,6 +105,13 @@ const F_AUX: u32 = 2;
 const F_DESIG: u32 = 4;
 /// `PTR`: one past the end of its object ([`Scalar::Pointer`] `past`).
 const F_PAST: u32 = 8;
+/// `PTR`, in the `extra` field above the base code (bits 0..4): `b` is a
+/// word-pool index holding the 64-bit offset, then the base's second id
+/// (`F_AUX`), then the designated type (`F_DESIG`), then the union path
+/// ([`Scalar::Pointer`] `unions`, WP-2200).
+const X_UPATH: u32 = 16;
+/// `PTR`: the bits of `extra` holding the base code.
+const X_CODE: u32 = 0xf;
 /// `MEMPTR`: member function.
 const F_FUNCTION: u32 = 1;
 /// `MEMPTR`: `derived` path.
@@ -120,6 +131,15 @@ impl Node {
     fn extra(self) -> u32 {
         self.tag >> 8
     }
+}
+
+/// A union path's span of the `paths` pool ([`UnionPath`] `i + 1` is
+/// `upaths[i]`).
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, Default, kiln_snap::Snap)]
+pub struct UpathRec {
+    start: u32,
+    len: u32,
 }
 
 /// Per-aggregate pool starts. `aggs[i + 1]` (always present: the vector
@@ -148,6 +168,8 @@ pub struct Pools {
     relocs: Vec<Reloc>,
     padding: Vec<ByteRange>,
     unions: Vec<UnionMember>,
+    /// Union paths ([`UnionPath`]), spans of `paths`.
+    upaths: Vec<UpathRec>,
 }
 
 /// The extent of a [`ConstStore`] at some point ([`ConstStore::mark`]).
@@ -170,6 +192,9 @@ pub struct ConstMark {
 pub struct ConstStore {
     pools: Pools,
     table: HashTable<ConstValueId>,
+    /// The union paths' index (raw [`UnionPath`] ids), keyed by
+    /// [`hash_path`]; rebuilt from the pools after a snapshot restore.
+    upath_ix: HashTable<u32>,
 }
 
 impl Default for ConstStore {
@@ -216,8 +241,10 @@ impl ConstStore {
                 relocs: Vec::new(),
                 padding: Vec::new(),
                 unions: Vec::new(),
+                upaths: Vec::new(),
             },
             table: HashTable::new(),
+            upath_ix: HashTable::new(),
         }
     }
 
@@ -260,6 +287,39 @@ impl ConstStore {
             + n(&p.relocs)
             + n(&p.padding)
             + n(&p.unions)
+            + n(&p.upaths)
+    }
+
+    /// Interns a union path (spec/ast.md §9.1 "Union paths"): the
+    /// `FieldDecl`s of the union members a pointer's designator enters
+    /// off their union's default member, outermost first. The empty list
+    /// is [`UnionPath::NONE`]; equal lists get equal ids.
+    ///
+    /// # Errors
+    /// [`ConstError::Capacity`] on id or pool exhaustion.
+    pub fn push_union_path(&mut self, path: &[DeclId]) -> Result<UnionPath, ConstError> {
+        if path.is_empty() {
+            return Ok(UnionPath::NONE);
+        }
+        let h = hash_path(path);
+        if let Some(&i) = self.upath_ix.find(h, |&i| self.pools.upath(i) == path) {
+            return Ok(UnionPath(i));
+        }
+        let p = &mut self.pools;
+        let start = to_u32(p.paths.len(), "union path pool")?;
+        to_u32(p.paths.len() + path.len(), "union path pool")?;
+        let id = to_u32(p.upaths.len() + 1, "union path count")?;
+        p.paths.extend_from_slice(path);
+        p.upaths.push(UpathRec { start, len: path.len() as u32 });
+        let pools = &self.pools;
+        self.upath_ix.insert_unique(h, id, |&i| hash_path(pools.upath(i)));
+        Ok(UnionPath(id))
+    }
+
+    /// The members union path `p` lists (empty for [`UnionPath::NONE`]
+    /// and for an id not from this store).
+    pub fn union_path(&self, p: UnionPath) -> &[DeclId] {
+        self.pools.upath(p.0)
     }
 
     /// The store's extent now, for [`ConstStore::truncate`].
@@ -474,6 +534,14 @@ impl Pools {
         self.nodes[id.index() as usize - 1]
     }
 
+    /// The members of raw union path `i` (empty for 0 or an unknown id).
+    fn upath(&self, i: u32) -> &[DeclId] {
+        let Some(r) = (i as usize).checked_sub(1).and_then(|i| self.upaths.get(i)) else {
+            return &[];
+        };
+        self.paths.get(r.start as usize..(r.start + r.len) as usize).unwrap_or(&[])
+    }
+
     fn contains(&self, id: ConstValueId) -> bool {
         id.index() as usize <= self.nodes.len()
     }
@@ -489,7 +557,9 @@ impl Pools {
             kind::MEMPTR if n.flags() & F_FUNCTION != 0 => Some(2 * p),
             // A label address difference is as wide as its integer
             // (`PtrBase::LabelDiff`'s code is 8 + log2 of its size).
-            kind::PTR if (8..=11).contains(&n.extra()) => Some(1 << (n.extra() - 8)),
+            kind::PTR if (8..=11).contains(&(n.extra() & X_CODE)) => {
+                Some(1 << ((n.extra() & X_CODE) - 8))
+            }
             kind::PTR | kind::NULL | kind::MEMPTR => Some(p),
             kind::REFL => Some(8),
             _ => None,
@@ -533,22 +603,29 @@ impl Pools {
             },
             kind::PTR => {
                 let (f, w) = (n.flags(), n.b as usize);
+                let code = n.extra() & X_CODE;
                 let aux = usize::from(f & F_AUX != 0);
+                let desig = usize::from(f & F_DESIG != 0);
                 let (base, offset) = if f & F_AUX != 0 {
                     let aux = self.words[w + 1] as u32;
-                    (PtrBase::from_parts_aux(n.extra(), n.a, aux), self.words[w])
+                    (PtrBase::from_parts_aux(code, n.a, aux), self.words[w])
                 } else if f & (F_WIDE | F_DESIG) != 0 {
-                    (PtrBase::from_parts(n.extra(), n.a), self.words[w])
+                    (PtrBase::from_parts(code, n.a), self.words[w])
                 } else {
-                    (PtrBase::from_parts(n.extra(), n.a), u64::from(n.b))
+                    (PtrBase::from_parts(code, n.a), u64::from(n.b))
                 };
                 let designated = if f & F_DESIG != 0 {
                     QualType::from_raw(self.words[w + 1 + aux] as u32)
                 } else {
                     None
                 };
+                let unions = if n.extra() & X_UPATH != 0 {
+                    UnionPath(self.words[w + 1 + aux + desig] as u32)
+                } else {
+                    UnionPath::NONE
+                };
                 let base = base.expect("ConstStore: pointer base");
-                Scalar::Pointer { ty, base, offset, designated, past: f & F_PAST != 0 }
+                Scalar::Pointer { ty, base, offset, designated, past: f & F_PAST != 0, unions }
             }
             kind::MEMPTR => {
                 let start = n.b as usize;
@@ -607,12 +684,17 @@ impl Pools {
             }
             // A `Function` base may carry an offset: a C address constant
             // `(char *)f + 1` (C23 6.6p9, WP-1304).
-            Scalar::Pointer { base, .. } => match base {
-                PtrBase::Const(c) if !self.contains(c) => {
-                    return Err(ConstError::Malformed("PtrBase::Const id not in this store"));
+            Scalar::Pointer { base, unions, .. } => {
+                if unions.0 as usize > self.upaths.len() {
+                    return Err(ConstError::Malformed("union path id not in this store"));
                 }
-                _ => {}
-            },
+                match base {
+                    PtrBase::Const(c) if !self.contains(c) => {
+                        return Err(ConstError::Malformed("PtrBase::Const id not in this store"));
+                    }
+                    _ => {}
+                }
+            }
             Scalar::MemberPtr { path, .. } => {
                 if path.len() >= 1 << 24 {
                     return Err(ConstError::Capacity("member pointer path longer than 2^24"));
@@ -665,19 +747,37 @@ impl Pools {
             Scalar::Null { ty, kind: k } => {
                 Node { ty, tag: tag(kind::NULL, 0, k as u32), a: 0, b: 0 }
             }
-            Scalar::Pointer { ty, base, offset, designated, past } => {
+            Scalar::Pointer { ty, base, offset, designated, past, unions } => {
                 let d = designated.map(|q| u64::from(q.to_raw()));
-                let (flags, b) = match (base.aux(), d, u32::try_from(offset)) {
-                    (Some(aux), None, _) => (F_AUX, self.push_words(&[offset, u64::from(aux)])?),
-                    (Some(aux), Some(d), _) => {
-                        (F_AUX | F_DESIG, self.push_words(&[offset, u64::from(aux), d])?)
+                let up = !unions.is_none();
+                let (flags, b) = if !up && base.aux().is_none() && d.is_none() {
+                    match u32::try_from(offset) {
+                        Ok(b) => (0, b),
+                        Err(_) => (F_WIDE, self.push_words(&[offset])?),
                     }
-                    (None, Some(d), _) => (F_DESIG, self.push_words(&[offset, d])?),
-                    (None, None, Ok(b)) => (0, b),
-                    (None, None, Err(_)) => (F_WIDE, self.push_words(&[offset])?),
+                } else {
+                    // The offset, then each of the base's second id, the
+                    // designated type and the union path that is present.
+                    let mut w = [offset, 0, 0, 0];
+                    let mut n = 1;
+                    let mut flags = 0;
+                    if let Some(aux) = base.aux() {
+                        (w[n], n, flags) = (u64::from(aux), n + 1, flags | F_AUX);
+                    }
+                    if let Some(d) = d {
+                        (w[n], n, flags) = (d, n + 1, flags | F_DESIG);
+                    }
+                    if up {
+                        (w[n], n) = (u64::from(unions.0), n + 1);
+                    }
+                    if flags & (F_AUX | F_DESIG) == 0 {
+                        flags |= F_WIDE;
+                    }
+                    (flags, self.push_words(&w[..n])?)
                 };
                 let flags = flags | if past { F_PAST } else { 0 };
-                Node { ty, tag: tag(kind::PTR, flags, base.code()), a: base.raw(), b }
+                let extra = base.code() | if up { X_UPATH } else { 0 };
+                Node { ty, tag: tag(kind::PTR, flags, extra), a: base.raw(), b }
             }
             Scalar::MemberPtr { ty, member, kind: k, derived, path } => {
                 let mut flags = if derived { F_DERIVED } else { 0 };
@@ -800,7 +900,7 @@ fn hash_scalar(s: &Scalar<'_>) -> u64 {
             h.write_u64((bits >> 64) as u64);
         }
         Scalar::Null { kind: k, .. } => h.write_u32(tag(kind::NULL, 0, k as u32)),
-        Scalar::Pointer { base, offset, designated, past, .. } => {
+        Scalar::Pointer { base, offset, designated, past, unions, .. } => {
             h.write_u32(tag(kind::PTR, if past { F_PAST } else { 0 }, base.code()));
             h.write_u32(base.raw());
             if let Some(aux) = base.aux() {
@@ -809,6 +909,9 @@ fn hash_scalar(s: &Scalar<'_>) -> u64 {
             h.write_u64(offset);
             if let Some(d) = designated {
                 h.write_u32(d.to_raw());
+            }
+            if !unions.is_none() {
+                h.write_u32(unions.0);
             }
         }
         Scalar::MemberPtr { member, kind: k, derived, path, .. } => {
@@ -822,6 +925,15 @@ fn hash_scalar(s: &Scalar<'_>) -> u64 {
             h.write_u32(tag(kind::REFL, 0, 0));
             h.write_u32(id.index());
         }
+    }
+    fx_finish(h)
+}
+
+/// The hash of a union path's members ([`ConstStore::push_union_path`]).
+fn hash_path(path: &[DeclId]) -> u64 {
+    let mut h = FxHasher::default();
+    for d in path {
+        h.write_u32(d.index());
     }
     fx_finish(h)
 }
@@ -901,12 +1013,19 @@ impl HeapSize for ConstStore {
         r.push(MemRow::of_vec("relocs", &p.relocs));
         r.push(MemRow::of_vec("padding", &p.padding));
         r.push(MemRow::of_vec("unions", &p.unions));
+        r.push(MemRow::of_vec("upaths", &p.upaths));
         let slot = size_of::<ConstValueId>() as u64 + 1;
         r.push(MemRow::new(
             "intern",
             self.table.len() as u64,
             self.table.len() as u64 * slot,
             self.table.allocation_size() as u64,
+        ));
+        r.push(MemRow::new(
+            "upath_ix",
+            self.upath_ix.len() as u64,
+            self.upath_ix.len() as u64 * 5,
+            self.upath_ix.allocation_size() as u64,
         ));
         r
     }
@@ -923,5 +1042,52 @@ mod tests {
         assert_eq!(size_of::<Reloc>(), 8);
         assert_eq!(size_of::<ByteRange>(), 8);
         assert_eq!(size_of::<UnionMember>(), 8);
+    }
+
+    /// Union paths (WP-2200): interned once per distinct list, part of a
+    /// pointer's identity, and kept by a snapshot with the index rebuilt.
+    #[test]
+    fn union_paths_intern_and_snapshot() {
+        use crate::ids::TypeId;
+        let mut st = ConstStore::default();
+        let (a, b, c) = (DeclId::new(3), DeclId::new(4), DeclId::new(5));
+        assert_eq!(st.push_union_path(&[]), Ok(UnionPath::NONE));
+        assert!(st.union_path(UnionPath::NONE).is_empty());
+        let ab = st.push_union_path(&[a, b]).unwrap();
+        let ba = st.push_union_path(&[b, a]).unwrap();
+        let c1 = st.push_union_path(&[c]).unwrap();
+        assert_eq!(st.push_union_path(&[a, b]), Ok(ab));
+        assert!(ab != ba && ab != c1 && !ab.is_none());
+        assert_eq!(st.union_path(ab), &[a, b]);
+        let ty = QualType::unqual(TypeId::new(40));
+        let ptr = |offset, unions| Scalar::Pointer {
+            ty,
+            base: PtrBase::Decl(DeclId::new(1)),
+            offset,
+            designated: None,
+            past: false,
+            unions,
+        };
+        let mut ids = Vec::new();
+        for off in [0, 12, 1 << 40] {
+            for u in [UnionPath::NONE, ab, c1] {
+                let id = st.push_scalar(ptr(off, u)).unwrap();
+                assert_eq!(st.scalar(id), Some(ptr(off, u)));
+                assert_eq!(st.push_scalar(ptr(off, u)), Ok(id));
+                assert!(!ids.contains(&id));
+                ids.push(id);
+            }
+        }
+        assert!(st.push_scalar(ptr(0, UnionPath(99))).is_err());
+        let bytes = kiln_snap::to_bytes(&st);
+        let back: ConstStore = kiln_snap::from_bytes(&bytes).unwrap();
+        assert_eq!(back.union_path(ab), &[a, b]);
+        let mut back = back;
+        assert_eq!(back.push_union_path(&[b, a]), Ok(ba));
+        for (i, off) in [0, 12, 1 << 40].into_iter().enumerate() {
+            for (j, u) in [UnionPath::NONE, ab, c1].into_iter().enumerate() {
+                assert_eq!(back.push_scalar(ptr(off, u)), Ok(ids[i * 3 + j]));
+            }
+        }
     }
 }

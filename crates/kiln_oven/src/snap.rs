@@ -31,6 +31,7 @@
 //! | `meta` | state + transient | the compiled intrinsic call sites and `info`'s type as data; the result buffer and a pending throw reset |
 //! | `refl_seen` | state | as data (reflection bytes already charged) |
 //! | `dms` | state + transient | the data member descriptions, annotation lists and the reader's plan and layouts as data; reused buffers reset |
+//! | `udesig` | state | the union member designator levels as data (static pointer marks hold tags, WP-2200); its index and last-hit cache rebuilt |
 //! | `budget`, `backtrace_limit` | configuration | `-fconstexpr-steps`, `-fconstexpr-depth`, `-fconstexpr-memory`, the memo size, `-fconstexpr-backtrace-limit` |
 //! | `inlining` | configuration | [`Oven::set_inlining`] (tests only; the sites the snapshot inlined stay inlined) |
 //! | `host` | configuration | the host-call handler, which the consumer registers itself; none may be registered while a snapshot is written (spec/host-calls.md §6) |
@@ -45,7 +46,6 @@
 //! | `contract_violated`, `msg_chars`, `subst_binds` | transient | the last evaluation's outputs and inputs, reset |
 //! | `regs`, `scratch`, `inner` | transient | registers and reused buffers, reset |
 //! | `umemo` | rebuilt | the union-path memo, a cache refilled on demand |
-//! | `udesig` | rebuilt | union member designators, interned on demand (tags live in registers only) |
 //! | `cdtors` | rebuilt | running constructors and destructors (empty between evaluations) |
 //! | `stats` | reset | `-fconstexpr-stats`/`-fconstexpr-report` records: reporting only (the consumer reports its own evaluations) |
 //!
@@ -123,6 +123,7 @@ struct Parts {
     meta: MetaState,
     refl_seen: ReflSeen,
     dms: DmsTable,
+    udesig: Vec<(u32, OTy, u32)>,
 }
 
 /// Adds `field` to a decoding error's path.
@@ -283,7 +284,7 @@ impl Oven {
             frame,
             mem,
             umemo: _,
-            udesig: _,
+            udesig,
             cdtors: _,
             regs: _,
             stack: _,
@@ -345,6 +346,8 @@ impl Oven {
         mem.snap_put(w);
         mark("mem", w.position());
         put!(exc, memo, mp, virt, meta, refl_seen, dms);
+        udesig.snap_list().to_vec().put(w);
+        mark("udesig", w.position());
     }
 
     /// Whether nothing was compiled, interned, allocated or evaluated
@@ -416,6 +419,7 @@ impl Oven {
             meta: at("Oven.meta", r.get())?,
             refl_seen: at("Oven.refl_seen", r.get())?,
             dms: at("Oven.dms", r.get())?,
+            udesig: at("Oven.udesig", r.get())?,
         };
         match parts
             .check(self.budget.memo_entries)
@@ -471,7 +475,13 @@ impl Oven {
             meta,
             refl_seen,
             dms,
+            udesig,
         } = parts;
+        let udesig = crate::vm::udesig::UnionDesigs::from_restored(udesig, &types)
+            .map_err(|why| r.invalid::<Oven>(why))?;
+        if mem.void_tags().any(|t| (t >> 32) as usize > udesig.len()) {
+            return Err(r.invalid::<Oven>("a pointer mark names an unknown union designator"));
+        }
         self.types = types;
         self.code = code;
         self.padded = padded;
@@ -510,6 +520,7 @@ impl Oven {
         self.meta = meta;
         self.refl_seen = refl_seen;
         self.dms = dms;
+        self.udesig = udesig;
         Ok(())
     }
 
@@ -555,6 +566,7 @@ impl Oven {
         .field::<MetaState>("meta")
         .field::<ReflSeen>("refl_seen")
         .field::<DmsTable>("dms")
+        .field::<Vec<(u32, OTy, u32)>>("udesig")
         .finish();
     pub fn snap_schema(s: &mut Schema) {
         let d = Desc::new("configured root")
@@ -596,7 +608,8 @@ impl Oven {
             .field::<Virt>("virt")
             .field::<MetaState>("meta")
             .field::<ReflSeen>("refl_seen")
-            .field::<DmsTable>("dms");
+            .field::<DmsTable>("dms")
+            .field::<Vec<(u32, OTy, u32)>>("udesig");
         if s.register::<Oven>(d) {
             Types::schema(s);
             Vec::<u32>::schema(s);
@@ -631,6 +644,7 @@ impl Oven {
             MetaState::schema(s);
             ReflSeen::schema(s);
             DmsTable::schema(s);
+            Vec::<(u32, OTy, u32)>::schema(s);
         }
     }
 }

@@ -14,7 +14,7 @@
 //! ([`Sema::object_lvalue`]). Substituting a pointer or
 //! reference template argument into a subobject uses the same walk.
 
-use kiln_ast::consts::{PtrBase, Scalar};
+use kiln_ast::consts::{PtrBase, Scalar, UnionPath};
 use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::{CastKind, ExprFlags, NonOdrUse, UnaryOp};
 use kiln_ast::{ConstValueId, DeclId, ExprId, QualType};
@@ -65,7 +65,8 @@ impl Sema<'_, '_> {
     /// way around the const-ification, so the reference to the variable
     /// holding the object is built outside the contract context.
     pub(crate) fn splice_object_expr(&mut self, p: ConstValueId, loc: Loc) -> Option<ExprId> {
-        let Some(Scalar::Pointer { ty, base, offset, .. }) = self.ast.consts.scalar(p) else {
+        let Some(Scalar::Pointer { ty, base, offset, unions, .. }) = self.ast.consts.scalar(p)
+        else {
             return None;
         };
         let target = self.ast.types.pointee(ty)?;
@@ -78,10 +79,10 @@ impl Sema<'_, '_> {
         | PtrBase::TypeInfo(_)
         | PtrBase::Temporary(_) = base
         {
-            return self.const_object_lvalue(base, offset, target, loc);
+            return self.const_object_lvalue(base, offset, target, unions, loc);
         }
         let contracts = std::mem::take(&mut self.contract_ctx);
-        let r = self.object_lvalue(base, offset, target, loc);
+        let r = self.object_lvalue(base, offset, target, unions, loc);
         self.contract_ctx = contracts;
         r
     }
@@ -101,6 +102,7 @@ impl Sema<'_, '_> {
         base: PtrBase,
         offset: u64,
         target: QualType,
+        unions: UnionPath,
         loc: Loc,
     ) -> Option<ExprId> {
         let q = self.ast.types.qualify(target, kiln_ast::types::Quals::CONST);
@@ -108,7 +110,14 @@ impl Sema<'_, '_> {
         let v = self
             .ast
             .consts
-            .push_scalar(Scalar::Pointer { ty, base, offset, designated: None, past: false })
+            .push_scalar(Scalar::Pointer {
+                ty,
+                base,
+                offset,
+                designated: None,
+                past: false,
+                unions,
+            })
             .ok()?;
         let o = self.builder().opaque_value_of(ty, kiln_ast::expr::ValueCategory::PRValue, loc);
         let c = self.builder().constant_expr(o, Some(v));
@@ -130,13 +139,17 @@ impl Sema<'_, '_> {
     /// An lvalue designating the object of type `target` at byte `offset`
     /// of `base`: the variable or template parameter object (the binding,
     /// for a CWG 3135 holding variable's object), then each step to the
-    /// subobject. `None` when `base` is not a declared object or no
-    /// subobject of that type lies at `offset`.
+    /// subobject, entering each union by the member union path `unions`
+    /// names, else by its first member holding the subobject (the
+    /// default member, spec/ast.md §9.1 "Union paths"). `None` when
+    /// `base` is not a declared object or no subobject of that type lies
+    /// at `offset`.
     pub(crate) fn object_lvalue(
         &mut self,
         base: PtrBase,
         offset: u64,
         target: QualType,
+        unions: UnionPath,
         loc: Loc,
     ) -> Option<ExprId> {
         let mut cur = match base {
@@ -154,7 +167,8 @@ impl Sema<'_, '_> {
         };
         let root = self.ety(cur);
         let mut path = Vec::new();
-        if !self.subobject_path(root, offset, target, true, &mut path, 0) {
+        let sel = self.ast.consts.union_path(unions).to_vec();
+        if !self.subobject_path(root, offset, target, (true, &sel), &mut path, 0) {
             return None;
         }
         for step in path {
@@ -201,11 +215,11 @@ impl Sema<'_, '_> {
         ty: QualType,
         pty: QualType,
         base: PtrBase,
-        offset: u64,
+        (offset, unions): (u64, UnionPath),
         loc: Loc,
     ) -> Option<ExprId> {
         let target = self.ast.types.pointee(pty)?;
-        let lv = self.object_lvalue(base, offset, target, loc)?;
+        let lv = self.object_lvalue(base, offset, target, unions, loc)?;
         if self.ast.types.is_reference(ty) {
             return Some(lv);
         }
@@ -260,12 +274,30 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The fields of record `def` with their bit offsets `fields`, in
+    /// declaration order, except that a union's member union path `sel`
+    /// names comes first.
+    fn fields_in_order(&self, def: DeclId, fields: &[u64], sel: &[DeclId]) -> Vec<(DeclId, u64)> {
+        let mut members: Vec<(DeclId, u64)> = self
+            .ast
+            .members(def)
+            .filter(|&m| self.kind_of(m) == DeclKind::Field)
+            .zip(fields.iter().copied())
+            .collect();
+        if !sel.is_empty() && self.is_union(def) {
+            // A stable sort: the others keep their order.
+            members.sort_by_key(|&(f, _)| !sel.contains(&f));
+        }
+        members
+    }
+
     /// Appends to `path` the steps from an object of type `ty` to its
     /// subobject of type `target` at byte `offset` (nothing when the
     /// object itself is meant). Bases are tried before members, and
     /// members sharing an offset (an empty base, a union's members, a
     /// `[[no_unique_address]]` member) in order, until one holds
-    /// `target`. A `complete` object (not a base class subobject) also
+    /// `target`; a union's member that `sel` (a union path) names is
+    /// tried first. A `complete` object (not a base class subobject) also
     /// holds its virtual bases, at the complete-object offsets the layout
     /// gives them. False when none does.
     fn subobject_path(
@@ -273,7 +305,7 @@ impl Sema<'_, '_> {
         ty: QualType,
         offset: u64,
         target: QualType,
-        complete: bool,
+        (complete, sel): (bool, &[DeclId]),
         path: &mut Vec<Step>,
         depth: u32,
     ) -> bool {
@@ -300,7 +332,8 @@ impl Sema<'_, '_> {
                 return false;
             }
             path.push(Step::Index(i));
-            if self.subobject_path(elem, offset - i * stride, target, true, path, depth + 1) {
+            if self.subobject_path(elem, offset - i * stride, target, (true, sel), path, depth + 1)
+            {
                 return true;
             }
             path.pop();
@@ -320,7 +353,7 @@ impl Sema<'_, '_> {
                 _ => return false,
             };
             path.push(Step::Part(imag));
-            if self.subobject_path(elem, 0, target, true, path, depth + 1) {
+            if self.subobject_path(elem, 0, target, (true, sel), path, depth + 1) {
                 return true;
             }
             path.pop();
@@ -348,14 +381,12 @@ impl Sema<'_, '_> {
             }
             let bt = self.tag_type(bdef);
             path.push(Step::Base { derived: def, base: self.ast.first(b) });
-            if self.subobject_path(bt, offset - at, target, false, path, depth + 1) {
+            if self.subobject_path(bt, offset - at, target, (false, sel), path, depth + 1) {
                 return true;
             }
             path.pop();
         }
-        let members: Vec<DeclId> =
-            self.ast.members(def).filter(|&m| self.kind_of(m) == DeclKind::Field).collect();
-        for (f, bits) in members.into_iter().zip(fields.iter().copied()) {
+        for (f, bits) in self.fields_in_order(def, &fields, sel) {
             let Some(data) = self.ast.decls.field(f) else { continue };
             if data.bit_width.is_some() || bits % 8 != 0 {
                 continue;
@@ -372,7 +403,7 @@ impl Sema<'_, '_> {
                 continue;
             }
             path.push(Step::Field(f));
-            if self.subobject_path(ft, offset - at, target, true, path, depth + 1) {
+            if self.subobject_path(ft, offset - at, target, (true, sel), path, depth + 1) {
                 return true;
             }
             path.pop();

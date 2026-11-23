@@ -17,8 +17,10 @@
 //! base projection, pointer arithmetic: none leaves the designated
 //! member's subobject in a constant expression) and through memory: a
 //! stored pointer keeps it in its granule's pointer mark, interned with
-//! the `void *` tag ([`crate::mem::Memory::set_void_tag`]; not in static
-//! memory, which a PCH snapshot keeps while this table is rebuilt). It is
+//! the `void *` tag ([`crate::mem::Memory::set_void_tag`]), static memory
+//! included: a snapshot keeps this table, and a frozen constant pointer
+//! keeps the members as its union path (`Oven::frozen_union_path`,
+//! WP-2200). It is
 //! read by the operations that act on the designated object: a load or
 //! store through the pointer (checked only on the side path of an
 //! allocation holding unions, `Oven::slow_access`), a placement new (which
@@ -40,8 +42,8 @@ type Level = (u32, OTy, u32);
 
 /// The interned designator paths: tag `i + 1` is `list[i]` below the
 /// path of its parent tag. Append-only for the translation unit (a tag
-/// lives in registers and in frame and heap memory, within one
-/// evaluation's pointer marks or a later one's, never in static memory).
+/// lives in registers and in pointer marks, static memory included, so a
+/// snapshot keeps the table).
 #[derive(Default, Debug)]
 pub(crate) struct UnionDesigs {
     list: Vec<Level>,
@@ -87,6 +89,46 @@ impl UnionDesigs {
             t = parent;
         }
         None
+    }
+
+    /// The levels of path `t`, innermost first: each union type and the
+    /// member index the path takes in it.
+    pub fn levels(&self, mut t: u32) -> impl Iterator<Item = (OTy, u32)> + '_ {
+        std::iter::from_fn(move || {
+            let &(parent, u, idx) = self.list.get((t as usize).checked_sub(1)?)?;
+            t = parent;
+            Some((u, idx))
+        })
+    }
+
+    /// The interned levels, for a snapshot (spec/oven.md "Union member
+    /// designators": static memory keeps tags since WP-2200).
+    pub fn snap_list(&self) -> &[Level] {
+        &self.list
+    }
+
+    /// The table of a restored snapshot's `list`, checked against the
+    /// restored types: each level's parent an earlier tag, its type a
+    /// union and its member index one of the union's fields.
+    pub fn from_restored(list: Vec<Level>, types: &crate::ty::Types) -> Result<Self, &'static str> {
+        let ntypes = types.infos.len();
+        let mut ix = FxHashMap::default();
+        for (i, &(parent, u, idx)) in list.iter().enumerate() {
+            if parent as usize > i
+                || u.0 as usize >= ntypes
+                || !matches!(types.kind(u), TyKind::Record { union: true, .. })
+                || idx as usize >= types.fields(u).len()
+                || ix.insert((parent, u, idx), i as u32 + 1).is_some()
+            {
+                return Err("a union member designator out of range");
+            }
+        }
+        Ok(UnionDesigs { list, ix, last: None })
+    }
+
+    /// The number of interned tags (the largest valid tag).
+    pub fn len(&self) -> usize {
+        self.list.len()
     }
 
     pub fn footprint(&self) -> usize {

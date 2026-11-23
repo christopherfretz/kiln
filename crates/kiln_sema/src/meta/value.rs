@@ -145,9 +145,21 @@ impl Sema<'_, '_> {
         base: PtrBase,
         offset: u64,
     ) -> Result<ConstValueId, MetaError> {
+        self.object_ptr_in(obj, base, offset, kiln_ast::consts::UnionPath::NONE)
+    }
+
+    /// [`Self::object_ptr`] for a subobject whose designator enters the
+    /// union members `unions` (WP-2200: `u.a` and `u.b` are two objects).
+    fn object_ptr_in(
+        &mut self,
+        obj: QualType,
+        base: PtrBase,
+        offset: u64,
+        unions: kiln_ast::consts::UnionPath,
+    ) -> Result<ConstValueId, MetaError> {
         let obj = self.unqual(obj);
         let ty = self.ast.types.pointer_to(obj);
-        self.push_const(Scalar::Pointer { ty, base, offset, designated: None, past: false })
+        self.push_const(Scalar::Pointer { ty, base, offset, designated: None, past: false, unions })
     }
 
     /// Why frozen value `cv` is no template argument ([temp.arg.nontype]/6):
@@ -369,10 +381,10 @@ impl Sema<'_, '_> {
         let pt = self.ast.types.pointer_to(t);
         let cv = self.bridge(|b| oven.meta_freeze(b, p, pt, loc))?;
         self.check_tparg(cv, "the object", loc)?;
-        let Some(Scalar::Pointer { base, offset, .. }) = self.ast.consts.scalar(cv) else {
+        let Some(Scalar::Pointer { base, offset, unions, .. }) = self.ast.consts.scalar(cv) else {
             return Err(not_static());
         };
-        let cv = self.object_ptr(t, base, offset)?;
+        let cv = self.object_ptr_in(t, base, offset, unions)?;
         self.intern_reflection(Reflectee::Object(cv), loc).map_err(MetaError::from)
     }
 
@@ -689,7 +701,7 @@ impl Sema<'_, '_> {
         oven: &mut Oven,
     ) -> Result<MetaOut, MetaError> {
         let v = self.var_init_value(d, oven).and_then(|v| self.ast.consts.scalar(v));
-        let Some(Scalar::Pointer { base, offset, .. }) = v else {
+        let Some(Scalar::Pointer { base, offset, unions, .. }) = v else {
             return fail(
                 loc,
                 format!(
@@ -700,7 +712,7 @@ impl Sema<'_, '_> {
         };
         let obj = self.referenced(vt);
         let konst = self.ast.types.canonical(obj).quals().is_const();
-        let p = self.object_ptr(obj, base, offset)?;
+        let p = self.object_ptr_in(obj, base, offset, unions)?;
         self.extract_place(r, p, konst, tc, loc)
     }
 
@@ -1039,6 +1051,7 @@ impl Sema<'_, '_> {
             offset: 0,
             designated: None,
             past: false,
+            unions: kiln_ast::consts::UnionPath::NONE,
         })?;
         Ok(MetaOut::Frozen(cv))
     }

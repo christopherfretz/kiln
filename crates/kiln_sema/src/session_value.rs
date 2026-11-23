@@ -16,7 +16,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 pub use kiln_ast::consts::FloatKind;
-use kiln_ast::consts::{ByteImage, ConstValue, IntBits, PrintEnv, PtrBase, Scalar, Shape};
+use kiln_ast::consts::{
+    ByteImage, ConstValue, IntBits, PrintEnv, PtrBase, Scalar, Shape, union_path_member,
+};
 use kiln_ast::decl::DeclKind;
 use kiln_ast::dump::AstNames;
 use kiln_ast::reflect::Reflectee;
@@ -531,8 +533,9 @@ impl Decoder<'_, '_, '_> {
             Scalar::Bool { ty, value } => self.int(ty, u128::from(value), 1, false)?,
             Scalar::Float { kind, bits, .. } => RunValue::Float { kind, bits },
             Scalar::Null { .. } => RunValue::Null,
-            Scalar::Pointer { ty, base, offset, designated, past } => {
-                self.pointer(ty, base, offset, designated, past)?
+            Scalar::Pointer { ty, base, offset, designated, past, unions } => {
+                let sel = self.ast.consts.union_path(unions);
+                self.pointer(ty, base, (offset, sel), designated, past)?
             }
             Scalar::MemberPtr { member, .. } => {
                 self.charge(size_of::<Entity>() as u64)?;
@@ -724,11 +727,14 @@ impl Decoder<'_, '_, '_> {
 
     // ---- pointers -----------------------------------------------------
 
+    /// A pointer of type `ty` to byte `offset` of `base`, whose designator
+    /// enters the union members union path `sel` names (spec/ast.md §9.1
+    /// "Union paths").
     fn pointer(
         &mut self,
         ty: QualType,
         base: PtrBase,
-        offset: u64,
+        (offset, sel): (u64, &[DeclId]),
         designated: Option<QualType>,
         past: bool,
     ) -> R<RunValue> {
@@ -777,7 +783,7 @@ impl Decoder<'_, '_, '_> {
         let (path, past_end) = match whole {
             None if offset == 0 => (Vec::new(), false),
             None => return unreadable("a pointer past a function or type_info object"),
-            Some(whole) => self.designator(whole, offset, pointee, past)?,
+            Some(whole) => self.designator(whole, (offset, sel), pointee, past)?,
         };
         self.charge((path.len() * size_of::<PathStep>()) as u64)?;
         Ok(RunValue::Pointer(Box::new(PointerValue {
@@ -788,13 +794,13 @@ impl Decoder<'_, '_, '_> {
     }
 
     /// The designator of byte `offset` of an object of type `whole` for
-    /// a pointer to `pointee` (`past`: one past the end of a subobject):
-    /// the path and whether the pointer is one past the end of what it
-    /// names.
+    /// a pointer to `pointee` (`past`: one past the end of a subobject)
+    /// through the union members `sel` names: the path and whether the
+    /// pointer is one past the end of what it names.
     fn designator(
         &mut self,
         whole: QualType,
-        offset: u64,
+        (offset, sel): (u64, &[DeclId]),
         pointee: Option<QualType>,
         past: bool,
     ) -> R<(Vec<PathStep>, bool)> {
@@ -805,12 +811,12 @@ impl Decoder<'_, '_, '_> {
         // it), then one whose last step is a scalar of another type (a
         // `void*`).
         for strict in [true, false] {
-            if !past && self.walk(whole, offset, pointee, strict, &mut steps, 0)? {
+            if !past && self.walk(whole, (offset, sel), pointee, strict, &mut steps, 0)? {
                 return Ok((steps, false));
             }
             steps.clear();
             if let Some(size) = size
-                && self.walk(whole, offset - size, pointee, strict, &mut steps, 0)?
+                && self.walk(whole, (offset - size, sel), pointee, strict, &mut steps, 0)?
             {
                 return Ok((steps, true));
             }
@@ -822,11 +828,13 @@ impl Decoder<'_, '_, '_> {
     /// The constant printer's designator recovery (`walk_at`), as steps.
     /// Several members can share an offset (an empty base, a
     /// `[[no_unique_address]]` member, a union's members): each is tried
-    /// until one holds `pointee` (`strict`), or a scalar at the offset.
+    /// until one holds `pointee` (`strict`), or a scalar at the offset. A
+    /// union is entered first by the member union path `sel` names, else
+    /// by its default member (`union_path_member`, as the printer does).
     fn walk(
         &mut self,
         mut ty: QualType,
-        mut offset: u64,
+        (mut offset, sel): (u64, &[DeclId]),
         pointee: Option<QualType>,
         strict: bool,
         steps: &mut Vec<PathStep>,
@@ -854,16 +862,20 @@ impl Decoder<'_, '_, '_> {
                     offset -= i * stride;
                     ty = elem;
                 }
-                Shape::Record { members, .. } => {
-                    let mut pos = 0u32;
-                    for m in members {
-                        let unnamed_bits =
-                            m.bit_width.is_some() && m.field.is_none_or(|f| self.is_unnamed(f));
-                        if unnamed_bits {
+                Shape::Record { members, union } => {
+                    let first = if *union {
+                        union_path_member(&self.names, members, offset, pointee, sel)
+                            .and_then(|f| members.iter().position(|m| std::ptr::eq(m, f)))
+                    } else {
+                        None
+                    };
+                    let order =
+                        first.into_iter().chain((0..members.len()).filter(|&i| Some(i) != first));
+                    for i in order {
+                        let m = &members[i];
+                        if m.bit_width.is_some() && m.field.is_none_or(|f| self.is_unnamed(f)) {
                             continue;
                         }
-                        let here = pos;
-                        pos += 1;
                         let at = m.offset_bits / 8;
                         let hit = m.bit_width.is_none()
                             && m.offset_bits % 8 == 0
@@ -874,12 +886,23 @@ impl Decoder<'_, '_, '_> {
                         }
                         let step = match m.field {
                             None => PathStep::Base(self.type_display(m.ty)?),
-                            Some(f) if self.is_unnamed(f) => PathStep::Anonymous(here),
+                            Some(f) if self.is_unnamed(f) => {
+                                // Its position among the members a
+                                // `Record` lists (unnamed bit-fields omitted).
+                                let here = members[..i]
+                                    .iter()
+                                    .filter(|m| {
+                                        m.bit_width.is_none()
+                                            || m.field.is_some_and(|f| !self.is_unnamed(f))
+                                    })
+                                    .count();
+                                PathStep::Anonymous(u32::try_from(here).unwrap_or(u32::MAX))
+                            }
                             Some(f) => PathStep::Member(self.ident(f)?),
                         };
                         let len = steps.len();
                         steps.push(step);
-                        if self.walk(m.ty, offset - at, pointee, strict, steps, depth + 1)? {
+                        if self.walk(m.ty, (offset - at, sel), pointee, strict, steps, depth + 1)? {
                             return Ok(true);
                         }
                         steps.truncate(len);

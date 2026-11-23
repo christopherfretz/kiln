@@ -84,6 +84,9 @@ pub(super) enum ConstRec {
         offset: u64,
         designated: Option<QRef>,
         past: bool,
+        /// WP-2200: the union path's members (field records), outermost
+        /// first.
+        unions: Vec<u32>,
     },
     /// WP-1343: a class, array or union value: its bytes, its
     /// pointer-like subobjects (offset, earlier constant), its padding
