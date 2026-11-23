@@ -1523,12 +1523,24 @@ impl Sema<'_, '_> {
         open
     }
 
-    /// The parameter list of the innermost untaken written head (a
-    /// [temp.friend]/5 friend's member template head, WP-1098).
-    pub(crate) fn innermost_open_head_list(&self) -> Option<TemplateParamListId> {
+    /// The parameter lists of the untaken written heads directly around
+    /// the declaration being declared, outermost first (a [temp.friend]/5
+    /// friend's own heads, its row's `heads`; spec/ast.md §23).
+    pub(crate) fn open_written_head_lists(&self) -> Vec<TemplateParamListId> {
         let floor = self.lambda_head_floor();
-        let (i, h) = self.templ.heads.iter().enumerate().rev().find(|(_, h)| !h.invented)?;
-        (!h.taken && i >= floor).then_some(h.list).flatten()
+        let mut open = Vec::new();
+        for (i, h) in self.templ.heads.iter().enumerate().rev() {
+            if h.taken || i < floor {
+                break;
+            }
+            if !h.invented
+                && let Some(l) = h.list
+            {
+                open.push(l);
+            }
+        }
+        open.reverse();
+        open
     }
 
     /// The parameter list of an untaken invented head innermost around

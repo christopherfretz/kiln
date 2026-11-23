@@ -1787,6 +1787,9 @@ pub struct ColdDeclData {
     /// the first), the opening an explicit specialization of a function
     /// template is written in (`ctx` is the template's).
     pub written_ns: ColdMap<DeclId, DeclId>,
+    /// A `Friend`'s row in `DeclArena::friend_forms` (spec/ast.md §23),
+    /// or `friend_form::NOT_CARRIED` for one read from a module image.
+    pub friend_form: ColdMap<DeclId, u32>,
 }
 
 impl Default for ColdDeclData {
@@ -1828,12 +1831,13 @@ impl Default for ColdDeclData {
             init_fp: ColdMap::new("init_fp"),
             closure_owner: ColdMap::new("closure_owner"),
             written_ns: ColdMap::new("written_ns"),
+            friend_form: ColdMap::new("friend_form"),
         }
     }
 }
 
 impl ColdDeclData {
-    fn rows(&self) -> [MemRow; 36] {
+    fn rows(&self) -> [MemRow; 37] {
         [
             self.lexical_ctx.mem_row(),
             self.written_ns.mem_row(),
@@ -1871,6 +1875,7 @@ impl ColdDeclData {
             self.compound_literal.mem_row(),
             self.init_fp.mem_row(),
             self.closure_owner.mem_row(),
+            self.friend_form.mem_row(),
         ]
     }
 }
@@ -1915,6 +1920,10 @@ pub struct DeclArena {
     /// each with the number of top-level ends recorded by then
     /// ([`DeclArena::note_fn_def_inst`]).
     fn_def_insts: Vec<(DeclId, u32)>,
+    /// The written forms of friends (spec/ast.md §23), in declaration
+    /// order, and the `Friend` of each.
+    pub(crate) friend_forms: Vec<crate::friend_form::FriendForm>,
+    pub(crate) friend_form_decls: Vec<DeclId>,
     /// Cold per-declaration data.
     pub cold: ColdDeclData,
     /// Every declaration [`DeclArena::set_ty`] retypes (WP-658; see
@@ -2015,6 +2024,8 @@ impl Default for DeclArena {
             completed_records: Vec::new(),
             top_level_ends: Vec::new(),
             fn_def_insts: Vec::new(),
+            friend_forms: Vec::new(),
+            friend_form_decls: Vec::new(),
             cold: ColdDeclData::default(),
             ty_journal: crate::journal::Journal::default(),
         }
@@ -3313,7 +3324,7 @@ impl DeclArena {
         all - VecDims::of("min_args", &self.min_args).live_bytes()
     }
 
-    fn vec_rows(&self) -> [VecDims; 19] {
+    fn vec_rows(&self) -> [VecDims; 21] {
         [
             VecDims::of("nodes", &self.nodes),
             VecDims::of("functions", &self.functions),
@@ -3334,6 +3345,8 @@ impl DeclArena {
             VecDims::of("completed_records", &self.completed_records),
             VecDims::of("top_level_ends", &self.top_level_ends),
             VecDims::of("fn_def_insts", &self.fn_def_insts),
+            VecDims::of("friend_forms", &self.friend_forms),
+            VecDims::of("friend_form_decls", &self.friend_form_decls),
         ]
     }
 }
@@ -7263,6 +7276,8 @@ impl DeclArena {
             completed_records: _,
             top_level_ends: _,
             fn_def_insts: _,
+            friend_forms: _,
+            friend_form_decls: _,
             cold: _,
             ty_journal: _,
         } = self;

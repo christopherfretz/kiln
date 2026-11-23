@@ -426,6 +426,7 @@ impl StdCache {
         // build records (spec/ast.md §19.6), keyed apart below.
         a.dump_decl_extents = false;
         a.dump_expr_extents = false;
+        a.dump_friend_forms = false;
         a.pp_record = false;
         a.dump_pp_record = false;
         // A module file carries no builtin-macro literal table (spec/ast.md

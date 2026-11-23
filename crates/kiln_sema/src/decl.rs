@@ -6452,13 +6452,9 @@ impl Sema<'_, '_> {
         if invalid_redecl {
             self.ast.decls.set_flags(f, DeclFlags::INVALID);
         } else if templated_friend || deferred_method_friend {
-            self.friend_qualifiers.insert(f, ctx);
-            if deferred_method_friend
-                && let Some(n) = d.qualifier_nns
-                && self.ast.types.nns_flags(n).intersects(TypeFlags::DEPENDENT)
-            {
-                self.friend_qualifier_nns.insert(f, (n, d.loc));
-            }
+            // Its row keeps the qualifier for the instantiation
+            // (`declare_friend`, spec/ast.md §23).
+            self.pending_qualified_friend = Some((f, deferred_friend || deferred_method_friend));
         }
         if d.op_name.is_none() && d.lit_suffix.is_none() {
             self.note_local_extern(name, f);
@@ -11140,6 +11136,8 @@ impl Sema<'_, '_> {
         fixed: Option<QualType>,
         loc: Loc,
     ) -> DeclId {
+        self.pending_friend_class_head = None;
+        self.pending_friend_class_qual = None;
         let ns = self.enclosing_namespace().unwrap_or(self.ast.tu);
         if let (Some((n, nloc)), Some(q)) = (name, qualifier)
             && keyword != TagKeyword::Enum
@@ -11427,6 +11425,7 @@ impl Sema<'_, '_> {
         }
         self.mark_type_referenced(p);
         self.friend_class_template = Some(t);
+        self.pending_friend_class_head = Some((head, nloc));
         Some(p)
     }
 

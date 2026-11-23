@@ -730,6 +730,9 @@ impl SyntaxJob<'_> {
             let x = kiln_parse::ExprExtents::new(&tu.ast, sm, interner, lex_options);
             result.output.push_str(&x.dump());
         }
+        if a.dump_friend_forms {
+            result.output.push_str(&tu.ast.dump_friend_forms(sm, main_id));
+        }
         if let Some(d) = pp_record {
             result.output.push_str(&d);
         }

@@ -180,28 +180,12 @@ impl Parser<'_, '_> {
         };
         let ast = &self.s.ast;
         let target = if ast.decls.get(decl).kind() == DeclKind::Friend {
-            match ast.decls.friend_target(decl) {
-                FriendTarget::Decl(t) => t,
-                // A qualified friend kept with its type only: a member of
-                // every specialization of a class template
-                // ([temp.friend]/5) or of a dependent class.
-                FriendTarget::Type { .. } if qualified => {
-                    let (entity, dep) = self.s.written_friend_type_target(decl, d);
-                    let id = self.s.note_written_decl_name(
-                        range,
-                        entity,
-                        RefRole::Elaborated,
-                        d.id_link,
-                        dep,
-                    );
-                    self.note_decl_tilde(id, tilde);
-                    return;
-                }
-                FriendTarget::Type { .. } => return,
-            }
+            let Some(t) = self.friend_declarator_target(decl, d, range, tilde) else { return };
+            t
         } else {
             decl
         };
+        let ast = &self.s.ast;
         let spec = ast.spec_info(target).map(|(_, i)| i.template);
         let first = ast.first(target);
         let (entity, role) = if let Some(t) = spec {
@@ -217,6 +201,43 @@ impl Parser<'_, '_> {
         let dep = entity.is_none() && d.qualifier.is_some_and(|q| self.s.is_dependent_ctx(q));
         let id = self.s.note_written_decl_name(range, entity, role, d.id_link, dep);
         self.note_decl_tilde(id, tilde);
+    }
+
+    /// The declaration the declarator-id of friend `decl` (declarator
+    /// `d`, written at `range`) redeclares, for `note_declarator_ref`;
+    /// `None` when its entry is recorded here (a friend matched per
+    /// specialization or kept with its type only) or there is none.
+    fn friend_declarator_target(
+        &mut self,
+        decl: DeclId,
+        d: &Declarator,
+        range: Span,
+        tilde: Option<Loc>,
+    ) -> Option<DeclId> {
+        let qualified = d.id_link != RefQualifier::NONE;
+        let ast = &self.s.ast;
+        // A friend matched per specialization names its row's candidate
+        // (spec/ast.md §23.3): one source of truth.
+        let (entity, dep) = if let Some(r) = ast.decls.friend_form_row(decl)
+            && r.flags.contains(kiln_ast::friend_form::FriendFormFlags::DEPENDENT)
+            && qualified
+        {
+            (r.entity, true)
+        } else {
+            match ast.decls.friend_target(decl) {
+                FriendTarget::Decl(t) => return Some(t),
+                // A qualified friend kept with its type only: a member of
+                // every specialization of a class template
+                // ([temp.friend]/5) or of a dependent class.
+                FriendTarget::Type { .. } if qualified => {
+                    self.s.written_friend_type_target(decl, d)
+                }
+                FriendTarget::Type { .. } => return None,
+            }
+        };
+        let id = self.s.note_written_decl_name(range, entity, RefRole::Elaborated, d.id_link, dep);
+        self.note_decl_tilde(id, tilde);
+        None
     }
 
     fn note_decl_tilde(&mut self, id: Option<WrittenRefId>, tilde: Option<Loc>) {

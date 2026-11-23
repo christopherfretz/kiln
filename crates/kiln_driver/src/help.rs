@@ -345,6 +345,9 @@ KILN DEVELOPMENT:
   -fkiln-dump-expr-extents
                           [kiln] Dump the written extent of every expression
                           (with -fsyntax-only)
+  -fkiln-dump-friend-forms
+                          [kiln] Dump every friend's written form (with
+                          -fsyntax-only)
   -fkiln-dump-pp-record   [kiln] Dump the preprocessing record (with -E: the
                           origin of each token from a macro)
   -fkiln-dump-pp-record=source-order

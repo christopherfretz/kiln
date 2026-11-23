@@ -11,7 +11,7 @@ use kiln_ast::decl::{
 };
 use kiln_ast::ids::TemplateParamListId;
 use kiln_ast::names::DeclNameKind;
-use kiln_ast::types::{TagKeyword, TypeView};
+use kiln_ast::types::{TagKeyword, TemplateArg, TypeFlags, TypeView};
 use kiln_ast::{AttrId, DeclId, QualType};
 use kiln_source::Loc;
 use kiln_source::symbol::Symbol;
@@ -866,9 +866,14 @@ impl Substituter<'_, '_, '_> {
         }
         let mut dr = self.pattern_declarator(d, ctx)?;
         if friend.is_some() {
-            dr.qualifier = if let Some(&(n, qloc)) = self.sema.friend_qualifier_nns.get(&d) {
+            let form = self.sema.qualified_friend_form(d);
+            let dependent_nns = form.filter(|&(n, _, deferred)| {
+                deferred && self.sema.ast.types.nns_flags(n).intersects(TypeFlags::DEPENDENT)
+            });
+            dr.qualifier = if let Some((n, qloc, _)) = dependent_nns {
                 // A method friend matched at instantiation (WP-1110): the
-                // class its substituted specifier names.
+                // class its substituted specifier names (its row's
+                // qualifier, spec/ast.md §23).
                 let n = self.nns(n, qloc)?;
                 if self.nns_still_dependent(n) {
                     // Still dependent (a local class of a generic lambda
@@ -881,8 +886,9 @@ impl Substituter<'_, '_, '_> {
                     Some(self.nns_context(n, qloc)?)
                 }
             } else {
-                match self.sema.friend_qualifiers.get(&d) {
-                    Some(&q) => Some(q),
+                // The namespace or class its qualifier names.
+                match form.and_then(|(n, _, _)| self.sema.nns_last_context(n)) {
+                    Some(q) => Some(q),
                     None => self.friend_member_class(d, loc),
                 }
             };
@@ -1961,10 +1967,7 @@ impl Substituter<'_, '_, '_> {
         let first = self.sema.ast.first(f);
         // A friend matched only here (WP-1110) redeclares the member its
         // instantiation found.
-        if first == f
-            && (self.sema.friend_qualifier_nns.contains_key(&f)
-                || self.sema.friend_qualifiers.contains_key(&f))
-        {
+        if first == f && self.sema.friend_fn_decls.contains_key(&f) {
             if let FriendTarget::Decl(x) = self.sema.ast.decls.friend_target(r)
                 && self.sema.ast.first(x) != x
                 && !self.sema.ast.decls.get(x).has(DeclFlags::INVALID)
@@ -2087,71 +2090,81 @@ impl Substituter<'_, '_, '_> {
     }
 
     /// `friend Z<T>::Z(typename T::t);` in a class template (see
-    /// `friend_decl`).
+    /// `friend_decl`): the pattern's `FriendDecl` `d` of special member
+    /// `kind` with declared type `ty`, matched from its row.
     fn special_friend(
         &mut self,
-        sf: crate::class::friend::SpecialFriend,
+        d: DeclId,
+        kind: crate::class::friend::SpecialFriendKind,
+        ty: QualType,
         loc: Loc,
     ) -> SubstResult<Option<DeclId>> {
+        let row = self.sema.ast.decls.friend_form_row(d).copied().ok_or(SubstFail)?;
+        let head = self.sema.ast.lists.at::<TemplateParamListId>(row.heads, 0);
         // `friend Z<T>::Z(typename T::t);`: matched in the class the
         // substituted specifier names ([class.friend]/4, [temp.friend]/1).
-        let ty = self.ty(sf.ty, loc)?;
+        let ty = self.ty(ty, loc)?;
         let record = self.sema.current_class().map(|c| c.record).ok_or(SubstFail)?;
-        let class = match sf.nns {
-            Some(n) => {
-                let n = self.nns(n, loc)?;
-                if self.nns_still_dependent(n) {
-                    // Still dependent (a local class of a generic lambda in
-                    // the template being instantiated): matched at the
-                    // instantiation that makes it a class, as in the
-                    // pattern ([temp.dep.type]/6, [temp.friend]/1).
-                    let target = FriendTarget::Type { ty, owned_tag: None };
-                    let fd = self.sema.builder().friend(record, loc, target);
-                    let sf = crate::class::friend::SpecialFriend { ty, nns: Some(n), ..sf };
-                    self.sema.special_friends.insert(fd, sf);
-                    return Ok(Some(fd));
-                }
-                self.nns_context(n, loc)?
+        let class = if let Some(n) = row.qualifier {
+            let n = self.nns(n, loc)?;
+            if self.nns_still_dependent(n) {
+                // Still dependent (a local class of a generic lambda in
+                // the template being instantiated): matched at the
+                // instantiation that makes it a class, as in the
+                // pattern ([temp.dep.type]/6, [temp.friend]/1).
+                let target = FriendTarget::Type { ty, owned_tag: None };
+                let fd = self.sema.builder().friend(record, loc, target);
+                self.sema.record_instantiated_friend_form(d, fd, Some(n));
+                return Ok(Some(fd));
             }
-            None if self.sema.in_dependent_class(sf.class) => {
-                self.find_instantiated_decl(sf.class, loc)?
-            }
-            None => sf.class,
+            self.nns_context(n, loc)?
+        } else {
+            // A friend written with no qualifier names no special member;
+            // its candidate's class is the one meant.
+            let c = row.entity.and_then(|e| self.sema.declaring_class(e)).ok_or(SubstFail)?;
+            if self.sema.in_dependent_class(c) { self.find_instantiated_decl(c, loc)? } else { c }
         };
-        if let Some(h) = sf.head {
+        if let Some(h) = head {
             // Its head keeps the pattern's parameters: equivalence does
             // not look at their depth.
-            return Ok(Some(
-                self.sema.befriend_special_template(record, class, sf.kind, ty, h, loc),
-            ));
+            return Ok(Some(self.sema.befriend_special_template(record, class, kind, ty, h, loc)));
         }
-        Ok(self.sema.befriend_special_member(record, class, (sf.kind, None), ty, loc))
+        Ok(self.sema.befriend_special_member(record, class, (kind, None), ty, loc))
     }
 
     /// A friend declaration of the pattern ([temp.friend]).
     pub(crate) fn friend_decl(&mut self, d: DeclId) -> SubstResult<Option<DeclId>> {
         let loc = self.sema.ast.decls.get(d).loc();
-        if let Some(mut fs) = self.sema.friend_specs.get(&d).cloned() {
+        // The friend's written form (spec/ast.md §23) says how it is
+        // matched per specialization.
+        let row = self.sema.ast.decls.friend_form_row(d).copied();
+        let fn_ty = self.sema.friend_fn_ty(d);
+        if let (Some(row), Some(fty)) = (row, fn_ty)
+            && row.kind == kiln_ast::friend_form::FriendFormKind::Specialization
+        {
             // `friend bool operator==<>(const X&, const X&);`
             // ([temp.friend]/1.3).
             // `friend void Q<T>::f<int>(int);`: the member templates found
             // in the dependent `Q<T>` are those of the instantiated class
             // (`Q<int>::f`), whose specialization is the friend, not one of
             // the pattern's template.
-            for t in &mut fs.templates {
+            let mut templates: Vec<DeclId> = self.sema.ast.lists.iter(row.found).collect();
+            for t in &mut templates {
                 if self.sema.declaring_class(*t).is_some_and(|c| self.sema.in_dependent_class(c)) {
                     *t = self.find_instantiated_decl(*t, loc)?;
                 }
             }
-            let ty = self.ty(fs.ty, loc)?;
-            let args = fs
-                .args
+            let ty = self.ty(fty, loc)?;
+            let written: Vec<TemplateArg> =
+                row.args.map(|a| self.sema.ast.types.args(a).to_vec()).unwrap_or_default();
+            let args = written
                 .iter()
                 .map(|&a| self.template_arg(a, loc))
                 .collect::<SubstResult<Vec<_>>>()?;
             let record = self.sema.current_class().map(|c| c.record).ok_or(SubstFail)?;
             let errors = self.sema.written_spec_errors();
-            let r = self.sema.instantiate_friend_spec(record, &fs, ty, &args);
+            let at = (row.name, row.name_loc);
+            let r = self.sema.instantiate_friend_spec(record, d, at, &templates, ty, &args);
             // Its written name's row (spec/ast.md §18.9.4).
             if let Some(e) = errors {
                 self.sema.note_written_spec_friend(d, r, e);
@@ -2160,17 +2173,22 @@ impl Substituter<'_, '_, '_> {
         }
         if let Some(mf) = self.sema.member_friends.by_friend.get(&d).cloned()
             && let FriendTarget::Type { ty, .. } = self.sema.ast.decls.friend_target(d)
+            && let Some(q) = row.and_then(|r| r.qualifier)
         {
             // `template<class T> friend class A<T>::Member;`
             // ([temp.friend]/5): its own parameters stay.
-            let nns = self.nns(mf.nns, loc)?;
+            let nns = self.nns(q, loc)?;
             let ty = self.ty(ty, loc)?;
             let depth = self.args.retained_depth(mf.depth());
             let at = (depth, self.args);
-            return Ok(self.sema.instantiate_member_friend(&mf, nns, ty, at, loc));
+            return Ok(self.sema.instantiate_member_friend((d, &mf), nns, ty, at, loc));
         }
-        if let Some(sf) = self.sema.special_friends.get(&d).copied() {
-            return self.special_friend(sf, loc);
+        if let (Some(row), Some(fty)) = (row, fn_ty)
+            && row.flags.contains(kiln_ast::friend_form::FriendFormFlags::DEPENDENT)
+            && !row.flags.contains(kiln_ast::friend_form::FriendFormFlags::EVERY_SPEC)
+            && let Some(kind) = crate::class::friend::SpecialFriendKind::of_form(row.kind)
+        {
+            return self.special_friend(d, kind, fty, loc);
         }
         match self.sema.ast.decls.friend_target(d) {
             // A friend function of a dependent class (`friend R T::f();`)

@@ -3225,8 +3225,9 @@ reports a dropped statement, part or declaration lookup.
   matched when the class template is defined: its own parameters are a
   level deeper than `N::f`'s and the match may depend on the class's
   arguments ([temp.friend]/1, [temp.over.link]/6). It is kept as a hidden
-  pattern (like an unqualified one) and its qualifier recorded
-  (`Sema::friend_qualifiers`); each instantiation of the class declares it
+  pattern (like an unqualified one) and its qualifier is that of its
+  `FriendForm` row (spec/ast.md §23, reached by `Sema::friend_fn_decls`;
+  the context named is the qualifier's last component); each instantiation of the class declares it
   again with that qualifier, so the substituted friend (now at `N::f`'s
   depth, parameters compared by position) redeclares the namespace member
   and befriends it, wherever the class itself lives. A non-template
@@ -3266,10 +3267,9 @@ reports a dropped statement, part or declaration lookup.
   it to the qualifier's class template; so does an abbreviated friend
   with no written head (`friend int B<T>::g(C auto, W<T>&);`): its
   invented head is its own (WP-1145). The deferred friend
-  redeclares nothing in the pattern, without a diagnostic, and records
-  its qualifier (`friend_qualifiers`), plus the written specifier when
-  that is dependent (`friend_qualifier_nns`, with where the specifier
-  begins: a substituted specifier naming no class, "type 'int' cannot be
+  redeclares nothing in the pattern, without a diagnostic; its row
+  keeps the written specifier, `DEPENDENT` and where the specifier
+  begins (`qualifier_loc`: a substituted specifier naming no class, "type 'int' cannot be
   used prior to '::'", is reported there, as clang does; WP-1507). Each
   instantiation declares
   it with the class the substituted specifier names
@@ -6559,7 +6559,7 @@ For `template<> R f<args>(params)` or `template<> R f(params)`, and for
    function template" at each declaration found; the declaration is
    dropped (`sema_dependent_member_spec_no_candidate`, WP-330;
    `tests/conformance/temp.expl.spec/dependent-member-spec-no-candidate.cpp`).
-   The friend form is the `FriendSpec` entry of §11.2. When candidates exist,
+   The friend form is the `FriendForm` row of §11.2 (spec/ast.md §23). When candidates exist,
    kiln still matches in the pattern, where clang defers the match to
    the class's instantiation (kept deviation: a mismatch is reported at
    the definition, without the "in instantiation of" note).
@@ -10624,8 +10624,9 @@ requires-clause scope.**
   friend specializations `friend R f<>(...)` / `friend R N::g<T>(...)`
   (`Declarator::friend`, `friend_spec_template`,
   `act_on_friend_spec_without_template`, `function_templates_in`,
-  `match_function_spec_in`). A dependent friend specialization is a
-  `FriendSpec` in `Sema.friend_specs`, matched when its class is
+  `match_function_spec_in`). A dependent friend specialization keeps its type and a
+  `Specialization` row (spec/ast.md §23: name, written arguments, the
+  templates found), matched from the row when its class is
   instantiated (`instantiate_friend_spec`); one in a template whose
   qualifier, type and arguments depend on nothing is also matched where
   written ([temp.res.general]/6; `friend_spec_dependent`), so a friend

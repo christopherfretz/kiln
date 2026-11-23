@@ -133,7 +133,7 @@ pub(crate) const MAGIC: [u8; 8] = *b"KILNSNAP";
 /// driver warning id; version 7 (WP-1433) a new AST cold map
 /// (`offsetof_layout`); version 8 (WP-1426) the SME diagnostic ids and
 /// attribute kinds and the 32-bit `FuncInfo`.
-pub(crate) const FORMAT_VERSION: u32 = 171;
+pub(crate) const FORMAT_VERSION: u32 = 172;
 /// The length of the magic and the format version.
 pub(crate) const HEADER_LEN: usize = 12;
 
@@ -176,6 +176,7 @@ fn excluded(args: &Args) -> Args {
         written_refs: d.written_refs,
         dump_decl_extents: d.dump_decl_extents,
         dump_expr_extents: d.dump_expr_extents,
+        dump_friend_forms: d.dump_friend_forms,
         // The preprocessing record likewise: carried when the producer
         // recorded it, read when the consumer records (spec/pp.md
         // "Preprocessing record", stage 4).
@@ -1228,6 +1229,7 @@ pub(crate) fn single_pass_blocker(
         (args.dump_written_refs, "-fkiln-dump-written-refs"),
         (args.dump_decl_extents, "-fkiln-dump-decl-extents"),
         (args.dump_expr_extents, "-fkiln-dump-expr-extents"),
+        (args.dump_friend_forms, "-fkiln-dump-friend-forms"),
         (args.dump_pp_record, "-fkiln-dump-pp-record"),
         (args.cfg_stats, "-fkiln-cfg-stats"),
         (args.bmi_image_census || args.bmi_image_census_all, "-fkiln-bmi-image-census"),

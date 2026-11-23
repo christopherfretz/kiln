@@ -177,11 +177,12 @@ matches nothing gets the same notes (`act_on_function`, not for a friend
 template, as in clang). When the class is templated (a class template's
 pattern, which `Z<T>::` also names outside `Z` when the parameters line
 up, or a member of one) or dependent, or the type is dependent, the
-friend keeps its type and a `SpecialFriend` entry in
-`Sema.special_friends` (the special member kind, the type, the class and
-the written nested-name-specifier; side data keyed by the `FriendDecl`,
-so the class record does not grow; part of the PCH snapshot, and a reason
-for the BMI image to fall back to replay). Each specialization substitutes
+friend keeps its type and its `FriendForm` row (spec/ast.md §23, which
+it is read from: the special member kind, the written
+nested-name-specifier, its head, `DEPENDENT`, and as `entity` the
+pattern's member it matched, whose class is the one meant without a
+qualifier; carried by the PCH snapshot, and a reason for the BMI image
+to fall back to replay). Each specialization substitutes
 the specifier and the type and matches them in the class named
 (`befriend_special_member`, `templ/subst/decls.rs` `friend_decl`): the
 same rule and the same no-match error, then with the instantiation note.
@@ -235,8 +236,8 @@ compares the friend's deeper parameters and rejects a valid conversion
 function template), and befriends nothing when it matches nothing
 (its parameters are one level deeper than the member's: a constructor
 template befriended there is not found, clang and GCC 16.1 befriend
-nothing either). In a templated class the `SpecialFriend`
-entry also keeps the friend's head and each specialization matches the
+nothing either). In a templated class the row also keeps the friend's
+head (`heads`) and each specialization matches the
 substituted type in the instantiated class (its head is the pattern's:
 equivalence does not compare depths). A friend of every specialization
 (`template<class U> friend X<U>::X(U);`, `X<U>::~X()`, `X<U>::operator

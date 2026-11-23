@@ -12,6 +12,7 @@
 //! grants only the members the rule names.
 
 use kiln_ast::decl::{DeclFlags, DeclKind, FriendTarget};
+use kiln_ast::friend_form::{FriendForm, FriendFormFlags, FriendFormKind};
 use kiln_ast::ids::{ArgListId, TemplateParamListId};
 use kiln_ast::names::{DeclName, DeclNameKind, OverloadedOperator};
 use kiln_ast::types::{Nns, TemplateArg, TypeFlags, TypeView};
@@ -28,26 +29,17 @@ use crate::templ::deduce::{DeducedArgs, Tdk};
 use crate::templ::stack::FrameKind;
 use crate::templ::subst::Substituter;
 
-/// One [temp.friend]/5 friend declaration.
+/// One [temp.friend]/5 friend declaration: Sema's state for it. Its
+/// written form (the qualifier, the befriended name, its own heads and
+/// trailing requires-clause) is its row (spec/ast.md §23), its function
+/// type the `FriendDecl`'s target ([`MfForm`]).
 #[derive(Clone, Debug, kiln_snap::Snap)]
 pub(crate) struct MemberFriend {
-    /// The written nested-name-specifier (`A<T>::`, `A<T>::X::`).
-    pub(crate) nns: NnsId,
     /// The friend's own template parameters' depth and count (the
     /// outermost head; parameters retained by substitution).
     depth: u16,
     params: u16,
-    /// A member template is named (`template<class T> template<class U>
-    /// friend void A<T>::g(U);`), with this head: matched against the
-    /// member template's head and type ([temp.over.link]; WP-1098).
-    inner_head: bool,
-    inner_list: Option<TemplateParamListId>,
-    /// The befriended member's name, a function's declared type and its
-    /// trailing requires-clause.
-    name: DeclName,
-    fn_ty: Option<QualType>,
-    requires: Option<ExprId>,
-    /// A function's parameter declarations, which `requires` names:
+    /// A function's parameter declarations, which the row's `requires` names:
     /// mapped to the member's when the two trailing requires-clauses are
     /// compared ([temp.over.link]/5, WP-1146).
     fn_params: Vec<DeclId>,
@@ -58,7 +50,8 @@ pub(crate) struct MemberFriend {
     enclosing: Option<MultiLevelArgs>,
     /// The class template the specifier names a specialization of (first
     /// declaration), that template-id's arguments, and the member class
-    /// names after it (`X` of `A<T>::X::Y`), outermost first.
+    /// names after it (`X` of `A<T>::X::Y`), outermost first: derived
+    /// from the row's qualifier when registered (a cache).
     template: DeclId,
     args: Vec<TemplateArg>,
     path: Vec<Symbol>,
@@ -93,11 +86,31 @@ impl MemberFriend {
     }
 }
 
+/// The parts of a [`MemberFriend`]'s written form its matching reads,
+/// from its row and target.
+#[derive(Clone, Copy, Debug)]
+struct MfForm {
+    /// The befriended member's name.
+    name: DeclName,
+    /// A function's declared type.
+    fn_ty: Option<QualType>,
+    /// A member template is named (`template<class T> template<class U>
+    /// friend void A<T>::g(U);`), with this head: matched against the
+    /// member template's head and type ([temp.over.link]; WP-1098).
+    inner_head: bool,
+    inner_list: Option<TemplateParamListId>,
+    /// The trailing requires-clause.
+    requires: Option<ExprId>,
+}
+
 impl Sema<'_, '_> {
     /// The class template `nns` names a specialization of, that
     /// template-id's arguments, and the member class names written after
     /// it, outermost first: `A`, `[T]`, `[X]` for `A<T>::X::`.
-    fn member_friend_shape(&self, nns: NnsId) -> Option<(DeclId, Vec<TemplateArg>, Vec<Symbol>)> {
+    pub(crate) fn member_friend_shape(
+        &self,
+        nns: NnsId,
+    ) -> Option<(DeclId, Vec<TemplateArg>, Vec<Symbol>)> {
         let t = &self.ast.types;
         let mut path = Vec::new();
         let mut cur = nns;
@@ -201,25 +214,28 @@ impl Sema<'_, '_> {
         };
         let (template, args, path) = self.member_friend_shape(nns)?;
         let (depth, params, inner_head) = self.member_friend_head(&args)?;
-        let inner_list = self.innermost_open_head_list().filter(|_| inner_head);
+        let mut heads = self.open_written_head_lists();
+        if !inner_head {
+            heads.truncate(1);
+        }
         self.take_open_heads();
         let fd =
             self.builder().friend(record, loc, FriendTarget::Type { ty: base, owned_tag: None });
         let name = DeclName::ident(name);
         let at = ds.dependent_tag_name.unwrap_or(loc);
+        let mut row = FriendForm::new(FriendFormKind::Class, name, at);
+        row.qualifier = Some(nns);
+        row.qualifier_loc = loc;
+        row.heads = self.friend_heads_list(&heads);
+        row.flags |= FriendFormFlags::EVERY_SPEC | FriendFormFlags::DEPENDENT;
         if path.is_empty() && self.member_friend_kind_mismatch(template, name, false, at) {
             self.ast.decls.set_flags(fd, DeclFlags::INVALID);
+            self.record_friend_form(fd, row);
             return Some(fd);
         }
         let mf = MemberFriend {
-            nns,
             depth,
             params,
-            inner_head,
-            inner_list,
-            name,
-            fn_ty: None,
-            requires: None,
             fn_params: Vec::new(),
             enclosing: None,
             template,
@@ -227,6 +243,7 @@ impl Sema<'_, '_> {
             path,
         };
         self.warn_unsupported_friend(nns, record, at);
+        self.record_friend_form(fd, row);
         self.register_member_friend(fd, mf);
         Some(fd)
     }
@@ -319,8 +336,11 @@ impl Sema<'_, '_> {
         // `template<class T> friend void A<T>::f(C auto);`: the invented
         // head of an abbreviated member template is the inner one.
         let invented = self.open_invented_head_list();
-        let inner_head = written || invented.is_some();
-        let inner_list = invented.or_else(|| self.innermost_open_head_list().filter(|_| written));
+        let mut heads = self.open_written_head_lists();
+        if !written {
+            heads.truncate(1);
+        }
+        heads.extend(invented);
         let head_loc = self.outermost_open_head_loc();
         self.take_open_heads();
         let ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
@@ -352,43 +372,44 @@ impl Sema<'_, '_> {
         };
         let at = d.name_loc();
         let fd = self.builder().friend(record, at, FriendTarget::Type { ty, owned_tag: None });
+        let kind = match special {
+            Some(SpecialName::Constructor(_)) => FriendFormKind::Constructor,
+            Some(SpecialName::Destructor(_)) => FriendFormKind::Destructor,
+            Some(_) => FriendFormKind::Conversion,
+            None => FriendFormKind::Function,
+        };
+        let mut row = self.friend_form_of(kind, d, name);
+        row.heads = self.friend_heads_list(&heads);
+        row.flags |= FriendFormFlags::EVERY_SPEC | FriendFormFlags::DEPENDENT;
         if path.is_empty() && self.member_friend_kind_mismatch(template, name, true, at) {
             self.ast.decls.set_flags(fd, DeclFlags::INVALID);
+            self.record_friend_form(fd, row);
             return Some(fd);
         }
-        if !inner_head && self.non_template_member_friend_requires(d, depth, head_loc) {
+        if heads.len() < 2 && self.non_template_member_friend_requires(d, depth, head_loc) {
             // clang drops the declaration in a templated class before it
             // warns.
             if depth == 0 {
                 self.warn_unsupported_friend(nns, record, at);
             }
             self.ast.decls.set_flags(fd, DeclFlags::INVALID);
+            self.record_friend_form(fd, row);
             return Some(fd);
         }
-        let fn_ty = Some(ty);
         let fn_params =
             d.function_params().unwrap_or_default().iter().filter_map(|p| p.decl).collect();
-        let mf = MemberFriend {
-            nns,
-            depth,
-            params,
-            inner_head,
-            inner_list,
-            name,
-            fn_ty,
-            requires: d.trailing_requires,
-            fn_params,
-            enclosing: None,
-            template,
-            args,
-            path,
-        };
+        let mf = MemberFriend { depth, params, fn_params, enclosing: None, template, args, path };
         // clang rejects a special member here ("friends can only be
         // classes or functions"), so it has no warning to match.
         if special.is_none() {
             self.warn_unsupported_friend(nns, record, at);
         }
+        self.record_friend_form(fd, row);
         self.register_member_friend(fd, mf);
+        // What its name refers to: the pattern's member, a candidate
+        // (spec/ast.md §23.3).
+        let e = self.member_friend_pattern_member(fd);
+        self.ast.decls.set_friend_form_entity(fd, e);
         Some(fd)
     }
 
@@ -447,13 +468,15 @@ impl Sema<'_, '_> {
         true
     }
 
-    /// The friend `pattern` of a class template, instantiated in the
-    /// class being defined (`record`) with the substituted specifier
-    /// `nns`, target type `ty` and the friend's parameters' new `depth`;
-    /// `outer` the instantiation's arguments.
+    /// The friend `pattern` (its `FriendDecl` `pfd`) of a class template,
+    /// instantiated in the class being defined (`record`) with the
+    /// substituted specifier `nns`, target type `ty` and the friend's
+    /// parameters' new `depth`; `outer` the instantiation's arguments. It
+    /// is still matched per specialization: its row is the pattern's with
+    /// the substituted qualifier.
     pub(crate) fn instantiate_member_friend(
         &mut self,
-        pattern: &MemberFriend,
+        (pfd, pattern): (DeclId, &MemberFriend),
         nns: NnsId,
         ty: QualType,
         (depth, outer): (u16, &MultiLevelArgs),
@@ -462,7 +485,7 @@ impl Sema<'_, '_> {
         let record = self.current_class()?.record;
         let (template, args, path) = self.member_friend_shape(nns)?;
         let fd = self.builder().friend(record, loc, FriendTarget::Type { ty, owned_tag: None });
-        let fn_ty = pattern.fn_ty.map(|_| ty);
+        self.record_instantiated_friend_form(pfd, fd, Some(nns));
         // The head and requires-clause keep the pattern's levels: the
         // arguments of every level outside the friend's own head, when
         // this instantiation substitutes them all (else the constraints
@@ -471,8 +494,7 @@ impl Sema<'_, '_> {
             && outer.depth() == usize::from(pattern.depth)
             && outer.substituted() == outer.depth())
         .then(|| outer.clone());
-        let mf =
-            MemberFriend { nns, depth, fn_ty, enclosing, template, args, path, ..pattern.clone() };
+        let mf = MemberFriend { depth, enclosing, template, args, path, ..pattern.clone() };
         self.register_member_friend(fd, mf);
         Some(fd)
     }
@@ -526,6 +548,22 @@ impl Sema<'_, '_> {
         let class = self.decl_name(record);
         let e = self.diag(DiagId::sema_unsupported_friend, at).arg(spec).arg(class);
         self.emit(e);
+        // The friend is accepted: its row says so (spec/ast.md §23).
+        self.pending_unsupported_friend = true;
+    }
+
+    /// The written form a [`MemberFriend`] `fd` is matched by.
+    fn mf_form(&self, fd: DeclId) -> Option<MfForm> {
+        let r = self.ast.decls.friend_form_row(fd)?;
+        let heads: Vec<TemplateParamListId> =
+            self.ast.lists.iter::<TemplateParamListId>(r.heads).collect();
+        Some(MfForm {
+            name: r.name,
+            fn_ty: self.friend_fn_ty(fd),
+            inner_head: heads.len() > 1,
+            inner_list: heads.get(1).copied(),
+            requires: r.requires,
+        })
     }
 
     /// The [temp.friend]/5 friends (`FriendDecl`s) that befriend one of
@@ -593,15 +631,16 @@ impl Sema<'_, '_> {
         path: &[Symbol],
     ) -> Grant {
         let Some(mf) = self.member_friends.by_friend.get(&fd).cloned() else { return Grant::No };
+        let Some(form) = self.mf_form(fd) else { return Grant::No };
         let n = self.ast.decls.get(e);
         // A constructor, destructor or conversion function friend names
         // the member of its kind; the type decides which.
         let special = matches!(
-            mf.name.kind(),
+            form.name.kind(),
             DeclNameKind::Constructor | DeclNameKind::Destructor | DeclNameKind::Conversion
         );
-        if mf.fn_ty.is_some() != n.kind().is_function()
-            || (n.name() != mf.name && !(special && n.name().kind() == mf.name.kind()))
+        if form.fn_ty.is_some() != n.kind().is_function()
+            || (n.name() != form.name && !(special && n.name().kind() == form.name.kind()))
             || !mf.path.iter().rev().eq(path.iter())
         {
             return Grant::No;
@@ -611,7 +650,7 @@ impl Sema<'_, '_> {
         // template head of its own, and the other way round
         // ([temp.over.link]/4; WP-1098).
         let e_tmpl = self.member_friend_template_of(e);
-        if mf.fn_ty.is_some() && e_tmpl.is_some() != mf.inner_head {
+        if form.fn_ty.is_some() && e_tmpl.is_some() != form.inner_head {
             return Grant::No;
         }
         // A member of the pattern or of a partial specialization: some
@@ -627,7 +666,7 @@ impl Sema<'_, '_> {
             {
                 return Grant::No;
             }
-            let Some(fty) = mf.fn_ty else { return Grant::Yes };
+            let Some(fty) = form.fn_ty else { return Grant::Yes };
             let deduced = s.ast.types.arg_list(&d.args);
             let mut levels = Self::outer_levels(mf.template, mf.depth);
             levels.push(deduced, mf.template, LevelMode::Substitute);
@@ -642,7 +681,7 @@ impl Sema<'_, '_> {
                 // parameters: equivalent heads, then equivalent types
                 // with the friend's parameters renamed to the member's.
                 let Some((inner, own)) =
-                    mf.inner_list.zip(s.ast.template_info(t).map(|i| i.params))
+                    form.inner_list.zip(s.ast.template_info(t).map(|i| i.params))
                 else {
                     return Grant::No;
                 };
@@ -650,7 +689,7 @@ impl Sema<'_, '_> {
                 else {
                     return Grant::No;
                 };
-                match s.member_friend_constraints_match(&mf, Some(t), e, &head_levels) {
+                match s.member_friend_constraints_match((&mf, form), Some(t), e, &head_levels) {
                     Some(true) => {}
                     Some(false) => return Grant::No,
                     None => unknown = true,
@@ -658,7 +697,7 @@ impl Sema<'_, '_> {
                 levels.push(renamed, mf.template, LevelMode::Substitute);
                 e_ty = s.pattern_of(t).and_then(|p| s.ast.decls.get(p).ty());
             } else {
-                match s.member_friend_constraints_match(&mf, None, e, &head_levels) {
+                match s.member_friend_constraints_match((&mf, form), None, e, &head_levels) {
                     Some(true) => {}
                     Some(false) => return Grant::No,
                     None => unknown = true,
@@ -669,7 +708,7 @@ impl Sema<'_, '_> {
             // specification may be implicit ([except.spec]/8, /9).
             let implicit_exc = special
                 || matches!(
-                    mf.name.as_operator(),
+                    form.name.as_operator(),
                     Some(OverloadedOperator::Delete | OverloadedOperator::ArrayDelete)
                 );
             if e_ty.is_none_or(|et| {
@@ -702,7 +741,8 @@ impl Sema<'_, '_> {
     /// declared in the pattern, overloads the type does not tell apart.
     pub(crate) fn member_friend_pattern_member(&mut self, fd: DeclId) -> Option<DeclId> {
         let mf = self.member_friends.by_friend.get(&fd).cloned()?;
-        let fty = mf.fn_ty?;
+        let form = self.mf_form(fd)?;
+        let fty = form.fn_ty?;
         let loc = self.ast.decls.get(fd).loc();
         let t = mf.template;
         let mut cands: Vec<(DeclId, Vec<DeclId>, Vec<TemplateArg>)> = Vec::new();
@@ -734,18 +774,18 @@ impl Sema<'_, '_> {
             class = self.ast.definition(inner)?;
         }
         let members: Vec<DeclId> = self
-            .lookup_in_dn(class, mf.name, crate::lookup::LookupKind::All)
+            .lookup_in_dn(class, form.name, crate::lookup::LookupKind::All)
             .decls
             .into_iter()
             .filter(|&m| {
                 let k = self.kind_of(m);
-                if mf.inner_head { k == DeclKind::FunctionTemplate } else { k.is_function() }
+                if form.inner_head { k == DeclKind::FunctionTemplate } else { k.is_function() }
             })
             .collect();
         let m = match members.as_slice() {
             [] => return None,
             [one] => *one,
-            _ if mf.inner_head => return None,
+            _ if form.inner_head => return None,
             _ => {
                 // The friend's type with its parameters renamed to the
                 // pattern's: the member of that type.
@@ -897,7 +937,7 @@ impl Sema<'_, '_> {
     /// is compared in each (WP-1145).
     fn member_friend_constraints_match(
         &mut self,
-        mf: &MemberFriend,
+        mf: (&MemberFriend, MfForm),
         t: Option<DeclId>,
         e: DeclId,
         levels: &MultiLevelArgs,
@@ -910,7 +950,7 @@ impl Sema<'_, '_> {
 
     fn member_friend_constraints_equivalent(
         &mut self,
-        mf: &MemberFriend,
+        (mf, form): (&MemberFriend, MfForm),
         t: Option<DeclId>,
         e: DeclId,
         levels: &MultiLevelArgs,
@@ -918,13 +958,13 @@ impl Sema<'_, '_> {
         // The friend's: type-constraints, requires-clause, trailing one.
         let mut ours: Vec<Option<ExprId>> = Vec::new();
         if t.is_some() {
-            let Some(inner) = mf.inner_list else { return false };
+            let Some(inner) = form.inner_list else { return false };
             let l = *self.ast.templates.param_list(inner);
             let ps: Vec<DeclId> = self.ast.lists.iter::<DeclId>(l.params).collect();
             ours.extend(ps.iter().map(|&p| self.ast.template_parm(p).and_then(|i| i.constraint)));
             ours.push(l.requires);
         }
-        ours.push(mf.requires);
+        ours.push(form.requires);
         // The member's, from its pattern's declaration when its class is
         // a specialization (they stay the pattern's). Each side's
         // function parameters, which a trailing requires-clause may name,

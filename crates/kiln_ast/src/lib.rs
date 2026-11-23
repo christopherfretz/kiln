@@ -26,6 +26,7 @@ pub mod dump;
 pub mod expr;
 pub mod expr_extent;
 pub mod fp;
+pub mod friend_form;
 pub mod ids;
 pub mod journal;
 pub mod lambda;

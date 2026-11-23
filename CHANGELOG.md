@@ -10,6 +10,22 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- A friend's written form on the `Ast` (WP-3164, spec/ast.md §23): each
+  friend written with a qualified declarator-id, a template-id, a
+  special member name, or a qualified class name with a template-head of
+  its own has a `FriendForm` row with its kind, the qualifier and the
+  template arguments as written (instantiation-dependent expressions
+  included), its own template-heads and trailing requires-clause, the
+  templates found, and its entity (a candidate when it is matched per
+  specialization). `Ast::friend_form(fd)` answers `Row`, `None` or
+  `NotCarried` (a friend from a module image). Sema matches friends from
+  the row; the written-reference entry of a friend's name takes the row's
+  entity; a qualified class friend's type keeps its written qualifier
+  (`struct ::G`, `struct Bq<sizeof (sizeof (f(T())))>::Y`), as clang's
+  dump shows it; `friend void Bq<8>::template t<1>();` parses.
+  `-fkiln-dump-friend-forms` prints the rows. PCH snapshots (format 172)
+  carry them; module images do not yet.
+
 - The declarator group of a shared decl-specifier in the written-reference
   table (WP-3144, spec/ast.md §18.3.1): in `S a, b;` the entry of `S` is
   still enclosed by `a`, now with the flag `REF_GROUP` (32), and

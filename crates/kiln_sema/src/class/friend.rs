@@ -3,6 +3,7 @@
 use kiln_ast::DeclId;
 use kiln_ast::QualType;
 use kiln_ast::decl::{ConstexprKind, DeclKind, FriendTarget};
+use kiln_ast::friend_form::{FriendForm, FriendFormFlags, FriendFormKind};
 use kiln_ast::ids::TemplateParamListId;
 use kiln_ast::names::DeclName;
 use kiln_ast::types::{TagKeyword, TemplateArg, TypeView};
@@ -14,28 +15,6 @@ use crate::declspec::{DeclSpec, Declarator, DefaultArg, SpecialName};
 use crate::local_friend::LocalFriendMember;
 use crate::lookup::LookupKind;
 use crate::templ::pack::PackOperand;
-
-/// A friend function template specialization in a dependent context
-/// (`friend bool operator==<>(const X&, const X&);` in a class
-/// template, [temp.friend]/1.3; clang's
-/// `DependentFunctionTemplateSpecializationInfo`): matched when its class
-/// is instantiated.
-#[derive(Clone, Debug, kiln_snap::Snap)]
-pub(crate) struct FriendSpec {
-    /// The name the declarator-id's template-id names.
-    pub(crate) name: DeclName,
-    /// The declared (dependent) function type.
-    pub(crate) ty: QualType,
-    /// The explicit template arguments written (possibly none, `f<>`).
-    pub(crate) args: Vec<TemplateArg>,
-    /// The function templates lookup found at the declaration.
-    pub(crate) templates: Vec<DeclId>,
-    /// The declarator-id.
-    pub(crate) loc: Loc,
-    /// Its noexcept-specifier waits for the end of the class (not in
-    /// `ty`), so it is not compared with the specialization's.
-    pub(crate) late_exc: bool,
-}
 
 /// Which special member a friend of a class template's pattern names
 /// (`friend Z<T>::Z(typename T::t);`, `friend Z<T>::~Z();`, `friend
@@ -50,27 +29,30 @@ pub(crate) enum SpecialFriendKind {
     Conversion,
 }
 
-/// A special member friend of a templated class whose class or type is
-/// dependent, matched per specialization ([`Sema::befriend_special_member`]):
-/// side data of its `FriendDecl` (`Sema::special_friends`), so the class
-/// record does not grow.
-#[derive(Clone, Copy, Debug, kiln_snap::Snap)]
-pub(crate) struct SpecialFriend {
-    /// The special member named.
-    pub(crate) kind: SpecialFriendKind,
-    /// The declared function type (a constructor's or destructor's
-    /// returning `void`).
-    pub(crate) ty: QualType,
-    /// The class the qualifier names in the definition (a pattern, or a
-    /// class of the current instantiation).
-    pub(crate) class: DeclId,
-    /// The written nested-name-specifier, substituted per specialization
-    /// (none: `class`, instantiated with the enclosing template when it
-    /// is templated).
-    pub(crate) nns: Option<kiln_ast::ids::NnsId>,
-    /// The friend's own template head (`template<class U> friend
-    /// Z<T>::Z(U);`): it names a member template ([temp.friend]/1).
-    pub(crate) head: Option<TemplateParamListId>,
+/// A special member friend matched per specialization, with its
+/// candidate (spec/ast.md §23.3).
+#[derive(Clone, Copy)]
+struct PerSpec(Option<DeclId>);
+
+impl SpecialFriendKind {
+    /// The row kind of a friend naming this special member.
+    pub(crate) const fn form_kind(self) -> FriendFormKind {
+        match self {
+            Self::Ctor => FriendFormKind::Constructor,
+            Self::Dtor => FriendFormKind::Destructor,
+            Self::Conversion => FriendFormKind::Conversion,
+        }
+    }
+
+    /// The special member a row of kind `k` names.
+    pub(crate) const fn of_form(k: FriendFormKind) -> Option<Self> {
+        match k {
+            FriendFormKind::Constructor => Some(Self::Ctor),
+            FriendFormKind::Destructor => Some(Self::Dtor),
+            FriendFormKind::Conversion => Some(Self::Conversion),
+            _ => None,
+        }
+    }
 }
 
 impl Sema<'_, '_> {
@@ -298,6 +280,8 @@ impl Sema<'_, '_> {
     ) -> Option<DeclId> {
         let record = self.current_class()?.record;
         let owned = self.friend_tag.take();
+        self.pending_unsupported_friend = false;
+        self.pending_qualified_friend = None;
         let Some(d) = d else {
             return self.declare_friend_type(ds, base, record, owned, friend_loc);
         };
@@ -492,6 +476,22 @@ impl Sema<'_, '_> {
         let fd = self.builder().friend(record, d.name_loc(), FriendTarget::Decl(target));
         let first = self.ast.first(target);
         self.push_friend(first);
+        // Its written form (spec/ast.md §23): a qualified friend's row;
+        // one matched per specialization names a candidate.
+        let pending = self.pending_qualified_friend.take().filter(|p| p.0 == f);
+        if d.qualifier_nns.is_some() {
+            let dname = d.fn_decl_name(name);
+            let mut row = self.friend_form_of(FriendFormKind::Function, d, dname);
+            row.heads = self.friend_heads_list(head.as_slice());
+            if pending.is_some_and(|p| p.1) {
+                row.flags |= FriendFormFlags::DEPENDENT;
+                row.entity = self.friend_fn_candidate(d, dname, ty, head.is_some());
+            }
+            self.record_friend_form(fd, row);
+        }
+        if let Some((f, _)) = pending {
+            self.friend_fn_decls.insert(f, fd);
+        }
         Some(fd)
     }
 
@@ -577,7 +577,9 @@ impl Sema<'_, '_> {
             // function template), kiln befriends nothing.
             let t = self.match_special_template(class, kind, ty, h);
             if self.in_dependent_class(record) {
-                return Some(self.befriend_matched_template(record, t, ty, at));
+                let fd = self.befriend_matched_template(record, t, ty, at);
+                self.record_special_friend_form(fd, d, (kind, head), None);
+                return Some(fd);
             }
             let Some(t) = t else {
                 let def = self.ast.definition(class).unwrap_or(class);
@@ -596,7 +598,9 @@ impl Sema<'_, '_> {
             {
                 self.check_friend_access_noted(t, at, Some(at));
             }
-            return Some(self.befriend_matched_template(record, Some(t), ty, at));
+            let fd = self.befriend_matched_template(record, Some(t), ty, at);
+            self.record_special_friend_form(fd, d, (kind, head), None);
+            return Some(fd);
         }
         if head.is_some() || !concrete || self.ast.types.is_dependent(ty) {
             // A member of the current instantiation (`friend M::M(T);`
@@ -609,18 +613,51 @@ impl Sema<'_, '_> {
             } else {
                 self.match_special_member(class, kind, ty, at, false).ok()
             };
-            let target =
-                pattern.map_or(FriendTarget::Type { ty, owned_tag: None }, FriendTarget::Decl);
-            let fd = self.builder().friend(record, at, target);
+            // The friend keeps its type, matched per specialization from
+            // its row (spec/ast.md §23); the pattern's member is its
+            // candidate.
+            let fd = self.builder().friend(record, at, FriendTarget::Type { ty, owned_tag: None });
             if let Some(p) = pattern {
                 let first = self.ast.first(p);
                 self.push_friend(first);
             }
-            let nns = d.qualifier_nns;
-            self.special_friends.insert(fd, SpecialFriend { kind, ty, class, nns, head });
+            let entity = pattern.map(|p| self.ast.first(p));
+            self.record_special_friend_form(fd, d, (kind, head), Some(PerSpec(entity)));
             return Some(fd);
         }
-        self.befriend_special_member(record, class, (kind, Some(constexpr)), ty, at)
+        let fd = self.befriend_special_member(record, class, (kind, Some(constexpr)), ty, at)?;
+        self.record_special_friend_form(fd, d, (kind, None), None);
+        Some(fd)
+    }
+
+    /// The row of special member friend `fd` of `kind` with own head
+    /// `head` (spec/ast.md §23): matched per specialization when
+    /// `per_spec` is given, which holds its candidate.
+    fn record_special_friend_form(
+        &mut self,
+        fd: DeclId,
+        d: &Declarator,
+        (kind, head): (SpecialFriendKind, Option<TemplateParamListId>),
+        per_spec: Option<PerSpec>,
+    ) {
+        // The member's own name (a constructor's, destructor's or
+        // conversion function's); the name as written when no member is
+        // known yet.
+        let named = match self.ast.decls.friend_target(fd) {
+            FriendTarget::Decl(t) => Some(t),
+            FriendTarget::Type { .. } => per_spec.and_then(|p| p.0),
+        };
+        let name = match named {
+            Some(t) => self.ast.decls.get(t).name(),
+            None => d.name.map_or(DeclName::EMPTY, |n| DeclName::ident(n.0)),
+        };
+        let mut row = self.friend_form_of(kind.form_kind(), d, name);
+        row.heads = self.friend_heads_list(head.as_slice());
+        if let Some(PerSpec(e)) = per_spec {
+            row.flags |= FriendFormFlags::DEPENDENT;
+            row.entity = e;
+        }
+        self.record_friend_form(fd, row);
     }
 
     /// The special member `kind` of `class` whose type is `ty` befriended
@@ -987,6 +1024,22 @@ impl Sema<'_, '_> {
             let fd = self.builder().friend(record, loc, FriendTarget::Decl(t));
             let first = self.ast.first(t);
             self.push_friend(first);
+            // `template<class U> friend class N::X;`: a qualified class
+            // friend with an own head has a row (spec/ast.md §23.1).
+            let head = self.pending_friend_class_head.take();
+            if let (Some((head, nloc)), Some((nns, qloc))) =
+                (head, self.pending_friend_class_qual.take())
+            {
+                let name = self.ast.decls.get(t).name();
+                let mut row = FriendForm::new(FriendFormKind::Class, name, nloc);
+                row.qualifier = Some(nns);
+                row.qualifier_loc = qloc;
+                if self.nns_is_global_first(nns) {
+                    row.flags |= FriendFormFlags::GLOBAL;
+                }
+                row.heads = self.friend_heads_list(head.as_slice());
+                self.record_friend_form(fd, row);
+            }
             return Some(fd);
         }
         // [temp.friend]/1: a friend class template is declared by an
@@ -1134,17 +1187,31 @@ impl Sema<'_, '_> {
             };
             let target = FriendTarget::Type { ty, owned_tag: None };
             let fd = self.builder().friend(record, loc, target);
+            // Its row (spec/ast.md §23): the written arguments and the
+            // templates found, matched per specialization.
+            let mut row = self.friend_form_of(FriendFormKind::Specialization, d, name);
+            row.found = self.ast.lists.push(&templates);
+            row.entity = match (matched, templates.as_slice()) {
+                (Some(m), _) => Some(self.ast.first(m.template)),
+                (None, [one]) => Some(self.ast.first(*one)),
+                (None, _) => None,
+            };
+            if matched.is_none() {
+                row.flags |= FriendFormFlags::DEPENDENT;
+            }
+            self.record_friend_form(fd, row);
             // Its written name: the template matched, else the
-            // candidates, decided per specialization (spec/ast.md §18.4).
+            // candidates, decided per specialization (spec/ast.md §18.4),
+            // with the row's candidate (§23.3).
             if let Some(id) = d.id_ref {
                 match matched {
                     Some(m) => self.note_written_spec_template(id, m.template),
                     None => self.note_written_friend_spec(id, fd, &templates, d.qualifier),
                 }
             }
-            let args = sid.args.clone();
-            let late_exc = d.late_noexcept.is_some();
-            self.friend_specs.insert(fd, FriendSpec { name, ty, args, templates, loc, late_exc });
+            if d.late_noexcept.is_some() {
+                self.friend_late_exc.insert(fd);
+            }
             return Some(fd);
         }
         let explicit = Some(self.ast.types.arg_list(&sid.args));
@@ -1165,7 +1232,11 @@ impl Sema<'_, '_> {
         {
             self.check_friend_access_noted(m.spec, loc, Some(loc));
         }
-        Some(self.befriend_spec(record, m.spec, loc))
+        let fd = self.befriend_spec(record, m.spec, loc);
+        let mut row = self.friend_form_of(FriendFormKind::Specialization, d, name);
+        row.found = self.ast.lists.push(&templates);
+        self.record_friend_form(fd, row);
+        Some(fd)
     }
 
     /// Whether the friend function template specialization `d` (of type
@@ -1186,22 +1257,28 @@ impl Sema<'_, '_> {
             })
     }
 
-    /// The [`FriendSpec`] of a class template's pattern for the
-    /// specialization being instantiated (`record`), its type and
-    /// arguments substituted.
+    /// The friend function template specialization `pattern` (its row's
+    /// `name` written at `loc`) of a class template's pattern for the
+    /// specialization being instantiated (`record`): the specialization of
+    /// one of `templates` (the row's `found`, instantiated) that its
+    /// substituted type `ty` and arguments `args` select.
+    #[allow(clippy::too_many_arguments, reason = "the row's parts, substituted")]
     pub(crate) fn instantiate_friend_spec(
         &mut self,
         record: DeclId,
-        fs: &FriendSpec,
+        pattern: DeclId,
+        (name, loc): (DeclName, Loc),
+        templates: &[DeclId],
         ty: QualType,
         args: &[TemplateArg],
     ) -> Option<DeclId> {
         let explicit = Some(self.ast.types.arg_list(args));
-        let m = self.match_function_spec_in(&fs.templates, explicit, fs.name, ty, false, fs.loc)?;
-        if !fs.late_exc && !self.check_spec_exc_spec(m.spec, ty, fs.loc, None) {
+        let m = self.match_function_spec_in(templates, explicit, name, ty, false, loc)?;
+        let late_exc = self.friend_late_exc.contains(&pattern);
+        if !late_exc && !self.check_spec_exc_spec(m.spec, ty, loc, None) {
             return None;
         }
-        Some(self.befriend_spec(record, m.spec, fs.loc))
+        Some(self.befriend_spec(record, m.spec, loc))
     }
 
     /// `friend void A::f(int);` where `A::f` declares no non-template
@@ -1248,7 +1325,10 @@ impl Sema<'_, '_> {
             self.check_friend_access_noted(spec, loc, Some(loc));
         }
         self.templ.cur = None;
-        Some(self.befriend_spec(record, spec, loc))
+        let fd = self.befriend_spec(record, spec, loc);
+        let row = self.friend_form_of(FriendFormKind::Function, d, name);
+        self.record_friend_form(fd, row);
+        Some(fd)
     }
 
     fn befriend_spec(&mut self, record: DeclId, spec: DeclId, loc: Loc) -> DeclId {

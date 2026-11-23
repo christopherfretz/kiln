@@ -3062,7 +3062,13 @@ impl Parser<'_, '_> {
         ds.tag_declares = use_ != TagUse::Reference;
         ds.tag_extent = ext;
         ds.keyword = keyword;
-        let ty = self.s.elaborated_tag_type(d, keyword);
+        let mut ty = self.s.elaborated_tag_type(d, keyword);
+        if let (TagUse::Friend, Some(q)) = (use_, qual) {
+            // A friend keeps its qualifier as written (`friend struct
+            // ::G;`, `friend struct Bq<sizeof(f(T()))>::Y;`): its type is
+            // the friend's written form (spec/ast.md §23.2).
+            ty = self.s.friend_elaborated_type(ty, q.nns, q.loc);
+        }
         if let Err(e) = ds.set_base(TypeSpecKind::Named, Some(ty), kw_loc) {
             ds.invalid = true;
             self.spec_error(&e, kw_loc);
@@ -3939,6 +3945,17 @@ impl Parser<'_, '_> {
             d.qualifier_nns = qual.map(|q| q.nns);
             let qual = qual.map(|q| q.ctx);
             d.global_qualifier = global && qual.is_some();
+            // `friend void Bq<8>::template t<1>();`: the `template`
+            // keyword before a qualified template-id ([temp.names]/5),
+            // kept on the friend's row (spec/ast.md §23).
+            if qual.is_some()
+                && self.at_kw(Kw::Template)
+                && self.ident_of(self.peek(1)).is_some()
+                && self.peek_is(2, Punct::Less)
+            {
+                self.bump();
+                d.template_kw = true;
+            }
             if self.at(Punct::Tilde) || self.at_kw(Kw::Operator) {
                 d.qualifier = qual;
                 entered = qual.map_or(0, |q| self.s.act_on_enter_declarator_scope(q));

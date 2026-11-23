@@ -1344,8 +1344,9 @@ reachable from the `Ast` or names the row that puts it there.
 - friends of a dependent class (the written name and template arguments,
   the special member and qualifier, the member friend of a dependent
   specialization, a method friend's dependent qualifier): their names as
-  written references with WP-3008; the written qualifier, the friend's
-  own template-head and trailing requires-clause not yet, row WP-3124.
+  written references with WP-3008; the written qualifier, template
+  arguments, the friend's own template-heads and trailing
+  requires-clause in its `FriendForm` row (§23, WP-3164).
 - the template-head of a partial specialization defined after its
   declaration: not yet, row WP-3120.
 - the written placeholder of a structured binding declaration and of
@@ -5391,3 +5392,163 @@ macro and as arguments; pasted into an integer, a suffixed and a
 floating literal; stringized; a middle and a last string piece; written
 literals; off by default), and
 `tests/conformance/cpp.predefined/builtin-literal-provenance.cpp`.
+
+## 23. A friend's written form (WP-3164)
+
+A `Friend` declaration's target (`FriendTarget`) is what it befriends.
+In a class template a friend named through a qualifier or a template-id
+is resolved, and the target alone loses what was written: the qualifier
+`Bq<sizeof(sizeof(f(T())))>::` of `friend void
+Bq<sizeof(sizeof(f(T())))>::g();` holds an instantiation-dependent
+expression whose validity is decided per specialization
+([temp.res.general]/6), though its value (and so the target) is the
+same as `Bq<8>::`'s. A tooling client comparing two versions of a
+template must see the difference. `kiln_ast::friend_form` keeps a
+friend's written form as one row per friend that has written parts.
+
+### 23.1 When a row exists
+
+`DeclArena::friend_forms` holds the rows in declaration order (the
+order Sema declares the friends, patterns and instantiations alike);
+`ColdDeclData::friend_form` maps a `Friend` to its row. A friend has a
+row, in any class (templated or not), when
+
+- its declarator-id is qualified (`friend void N::f();`, `friend int
+  B<T>::m(T);`, `template <class U> friend void A<U>::f();`);
+- its declarator-id is a template-id (`friend void h<int>();`, `friend
+  bool operator==<>(const X&, const X&);`, [temp.friend]/1.3);
+- it names a constructor, destructor or conversion function (`friend
+  Z<T>::Z();`);
+- it is a qualified class friend with a template-head of its own
+  (`template <class U> friend class N::X;`, `template <class U> friend
+  class A<U>::In;`).
+
+`friend void f(int);`, `template <class U> friend void f(U);` and
+`friend class C;` have none: the target declaration (or type) is their
+whole written form. A qualified class friend without a head of its own
+has none either: its target type keeps the elaborated type with the
+qualifier as written (§23.2.1).
+
+A friend an instantiation declares in a class that is not itself a
+pattern has a row only while it is still matched per specialization
+(`DEPENDENT`, below): a fully instantiated friend's target is
+`FriendTarget::Decl` of the exact entity (`h<int>` for `friend void
+h<>(T);` in `S<int>`). Such a row is a copy of the pattern's with the
+substituted qualifier.
+
+### 23.2 The row
+
+`FriendForm` (40 bytes):
+
+| field | type | meaning |
+|---|---|---|
+| `kind` | `FriendFormKind` (1) | `Function` (a qualified function or function template), `Specialization` ([temp.friend]/1.3), `Constructor`, `Destructor`, `Conversion`, `Class` |
+| `flags` | `FriendFormFlags` (1) | `GLOBAL` (the qualifier begins with `::`), `TEMPLATE_KW` (`Bq<8>::template t<1>`), `EVERY_SPEC` (a [temp.friend]/5 friend of every specialization: its own head deduces the qualifier's arguments), `DEPENDENT` (matched per specialization of the class, §23.3), `UNSUPPORTED` (accepted with `-Wunsupported-friend` and ignored) |
+| `name` | `DeclName` | the befriended name: as written (`g`, `h`), or the special member's own name when it is known |
+| `name_loc` | `Loc` | where the name is written |
+| `qualifier` | `Option<NnsId>` | the nested-name-specifier as written: its `Nns::Type` components keep their sugar, so `Bq<sizeof(sizeof(f(T())))>::` holds the expression and `Bq<8>::` does not |
+| `qualifier_loc` | `Loc` | where the qualifier begins |
+| `args` | `Option<ArgListId>` | the template-id's arguments as written (instantiation-dependent expressions included); `Some(EMPTY)` for `f<>`, `None` without a template-id |
+| `entity` | `Option<DeclId>` | §23.3 |
+| `found` | `ListId` of `DeclId` | the function templates lookup of a specialization's name found (first declarations); empty otherwise |
+| `heads` | `ListId` of `TemplateParamListId` | the friend's own template-heads, outermost first; each head's parameters are declarations and its requires-clause is `TemplateParamList.requires` |
+| `requires` | `Option<ExprId>` | the trailing requires-clause |
+
+Ids, not copies: `heads` and `requires` are the lists and expressions a
+target declaration holds, when there is one.
+
+#### 23.2.1 Class friends
+
+A class friend's written form is its type: `FriendTarget::Type` keeps
+the elaborated type with its keyword and the qualifier as written
+(`friend struct ::G;` is `struct ::G`, `friend struct
+Bq<sizeof(sizeof(f(T())))>::Y;` is `struct Bq<sizeof (sizeof
+(f(T())))>::Y` over `Bq<8>::Y`), as clang's dump shows it. A row adds
+only an own head (`Class`, with `qualifier` the same specifier).
+
+### 23.3 The entity
+
+`entity` follows the written-reference referent rules (§18):
+
+- a target `Decl(t)`: none, the target is the entity
+  (`FriendFormView::entity` returns `t`);
+- a specialization ([temp.friend]/1.3): the template its match chose;
+  before the match (`DEPENDENT`) the one function template found, none
+  when several were (the client compares `found`);
+- a member template of a non-dependent class (`friend void
+  Bq<8>::t<sizeof(T)>();`): that template;
+- a dependent qualifier naming a specialization of class template `A`:
+  the member of `A`'s primary pattern found by the name and, for a
+  function, the declared type; none when the primary has no such member
+  (it may be in an explicit or partial specialization);
+- a constructor, destructor or conversion function: that special member
+  of the class (its pattern when dependent), else none.
+
+**With `DEPENDENT` set, `entity` is a CANDIDATE, not the referent**: what
+the friend befriends is decided per specialization of its class, and an
+explicit or partial specialization may make it another declaration (or
+none). `found` never lists partial specialization candidates.
+
+The written-reference entry at `name_loc` has the row's entity (WP-3008,
+§18.4): one source of truth. A `DEPENDENT` row's entry is `DEPENDENT`
+too, with the candidate as its entity (printed `dep`), and a
+specialization's keeps its found set.
+
+### 23.4 Reading it
+
+`Ast::friend_form(fd)` answers in three ways:
+
+- `FriendFormAnswer::Row(view)`: the row, through `FriendFormView`
+  (`kind`, `flags`, `name`, `name_loc`, `qualifier`, `qualifier_loc`,
+  `args`, `entity`, `found`, `heads` / `head(i)` / `head_params(i)` /
+  `head_requires(i)`, `requires`);
+- `FriendFormAnswer::None`: the friend has no written parts (§23.1);
+- `FriendFormAnswer::NotCarried`: the friend came from a module image,
+  which does not carry rows (§23.5); its form is unknown, not absent.
+
+`DeclArena::friend_forms()` lists `(Friend, row)` pairs in declaration
+order.
+
+Sema matches friends from the row (spec/sema-class.md §2.4): a
+specialization's name, arguments, found templates and location; a
+special member's kind, head and qualifier; a [temp.friend]/5 friend's
+qualifier, name, function type and requires-clause; a qualified
+friend's qualifier and the context it names. Sema keeps only its own
+state beside it: the substitution levels and caches of
+`MemberFriends`, the `noexcept` deferral of a friend specialization
+(`friend_late_exc`), and a function-to-`Friend` index
+(`friend_fn_decls`).
+
+### 23.5 Snapshots, modules
+
+A snapshot (PCH) carries the rows and the map with the `Ast` (`Snap`),
+in order (`pch_snapshot` `FORMAT_VERSION` 172). A module image does not
+carry them: an imported `Friend` answers `NotCarried`, and the friends
+that would need a row fall back as before (bmi_image/friend.rs, phase 2
+of the design: row WP-3230).
+
+### 23.6 The dump
+
+`-fkiln-dump-friend-forms` (with `-fsyntax-only`, to the output, after
+the other kiln dumps) prints one line per row in declaration order:
+
+```
+<friend loc> FriendForm <kind> [qualifier '<nns>'] name '<name>'@<loc>
+  [args <args>] [heads <n>] [requires] [entity <decl>@<loc>]
+  [found [<decl>@<loc>, ...]] [global] [template] [every-spec]
+  [dependent] [unsupported]
+```
+
+(one line; wrapped here), positions as `line:col` in the main file and
+`file:line:col` elsewhere. Tests: `crates/kiln_parse/tests/friend_forms.rs`
+(dump goldens of the reproducers above and of special members,
+[temp.friend]/5 friends (`UNSUPPORTED`), `::` and a non-templated class;
+pairs differing only in an instantiation-dependent expression or a
+head's constraint; a trailing requires-clause; `template`; the
+instantiated target `h<int>`; the written-reference agreement) and
+`crates/kiln_driver/tests/friend_forms_carry.rs` (the dump option's
+golden, a snapshot round trip in order, `NotCarried` through a module
+image). A head's default argument cannot tell two rows apart in valid
+code: a friend class template declaration has none, and a friend
+function template declaration with one must be a definition
+([temp.param]/12), which a qualified friend never is ([class.friend]/6).

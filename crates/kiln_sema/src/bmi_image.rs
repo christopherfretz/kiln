@@ -6248,7 +6248,11 @@ impl Sema<'_, '_> {
                             owned_tag: at(*owned),
                         },
                     };
-                    self.builder().friend(ctx, h.loc, t)
+                    let fd = self.builder().friend(ctx, h.loc, t);
+                    // The image carries no written form (spec/ast.md
+                    // §23.5): its row is not known, rather than absent.
+                    self.ast.decls.set_friend_form_not_carried(fd);
+                    fd
                 }
                 Payload::Implicit { kind: scope::BUILTIN_KIND } => {
                     self.image_builtin(img, i as u32)

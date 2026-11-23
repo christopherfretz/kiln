@@ -524,7 +524,9 @@ impl Sema<'_, '_> {
 
     /// Records a declarative name (stage 3, spec/ast.md §18.4) written at
     /// `range` with qualifier `q`, naming `entity`: `None` is a dependent
-    /// name when `dependent`, else an unresolved one.
+    /// name when `dependent`, else an unresolved one; an entity with
+    /// `dependent` is a candidate decided per specialization (a friend's
+    /// row entity, spec/ast.md §23.3).
     pub fn note_written_decl_name(
         &mut self,
         range: Span,
@@ -537,8 +539,8 @@ impl Sema<'_, '_> {
             return None;
         }
         let flags = match entity {
+            _ if dependent => REF_DEPENDENT,
             Some(_) => 0,
-            None if dependent => REF_DEPENDENT,
             None => REF_UNRESOLVED,
         };
         self.push_written_ref(range, entity, None, role, q, flags)
@@ -564,12 +566,13 @@ impl Sema<'_, '_> {
     }
 
     /// What the qualified friend `fd` written with declarator `d` names
-    /// when sema kept it with its type only (`FriendTarget::Type`): for a
-    /// [temp.friend]/5 friend (`template<class T> friend void
-    /// A<T>::f();`) the member of the class template pattern its
-    /// qualifier names ([`Sema::member_friend_pattern_member`]), else
-    /// nothing; and whether the name is dependent (no entity, a dependent
-    /// qualifier: spec/ast.md §18.4).
+    /// when sema kept it with its type only (`FriendTarget::Type`): its
+    /// row's entity and `DEPENDENT` flag (spec/ast.md §23.3, one source
+    /// of truth); without a row, for a [temp.friend]/5 friend
+    /// (`template<class T> friend void A<T>::f();`) the member of the
+    /// class template pattern its qualifier names
+    /// ([`Sema::member_friend_pattern_member`]), else nothing; and
+    /// whether the name is dependent (spec/ast.md §18.4).
     pub fn written_friend_type_target(
         &mut self,
         fd: DeclId,
@@ -577,6 +580,10 @@ impl Sema<'_, '_> {
     ) -> (Option<DeclId>, bool) {
         if !self.records_written_refs() {
             return (None, false);
+        }
+        if let Some(r) = self.ast.decls.friend_form_row(fd) {
+            let dep = r.flags.contains(kiln_ast::friend_form::FriendFormFlags::DEPENDENT);
+            return (r.entity, dep);
         }
         let e = self.member_friend_pattern_member(fd);
         let dep = e.is_none()
@@ -607,8 +614,10 @@ impl Sema<'_, '_> {
         if !self.records_written_refs() || !self.inst.stack.is_empty() {
             return;
         }
+        // The row's candidate (the one template found), spec/ast.md §23.3.
+        let entity = self.ast.decls.friend_form_row(fd).and_then(|r| r.entity);
         let refs = &mut self.ast.written_refs;
-        refs.set_target(id, None, None, REF_DEPENDENT);
+        refs.set_target(id, entity, None, REF_DEPENDENT);
         refs.set_how(id, RefLookup::None);
         if refs.using_directive(id).is_some() {
             refs.set_using_directive(id, None);
