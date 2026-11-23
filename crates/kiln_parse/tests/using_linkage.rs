@@ -351,6 +351,75 @@ fn block_scope_extern() {
     assert_eq!(ast.linkage(one(&ast, &i, DeclKind::Var, "local")), Linkage::None);
 }
 
+/// The linkage of every declaration of kind `kind` named `n`, checked to
+/// agree across redeclarations.
+fn link(ast: &Ast, i: &Interner, kind: DeclKind, n: &str) -> Linkage {
+    let ds = all(ast, i, kind, n);
+    assert!(!ds.is_empty(), "no {kind:?} {n}");
+    let l = ast.linkage(ds[0]);
+    for &d in &ds[1..] {
+        assert_eq!(ast.linkage(d), l, "{n}: redeclarations agree");
+    }
+    l
+}
+
+/// [basic.link]/4, /6, [dcl.meaning.general]/3.5 (WP-2623): a block-scope
+/// function or `extern` declaration declares a member of the innermost
+/// enclosing namespace, so it is internal in a function (a member
+/// function included) of an unnamed namespace, external in a `static`
+/// function outside one, and takes the linkage of an earlier declaration
+/// it redeclares.
+#[test]
+fn block_scope_extern_in_unnamed_namespace() {
+    let (ast, i) = parse(
+        "namespace { void g() { extern int v; extern void h(); }\n\
+           struct A { void m() { extern int mv; } }; }\n\
+         static void s() { extern int sv; extern void sh(); }\n\
+         static int pv; void p() { extern int pv; }\n\
+         namespace N { namespace { void q() { extern int nv; } } }\n",
+    );
+    assert_eq!(link(&ast, &i, DeclKind::Var, "v"), Linkage::Internal);
+    assert_eq!(link(&ast, &i, DeclKind::Function, "h"), Linkage::Internal);
+    assert_eq!(link(&ast, &i, DeclKind::Var, "mv"), Linkage::Internal);
+    assert_eq!(link(&ast, &i, DeclKind::Var, "nv"), Linkage::Internal);
+    assert_eq!(link(&ast, &i, DeclKind::Var, "sv"), Linkage::External);
+    assert_eq!(link(&ast, &i, DeclKind::Function, "sh"), Linkage::External);
+    assert_eq!(all(&ast, &i, DeclKind::Var, "pv").len(), 2);
+    assert_eq!(link(&ast, &i, DeclKind::Var, "pv"), Linkage::Internal);
+    assert_eq!(lang(&ast, &i, DeclKind::Var, "v"), LanguageLinkage::None);
+    assert_eq!(lang(&ast, &i, DeclKind::Var, "sv"), LanguageLinkage::Cxx);
+}
+
+/// [basic.link]/4, [dcl.link]/4 (WP-2624): a function or variable of an
+/// unnamed namespace first declared in an `extern "C"` context (a
+/// block-scope `extern` one in an `extern "C"` function included) has
+/// external linkage and C language linkage, as in clang and as the
+/// mangler says; one not in an `extern "C"` context is internal.
+#[test]
+fn extern_c_in_unnamed_namespace() {
+    let (ast, i) = parse(
+        "namespace { extern \"C\" void f(); extern \"C\" int x; void plain();\n\
+           extern \"C\" void k() { extern int w; extern void m(); } }\n\
+         extern \"C\" { namespace { void cf(); } }\n\
+         extern \"C\" void f3(); namespace { extern \"C\" void f3(); }\n",
+    );
+    for (kind, n) in [
+        (DeclKind::Function, "f"),
+        (DeclKind::Var, "x"),
+        (DeclKind::Function, "k"),
+        (DeclKind::Var, "w"),
+        (DeclKind::Function, "m"),
+        (DeclKind::Function, "cf"),
+        (DeclKind::Function, "f3"),
+    ] {
+        assert_eq!(link(&ast, &i, kind, n), Linkage::External, "{n}");
+        assert_eq!(lang(&ast, &i, kind, n), LanguageLinkage::C, "{n}");
+        assert!(all(&ast, &i, kind, n).iter().all(|&d| ast.is_extern_c(d)), "{n}");
+    }
+    assert_eq!(link(&ast, &i, DeclKind::Function, "plain"), Linkage::Internal);
+    assert_eq!(lang(&ast, &i, DeclKind::Function, "plain"), LanguageLinkage::None);
+}
+
 /// [dcl.link]/5: a C language linkage is ignored for class members; a
 /// static data member and a member function in an `extern "C"` block
 /// have C++ language linkage.

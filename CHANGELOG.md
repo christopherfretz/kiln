@@ -1009,6 +1009,17 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 - Scratch space (`is_written_in_scratch_space`) is the `<scratch space>`
   buffer itself, not a presumed name (WP-2622): a file with `#line 1
   "<scratch space>"` had its own tokens taken for pasted ones.
+- A block-scope function declaration or `extern` variable in a function
+  of an unnamed namespace has internal linkage for `Ast::linkage` and
+  reflection's `has_internal_linkage` ([basic.link]/4, /6), as its symbol
+  already had (WP-2623).
+- A function or variable of an unnamed namespace first declared in an
+  `extern "C"` context has external linkage for `Ast::linkage` too (it
+  said internal while the mangler said external), as in clang; a
+  block-scope `extern` declaration in an `extern "C"` function of an
+  unnamed namespace now gets clang's unmangled external symbol instead
+  of a `_ZN12_GLOBAL__N_1` one and a stray `-Wundefined-internal`
+  (WP-2624).
 - A global `operator new` or `operator delete` declared after a class
   template whose pattern befriends it is one function with the implicit
   declaration and the instantiated friend, before or after the

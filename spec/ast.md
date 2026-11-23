@@ -490,7 +490,27 @@ translation unit, when sema is gone) ask one computation:
   module and not exported, else external. A member takes its class's
   linkage. A local entity has none, except a block-scope function
   declaration or `extern` variable, which has its first declaration's
-  ([basic.link]/6; external when it is the first). A namespace is
+  ([basic.link]/6). When it is the first, it declares a member of the
+  innermost enclosing namespace ([dcl.meaning.general]/3.5), so
+  [basic.link]/4 makes it internal in a function of an unnamed namespace
+  (`namespace { void g() { extern int v; } }`; WP-2623) and external
+  otherwise, whatever its function's linkage (`static void g() { extern
+  int v; }` declares an external `v`). **`extern "C"` in an unnamed
+  namespace** (WP-2624): a function or variable whose target scope is a
+  namespace (a block-scope `extern` one included) and whose first
+  declaration is in an `extern "C"` context keeps external linkage (and
+  C language linkage) in an unnamed namespace. This follows clang
+  (`getLVForNamespaceScopeDecl`, `getLVForLocalDecl`), not the letter of
+  [basic.link]/4 as CWG 1113 and CWG 1603 left it (every name in an
+  unnamed namespace is internal, and [dcl.link]/1, /4 then give it no
+  language linkage), which GCC 16.1 follows (internal; a local symbol
+  that keeps the C name; distinct from a global `extern "C"` entity of
+  the same name). Kiln takes clang's model because its sema already does
+  (such a declaration is one entity with a global `extern "C"`
+  declaration of the same name, CWG 14), and its symbol is clang's (an
+  unmangled external name). `Ast::extern_c_escapes_unnamed_namespace`
+  owns the exception; `Ast::linkage`, `Ast::is_extern_c` and the
+  mangler's `has_internal_linkage` all read it. A namespace is
   internal when unnamed or inside an unnamed one. Anything else (an
   alias, a data member, an enumerator, a parameter, a deduction guide, a
   closure type, a using-declaration or shadow) has none. Reflection's
@@ -504,7 +524,8 @@ translation unit, when sema is gone) ask one computation:
   `extern "C"` function has it), it is no class member, no member-like
   constrained friend ([dcl.link]/5) and has no internal linkage. A
   function or variable in an unnamed namespace first declared in an
-  `extern "C"` context keeps it, as in clang. In C every function and
+  `extern "C"` context keeps it, as in clang (above), a block-scope
+  `extern` one in an `extern "C"` function included. In C every function and
   variable with linkage has it.
 - `Ast::language_linkage(d) -> LanguageLinkage { Cxx, C, None }` is
   [dcl.link] for tooling clients: `C` when `is_extern_c(d)` (and `d`
@@ -518,7 +539,11 @@ translation unit, when sema is gone) ask one computation:
   in an `extern "C"` block is `Cxx` ([dcl.link]/5).
 
 Nothing is stored: each query walks the context chain (bounded) and
-reads the payloads. Tests: `crates/kiln_parse/tests/using_linkage.rs`.
+reads the payloads. Tests: `crates/kiln_parse/tests/using_linkage.rs`,
+`tests/conformance/basic.link/local-extern-unnamed-namespace-ir.cpp`,
+`tests/conformance/dcl.link/extern-c-unnamed-namespace-ir.cpp`,
+`tests/conformance/meta.reflection.queries/linkage-block-scope-extern.cpp`,
+`tests/conformance/meta.reflection.queries/linkage-extern-c-unnamed-namespace.cpp`.
 
 ## 5. Expressions
 ### 5.1 Header
