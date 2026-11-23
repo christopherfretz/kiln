@@ -312,6 +312,29 @@ Rechecked against g++ 16.1 `-std=c++26 -freflection` in WP-503:
   rejects it; the text decides). GCC 16.1 agrees on the rest. Tests:
   `meta.reflection.extract/local-constant.cpp`, `local-constant-neg.cpp`,
   `local-constant-binding.cpp`.
+- `extract` by value and `constant_of` of a structured binding, of an
+  automatic variable and of a parameter whose lifetime began within the
+  evaluation (WP-2161): `constant_of(r)` is `reflect_constant([: R :])`,
+  and the splice reads the binding (a member or element of the
+  decomposition, or a tuple-like holding variable's referent) or the
+  variable where its live frame holds it ([expr.const]/10; the
+  [meta.reflection.queries] example rejects only an object outside its
+  lifetime), also from a function its reflection was passed down to;
+  `extract<U>` by value is `extract-value<U>` of that. A reference's
+  `constant_of` is its referent's value. A parameter's variable is a
+  splice operand in its function (`constant_of` no longer rejects it as
+  "not a valid argument to a splice-expression"). Read as the frame holds
+  it at the call (never memoized). A binding or variable of a frame
+  outside the evaluation (a non-constexpr function's, seen from an
+  immediate invocation or a `static_assert` in it) or of a returned frame
+  keeps the earlier failures. GCC 16.1 agrees on a binding, a local and a
+  parameter of the running frame, and rejects the rest (another frame's
+  variable, a tuple-like binding, a reference local's `constant_of`); the
+  text decides. Not yet: a bit-field binding (WP-2191) and `^^` of a value
+  pack in a pack expansion (WP-2190). Tests:
+  `meta.reflection.extract/binding-local.cpp`, `binding-local-kiln.cpp`,
+  `binding-local-neg.cpp`, `binding-bit-field.cpp` and `binding-pack.cpp`
+  (xfail).
 - `extract` of a reference variable whose lifetime began within the
   evaluation (a reference parameter or a reference local of a consteval
   function, reflected in its body), WP-1489. `^^r` there represents a

@@ -5224,7 +5224,7 @@ Specified in **`spec/reflection.md`** §3:
 
 The VM half is `vm/meta.rs`; the op tables are in `meta/`.
 
-**Reflected locals (WP-1482, WP-1505, WP-1515).** `extract` of a
+**Reflected locals (WP-1482, WP-1505, WP-1515, WP-2161).** `extract` of a
 reflected automatic variable reads it only while its lifetime, begun in
 a frame of the running evaluation, lasts ([meta.reflection.extract]):
 - A non-reference local or parameter whose reflection the body takes
@@ -5271,6 +5271,31 @@ a frame of the running evaluation, lasts ([meta.reflection.extract]):
   the calls in progress impure (`Oven::mark_impure` from sema): a later
   call after `x` changed, or in a later run of an evaluation session,
   reads it again.
+- A structured binding (WP-2161) names a member or element of its
+  decomposition's hidden variable `e`, or (tuple-like) the referent of
+  its holding variable, not a variable of its own. A binding of an
+  automatic decomposition whose reflection the body takes
+  (`compile::is_local_binding`: not a bit-field, of a class or array, or
+  tuple-like) is recorded in `Compiler::refl_refs` like a reflected
+  reference: the `ScopeEnter` of the decomposition's block allocates an
+  object of type "reference to the binding's type" (`Origin::Var(b)`),
+  and after the decomposition and its holding variables are
+  initialized `Compiler::bind_reflected` stores the address of the
+  binding expression's place into it (also for a condition's
+  decomposition). `Oven::meta_ref_local(b)` loads it while the block
+  lasts. sema reads the object there: `extract<T>` by value of the
+  binding's own type reads it live; otherwise, and for `constant_of`,
+  `Oven::meta_freeze_live` freezes its value. A `^^b` of such a binding
+  is marked as a local's is (`IsConstEval` aux 32: no call reaching it
+  is memoized), and `extract`/`constant_of` of it mark the calls in
+  progress impure (its decomposition is the automatic variable read).
+  Not found live (a bit-field binding, a frame outside the evaluation,
+  an ended block), the binding falls to sema's constant rule (its
+  decomposition usable in constant expressions).
+- `constant_of` of an automatic variable or parameter found live (WP-2161)
+  freezes its value there (`Oven::meta_freeze_live`; a reference's
+  referent's, through `meta_ref_local`/`meta_ref_param`): `[: R :]` reads
+  it within the evaluation.
 
 Nothing is added for a function that reflects no reference local: its
 scan leaves `refl_refs` empty, so its frames, registers and instructions

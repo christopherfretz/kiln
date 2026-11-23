@@ -426,6 +426,13 @@ impl Sema<'_, '_> {
             return fail(loc, "reflection does not have a type");
         };
         let ty = self.ast.types.canonical(ty);
+        // `[: r :]` of an automatic variable or parameter whose lifetime
+        // began within this evaluation, in a live frame, reads it there
+        // ([meta.reflection.queries] constant_of, [expr.const]/10.9;
+        // WP-2161): its value now, or, of a reference, its referent's.
+        if let Some(cv) = self.live_constant(d, ty, ctx, oven)? {
+            return self.constant_of_value(cv, loc);
+        }
         if self.ast.types.is_reference(ty) {
             let o = self.referenced_object(d, loc, oven)?;
             let Reflectee::Object(p) = self.ast.reflections.get(o) else {
@@ -459,6 +466,44 @@ impl Sema<'_, '_> {
         self.constant_of_value(cv, loc)
     }
 
+    /// The value of automatic variable or parameter `d` (of canonical
+    /// type `ty`) in the innermost live frame of the running evaluation
+    /// that holds it, frozen for `constant_of` (a reference's referent's
+    /// value); `None` when no live frame holds it (a static, a local of
+    /// an enclosing function outside this evaluation, one whose block
+    /// ended): the caller's rules apply then.
+    fn live_constant(
+        &mut self,
+        d: DeclId,
+        ty: QualType,
+        ctx: &MetaCtx,
+        oven: &mut Oven,
+    ) -> Result<Option<ConstValueId>, MetaError> {
+        let kind = self.kind_of(d);
+        let local = kind == DeclKind::ParmVar
+            || (kind == DeclKind::Var
+                && self.ast.decls.var(d).is_some()
+                && !self.has_static_storage(d));
+        if !local {
+            return Ok(None);
+        }
+        let t = &self.ast.types;
+        let (addr, obj) = if t.is_reference(ty) {
+            let obj = t.pointee(ty).map_or(ty, |p| t.canonical(p));
+            let a = if kind == DeclKind::ParmVar {
+                oven.meta_ref_param(d)
+            } else {
+                oven.meta_ref_local(d)
+            };
+            (a, obj)
+        } else {
+            (oven.meta_local(d), ty)
+        };
+        let Some(addr) = addr else { return Ok(None) };
+        let q = self.ast.types.canonical(obj).without_quals();
+        self.bridge(|b| oven.meta_freeze_live(b, addr, q, ctx.loc)).map(Some)
+    }
+
     /// How `constant_of` treats declaration `d` ([meta.reflection.queries]
     /// `constant_of`: whether `[: ^^d :]` is a valid splice-expression,
     /// and of what). Exhaustive (WP-1782): a kind sent to the failure by
@@ -466,9 +511,12 @@ impl Sema<'_, '_> {
     /// static-gap inventory.
     fn constant_of_kind(&self, d: DeclId) -> ConstantOfKind {
         match self.kind_of(d) {
-            DeclKind::EnumConstant | DeclKind::Var | DeclKind::VarTemplateSpecialization => {
-                ConstantOfKind::Value
-            }
+            // A parameter's variable, too: `[: r :]` of it in its
+            // function's body reads it (WP-2161).
+            DeclKind::EnumConstant
+            | DeclKind::Var
+            | DeclKind::VarTemplateSpecialization
+            | DeclKind::ParmVar => ConstantOfKind::Value,
             // `reflect_function([: r :])`: the function itself. A static or
             // explicit-object member function (a conversion function, too)
             // is an lvalue of function type ([expr.prim.splice]/2,
@@ -501,7 +549,6 @@ impl Sema<'_, '_> {
             | DeclKind::TypeAliasTemplate
             | DeclKind::Concept
             | DeclKind::BuiltinTemplate
-            | DeclKind::ParmVar
             | DeclKind::ImplicitParam
             | DeclKind::TemplateTypeParm
             | DeclKind::NonTypeTemplateParm
@@ -555,6 +602,19 @@ impl Sema<'_, '_> {
         oven: &mut Oven,
     ) -> Result<ReflectionId, MetaError> {
         let loc = ctx.loc;
+        // A binding of an automatic decomposition of a live frame of the
+        // running evaluation: the object it names there, read now
+        // ([dcl.struct.bind]/1: its lifetime began within the
+        // evaluation; the Oven keeps its address, `Oven::meta_ref_local`;
+        // WP-2161).
+        if let Some(addr) = oven.meta_ref_local(b) {
+            let Some(t) = self.ast.decls.get(b).ty().filter(|&t| t != QualType::ERROR) else {
+                return self.not_usable(b, loc);
+            };
+            let q = self.ast.types.canonical(t).without_quals();
+            let cv = self.bridge(|br| oven.meta_freeze_live(br, addr, q, loc))?;
+            return self.constant_of_value(cv, loc);
+        }
         if let Some(v) = self.ast.decls.binding_var(b) {
             let r = self.intern_reflection(Reflectee::Decl(v), loc)?;
             return self.reflect_constant_of(r, ctx, oven);
