@@ -135,6 +135,11 @@ pub(crate) struct Host {
     pub(crate) mode: HostMode,
     /// Calls the handler received.
     pub(crate) calls: u64,
+    /// A call failed with the handler's error or was refused
+    /// (`Fault::Host`: a nested call in a session's run, no handler, the
+    /// handler's `Err`, results over a capacity) since the flag was last
+    /// cleared ([`Oven::clear_host_failed`]).
+    pub(crate) failed: bool,
     /// The arguments read and the results written, reused across calls.
     pub(crate) ints_in: Vec<u64>,
     pub(crate) bytes_in: Vec<u8>,
@@ -148,6 +153,7 @@ impl Default for Host {
             handler: None,
             mode: HostMode::Silent,
             calls: 0,
+            failed: false,
             ints_in: Vec::new(),
             bytes_in: Vec::new(),
             ints_out: Vec::new(),
@@ -190,6 +196,19 @@ impl Oven {
     /// How many calls the handler received.
     pub fn host_call_count(&self) -> u64 {
         self.host.calls
+    }
+
+    /// Whether a host call failed with the handler's error or was
+    /// refused before it ran (not a range check of the arguments, not a
+    /// speculative or silent refusal) since [`Oven::clear_host_failed`]
+    /// (spec/host-calls.md §4, WP-2501).
+    pub fn host_failed(&self) -> bool {
+        self.host.failed
+    }
+
+    /// Clears [`Oven::host_failed`].
+    pub fn clear_host_failed(&mut self) {
+        self.host.failed = false;
     }
 
     /// Enters an entry point of host mode `m` (spec/host-calls.md §4):

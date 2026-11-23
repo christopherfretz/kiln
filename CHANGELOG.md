@@ -27,6 +27,11 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   `token_range_split`), so an expression ending at the first `>` of a
   `>>`, `>=`, `>>=` or `>>>` ends where sema says.
 
+- `ValueError::StackExhausted` for an evaluation session's
+  `variable_value` (WP-2510, spec/eval-session.md §9): a read whose
+  initializer exhausts the stack of the thread it runs on is refused as
+  a stack exhaustion, as `RunError::StackExhausted` refuses a run, not
+  as `NotAConstant`.
 - Native stack sizing for evaluation-session workers (WP-2500,
   spec/eval-session.md §9 "Limits that bound the native depth"): every
   kiln limit that bounds how deep a run's semantic work recurses on the
@@ -1020,6 +1025,30 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   unnamed namespace now gets clang's unmangled external symbol instead
   of a `_ZN12_GLOBAL__N_1` one and a stray `-Wundefined-internal`
   (WP-2624).
+- A host call that the handler fails or that is refused (no handler, an
+  evaluation session's refusal outside a run or in a run's nested work,
+  results over a capacity) inside a SFINAE context is a hard error, not
+  a substitution failure (WP-2501, spec/host-calls.md §4): a
+  requires-expression no longer evaluates to `false`, a deduction no
+  longer drops the candidate and a partial specialization no longer
+  fails to match because a handler did not answer. The error prints
+  with the host call's note and the context notes ("in instantiation of
+  requirement here", ...).
+- An evaluation session replays the diagnostics of an out-of-line static
+  data member definition and of a variable template specialization's
+  initializer that a `variable_value` read instantiated on demand
+  (WP-2451, WP-2452, spec/eval-session.md §5): the read's work is a unit
+  keyed by the variable's first declaration, and a later run that names
+  the definition the read left invalid reaches it, so the run fails with
+  the read's first diagnostic, as a fresh session's run does. A function
+  template's own specialization instantiated in a run is a unit too, as
+  a member function's definition is: a later run that calls it replays
+  its diagnostics (WP-2501).
+- An in-class `static const` integral or enumeration data member's
+  checked initializer value is the variable's evaluated value, as the
+  out-of-line definition's constant-initialization check records it
+  (WP-2504, spec/ast.md §9.2): a later read reuses it instead of
+  evaluating the initializer again.
 - A global `operator new` or `operator delete` declared after a class
   template whose pattern befriends it is one function with the implicit
   declaration and the instantiated friend, before or after the

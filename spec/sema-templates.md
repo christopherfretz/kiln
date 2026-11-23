@@ -4798,7 +4798,15 @@ member is an error at its instantiation
 **What SFINAE mode does** (clang `SFINAETrap` +
 `Sema::EmitCurrentDiagnostic`):
 - An *error* is captured, not emitted; the first one is kept. It also
-  makes the current substitution return `SubstFail`.
+  makes the current substitution return `SubstFail`. Except the error
+  reporting a constant evaluation that failed at a host call the
+  handler failed or that was refused (spec/host-calls.md §4, WP-2501):
+  `eval_const` marks the innermost SFINAE context
+  (`SfinaeState::host_failure`, when `Oven::host_failed` is set after a
+  failed evaluation), and the next error in that context prints with
+  its context notes, as a `SFINAE_Report` error does
+  (`Sema::host_failure_escapes`); an unspent mark ends with the
+  context. No snapshot holds it: the SFINAE stack is empty at rest.
 - Warnings and remarks are held back in `SfinaeState.warnings` (WP-392).
   What counts is the diagnostic's class, not its mapped severity: a
   warning that `-Werror` turns into an error is held back like any

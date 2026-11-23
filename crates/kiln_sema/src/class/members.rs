@@ -560,7 +560,14 @@ impl Sema<'_, '_> {
             // Any constant value of the member's type will do: not
             // `eval_int`, whose `i128` cannot hold every `unsigned
             // __int128` (`~(unsigned __int128)0`, WP-275).
-            if let Err(f) = self.eval_const(e, ctx) {
+            let r = self.eval_const(e, ctx);
+            // The value is the variable's evaluated value, as the
+            // out-of-line form's constant-initialization check records
+            // it (spec/ast.md §9.2, WP-2504).
+            if self.ast.decls.begin_eval(v).is_ok() {
+                self.ast.decls.finish_eval(v, r.as_ref().ok().copied());
+            }
+            if let Err(f) = r {
                 if self.clang_compat >= 22 {
                     // clang 22 reports at the member, with the
                     // evaluation's notes.

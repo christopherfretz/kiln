@@ -605,21 +605,33 @@ the same rules. `ValueError`: `NotFound`, `NotAVariable`,
 `NotAConstant` (not usable in constant expressions, or no constant
 initializer), `WrongType` (not a result type, §3), `TooLarge`,
 `Unreadable` (a value no tree can give: an address that designates no
-object, as a GNU label address). It is
+object, as a GNU label address), `StackExhausted` (the read's on-demand
+work exhausted the calling thread's stack, or reached work an
+exhaustion stopped: `RunError::StackExhausted`'s rule, §9; WP-2510). It is
 named apart from `std::meta::constant_of`, which it is not. **On
 demand** (WP-2420): a variable whose initializer has not been
 instantiated or evaluated (a static data member of a class template
 specialization whose initializer nothing used: an in-class `constexpr`
-one, deferred, or an out-of-line `const` one) has it instantiated and evaluated now, as a reference
+one, deferred, or an out-of-line `const` one; a variable template
+specialization named only in an unevaluated operand) has it instantiated and evaluated now, as a reference
 to the variable in a constant expression would ([temp.inst]/4 and /8:
 `note_var_referenced` at the variable's own location, with what that
 instantiates in turn, a function template its initializer calls
 included), under the translation unit's limits, without a handler, and
 on the calling thread's stack (§9). That work is the translation
 unit's (§5.1 "Unchanged"), kept, and so not read-only on the AST. Its
-units (§5.1, `Init(v)`) are recorded as a run's are, so a later run
+units (§5.1, `Init(v)`: an in-class initializer, an out-of-line
+definition instantiated as a redeclaration, WP-2451, and a variable
+template specialization's initializer, keyed by the variable's first
+declaration) are recorded as a run's are, so a later run
 that reaches one that failed reports its diagnostics exactly as in a
-session where the run did the work (§7); no run is open to measure it,
+session where the run did the work (§7); a reference to the definition
+such a unit left invalid reaches it too (`build_decl_ref_extra`, where
+the reference is quiet as in a translation unit). The run's own error
+after the replayed ones may differ from a run that did the work: a
+reference made before the definition failed names the in-class
+declaration, one made after names the invalid definition (a residual
+of the translation unit's own order, §5.1 "Residuals"). No run is open to measure it,
 so a later run that reaches it is not charged it, as for work before
 the first run. Its diagnostics are captured and dropped (the answer is
 `NotAConstant`): none reaches the engine's sink. A fatal error it
@@ -634,7 +646,11 @@ decoder). Tests (WP-2420): `crates/kiln_parse/tests/eval_session_results.rs`
 `variable_values_instantiate_on_demand` (in-class, out-of-line, class
 type, an initializer calling an uninstantiated function template, a
 non-constant one; read before, after and between runs) and
-`a_failed_on_demand_read_fails_later_runs_alike`.
+`a_failed_on_demand_read_fails_later_runs_alike`; WP-2451 and WP-2452:
+`a_failed_on_demand_definition_fails_later_runs_alike` (an out-of-line
+definition and a variable template specialization whose instantiation
+fails, read first or reached by another entry's run first) and
+`a_variable_template_specialization_is_read_on_demand`.
 
 **Kept state.** Reading interns nothing and keeps nothing: the frozen
 values are truncated, the name table is local to the read, and
@@ -704,7 +720,7 @@ units (`Key` in `kiln_sema/src/session.rs`):
 | `Func(f)` | the Oven's compilation of function `f`, with the semantic work it needs: an instantiation, an implicit or defaulted member, a metafunction thunk (`SemaBridge::ensure_body`) | every call of `f` in a run (`Oven::session_compile`) |
 | `Var(g)` | the Oven's evaluation of global `g`'s initializer for a read (`eval_var_init`) | every first read of `g` in a run (`Oven::session_kept_var`) |
 | `Init(v)` | a variable's initializer instantiated and checked (`instantiate_var_spec_init`, `subst_static_member_init`) | each reference to `v` that may need its value (`note_var_reference`) |
-| `Inst(f)` | a function template specialization's definition instantiated (`instantiate_function_definition`) | each request to instantiate it, done or not (its early return, `note_used_for_instantiation`), and each compilation of it that finds its body instantiated (`SemaBridge::ensure_body`, WP-2072) |
+| `Inst(f)` | a function template specialization's definition instantiated (`instantiate_function_definition`: a member function of a class template specialization, and a function template's own specialization, `instantiate_function_spec_definition`, a unit since WP-2501: before, its work was only its parent unit's, so a run that called it after another run instantiated it replayed nothing) | each request to instantiate it, done or not (its early return, `note_used_for_instantiation`), and each compilation of it that finds its body instantiated (`SemaBridge::ensure_body`, WP-2072) |
 | `Meta(op, operands)` | a reflection query (`SemaBridge::meta`) | each query with the same op and operands |
 | `Nothrow(f)` | whether `f` is non-throwing, which may instantiate an exception specification (`SemaBridge::is_nothrow`) | each query, the early `known_nothrow` answer included |
 | `Class(c)` (WP-2075) | the definition of class template specialization `c` instantiated ([temp.inst]/2-3: its member declarations, `static_assert`s, bit-field widths, alignments, nested types), or of a member class or member enumeration `c` of one ([temp.inst]/3: an enumeration's enumerator values); `instantiate_class_as`, `instantiate_member_class`, `instantiate_member_enum`. Its member function definitions are `Inst`, its static data members' initializers `Init`, its default member initializers `Nsdmi` | each request that instantiates `c` when it is undefined and finds it defined: the `require_complete` family (`undefined_spec_at`: `require_complete`, `require_complete_silent`, `instantiation_fails`, `require_complete_nns`; `instantiate_for_init`, `require_member_enum`), a class named in a nested-name-specifier, `instantiate_class_as`'s early return (base matching in deduction, explicit instantiation), every class associated with an argument-dependent lookup, and a reflection query that completes a type (`meta_undefined_spec`) |
@@ -841,7 +857,12 @@ is charged only to the unit that first did it (WP-2076). So is the
 reflection-bytes charge (spec/oven.md "Limits": a value already
 interned charges 0), which makes a run's peak bytes depend on what
 earlier runs interned (WP-2077). The nested limits are the translation
-unit's; a session-level setting for them is WP-2078.
+unit's; a session-level setting for them is WP-2078. A reference made
+after an out-of-line static data member definition's instantiation
+failed (and left the definition invalid) is quiet where the reference
+that did the work was not (it named the in-class declaration and
+reported the read of its unknown initializer): the unit's diagnostics
+are replayed alike, the run's own failure notes differ (§4.1, WP-2451).
 
 **Unchanged.** The translation unit's own nested evaluations, before
 any run, run under its limits and its handler, are not units and are
@@ -859,7 +880,11 @@ handler, and nothing keeps it after `run` returns. Nested
 evaluations of semantic work the run triggers (§5.1) have no handler:
 a host call there is refused, as what they compute is kept across runs
 and must not depend on one run's handler. The translation unit's
-handler (given to the parse) is not used by runs.
+handler (given to the parse) is not used by runs. A refusal in a SFINAE
+context (a requires-expression a run's instantiation evaluates, a
+deduction) is a hard error, never a substitution failure, in the
+translation unit and in a run's nested work alike (spec/host-calls.md
+§4, WP-2501).
 
 The refusal's note says it in the author's terms (WP-2325): `a host
 call cannot be evaluated here: this expression is evaluated when the
@@ -1305,8 +1330,13 @@ spec/sema-templates.md §10.3).
   no further check passes. When the run ends it is restored to its
   value at the run's start, which is clear (a session opens only on a
   translation unit without a fatal error), so the next run, on any
-  thread, starts with the guard untripped. `variable_value`'s refusal
-  of a read an exhaustion stopped stays `ValueError::NotAConstant`.
+  thread, starts with the guard untripped. `variable_value` follows
+  the same rule (WP-2510): a read that would be refused `NotAConstant`
+  and has `sema_stack_exhausted` among its captured diagnostics (its
+  own exhaustion, or the replayed one of work an exhaustion stopped) is
+  `ValueError::StackExhausted` (test:
+  `crates/kiln_parse/tests/eval_session.rs`
+  `a_variable_value_checks_the_stack_of_its_own_thread`).
 - **What it stopped stays stopped.** The instantiation the exhaustion
   cut short is kept as it failed, as any failed semantic work (§5.1
   rule 1: semantic work is not rolled back): every later run that

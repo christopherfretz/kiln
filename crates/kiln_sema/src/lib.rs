@@ -2031,7 +2031,10 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             let sev = self.diags.severity_at(id, d.loc());
             // clang's `NoSFINAE` errors (`SFINAE_Report`) print even in
             // a SFINAE context, with the context notes.
-            if self.inst.stack.is_sfinae() && !is_sfinae_report(id) {
+            if self.inst.stack.is_sfinae()
+                && !is_sfinae_report(id)
+                && !self.host_failure_escapes(sev)
+            {
                 if self.inst.suppress_access.get() && is_access_error(id) {
                     if let Some(s) = self.inst.sfinae.borrow_mut().last_mut()
                         && s.first.is_none()
@@ -2083,6 +2086,25 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         inst_notes.extend(outer);
         d.prepend_notes(inst_notes);
         d.emit(self.diags);
+    }
+
+    /// Whether an error of severity `sev` emitted in a SFINAE context
+    /// reports a constant evaluation that failed at a host call there
+    /// (`Sema::note_host_failure_in_sfinae`, WP-2501): it prints, with
+    /// the context notes, as clang's `SFINAE_Report` errors do, and the
+    /// mark (`SfinaeState::host_failure` of the innermost SFINAE context)
+    /// is spent; it ends with its context.
+    fn host_failure_escapes(&self, sev: kiln_diag::Severity) -> bool {
+        if sev < kiln_diag::Severity::Error {
+            return false;
+        }
+        match self.inst.sfinae.borrow_mut().last_mut() {
+            Some(s) if s.host_failure => {
+                s.host_failure = false;
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Starts holding back the diagnostics clang reports through delayed

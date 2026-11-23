@@ -310,6 +310,81 @@ fn refusals_say_why() {
     std::fs::remove_dir_all(&d).unwrap();
 }
 
+/// WP-2501 (spec/host-calls.md §4, spec/eval-session.md §6): a host call
+/// the translation unit's handler refuses (outside a run) in a SFINAE
+/// context is a hard error, not a substitution failure: in a
+/// requires-expression (the brief's `has<int>()` was silently `false`),
+/// a deduction and a partial specialization's match. Each unit is refused
+/// with the session's refusal note, the requirement's or the deduction's
+/// context note and the instantiation it was required from; an `if
+/// constexpr` condition (no SFINAE context) is the same error as before.
+#[test]
+fn a_refused_host_call_is_no_substitution_failure() {
+    const PRE: &str = "using u64 = unsigned long long;\n\
+constexpr u64 host_size() { return __builtin_kiln_host_call(1, nullptr, 0, nullptr, 0, nullptr, 0, nullptr, 0); }\n\
+template <u64 N> struct K {};\n";
+    let cases: [(&str, &str, &[&str]); 4] = [
+        (
+            "requires.cpp",
+            "template <class T> consteval bool has() { return requires { typename K<host_size() + sizeof(T)>; }; }\n\
+             static_assert(!has<int>());\n",
+            &[
+                "error: non-type template argument is not a constant expression",
+                "note: in instantiation of requirement here",
+                "note: in instantiation of function template specialization 'has<int>' requested here",
+            ],
+        ),
+        (
+            "deduction.cpp",
+            "template <class T> auto d(int) -> K<host_size() + sizeof(T)>* { return nullptr; }\n\
+             template <class T> char d(...) { return 0; }\n\
+             static_assert(sizeof(d<int>(0)) == 1);\n",
+            &[
+                "error: non-type template argument is not a constant expression",
+                "note: while substituting deduced template arguments into function template 'd' [with T = int]",
+            ],
+        ),
+        (
+            "partial.cpp",
+            "template <class T, class = void> struct P { static constexpr int v = 0; };\n\
+             template <class T> struct P<T, decltype((void)K<host_size() + sizeof(T)>{})> { static constexpr int v = 1; };\n\
+             static_assert(P<int>::v == 0);\n",
+            &[
+                "error: non-type template argument is not a constant expression",
+                "note: during template argument deduction for class template partial specialization",
+            ],
+        ),
+        (
+            "ifconstexpr.cpp",
+            "template <class T> constexpr int ic() { if constexpr (host_size() + sizeof(T) > 0) return 1; else return 2; }\n\
+             static_assert(ic<int>() == 1);\n",
+            &[
+                "error: constexpr if condition is not a constant expression",
+                "note: in instantiation of function template specialization 'ic<int>' requested here",
+            ],
+        ),
+    ];
+    let files: Vec<(String, String)> =
+        cases.iter().map(|(n, src, _)| ((*n).to_owned(), format!("{PRE}{src}"))).collect();
+    let refs: Vec<(&str, &str)> = files.iter().map(|(n, s)| (n.as_str(), s.as_str())).collect();
+    let d = scratch("host-sfinae", &refs);
+    for (name, _, want) in cases {
+        let err = Captured::default();
+        let cl = ["-std=c++26".to_owned(), d.join(name).to_string_lossy().into_owned()];
+        let got = with_eval_session(&kilnpp(), &cl, io(&err), |fe| fe.map(drop).err());
+        let Some(SessionRefused::TuHasErrors { rendered, .. }) = got else {
+            panic!("{name}: {got:?}\n{}", err.text())
+        };
+        let refusal =
+            "note: host call failed: host calls are served only in evaluation-session runs";
+        assert!(rendered.contains(refusal), "{name}:\n{rendered}");
+        for w in want {
+            assert!(rendered.contains(w), "{name}: no '{w}' in\n{rendered}");
+        }
+    }
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
 /// WP-2324 (spec/eval-session.md §7): the public renderer renders records
 /// exactly as the driver prints them, in text and JSON. The unit's own
 /// warning (in a header, with a note) is rendered as `kiln++

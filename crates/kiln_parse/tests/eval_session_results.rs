@@ -8,6 +8,7 @@
 
 use std::sync::Arc;
 
+use kiln_ast::decl::VarEvalState;
 use kiln_diag::{DiagEngine, DiagOptions, Diagnostic, MemorySink};
 use kiln_parse::{
     CancelToken, CharUnit, ConstexprLimits, EntryError, EvalSession, FieldKind, FloatKind,
@@ -1078,6 +1079,224 @@ fn a_failed_on_demand_read_fails_later_runs_alike() {
         }
         assert_eq!(s.variable_value_named("B2::v", cap), Err(ValueError::NotAConstant));
     });
+}
+
+/// Every message of `r`'s diagnostics, notes included, in order, with
+/// its level and span.
+fn all_msgs(r: &RunReport) -> Vec<String> {
+    fn one(d: &Diagnostic, out: &mut Vec<String>) {
+        out.push(format!("{:?} {:?}: {}", d.level, d.span, d.message));
+        for n in &d.notes {
+            one(n, out);
+        }
+    }
+    let mut out = Vec::new();
+    for d in &r.diagnostics {
+        one(d, &mut out);
+    }
+    out
+}
+
+/// The one variable template specialization of the translation unit.
+fn the_var_spec(s: &EvalSession<'_, '_>) -> kiln_ast::DeclId {
+    use kiln_ast::decl::DeclKind;
+    let ast = &s.sema().ast;
+    let specs: Vec<_> = (1..=ast.decls.len() as u32)
+        .map(kiln_ast::DeclId::new)
+        .filter(|&d| {
+            matches!(ast.decls.get(d).kind(), DeclKind::Var | DeclKind::VarTemplateSpecialization)
+                && ast.spec_info(d).is_some()
+        })
+        .collect();
+    assert_eq!(specs.len(), 1, "{specs:?}");
+    specs[0]
+}
+
+/// WP-2451 and WP-2452 (spec/eval-session.md §4.1 "On demand", §7): an
+/// initializer instantiated on demand by `variable_value` that fails, as
+/// an out-of-line static data member definition (`Od<int>::k`,
+/// [temp.inst]/4) and as a variable template specialization's
+/// (`vbad<int>`, [temp.inst]/8), is recorded as a unit: the read is
+/// `NotAConstant`, and every later run that reaches the initializer, by
+/// either of two entries, fails with the instantiation's diagnostics as
+/// a fresh session's run gives them, and alike on every run. Without the
+/// out-of-line definition's unit (and its reach from a reference to the
+/// definition it left invalid), a run after the read or after the other
+/// entry's run reported no error of the instantiation, only kiln's
+/// internal error for a statement that failed silently.
+#[test]
+fn a_failed_on_demand_definition_fails_later_runs_alike() {
+    const SRCS: [&str; 2] = [
+        "template <class T> struct Od { static const int k; };\n\
+         template <class T> const int Od<T>::k = T::missing;\n\
+         template <class T> struct Use {\n\
+           static consteval int f() { return Od<T>::k; }\n\
+           static consteval int g() { return Od<T>::k + 1; }\n\
+         };\n\
+         static_assert(sizeof(Od<int>) + sizeof(Use<int>) > 0);\n\
+         using O = Od<int>; using U = Use<int>;\n",
+        "template <class T> constexpr int vbad = T::missing;\n\
+         template <class T> struct Use {\n\
+           static consteval int f() { return vbad<T>; }\n\
+           static consteval int g() { return vbad<T> + 1; }\n\
+         };\n\
+         using D = decltype(vbad<int>);\n\
+         static_assert(sizeof(Use<int>) > 0);\n\
+         using U = Use<int>;\n",
+    ];
+    // The instantiation's error with its notes: the run's own failure
+    // that follows may differ (a reference made after the definition
+    // left the variable invalid is quiet, as in a translation unit).
+    let first = |r: &RunReport| {
+        assert_eq!(r.result, Err(RunError::Failed));
+        let all = all_msgs(r);
+        let n = r.diagnostics.first().map_or(0, |d| 1 + d.notes.len());
+        all[..n].to_vec()
+    };
+    for (i, src) in SRCS.into_iter().enumerate() {
+        let read = |s: &mut EvalSession<'_, '_>| {
+            let cap = RunBudget::PROGRAM.result_bytes;
+            if i == 0 {
+                s.variable_value_named("O::k", cap)
+            } else {
+                let v = the_var_spec(s);
+                s.variable_value(v, cap)
+            }
+        };
+        let fresh =
+            |entry: &str| session(src, |s| first(&run_budget(s, entry, RunBudget::PROGRAM)));
+        let (ff, fg) = (fresh("U::f"), fresh("U::g"));
+        assert!(ff[0].contains("cannot be used prior to '::'"), "{ff:#?}");
+        // The entries' runs, twice, alike each time.
+        let runs = |s: &mut EvalSession<'_, '_>, order: [&str; 2]| {
+            let mut seen: Vec<Vec<String>> = Vec::new();
+            for round in 0..2 {
+                for (k, e) in order.into_iter().enumerate() {
+                    let r = run_budget(s, e, RunBudget::PROGRAM);
+                    assert_eq!(&first(&r), if e == "U::f" { &ff } else { &fg }, "source {i} {e}");
+                    if round == 0 {
+                        seen.push(all_msgs(&r));
+                    } else {
+                        assert_eq!(all_msgs(&r), seen[k], "source {i} {e}");
+                    }
+                }
+            }
+        };
+        // Read first, then runs of both entries.
+        session(src, |s| {
+            assert_eq!(read(s), Err(ValueError::NotAConstant));
+            runs(s, ["U::g", "U::f"]);
+            assert_eq!(read(s), Err(ValueError::NotAConstant));
+        });
+        // One entry's run first, then the other's, then a read.
+        session(src, |s| {
+            runs(s, ["U::f", "U::g"]);
+            assert_eq!(read(s), Err(ValueError::NotAConstant));
+        });
+    }
+}
+
+/// WP-2452 (spec/eval-session.md §4.1 "On demand", [temp.inst]/8): a
+/// variable template specialization named only in an unevaluated operand
+/// (`decltype(vt<int>)`, so its initializer was not instantiated) has its
+/// initializer instantiated and evaluated by `variable_value`, before and
+/// after a run that reaches it, and the run gives the same value.
+#[test]
+fn a_variable_template_specialization_is_read_on_demand() {
+    const SRC: &str = "template <int N> constexpr int tw() { return N * 2; }\n\
+         template <class T> constexpr int vt = tw<sizeof(T)>() + 1;\n\
+         template <class T> struct Use { static consteval int f() { return vt<T>; } };\n\
+         using D = decltype(vt<int>);\n\
+         static_assert(sizeof(Use<int>) > 0);\n\
+         using U = Use<int>;\n";
+    let cap = RunBudget::PROGRAM.result_bytes;
+    // The target is x86-64: `sizeof(int)` is 4.
+    session(SRC, |s| {
+        let v = the_var_spec(s);
+        assert_eq!(s.variable_value(v, cap).map(|t| t.root), Ok(RunValue::Signed(9)));
+        assert_eq!(val(s, "U::f"), RunValue::Signed(9));
+        assert_eq!(s.variable_value(v, cap).map(|t| t.root), Ok(RunValue::Signed(9)));
+    });
+    session(SRC, |s| {
+        let v = the_var_spec(s);
+        assert_eq!(val(s, "U::f"), RunValue::Signed(9));
+        assert_eq!(s.variable_value(v, cap).map(|t| t.root), Ok(RunValue::Signed(9)));
+        assert_eq!(val(s, "U::f"), RunValue::Signed(9));
+    });
+}
+
+/// The evaluated values (`VarData::eval`) of the variables named `name`
+/// that have an initializer, in declaration order.
+fn evals(s: &EvalSession<'_, '_>, name: &str) -> Vec<VarEvalState> {
+    use kiln_ast::decl::DeclKind;
+    let sema = s.sema();
+    let ast = &sema.ast;
+    (1..=ast.decls.len() as u32)
+        .map(kiln_ast::DeclId::new)
+        .filter(|&d| {
+            let n = ast.decls.get(d);
+            matches!(n.kind(), DeclKind::Var | DeclKind::VarTemplateSpecialization)
+                && sema.decl_name_str(n.name()) == name
+        })
+        .filter_map(|d| ast.decls.var(d).filter(|v| v.init.is_some()).map(|v| v.eval.state()))
+        .collect()
+}
+
+/// WP-2504 (spec/ast.md §9.2, [expr.const]/4, [class.static.data]/4):
+/// every constant initializer sema checks is evaluated when checked and
+/// its value written to `eval`, in both forms of a `const` static data
+/// member: in-class (`S::x`, which had none, so a tooling client reading
+/// the AST saw no value) and out-of-line (`O::y`), at the declaration or,
+/// for a member of a specialization, when its initializer is
+/// instantiated; a `const` integer whose initializer is not a constant is
+/// `NotConstant`. A pattern's dependent initializer is not evaluated, and
+/// a use writes nothing: `eval` is the check's.
+#[test]
+fn evaluated_values_are_written_when_checked() {
+    session(
+        "struct S { static const int x = 1; };\n\
+         int a[S::x];\n\
+         struct O { static const int y; };\n\
+         const int O::y = 2;\n\
+         const int n = 3;\n\
+         constexpr int c = 4;\n\
+         int f();\n\
+         const int nc = f();\n\
+         template <class T> struct TS { static const int z = sizeof(T); };\n\
+         int b[TS<int>::z];\n\
+         template <class T> struct TO { static const int w; };\n\
+         template <class T> const int TO<T>::w = sizeof(T) + 1;\n\
+         int d[TO<int>::w];\n\
+         struct U { static const int unused = 6; };\n",
+        |s| {
+            let value = |st: &[VarEvalState]| {
+                st.iter().map(|x| matches!(x, VarEvalState::Value(_))).collect::<Vec<_>>()
+            };
+            for (name, want) in [
+                ("x", &[true][..]),
+                ("y", &[true]),
+                ("n", &[true]),
+                ("c", &[true]),
+                ("unused", &[true]),
+                // The pattern's, then `TS<int>`'s.
+                ("z", &[false, true]),
+                ("w", &[false, true]),
+            ] {
+                assert_eq!(value(&evals(s, name)), want, "{name}: {:?}", evals(s, name));
+            }
+            assert_eq!(evals(s, "nc"), [VarEvalState::NotConstant]);
+            assert_eq!(evals(s, "z")[0], VarEvalState::NotEvaluated);
+            assert_eq!(evals(s, "w")[0], VarEvalState::NotEvaluated);
+            let cap = RunBudget::PROGRAM.result_bytes;
+            for (name, v) in [("S::x", 1), ("O::y", 2), ("U::unused", 6)] {
+                assert_eq!(
+                    s.variable_value_named(name, cap).map(|t| t.root),
+                    Ok(RunValue::Signed(v)),
+                    "{name}"
+                );
+            }
+        },
+    );
 }
 
 /// The parts of `RunError::Uncaught` of a run of `name`, which must end so.

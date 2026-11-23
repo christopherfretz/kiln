@@ -1387,12 +1387,38 @@ struct UnionMember { at: u32, field: DeclId }       // active member of the unio
 | cache | content |
 |---|---|
 | `ConstantExpr.b` | value of a constant expression (§5.5) |
-| `VarData.eval` | `NotEvaluated → Evaluating → Value(id) / NotConstant`; `Evaluating` detects self-reference; used for `constexpr`/`constinit` vars, `const` integral vars usable in constant expressions, and static-storage constant initialization (codegen emits the value) |
+| `VarData.eval` | `NotEvaluated → Evaluating → Value(id) / NotConstant`; `Evaluating` detects self-reference; used for `constexpr`/`constinit` vars, `const` integral vars usable in constant expressions, and static-storage constant initialization (codegen emits the value); when it is written: below |
 | `EnumConstant` payload | value (`Int`) |
 | `TemplateArg::Value` | the converted non-type argument (spec/types.md §8.3) |
 | `TemplateParamObject` | the object's value |
 | `IfStmt` | `if constexpr` via its `ConstantExpr`; `if consteval` needs no value |
 | `Annotation` attr | annotation value (M6) |
+
+**When `VarData.eval` is written** (WP-2504). Every constant
+initializer sema checks is evaluated when it is checked, and the
+result is written then, once: `Value(id)` or `NotConstant`. The checks
+are a `constexpr` (or `constexpr` structured binding's) initializer
+(`check_constexpr_init`), an in-class initializer of a non-inline
+`const` integral or enumeration static data member
+(`check_in_class_static_init`: `struct S { static const int x = 1; };`),
+and a `const` non-volatile integral or enumeration variable with static
+storage (`fix_const_int_init`: a namespace-scope one, an out-of-line
+static data member definition, `const int S::y = 2;`). The check runs
+where the initializer is: at the declaration, or, for a member of a
+class template specialization or a variable template specialization,
+when the initializer is instantiated (at its first use, at the end of
+the translation unit, or by an evaluation session's on-demand read). So
+the two forms of a `const` static data member agree: each has its value
+from its check (before WP-2504 the in-class form was evaluated by its
+check but the value dropped). A dependent initializer (a template's
+pattern) is not evaluated and stays `NotEvaluated`. A later use never
+writes `eval`: an Oven that reads a variable still `NotEvaluated` (one
+no check covers: a non-`const` one read by a lax fold, an initializer
+not yet instantiated) evaluates its initializer into its own global
+object, which that Oven keeps, and leaves `eval` as it is. A module or
+precompiled header image carries `eval` as written
+(`crates/kiln_parse/tests/eval_session_results.rs`
+`evaluated_values_are_written_when_checked`).
 
 ### 9.3 Printing values
 `ConstStore::print(id, &StringPool, &dyn PrintEnv, &PrintOptions, &mut

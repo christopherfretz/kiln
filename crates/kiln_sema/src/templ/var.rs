@@ -40,6 +40,14 @@ impl Sema<'_, '_> {
         self.ensure_template_constraints(tmpl, conv.sugared, 2, loc)?;
         if let Some(s) = self.ast.templates.find_spec(tmpl, conv.canonical) {
             if self.ast.decls.get(s).has(DeclFlags::INVALID) {
+                // One an earlier unit of an evaluation session (an
+                // on-demand read's instantiation) left invalid: the
+                // reference reaches its record, so the diagnostics that
+                // explain the error are replayed (spec/eval-session.md
+                // §5.1, WP-2452).
+                if self.eval_replay.is_some() {
+                    self.sess_reach_at(&crate::session::Key::Init(self.ast.first(s)), loc);
+                }
                 self.var_spec_depends_on_itself(s, loc);
                 return Err(());
             }
@@ -248,7 +256,7 @@ impl Sema<'_, '_> {
             // A failure was diagnosed; the variable is left uninitialized.
             let _ = sub.var_init(pattern, v);
         });
-        self.sess_window_end(crate::session::Key::Init(v), unit);
+        self.sess_window_end(crate::session::Key::Init(self.ast.first(v)), unit);
         self.pop_inst_frame();
     }
 

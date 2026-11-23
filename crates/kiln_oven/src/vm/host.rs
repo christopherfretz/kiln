@@ -73,6 +73,24 @@ impl Oven {
         if self.host_cancelled() {
             return Err(Fault::Cancelled);
         }
+        let r = self.exec_host_call_allowed(b, pc, base, (ti, tb));
+        // A failed or refused call is flagged: sema makes it a hard
+        // error in a SFINAE context (spec/host-calls.md §4, WP-2501).
+        if matches!(r, Err(Fault::Host(_))) {
+            self.host.failed = true;
+        }
+        r
+    }
+
+    /// [`Oven::exec_host_call`] in an evaluation whose mode lets the call
+    /// run.
+    fn exec_host_call_allowed(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        pc: usize,
+        base: usize,
+        (ti, tb): (OTy, OTy),
+    ) -> Result<u128, Fault> {
         // In an evaluation session's run, semantic work the run triggers
         // is kept for later runs, so it may not depend on this run's
         // handler (spec/eval-session.md §6).

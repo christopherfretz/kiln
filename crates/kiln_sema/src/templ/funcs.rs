@@ -363,6 +363,11 @@ impl Sema<'_, '_> {
         if !self.push_inst_frame(crate::templ::stack::FrameKind::FunctionSpec, f, tmpl, poi) {
             return;
         }
+        // In an evaluation session's run: a unit of its own, as a member
+        // function's is, so a later run that calls the specialization
+        // (not the function whose instantiation needed it) replays its
+        // diagnostics (spec/eval-session.md §5.1, WP-2501).
+        let unit = self.sess_unit_begin();
         if let Some((i, _)) = self.ast.spec_info(f) {
             self.ast.templates.update_spec(i, |s| {
                 if s.point_of_instantiation == Loc::INVALID {
@@ -463,6 +468,7 @@ impl Sema<'_, '_> {
             s.act_on_finish_function_def(f, b, rbrace);
         });
         self.replay_dependent_access(pdef, f);
+        self.sess_window_end(crate::session::Key::Inst(f), unit);
         self.pop_inst_frame();
     }
 }
