@@ -1,7 +1,7 @@
 12:3-12:4  type  'T' -> T@11:17 in=lib::Vec::data@12:6
 13:22-13:23  type  'U' -> U@13:19 in=lib::Vec::as@13:24
 14:55-14:56  type  'U' -> U@14:19 in=lib::Vec::Rebind@14:29
-14:51-14:54  template  'Vec' -> lib::Vec@11:27 in=lib::Vec::Rebind@14:29
+14:51-14:54  template  'Vec' -> lib::Vec@11:27 in=lib::Vec::Rebind@14:29 how=injected
 13:44-13:45  type  'U' -> U@13:19 in=lib::Vec::as@13:24
 17:3-17:4  type  'A' -> A@16:17 in=lib::Pair::a@17:5
 18:3-18:4  type  'B' -> B@16:26 in=lib::Pair::b@18:5

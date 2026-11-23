@@ -1,7 +1,8 @@
 //! The written-reference table (spec/ast.md §18): off by default, it
 //! records nothing and reports no memory; on, it records each written
 //! name once and dumps it, and `enclosed_by` finds a declaration's type,
-//! template, base and mem-init names (stage 2).
+//! template, base and mem-init names (stage 2); the lookup provenance
+//! reads through the API (§18.7).
 
 use std::sync::Arc;
 
@@ -116,5 +117,57 @@ fn enclosed_by_finds_stage2_names() {
             let d = r.enclosing.expect("enclosed");
             assert_eq!(t.enclosed_by(d).filter(|&(i, _)| i == id).count(), 1);
         }
+    });
+}
+
+const PROVENANCE: &str = "namespace a { struct S {}; void f(S); int v; }\n\
+                          using namespace a;\n\
+                          void g(int);\n\
+                          struct M { int m; template <class T> int t(); };\n\
+                          int h(S s, M x) { f(s); g(1); return v + x.m + x.template t<int>(); }\n";
+
+/// Lookup provenance through the API (spec/ast.md §18.7): `how`, the
+/// using-directive and the interned argument-dependent sets; off, none of
+/// it exists.
+#[test]
+fn provenance_through_the_api() {
+    use kiln_ast::written_refs::RefLookup;
+    run_src(PROVENANCE, true, |t| {
+        // The expression names of `h`'s body, in order: f, s, g, v, x, x.
+        let exprs: Vec<_> = t.iter().filter(|(_, r)| r.role == RefRole::Expr).collect();
+        assert_eq!(exprs.len(), 6);
+        let (f, fr) = exprs[0];
+        let (g, gr) = exprs[2];
+        let (v, vr) = exprs[3];
+        // `f(s)`: ordinary lookup finds a::f through the directive and
+        // argument-dependent lookup again: `Both`; its set is namespace a
+        // and class a::S.
+        assert_eq!(fr.how, RefLookup::Both);
+        let set = t.adl_set(f).expect("an ADL set");
+        assert_eq!((set.namespaces().len(), set.classes().len(), set.enums().len()), (1, 1, 0));
+        // `g(1)`: ordinary lookup, an empty set (a fundamental argument).
+        assert_eq!(gr.how, RefLookup::Unqualified);
+        assert!(t.adl_set(g).expect("ADL ran").is_empty());
+        assert_ne!(t.adl_set_id(f), t.adl_set_id(g));
+        assert_eq!(t.adl_set_count(), 2);
+        // `v`, and the parameter type `S`: through the file-scope directive;
+        // `S` in `void f(S)` inside `a` is the namespace's own.
+        assert_eq!(vr.how, RefLookup::Unqualified);
+        let dir = t.using_directive(v).expect("found through the directive");
+        let types: Vec<_> = t.iter().filter(|(_, r)| r.role == RefRole::Type).collect();
+        assert_eq!(t.using_directive(types[0].0), None);
+        assert_eq!(t.using_directive(types[1].0), Some(dir));
+        assert_eq!(t.using_directive(f), Some(dir), "`Both` keeps ordinary lookup's directive");
+        // `x.m`: a member.
+        let (_, mr) = t.iter().find(|(_, r)| r.role == RefRole::Member).expect("x.m");
+        assert_eq!(mr.how, RefLookup::Member);
+        // `x.template t<int>()`: a member template, role `template`.
+        let (_, tr) = t.iter().find(|(_, r)| r.role == RefRole::Template).expect("t<int>");
+        assert_eq!(tr.how, RefLookup::Member);
+        assert!(t.provenance_mem().0 > 0);
+    });
+    run_src(PROVENANCE, false, |t| {
+        assert_eq!(t.adl_set_count(), 0);
+        assert_eq!(t.provenance_mem(), (0, 0));
     });
 }

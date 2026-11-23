@@ -30,17 +30,17 @@
 41:18-41:19  expr  'd' -> d@40:7 in=tentative@36:5
 41:22-41:23  expr  'y' -> y@37:7 in=tentative@36:5
 41:24-41:25  member  'n' -> lib::Rec::n@13:7 in=tentative@36:5
-41:28-41:36  expr  'defaults' -> defaults@29:5 in=tentative@36:5
-41:41-41:49  expr  'defaults' -> defaults@29:5 in=tentative@36:5
+41:28-41:36  expr  'defaults' -> defaults@29:5 in=tentative@36:5 adl-ns=
+41:41-41:49  expr  'defaults' -> defaults@29:5 in=tentative@36:5 adl-ns=
 44:20-44:21  type  'T' -> T@44:17 in=twice@44:22
 44:28-44:29  type  'T' -> T@44:17 in=t@44:30
 44:42-44:43  type  'T' -> T@44:17 in=twice@44:22
 44:44-44:45  expr  't' -> t@44:30 in=twice@44:22
 44:46-44:47  member  'n' -> (dependent) in=twice@44:22
-45:20-45:25  expr  'twice' -> twice<Rec>@44:22 found=twice@44:22 in=instantiated@45:5
+45:20-45:25  expr  'twice' -> twice<Rec>@44:22 found=twice@44:22 in=instantiated@45:5 adl-ns=lib@11:11 adl-cls=lib::Rec@12:8
 45:26-45:29  type  'Rec' -> lib::Rec@12:8 found=Rec@24:12 in=instantiated@45:5
 45:34-45:35  member  'n' -> lib::Rec::n@13:7 in=instantiated@45:5
-45:38-45:43  expr  'twice' -> twice<Rec>@44:22 found=twice@44:22 in=instantiated@45:5
+45:38-45:43  expr  'twice' -> twice<Rec>@44:22 found=twice@44:22 in=instantiated@45:5 adl-ns=lib@11:11 adl-cls=lib::Rec@12:8
 45:44-45:47  nns  'lib' -> lib@11:11 in=instantiated@45:5
 45:49-45:52  type  'Rec' -> lib::Rec@12:8 q=45:44 in=instantiated@45:5
 45:57-45:58  member  'n' -> lib::Rec::n@13:7 in=instantiated@45:5

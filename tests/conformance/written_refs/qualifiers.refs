@@ -32,4 +32,4 @@
 29:24-29:27  nns  'Box' -> outer::inner::Box@15:27 q=29:17 in=qualified@26:5
 29:34-29:38  expr  'size' -> outer::inner::Box<int>::size@16:24 q=29:24 in=qualified@26:5
 29:51-29:53  type  'SS' -> SS@21:7 in=qualified@26:5
-29:41-29:50  expr  'via_param' -> via_param<SS>@24:24 found=via_param@24:24 in=qualified@26:5
+29:41-29:50  expr  'via_param' -> via_param<SS>@24:24 found=via_param@24:24 in=qualified@26:5 adl-ns=

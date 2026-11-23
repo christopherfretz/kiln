@@ -68,6 +68,32 @@ pub struct Found {
     pub ambiguity: Option<MemberAmbiguity>,
 }
 
+/// Where a namespace nominated by a using-directive was made visible from,
+/// for lookup provenance (spec/ast.md §18.7.3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum UdirVia {
+    /// A block-scope using-directive.
+    Directive(DeclId),
+    /// A using-directive of this namespace (a primary context, its inline
+    /// namespace set included).
+    Namespace(DeclId),
+}
+
+/// The provenance of a scope walk or a qualified namespace search
+/// (spec/ast.md §18.7.1), returned beside its [`Found`] when asked for.
+#[derive(Debug, Default)]
+pub(crate) struct WalkProvenance {
+    /// Each declaration a nominated namespace contributed in the scope
+    /// where the lookup stopped: the declaration as in the namespace's
+    /// table, the nominated namespace, and where the directive is.
+    pub udirs: Vec<(DeclId, DeclId, UdirVia)>,
+    /// The namespace or class whose scope the lookup stopped in (its own
+    /// declarations come first).
+    pub scope: Option<DeclId>,
+    /// True when that is a class scope.
+    pub in_class: bool,
+}
+
 /// Why a class member lookup is ambiguous ([class.member.lookup]/6).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MemberAmbiguity {
@@ -303,16 +329,36 @@ impl Sema<'_, '_> {
         name: DeclName,
         kind: LookupKind,
     ) -> Found {
+        self.lookup_qualified_walk(ctx, name, kind, false).0
+    }
+
+    /// [`Sema::lookup_qualified_dn`] with its provenance when `prov`
+    /// (spec/ast.md §18.7.1).
+    pub(crate) fn lookup_qualified_walk(
+        &self,
+        ctx: DeclId,
+        name: DeclName,
+        kind: LookupKind,
+        prov: bool,
+    ) -> (Found, WalkProvenance) {
+        let mut p = WalkProvenance::default();
         if self.is_dependent_ctx(ctx) {
             // [temp.dep.type]/6: nothing is known about a dependent scope.
-            return Found::default();
+            return (Found::default(), p);
         }
         if self.kind_of(ctx) == DeclKind::CXXRecord {
-            return self.lookup_in_class_dn(ctx, name, kind);
+            if prov {
+                p.scope = Some(ctx);
+                p.in_class = true;
+            }
+            return (self.lookup_in_class_dn(ctx, name, kind), p);
+        }
+        if prov {
+            p.scope = Some(ctx);
         }
         let found = self.lookup_in_dn(ctx, name, kind);
         if !found.is_empty() || self.ast.lookup.has_no_using_directives() {
-            return found;
+            return (found, p);
         }
         // [namespace.qual]/2: when `ctx` (with its inline namespace set)
         // declares nothing acceptable, the namespaces nominated by its
@@ -320,10 +366,10 @@ impl Sema<'_, '_> {
         // results are united. Every namespace is searched once.
         let mut v = Vec::new();
         let mut seen = vec![self.ast.first(ctx)];
-        let mut work: Vec<DeclId> =
-            self.ast.lookup.using_directives(self.ast.primary_context(ctx)).to_vec();
-        work.reverse();
-        while let Some(n) = work.pop() {
+        let holder = self.ast.primary_context(ctx);
+        let mut work: Vec<(DeclId, DeclId)> =
+            self.ast.lookup.using_directives(holder).iter().rev().map(|&n| (n, holder)).collect();
+        while let Some((n, via)) = work.pop() {
             if seen.contains(&n) {
                 continue;
             }
@@ -331,12 +377,15 @@ impl Sema<'_, '_> {
             let here: Vec<DeclId> = self.ast.lookup_local(n, name).iter_ordinary().collect();
             if self.filter(here.clone(), kind).is_empty() {
                 let dirs = self.ast.lookup.using_directives(n);
-                work.extend(dirs.iter().rev().copied());
+                work.extend(dirs.iter().rev().map(|&m| (m, n)));
             } else {
+                if prov {
+                    p.udirs.extend(here.iter().map(|&d| (d, n, UdirVia::Namespace(via))));
+                }
                 v.extend(here);
             }
         }
-        self.filter(v, kind)
+        (self.filter(v, kind), p)
     }
 
     /// Unqualified lookup of `name` from the current scope
@@ -350,6 +399,16 @@ impl Sema<'_, '_> {
     /// template parameter or block-scope name here.
     pub(crate) fn lookup_name_dn(&self, dname: DeclName, kind: LookupKind) -> Found {
         self.lookup_name_scoped(dname, kind, false)
+    }
+
+    /// [`Sema::lookup_name_dn`] with the provenance of its scope walk
+    /// (spec/ast.md §18.7.1).
+    pub(crate) fn lookup_name_provenance(
+        &self,
+        dname: DeclName,
+        kind: LookupKind,
+    ) -> (Found, WalkProvenance) {
+        self.lookup_name_walk(dname, kind, false, true)
     }
 
     /// The unqualified lookup of an operator function name for an operator
@@ -526,12 +585,27 @@ impl Sema<'_, '_> {
     }
 
     fn lookup_name_scoped(&self, dname: DeclName, kind: LookupKind, skip_records: bool) -> Found {
+        self.lookup_name_walk(dname, kind, skip_records, false).0
+    }
+
+    /// The scope walk of [`Sema::lookup_name_scoped`], with its provenance
+    /// when `prov` (spec/ast.md §18.7.1; empty otherwise, nothing
+    /// allocated).
+    #[allow(clippy::too_many_lines, reason = "one arm per scope kind")]
+    fn lookup_name_walk(
+        &self,
+        dname: DeclName,
+        kind: LookupKind,
+        skip_records: bool,
+        prov: bool,
+    ) -> (Found, WalkProvenance) {
+        let mut p = WalkProvenance::default();
         let ident = dname.as_ident();
         let name = ident.unwrap_or(Symbol::from_index(0));
         // The namespaces nominated by the using-directives in scope here
         // and the namespace each one's members appear in (computed when
         // the walk first reaches a namespace scope; [namespace.udir]/2).
-        let mut udirs: Option<Vec<(DeclId, DeclId)>> = None;
+        let mut udirs: Option<Vec<(DeclId, DeclId, UdirVia)>> = None;
         for (i, s) in self.scopes.iter().enumerate().rev() {
             // [basic.scope.param]: the parameters of a declarator being
             // parsed, before the scope the declarator appears in.
@@ -542,7 +616,7 @@ impl Sema<'_, '_> {
             {
                 let found = self.filter(vec![d], kind);
                 if !found.is_empty() {
-                    return found;
+                    return (found, p);
                 }
             }
             // [expr.prim.lambda.capture]/6 (P2036): a lambda's
@@ -555,7 +629,7 @@ impl Sema<'_, '_> {
             {
                 let found = self.filter(v, kind);
                 if !found.is_empty() {
-                    return found;
+                    return (found, p);
                 }
             }
             if s.kind == ScopeKind::TemplateParams {
@@ -565,7 +639,7 @@ impl Sema<'_, '_> {
                     && let Some(d) = s.find(name, Ns::Ordinary)
                     && self.accept(d, kind)
                 {
-                    return self.filter(vec![d], kind);
+                    return (self.filter(vec![d], kind), p);
                 }
                 continue;
             }
@@ -573,7 +647,7 @@ impl Sema<'_, '_> {
                 if ident.is_some()
                     && let Some(found) = self.lookup_in_block_scope(s, name, kind)
                 {
-                    return found;
+                    return (found, p);
                 }
                 // An operator or literal-operator name a block-scope
                 // using-declarator introduced hides the outer ones
@@ -583,7 +657,7 @@ impl Sema<'_, '_> {
                         s.local_names.iter().filter(|e| e.0 == dname).map(|e| e.1).collect();
                     let found = self.filter(v, kind);
                     if !found.is_empty() {
-                        return found;
+                        return (found, p);
                     }
                 }
                 continue;
@@ -605,11 +679,15 @@ impl Sema<'_, '_> {
                     && ident.is_some()
                     && let Some(d) = self.own_template_param_outside(i, entity, name, kind)
                 {
-                    return self.filter(vec![d], kind);
+                    return (self.filter(vec![d], kind), p);
                 }
                 let found = self.lookup_in_class_unqual(entity, dname, kind);
                 if !found.is_empty() || found.ambiguity.is_some() {
-                    return found;
+                    if prov {
+                        p.scope = Some(entity);
+                        p.in_class = true;
+                    }
+                    return (found, p);
                 }
                 continue;
             }
@@ -625,7 +703,7 @@ impl Sema<'_, '_> {
             if !matches!(s.kind, ScopeKind::Namespace | ScopeKind::TranslationUnit) {
                 let own = self.filter(local.iter_ordinary(), kind);
                 if !own.is_empty() {
-                    return own;
+                    return (own, p);
                 }
                 continue;
             }
@@ -640,8 +718,12 @@ impl Sema<'_, '_> {
             let mut j = 0;
             while j < dirs.len() {
                 if self.encloses(entity, dirs[j].1) {
-                    let (n, _) = dirs.remove(j);
+                    let (n, _, via) = dirs.remove(j);
+                    let before = nominated.len();
                     nominated.extend(self.ast.lookup_local(n, dname).iter_ordinary());
+                    if prov {
+                        p.udirs.extend(nominated[before..].iter().map(|&d| (d, n, via)));
+                    }
                 } else {
                     j += 1;
                 }
@@ -650,10 +732,14 @@ impl Sema<'_, '_> {
             // `CppNamespaceLookup`); nothing found filters to nothing.
             let found = self.filter(local.iter_ordinary().chain(nominated), kind);
             if !found.is_empty() {
-                return found;
+                if prov {
+                    p.scope = Some(entity);
+                }
+                return (found, p);
             }
+            p.udirs.clear();
         }
-        Found::default()
+        (Found::default(), p)
     }
 
     /// The namespaces nominated by the using-directives visible from the
@@ -664,8 +750,8 @@ impl Sema<'_, '_> {
     /// `UnqualUsingDirectiveSet`). A block-scope directive counts as in
     /// the innermost enclosing namespace of the lookup. Each namespace
     /// appears once.
-    fn visible_using_directives(&self) -> Vec<(DeclId, DeclId)> {
-        let mut out: Vec<(DeclId, DeclId)> = Vec::new();
+    fn visible_using_directives(&self) -> Vec<(DeclId, DeclId, UdirVia)> {
+        let mut out: Vec<(DeclId, DeclId, UdirVia)> = Vec::new();
         let tables = &self.ast.lookup;
         let has_local = self.scopes.iter().any(|s| s.is_local() && !s.using_dirs.is_empty());
         if tables.has_no_using_directives() && !has_local {
@@ -678,24 +764,28 @@ impl Sema<'_, '_> {
             .filter(|s| matches!(s.kind, ScopeKind::Namespace | ScopeKind::TranslationUnit))
             .find_map(|s| s.entity)
             .unwrap_or(self.ast.tu);
-        let mut work: Vec<(DeclId, DeclId)> = Vec::new();
+        let mut work: Vec<(DeclId, DeclId, UdirVia)> = Vec::new();
         for s in self.scopes.iter().rev() {
             if s.is_local() {
-                work.extend(s.using_dirs.iter().rev().map(|&n| (n, innermost_ns)));
+                work.extend(s.using_dirs.iter().rev().filter_map(|&d| {
+                    let n = self.ast.using_target(d)?;
+                    Some((n, innermost_ns, UdirVia::Directive(d)))
+                }));
             } else if matches!(s.kind, ScopeKind::Namespace | ScopeKind::TranslationUnit)
                 && let Some(e) = s.entity
             {
-                let dirs = tables.using_directives(self.ast.primary_context(e));
-                work.extend(dirs.iter().rev().map(|&n| (n, e)));
+                let holder = self.ast.primary_context(e);
+                let dirs = tables.using_directives(holder);
+                work.extend(dirs.iter().rev().map(|&n| (n, e, UdirVia::Namespace(holder))));
             }
-            while let Some((n, eff)) = work.pop() {
+            while let Some((n, eff, via)) = work.pop() {
                 let n = self.ast.first(n);
-                if out.iter().any(|&(m, _)| m == n) {
+                if out.iter().any(|&(m, _, _)| m == n) {
                     continue;
                 }
-                out.push((n, self.common_namespace(n, eff)));
+                out.push((n, self.common_namespace(n, eff), via));
                 let next = tables.using_directives(n);
-                work.extend(next.iter().rev().map(|&m| (m, eff)));
+                work.extend(next.iter().rev().map(|&m| (m, eff, UdirVia::Namespace(n))));
             }
         }
         out

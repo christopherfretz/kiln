@@ -7,7 +7,7 @@
 23:34-23:38  type  'Page' -> store::disk::Page@11:8 found=app::Page@22:20 in=app::Cache@23:8
 23:29-23:33  base  'Slot' -> store::disk::Slot@15:27 q=23:23 in=app::Cache@23:8
 24:14-24:18  type  'Page' -> store::disk::Page@11:8 found=app::Page@22:20 in=p@24:20
-25:5-25:9  expr  'sync' -> store::disk::sync@14:6 in=app::Cache::flush@24:8
+25:5-25:9  expr  'sync' -> store::disk::sync@14:6 in=app::Cache::flush@24:8 how=adl adl-ns=store::disk@10:11 adl-cls=store::disk::Page@11:8
 25:10-25:11  expr  'p' -> p@24:20 in=app::Cache::flush@24:8
 26:5-26:6  expr  'p' -> p@24:20 in=app::Cache::flush@24:8
 26:7-26:11  member  'used' -> store::disk::Page::used@12:7 in=app::Cache::flush@24:8
@@ -17,7 +17,7 @@
 30:12-30:17  nns  'store' -> store@9:11 in=p@30:31
 30:19-30:23  nns  'disk' -> store::disk@10:11 q=30:12 in=p@30:31
 30:25-30:29  type  'Page' -> store::disk::Page@11:8 q=30:19 in=p@30:31
-30:36-30:41  expr  'every' -> app::every<store::disk::Page>@29:25 found=app::every@29:25 in=app::drain@30:6
+30:36-30:41  expr  'every' -> app::every<store::disk::Page>@29:25 found=app::every@29:25 in=app::drain@30:6 adl-ns=store::disk@10:11 adl-cls=store::disk::Page@11:8
 30:42-30:43  expr  'p' -> p@30:31 in=app::drain@30:6
 33:6-33:11  nns  'store' -> store@9:11 in=store::disk::sync@33:19
 33:13-33:17  nns  'disk' -> store::disk@10:11 q=33:6 in=store::disk::sync@33:19

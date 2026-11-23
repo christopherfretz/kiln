@@ -71,7 +71,8 @@ pub struct Scope {
     /// block: they shadow the function's labels of the same name inside
     /// it (spec/sema.md §7.4).
     pub labels: Vec<(Symbol, DeclId)>,
-    /// Namespaces nominated by `using namespace` in this scope.
+    /// The `using namespace` directives of this scope; each names its
+    /// namespace through `Ast::using_target`.
     pub using_dirs: Vec<DeclId>,
     /// The NRVO candidate of this scope (spec/sema-class.md §5.5).
     pub nrvo: NrvoState,

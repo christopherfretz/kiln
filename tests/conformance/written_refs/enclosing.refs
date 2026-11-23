@@ -4,7 +4,7 @@
 16:23-16:28  expr  'limit' -> defaults::Widget::limit@17:14 in=to@16:18
 14:15-14:19  expr  'base' -> defaults::base@11:5 in=defaults::Widget::width@14:7
 14:22-14:27  expr  'extra' -> defaults::Widget::extra@18:24 in=defaults::Widget::width@14:7
-15:16-15:21  expr  'scale' -> defaults::scale@12:5 in=defaults::Widget::height@15:7
+15:16-15:21  expr  'scale' -> defaults::scale@12:5 in=defaults::Widget::height@15:7 adl-ns=
 15:22-15:27  expr  'width' -> defaults::Widget::width@14:7 in=defaults::Widget::height@15:7
 22:5-22:13  nns  'defaults' -> defaults@10:11 in=defaults::Widget::resize@22:23
 22:15-22:21  nns  'Widget' -> defaults::Widget@13:8 q=22:5 in=defaults::Widget::resize@22:23

@@ -8,7 +8,8 @@ use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::ExprKind;
 use kiln_ast::types::{ArgView, Nns, TemplateName, TypeView};
 use kiln_ast::written_refs::{
-    REF_DEPENDENT, REF_UNRESOLVED, RefMark, RefQualifier, RefRole, WrittenRef, WrittenRefId,
+    AdlSet, QualLink, REF_DEPENDENT, REF_MEMBER, REF_UNRESOLVED, RefLookup, RefMark, RefQualifier,
+    RefRole, WrittenRef, WrittenRefId,
 };
 use kiln_ast::{DeclId, ExprId, NnsId, QualType};
 use kiln_source::Span;
@@ -39,13 +40,15 @@ impl Sema<'_, '_> {
     }
 
     /// Records the expression or member name written at `range`, which
-    /// built `e` (`None`: nothing was built), with qualifier `q`.
+    /// built `e` (`None`: nothing was built), with qualifier `q`; `member`
+    /// when it was written after `.` or `->`.
     pub fn note_written_name(
         &mut self,
         e: Option<ExprId>,
         range: Span,
         role: RefRole,
         q: RefQualifier,
+        member: bool,
     ) -> Option<WrittenRefId> {
         if !self.records_written_refs() || !self.inst.stack.is_empty() {
             return None;
@@ -71,6 +74,14 @@ impl Sema<'_, '_> {
             }
             Target::Dependent => (None, None, REF_DEPENDENT, None),
             Target::Unresolved => (None, None, REF_UNRESOLVED, None),
+        };
+        // A member (or member template) name after `.`/`->` is found by
+        // class member lookup (spec/ast.md §18.7.2); a pseudo-destructor's
+        // type name is not.
+        let flags = if member && matches!(role, RefRole::Member | RefRole::Template) {
+            flags | REF_MEMBER
+        } else {
+            flags
         };
         let id = self.push_written_ref(range, entity, found, role, q, flags)?;
         if let Some(x) = pending {
@@ -208,6 +219,7 @@ impl Sema<'_, '_> {
             }
         };
         self.ast.written_refs.set_target(w, entity, found, flags);
+        self.fill_written_provenance(w);
     }
 
     /// The declaration lookup found for the type or template name `name`
@@ -305,9 +317,278 @@ impl Sema<'_, '_> {
     /// set `x`: patches the entry naming `x` (spec/ast.md §18.4).
     #[inline]
     pub(crate) fn resolve_written_ref(&mut self, x: ExprId, d: DeclId, found: Option<DeclId>) {
-        if self.ast.written_refs.has_pending() && self.inst.stack.is_empty() {
-            self.ast.written_refs.resolve(x, d, found);
+        if self.ast.written_refs.has_pending()
+            && self.inst.stack.is_empty()
+            && let Some(id) = self.ast.written_refs.resolve(x, d, found)
+        {
+            self.fill_written_provenance(id);
         }
+    }
+
+    /// The entry of the overloaded name `x` while it awaits resolution
+    /// (one branch when nothing is pending).
+    #[inline]
+    pub(crate) fn pending_written_ref(&self, x: ExprId) -> Option<WrittenRefId> {
+        if self.ast.written_refs.has_pending() && self.inst.stack.is_empty() {
+            self.ast.written_refs.pending_for(x)
+        } else {
+            None
+        }
+    }
+
+    /// The call whose callee's entry is `w` was resolved, after
+    /// argument-dependent lookup saw `facts` (`None`: it was not
+    /// performed): `how` becomes `Adl` or `Both` when it found the winner,
+    /// and the entry keeps the associated set (spec/ast.md §18.7.4).
+    pub(crate) fn note_written_call_lookup(
+        &mut self,
+        w: WrittenRefId,
+        facts: Option<crate::overload::adl::AdlFacts>,
+    ) {
+        let Some(f) = facts else { return };
+        let r = *self.ast.written_refs.get(w);
+        // A class member was selected (a template-id that named member
+        // function templates, called on the implicit object): ordinary
+        // lookup found a class member, which suppresses argument-dependent
+        // lookup ([basic.lookup.argdep]/1), so no set is kept.
+        if let Some(e) = r.entity
+            && self
+                .ast
+                .decls
+                .get(e)
+                .ctx()
+                .is_some_and(|c| crate::overload::adl::is_class_kind(self.kind_of(c)))
+        {
+            return;
+        }
+        if let Some(e) = r.entity {
+            let key = self.ast.first(self.ast.strip_shadow(r.found.unwrap_or(e)));
+            let how = if f.only.contains(&key) {
+                Some(RefLookup::Adl)
+            } else if f.also.contains(&key) {
+                Some(RefLookup::Both)
+            } else {
+                None
+            };
+            if let Some(how) = how {
+                self.ast.written_refs.set_how(w, how);
+                if how == RefLookup::Adl {
+                    self.ast.written_refs.set_using_directive(w, None);
+                }
+            }
+        }
+        let a = &f.assoc;
+        self.ast.written_refs.set_adl(w, AdlSet::new(&a.namespaces, &a.classes, &a.enums));
+    }
+
+    /// Sets `how` and the using-directive of entry `id`, which just got
+    /// its entity (spec/ast.md §18.7.2, §18.7.3).
+    fn fill_written_provenance(&mut self, id: WrittenRefId) {
+        let r = *self.ast.written_refs.get(id);
+        let mut how = r.default_how();
+        let mut udir = None;
+        if let Some(e) = r.entity
+            && matches!(how, RefLookup::Unqualified | RefLookup::Qualified)
+        {
+            if self.ast.decls.builtin_id(e).is_some() {
+                how = RefLookup::Builtin;
+            } else if let Some((injected, u)) = self.written_lookup_provenance(&r) {
+                if injected {
+                    how = RefLookup::Injected;
+                }
+                udir = u;
+            }
+        }
+        if how != r.how {
+            self.ast.written_refs.set_how(id, how);
+        }
+        if udir.is_some() || self.ast.written_refs.using_directive(id).is_some() {
+            self.ast.written_refs.set_using_directive(id, udir);
+        }
+    }
+
+    /// Whether the name of entry `r` was found as an injected-class-name,
+    /// and the using-directive it was found through: the lookup re-run in
+    /// its provenance form over the current scopes, believed only when it
+    /// finds `r`'s entity (spec/ast.md §18.7.1). `None` when neither can
+    /// apply or the lookup disagrees.
+    fn written_lookup_provenance(&mut self, r: &WrittenRef) -> Option<(bool, Option<DeclId>)> {
+        let entity = r.entity?;
+        let target = r.found.unwrap_or(entity);
+        let key = self.ast.first(self.ast.strip_shadow(target));
+        let class = self.written_class_of(key);
+        let may_inject = class.is_some()
+            && matches!(
+                r.role,
+                RefRole::Type | RefRole::Template | RefRole::Nns | RefRole::Base | RefRole::MemInit
+            );
+        let may_udir = self.any_using_directive() && self.in_namespace_scope(target);
+        if !may_inject && !may_udir {
+            return None;
+        }
+        let name = self.ast.decls.get(target).name();
+        if name == kiln_ast::names::DeclName::EMPTY {
+            return None;
+        }
+        let kind = match r.role {
+            RefRole::Nns => crate::lookup::LookupKind::Nested,
+            RefRole::Type | RefRole::Base => crate::lookup::LookupKind::Type,
+            _ => crate::lookup::LookupKind::Ordinary,
+        };
+        let (found, p) = match r.qualifier.link() {
+            QualLink::None => self.lookup_name_provenance(name, kind),
+            QualLink::Global => self.lookup_qualified_walk(self.ast.tu, name, kind, true),
+            QualLink::Entry(q) => {
+                let ctx = self.written_qualifier_scope(self.ast.written_refs.get(q).entity?)?;
+                self.lookup_qualified_walk(ctx, name, kind, true)
+            }
+        };
+        // A class template's injected-class-name is found as its pattern
+        // ([temp.local]/1).
+        let class_key = class.map(|c| self.ast.first(c));
+        if !found.decls.iter().any(|&d| {
+            let f = self.ast.first(d);
+            f == key || (p.in_class && Some(f) == class_key)
+        }) {
+            return None;
+        }
+        let injected = may_inject
+            && p.in_class
+            && match (class, p.scope) {
+                (Some(c), Some(s)) => {
+                    let c = self.ast.first(c);
+                    self.ast.first(s) == c
+                        || crate::conv::bases::is_derived_from(self, self.ast.primary_context(s), c)
+                }
+                _ => false,
+            };
+        if p.in_class || p.udirs.is_empty() {
+            return Some((injected, None));
+        }
+        let key_of = |s: &Self, d: DeclId| s.ast.first(s.ast.strip_shadow(d));
+        if let Some(ns) = p.scope
+            && self.ast.lookup_local(ns, name).iter_ordinary().any(|d| key_of(self, d) == key)
+        {
+            // The scope's own declaration: no directive (§18.7.3).
+            return Some((injected, None));
+        }
+        let hit = p.udirs.iter().find(|&&(d, _, _)| key_of(self, d) == key).copied();
+        let udir = match hit {
+            Some((_, _, crate::lookup::UdirVia::Directive(d))) => Some(d),
+            Some((_, n, crate::lookup::UdirVia::Namespace(h))) => self.find_using_directive(h, n),
+            None => None,
+        };
+        Some((injected, udir))
+    }
+
+    /// The class a class, class template or specialization `d` names.
+    fn written_class_of(&self, d: DeclId) -> Option<DeclId> {
+        match self.kind_of(d) {
+            DeclKind::CXXRecord
+            | DeclKind::ClassTemplateSpecialization
+            | DeclKind::ClassTemplatePartialSpecialization => Some(d),
+            DeclKind::ClassTemplate => self.pattern_of(d),
+            _ => None,
+        }
+    }
+
+    /// True when some using-directive exists that a lookup could use.
+    fn any_using_directive(&self) -> bool {
+        !self.ast.lookup.has_no_using_directives()
+            || self.scopes.iter().any(|s| s.is_local() && !s.using_dirs.is_empty())
+    }
+
+    /// True when `d` is declared in a namespace scope (through linkage
+    /// specifications, `export` and unscoped enumerations), where a
+    /// using-directive can make it visible.
+    fn in_namespace_scope(&self, d: DeclId) -> bool {
+        let mut cur = self.ast.decls.get(d).ctx();
+        for _ in 0..64 {
+            let Some(c) = cur else { return false };
+            if self.ast.is_transparent(c) {
+                cur = self.ast.decls.get(c).ctx();
+                continue;
+            }
+            return matches!(self.kind_of(c), DeclKind::Namespace | DeclKind::TranslationUnit);
+        }
+        false
+    }
+
+    /// The scope a qualifier component naming `q` designates: a namespace
+    /// (an alias's target), or a class's definition.
+    fn written_qualifier_scope(&self, mut q: DeclId) -> Option<DeclId> {
+        for _ in 0..16 {
+            match self.kind_of(q) {
+                DeclKind::Namespace => return Some(q),
+                DeclKind::NamespaceAlias => q = self.ast.using_target(q)?,
+                DeclKind::CXXRecord
+                | DeclKind::ClassTemplateSpecialization
+                | DeclKind::ClassTemplatePartialSpecialization => {
+                    return Some(self.ast.primary_context(q));
+                }
+                DeclKind::Typedef | DeclKind::TypeAlias => {
+                    let t = self.ast.decls.get(q).ty()?;
+                    let c = self.ast.types.as_record(t)?;
+                    return Some(self.ast.primary_context(c));
+                }
+                _ => return None,
+            }
+        }
+        None
+    }
+
+    /// The using-directive in namespace `holder` (its reopenings, linkage
+    /// specifications and inline namespaces) that nominates `nominated`,
+    /// earliest first; cached (spec/ast.md §18.7.3).
+    fn find_using_directive(&mut self, holder: DeclId, nominated: DeclId) -> Option<DeclId> {
+        if let Some(c) = self.ast.written_refs.cached_directive(holder, nominated) {
+            return c;
+        }
+        let d = self.scan_using_directive(holder, self.ast.first(nominated), 0);
+        self.ast.written_refs.cache_directive(holder, nominated, d);
+        d
+    }
+
+    fn scan_using_directive(&self, ns: DeclId, nominated: DeclId, depth: u32) -> Option<DeclId> {
+        if depth > 32 {
+            return None;
+        }
+        let mut opened: Vec<DeclId> = self.ast.redecls_of(ns).collect();
+        opened.reverse();
+        for r in opened {
+            if let Some(d) = self.scan_members_for_directive(r, nominated, 0) {
+                return Some(d);
+            }
+        }
+        let inline: Vec<DeclId> = self.ast.lookup.inline_children(self.ast.first(ns)).to_vec();
+        inline.into_iter().find_map(|c| self.scan_using_directive(c, nominated, depth + 1))
+    }
+
+    fn scan_members_for_directive(
+        &self,
+        ctx: DeclId,
+        nominated: DeclId,
+        depth: u32,
+    ) -> Option<DeclId> {
+        if depth > 32 {
+            return None;
+        }
+        for m in self.ast.decls.members(ctx) {
+            match self.kind_of(m) {
+                DeclKind::UsingDirective
+                    if self.ast.using_target(m).map(|n| self.ast.first(n)) == Some(nominated) =>
+                {
+                    return Some(m);
+                }
+                DeclKind::LinkageSpec | DeclKind::Export => {
+                    if let Some(d) = self.scan_members_for_directive(m, nominated, depth + 1) {
+                        return Some(d);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
     }
 
     /// The overload set `from` goes on as the set `to`.
@@ -386,7 +667,7 @@ impl Sema<'_, '_> {
             ctx = c;
         }
         let enclosing = Some(ctx);
-        self.ast.written_refs.push(WrittenRef {
+        let mut r = WrittenRef {
             range,
             entity,
             found,
@@ -394,7 +675,14 @@ impl Sema<'_, '_> {
             qualifier,
             role,
             flags,
-        })
+            how: RefLookup::None,
+        };
+        r.how = r.default_how();
+        let id = self.ast.written_refs.push(r)?;
+        if entity.is_some() {
+            self.fill_written_provenance(id);
+        }
+        Some(id)
     }
 
     /// What the name expression `e` (implicit conversions peeled)

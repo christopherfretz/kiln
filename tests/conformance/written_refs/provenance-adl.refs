@@ -1,0 +1,69 @@
+10:11-10:12  type  'S' -> n1::S@9:8 in=(anonymous)@10:12
+11:1-11:2  type  'S' -> n1::S@9:8 in=n1::operator+@11:3
+11:13-11:14  type  'S' -> n1::S@9:8 in=(anonymous)@11:14
+11:16-11:17  type  'S' -> n1::S@9:8 in=(anonymous)@11:17
+13:10-13:11  type  'E' -> n1::E@12:6 in=(anonymous)@13:11
+17:12-17:17  nns  'Outer' -> n1::Outer@14:8 in=(anonymous)@17:21
+17:19-17:21  type  'In' -> n1::Outer::In@15:8 q=17:12 in=(anonymous)@17:21
+21:21-21:22  type  'P' -> n2::P@20:8 in=(anonymous)@21:22
+23:14-23:16  nns  'n2' -> n2@19:11 in=(anonymous)@23:19
+23:18-23:19  type  'P' -> n2::P@20:8 q=23:14 in=(anonymous)@23:19
+29:30-29:32  nns  'n3' -> n3@24:11 in=(anonymous)@29:40
+29:38-29:39  type  'T' -> T@29:17 in=(anonymous)@29:40
+29:34-29:37  template  'Box' -> n3::Box@25:27 q=29:30 in=(anonymous)@29:40
+33:20-33:21  type  'H' -> n5::H@32:8 in=(anonymous)@33:21 how=injected
+38:11-38:12  type  'T' -> n6::T@37:8 in=(anonymous)@38:12
+40:7-40:9  nns  'n6' -> n6@36:11 in=(tu)
+43:13-43:14  type  'U' -> n7::U@42:8 in=(anonymous)@43:14
+50:9-50:10  type  'I' -> n8::I@48:8 in=(anonymous)@50:10
+55:13-55:15  nns  'n1' -> n1@8:11 in=(anonymous)@55:18
+55:17-55:18  type  'S' -> n1::S@9:8 q=55:13 in=(anonymous)@55:18
+58:10-58:12  nns  'n1' -> n1@8:11 in=s@58:16
+58:14-58:15  type  'S' -> n1::S@9:8 q=58:10 in=s@58:16
+58:21-58:25  expr  'take' -> M::take@55:8 in=M::g@58:8
+58:26-58:27  expr  's' -> s@58:16 in=M::g@58:8
+61:12-61:14  nns  'n1' -> n1@8:11 in=s@61:18
+61:16-61:17  type  'S' -> n1::S@9:8 q=61:12 in=s@61:18
+61:21-61:23  nns  'n3' -> n3@24:11 in=bx@61:36
+61:29-61:31  nns  'n4' -> n4@27:11 in=bx@61:36
+61:33-61:34  type  'Q' -> n4::Q@28:8 q=61:29 in=bx@61:36
+61:25-61:28  template  'Box' -> n3::Box@25:27 q=61:21 in=bx@61:36
+61:40-61:42  nns  'n5' -> n5@31:11 in=h@61:46
+61:44-61:45  type  'H' -> n5::H@32:8 q=61:40 in=h@61:46
+61:49-61:51  nns  'n6' -> n6@36:11 in=t@61:55
+61:53-61:54  type  'T' -> n6::T@37:8 q=61:49 in=t@61:55
+61:58-61:60  nns  'n7' -> n7@41:11 in=u@61:64
+61:62-61:63  type  'U' -> n7::U@42:8 q=61:58 in=u@61:64
+61:67-61:69  nns  'n8' -> n8@46:11 in=i@61:73
+61:71-61:72  type  'I' -> n8::I@48:8 q=61:67 in=i@61:73
+63:3-63:7  expr  'take' -> n1::take@10:6 in=calls@61:6 how=adl adl-ns=n1@8:11 adl-cls=n1::S@9:8
+63:8-63:9  expr  's' -> s@61:18 in=calls@61:6
+66:3-66:6  expr  'tag' -> n1::tag@13:6 in=calls@61:6 how=adl adl-ns=n1@8:11 adl-enum=n1::E@12:6
+66:7-66:9  nns  'n1' -> n1@8:11 in=calls@61:6
+66:11-66:13  expr  'e0' -> n1::e0@12:10 q=66:7 in=calls@61:6
+69:3-69:8  expr  'inner' -> n1::inner@17:6 in=calls@61:6 how=adl adl-ns=n1@8:11 adl-cls=n1::Outer@14:8 adl-enum=n1::Outer::In@15:8
+69:9-69:11  nns  'n1' -> n1@8:11 in=calls@61:6
+69:13-69:18  nns  'Outer' -> n1::Outer@14:8 q=69:9 in=calls@61:6
+69:20-69:22  expr  'i0' -> n1::Outer::i0@15:13 q=69:13 in=calls@61:6
+72:3-72:8  expr  'apply' -> n2::apply@21:6 in=calls@61:6 how=adl adl-ns=n2@19:11 adl-cls=n2::P@20:8
+72:10-72:17  expr  'handler' -> handler@23:6 in=calls@61:6
+75:3-75:7  expr  'peek' -> n4::peek<Q>@29:25 found=n4::peek@29:25 in=calls@61:6 how=adl adl-ns=n3@24:11,n4@27:11 adl-cls=n3::Box@25:27,n4::Q@28:8
+75:8-75:10  expr  'bx' -> bx@61:36 in=calls@61:6
+78:3-78:7  expr  'poke' -> n5::poke@33:15 in=calls@61:6 how=adl adl-ns=n5@31:11 adl-cls=n5::H@32:8
+78:8-78:9  expr  'h' -> h@61:46 in=calls@61:6
+81:3-81:7  expr  'both' -> n6::both@38:6 found=both@40:11 in=calls@61:6 how=both adl-ns=n6@36:11 adl-cls=n6::T@37:8
+81:8-81:9  expr  't' -> t@61:55 in=calls@61:6
+84:3-84:9  expr  'viadir' -> n7::viadir@43:6 in=calls@61:6 how=both udir=n7@45:1 adl-ns=n7@41:11 adl-cls=n7::U@42:8
+84:10-84:11  expr  'u' -> u@61:64 in=calls@61:6
+87:3-87:5  expr  'fi' -> n8::fi@50:6 in=calls@61:6 how=adl adl-ns=n8::v@47:18,n8@46:11 adl-cls=n8::I@48:8
+87:6-87:7  expr  'i' -> i@61:73 in=calls@61:6
+89:3-89:8  expr  'plain' -> plain@52:6 in=calls@61:6 adl-ns=
+93:3-93:12  expr  'operator+' -> n1::operator+@11:3 in=calls@61:6 how=adl adl-ns=n1@8:11 adl-cls=n1::S@9:8
+93:13-93:14  expr  's' -> s@61:18 in=calls@61:6
+93:16-93:17  expr  's' -> s@61:18 in=calls@61:6
+94:10-94:11  expr  's' -> s@61:18 in=calls@61:6
+94:14-94:15  expr  's' -> s@61:18 in=calls@61:6
+99:29-99:30  type  'T' -> T@99:17 in=(anonymous)@99:30
+103:18-103:21  expr  'unn' -> n9::unn<(unnamed enum at tests/conformance/written_refs/provenance-adl.cpp:98:1)>@99:25 found=n9::unn@99:25 in=unnamed@103:6 how=adl adl-ns=n9@97:11 adl-enum=(anonymous)@98:1
+103:22-103:24  nns  'n9' -> n9@97:11 in=unnamed@103:6
+103:26-103:28  expr  'k0' -> n9::k0@98:8 q=103:22 in=unnamed@103:6

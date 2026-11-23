@@ -87,6 +87,17 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   statement holds is checked; implicit attributes are built checked,
   and PCH snapshots and module images carry the bit in the existing
   flags byte (no format change).
+- Lookup provenance on the written-reference table for tooling clients
+  (WP-2130): each entry now says how lookup found the name
+  (`WrittenRef::how`: unqualified, qualified, member, argument-dependent
+  only, both, builtin, injected-class-name, none), the using-directive an
+  unqualified or qualified lookup went through
+  (`WrittenRefs::using_directive`, the innermost link of a transitive
+  chain), and, for a call subject to argument-dependent lookup, the
+  associated namespaces, classes and enumerations it searched
+  (`WrittenRefs::adl_set`, interned). The entry stays 28 bytes; the rest
+  is a sparse side table. `-fkiln-dump-written-refs` prints the new
+  fields; under the same switch, no cost when off (spec/ast.md §18.7).
 - A declaration-extent table for tooling clients (WP-2090):
   `-fkiln-decl-extents` records, for every declaration as written, its
   full range from its first token (an attribute, a template head, a

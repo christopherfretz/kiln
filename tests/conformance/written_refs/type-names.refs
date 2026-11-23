@@ -1,6 +1,6 @@
 15:33-15:34  expr  'n' -> lib::Rec::n@14:7 in=lib::Rec::operator int@15:3
 21:3-21:4  type  'T' -> T@20:17 in=lib::Box::v@21:5
-22:3-22:6  type  'Box' -> lib::Box@20:27 in=lib::Box::self@22:8
+22:3-22:6  type  'Box' -> lib::Box@20:27 in=lib::Box::self@22:8 how=injected
 27:7-27:10  nns  'lib' -> lib@12:11 in=app@26:11
 28:15-28:18  nns  'lib' -> lib@12:11 in=app@26:11
 28:20-28:23  type  'Rec' -> lib::Rec@13:8 q=28:15 in=app@26:11

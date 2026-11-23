@@ -1,10 +1,10 @@
 9:28-9:29  expr  'b' -> Base::b@8:7 in=Base::get@9:7
 11:14-11:18  base  'Base' -> Base@7:8 in=Num@11:8
-12:9-12:13  nns  'Base' -> Base@7:8 in=Num@11:8
-14:3-14:6  type  'Num' -> Num@11:8 in=Num::operator+@14:7
-14:17-14:20  type  'Num' -> Num@11:8 in=o@14:21
+12:9-12:13  nns  'Base' -> Base@7:8 in=Num@11:8 how=injected
+14:3-14:6  type  'Num' -> Num@11:8 in=Num::operator+@14:7 how=injected
+14:17-14:20  type  'Num' -> Num@11:8 in=o@14:21 how=injected
 15:22-15:23  type  'T' -> T@15:19 in=Num::as@15:24
-14:39-14:42  type  'Num' -> Num@11:8 in=Num::operator+@14:7
+14:39-14:42  type  'Num' -> Num@11:8 in=Num::operator+@14:7 how=injected
 14:48-14:49  expr  'v' -> Num::v@13:7 in=Num::operator+@14:7
 14:52-14:53  expr  'o' -> o@14:21 in=Num::operator+@14:7
 14:54-14:55  member  'v' -> Num::v@13:7 in=Num::operator+@14:7

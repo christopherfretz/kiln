@@ -24,6 +24,20 @@ pub(crate) struct AssocSet {
     pub enums: Vec<DeclId>,
 }
 
+/// What an argument-dependent lookup saw, for lookup provenance
+/// (spec/ast.md §18.7.4): returned by [`Sema::adl_lookup_explained`] when
+/// asked for.
+#[derive(Debug)]
+pub(crate) struct AdlFacts {
+    /// The associated set the lookup searched.
+    pub assoc: AssocSet,
+    /// The functions (first declarations) the lookup found that `out`
+    /// already held: ordinary lookup found them too.
+    pub also: Vec<DeclId>,
+    /// The functions (first declarations) only this lookup found.
+    pub only: Vec<DeclId>,
+}
+
 /// Bound on the type recursion (template arguments of template
 /// arguments …); deeper parts add nothing.
 const MAX_DEPTH: u32 = 64;
@@ -280,6 +294,22 @@ impl Sema<'_, '_> {
         loc: Loc,
         out: &mut Vec<(DeclId, DeclId)>,
     ) {
+        self.adl_lookup_explained(name, args, loc, out, false);
+    }
+
+    /// [`Sema::adl_lookup_dn`], returning what it saw when `explain`
+    /// (spec/ast.md §18.7.4; `None` otherwise).
+    pub(crate) fn adl_lookup_explained(
+        &mut self,
+        name: DeclName,
+        args: &[ExprId],
+        loc: Loc,
+        out: &mut Vec<(DeclId, DeclId)>,
+        explain: bool,
+    ) -> Option<AdlFacts> {
+        let mut also = Vec::new();
+        // The candidates ordinary lookup found, before this lookup's.
+        let ordinary = out.len();
         let mut assoc = AssocSet::default();
         for &a in args {
             self.assoc_arg(a, &mut assoc);
@@ -328,11 +358,22 @@ impl Sema<'_, '_> {
                 }
                 let f = self.ast.first(d);
                 if out.iter().any(|&(o, _)| self.ast.first(o) == f) {
+                    if explain
+                        && !also.contains(&f)
+                        && out[..ordinary].iter().any(|&(o, _)| self.ast.first(o) == f)
+                    {
+                        also.push(f);
+                    }
                     continue;
                 }
                 out.push((d, raw));
             }
         }
+        explain.then(|| AdlFacts {
+            assoc,
+            also,
+            only: out[ordinary..].iter().map(|&(d, _)| self.ast.first(d)).collect(),
+        })
     }
 
     /// True if some declaration of `d` is lexically in one of `classes`
