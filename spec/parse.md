@@ -779,12 +779,14 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
 - A result is valid while `Sema::lookup_stamp()` is unchanged. The stamp
   hashes what name classification reads: the declaration count, the
   lookup tables' generation (bumped on every insertion), the semantic
-  context, the scope stack (per scope: kind, entity, the local count and
-  the last local, the local using-declarator and using-directive counts)
-  and the prototype-parameter scopes. A different stamp empties the memo
-  before the lookup.
-  - The last local matters when two scope stacks of the same shape are
-    reinstated in turn with no declaration in between. The deferred
+  context, the scope stack's revision (spec/sema.md §2: a new one at
+  every change of a scope, the one from before a push back at its pop)
+  and the prototype-parameter scopes and lambda init-captures. A
+  different stamp empties the memo before the lookup. The stamp costs
+  O(1) in the scope depth: it hashed every open scope before, which made
+  an `else if` chain N deep O(N^2) (WP-2478).
+  - Two scope stacks of the same shape reinstated in turn with no
+    declaration in between have different revisions. The deferred
     exception specifications of two member function templates with alike
     parameter lists are an example: by counts alone their `_Tp` would
     share a memo entry (WP-919; libc++ 19 `tuple`'s

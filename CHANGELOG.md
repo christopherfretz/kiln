@@ -984,6 +984,20 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   checked; `aligned(N)` on a parameter aligns its storage; `align_value`
   on a non-static data member is ignored with a warning, as clang, instead
   of accepted.
+- Parse cost that grew faster than the input in shapes tooling clients
+  meet (WP-2478): a run of labels and of case labels (the label and
+  case-value searches are hashed, the case-range overlap checks
+  binary-search), an `else if` chain (the lookahead memo stamp hashed
+  every open scope and every lookup and every `return` walked all of
+  them: the scope stack now keeps a revision and a walk index that skips
+  empty block scopes), nested classes (a class-head name that cannot be
+  qualified is no longer looked up through every enclosing class, and the
+  [temp.local]/7 search no longer rescans the scopes below each class
+  scope). All now scale linearly; 100 000 labels parse in 0.08 s instead
+  of 5.9 s.
+- A designated initializer list nested N deep in a template keeps N + 1
+  written lists, not (N + 1)(N + 2)/2: the written forms of the inner
+  lists are shared (WP-2478).
 - `EvalSession::variable_value` instantiates on demand a static data
   member's initializer that nothing instantiated (an in-class `constexpr`
   member of a class template specialization, an out-of-line `const` one),

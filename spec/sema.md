@@ -668,6 +668,35 @@ translation unit that fails costs about what it costs clang:
     condition of `if`, `switch`, `while` and `for`.
   - **Block:** pushed for a compound statement, and for a
     sub-statement that is not one (parse.md §6.1).
+- **The stack** (`ScopeStack`, WP-2478) reads as the `Vec<Scope>` it
+  holds and keeps two things so that nothing costs the scope depth per
+  lookup:
+  - a **revision**, the scope part of `Sema::lookup_stamp` (parse.md
+    §2.5): every mutable access gives a new one, except a change of NRVO
+    state (`nrvo_mut`, read by no lookup); a pop (or `truncate`) gives
+    back the revision from before the scope's push when nothing reached
+    the scopes below through the `Vec` since, so a lookahead memo
+    survives a scope entered and left. Revisions are drawn from one
+    global counter, so a stack moved aside and reinstated keeps its own.
+  - a **walk index**: per scope, the nearest scope below it that the
+    unqualified-lookup walk must visit. A block or control scope with no
+    locals, local using-declarators or using-directives is skipped; every
+    other scope (function, prototype, requires-expression, template
+    parameter, context scopes) is visited. `push`, `pop`, `truncate`,
+    `last_mut` and `scope_mut` of the innermost scope keep the index;
+    any other access through the `Vec` drops it, rebuilt (O(depth)) at
+    the next walk. The lookup walk follows the index unless a prototype
+    parameter list or a lambda's init-captures is open (they attach to
+    scope positions); the using-directive collection and the NRVO update
+    of a `return` (clang `Scope::updateNRVOCandidate`, which walks every
+    scope out to the function scope) follow it always. The template
+    parameter scopes are listed too, for the [temp.local]/7 search below
+    a re-entered class scope (once per walk, not a scan per class scope).
+- **Labels** of a function (`FnState::labels`, a `LabelTable`) are found
+  by declaration and by name through hash maps, and a switch's case
+  values (`SwitchState::value_locs`, `wide_index`) by value; the case
+  range overlap checks binary-search the sorted values (WP-2478: a run
+  of N labels or case labels cost O(N^2) before).
 
 ## 3. Lookup (`lookup.rs`)
 - **Modules.** With C++20 modules active, every namespace-scope lookup

@@ -74,7 +74,11 @@ impl Sema<'_, '_> {
         l.ranges.sort_by_key(|r| r.0);
         if l.values.windows(2).any(|w| w[0].0 == w[1].0)
             || l.ranges.windows(2).any(|w| w[1].0 <= w[0].1)
-            || l.ranges.iter().any(|&(lo, hi, ..)| l.values.iter().any(|v| lo <= v.0 && v.0 <= hi))
+            || l.ranges.iter().any(|&(lo, hi, ..)| {
+                // The values are sorted: the first one at or above `lo`.
+                let k = l.values.partition_point(|v| v.0 < lo);
+                l.values.get(k).is_some_and(|v| v.0 <= hi)
+            })
         {
             l.broken = true;
         }

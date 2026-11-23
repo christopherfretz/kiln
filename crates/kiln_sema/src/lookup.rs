@@ -563,25 +563,34 @@ impl Sema<'_, '_> {
     /// member of the class rather than to the class's own templates: its
     /// depth is at least the class's template levels. Such scopes are
     /// outside the class scope only for an out-of-line member definition.
+    ///
+    /// `tparams` lists the indices of the template parameter scopes,
+    /// innermost last (found once per walk: a scan of the scopes below
+    /// each class scope made a lookup from N nested classes O(N^2)).
     fn own_template_param_outside(
         &self,
         i: usize,
+        tparams: &[usize],
         entity: DeclId,
         name: Symbol,
         kind: LookupKind,
     ) -> Option<DeclId> {
-        let mut outer = self.scopes[..i].iter().rev();
-        if !outer.clone().any(|s| s.kind == ScopeKind::TemplateParams) {
+        let below = tparams.partition_point(|&j| j < i);
+        if below == 0 {
             return None;
         }
         let levels = self.ctx_template_levels(entity);
-        outer.find_map(|s| {
-            let d = (s.kind == ScopeKind::TemplateParams)
-                .then(|| s.find(name, Ns::Ordinary))
-                .flatten()?;
+        tparams[..below].iter().rev().find_map(|&j| {
+            kiln_ast::expr::note_search_steps(1);
+            let d = self.scopes[j].find(name, Ns::Ordinary)?;
             let depth = self.ast.template_parm(d)?.depth;
             (depth >= levels && self.accept(d, kind)).then_some(d)
         })
+    }
+
+    /// The indices of the template parameter scopes, innermost last.
+    fn template_param_scopes(&self) -> Vec<usize> {
+        self.scopes.template_param_scopes()
     }
 
     fn lookup_name_scoped(&self, dname: DeclName, kind: LookupKind, skip_records: bool) -> Found {
@@ -606,7 +615,23 @@ impl Sema<'_, '_> {
         // and the namespace each one's members appear in (computed when
         // the walk first reaches a namespace scope; [namespace.udir]/2).
         let mut udirs: Option<Vec<(DeclId, DeclId, UdirVia)>> = None;
-        for (i, s) in self.scopes.iter().enumerate().rev() {
+        // The template parameter scopes, found when a class scope is
+        // first reached.
+        let mut tparams: Option<Vec<usize>> = None;
+        // The walk skips the local scopes that hold nothing (the scope
+        // stack's walk index; an `else if` chain N deep made every lookup
+        // O(N)) unless a prototype parameter list or a lambda's
+        // init-captures attach to a scope position.
+        let skip_empty = self.prototype_params.is_empty() && self.lambdas.is_empty();
+        let mut next = self.scopes.len().checked_sub(1);
+        while let Some(i) = next {
+            let s = &self.scopes[i];
+            next = if skip_empty {
+                self.scopes.walk_below(i)
+            } else {
+                kiln_ast::expr::note_search_steps(1);
+                i.checked_sub(1)
+            };
             // [basic.scope.param]: the parameters of a declarator being
             // parsed, before the scope the declarator appears in.
             if kind != LookupKind::Tag
@@ -677,7 +702,13 @@ impl Sema<'_, '_> {
                 // size> void P::f() { size; }` with a base `size()`).
                 if kind != LookupKind::Tag
                     && ident.is_some()
-                    && let Some(d) = self.own_template_param_outside(i, entity, name, kind)
+                    && let Some(d) = self.own_template_param_outside(
+                        i,
+                        tparams.get_or_insert_with(|| self.template_param_scopes()),
+                        entity,
+                        name,
+                        kind,
+                    )
                 {
                     return (self.filter(vec![d], kind), p);
                 }
@@ -753,19 +784,21 @@ impl Sema<'_, '_> {
     fn visible_using_directives(&self) -> Vec<(DeclId, DeclId, UdirVia)> {
         let mut out: Vec<(DeclId, DeclId, UdirVia)> = Vec::new();
         let tables = &self.ast.lookup;
-        let has_local = self.scopes.iter().any(|s| s.is_local() && !s.using_dirs.is_empty());
+        // The scopes that hold nothing do not matter here (the scope
+        // stack's walk).
+        let has_local = self.scopes.walk().any(|(_, s)| s.is_local() && !s.using_dirs.is_empty());
         if tables.has_no_using_directives() && !has_local {
             return out;
         }
         let innermost_ns = self
             .scopes
-            .iter()
-            .rev()
+            .walk()
+            .map(|(_, s)| s)
             .filter(|s| matches!(s.kind, ScopeKind::Namespace | ScopeKind::TranslationUnit))
             .find_map(|s| s.entity)
             .unwrap_or(self.ast.tu);
         let mut work: Vec<(DeclId, DeclId, UdirVia)> = Vec::new();
-        for s in self.scopes.iter().rev() {
+        for (_, s) in self.scopes.walk() {
             if s.is_local() {
                 work.extend(s.using_dirs.iter().rev().filter_map(|&d| {
                     let n = self.ast.using_target(d)?;
@@ -1341,7 +1374,8 @@ impl Sema<'_, '_> {
         // Every local variable may take the return slot (clang
         // `Scope::AddDecl` fills `ReturnSlots`; parameters do not).
         let var = self.kind_of(d) == DeclKind::Var;
-        if let Some(s) = self.scopes.iter_mut().rev().find(|s| s.is_local()) {
+        if let Some(i) = self.scopes.iter().rposition(crate::scope::Scope::is_local) {
+            let s = self.scopes.scope_mut(i);
             s.locals.push((name, d, ns));
             if var {
                 s.nrvo.slots.push(d);

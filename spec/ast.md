@@ -574,7 +574,15 @@ struct ExprNode {        // 20 bytes
   (`kiln_ast::expr::walk_steps`): the chain scaling tests
   (crates/kiln_parse/tests/chain_scaling.rs,
   crates/kiln_codegen/tests/chain_scaling.rs) compare the count at N and
-  4N, which a walk repeated per node makes grow 16-fold.
+  4N, which a walk repeated per node makes grow 16-fold. A second debug
+  counter, `kiln_ast::expr::search_steps` (`note_search_steps`), counts
+  searches sema does per element of a run (label and case-value
+  searches, the scopes an unqualified lookup visits, lookup-stamp
+  fingerprints, rebuilds of the scope stack's walk index; spec/sema.md
+  §2.1): crates/kiln_parse/tests/parse_scaling.rs compares walk plus
+  search steps at N and 4N for runs of labels and case labels, member
+  call chains, `else if` chains, nested classes and closure chains
+  (WP-2478).
 - **No parent links.** `ParentMap::build(&Ast, root: StmtId)` builds one on
   demand (diagnostics needing context, `-Wparentheses`-style checks).
 
@@ -706,6 +714,16 @@ needed later). Values of non-constant-context folding (`try_fold`) are
   `void` list) is kept in the cold map `syntactic_list: ExprId -> ExprId`
   of the semantic list. Instantiation rebuilds from that written form,
   as clang's `TransformInitListExpr` does from the syntactic form.
+  Written forms are shared: the written form of a list nested in a
+  designated list is the very node of the inner list's own written form
+  (sema keeps the written forms of the lists of one outermost designated
+  list by their braces while it is analyzed), so a list nested N deep
+  has N + 1 written lists, not one copy of every inner level per level,
+  (N + 1)(N + 2)/2 (WP-2478, a quadratic AST before; test
+  `crates/kiln_parse/tests/parse_scaling.rs`, `nested_designated_lists`,
+  counts the expression nodes at N and 4N). The written form is a DAG
+  there; every walk of it (dump, instantiation, the PCH body writer's
+  expression memo) handles a shared node.
   Outside templates no `DesignatedInitExpr` is built.
 - `ParenExpr` is kept (it changes `decltype` and [temp.over.link]).
 - No `CXXRewrittenBinaryOperator` syntactic form

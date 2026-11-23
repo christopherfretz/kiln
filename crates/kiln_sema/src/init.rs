@@ -2163,6 +2163,7 @@ impl Sema<'_, '_> {
         let designated = self.in_template() && l.items.iter().any(|i| !i.designator.is_empty());
         let outer = if designated { self.designator_pending.replace(Vec::new()) } else { None };
         let outer_end = self.agg_list_end.replace(l.rbrace);
+        self.designated_depth += u32::from(designated);
         let e = self.check_aggregate(ty, &l.items, &mut pos, true, l.lbrace, l.rbrace);
         self.agg_list_end = outer_end;
         if designated {
@@ -2177,6 +2178,10 @@ impl Sema<'_, '_> {
         if designated {
             // Instantiation rebuilds a designated list as written.
             self.note_syntactic_list(e, l);
+            self.designated_depth -= 1;
+            if self.designated_depth == 0 {
+                self.written_lists.clear();
+            }
         }
         e
     }

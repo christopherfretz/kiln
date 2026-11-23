@@ -2088,11 +2088,26 @@ impl Sema<'_, '_> {
     /// A braced-init-list kept unanalyzed in a dependent context: an
     /// `InitListExpr` of type `void` ([temp.dep.expr]/3).
     pub(crate) fn dependent_init_list(&mut self, l: &crate::init::InitList) -> ExprId {
+        self.dependent_init_list_in(l, false)
+    }
+
+    /// [`Sema::dependent_init_list`]; with `reuse`, a nested list whose
+    /// written form [`Sema::note_syntactic_list`] already recorded
+    /// (`written_lists`) is that form, not a new copy.
+    fn dependent_init_list_in(&mut self, l: &crate::init::InitList, reuse: bool) -> ExprId {
         let mut inits = Vec::with_capacity(l.items.len());
         for it in &l.items {
             let e = match &it.value {
                 crate::init::InitValue::Expr(e) => *e,
-                crate::init::InitValue::List(n) => self.dependent_init_list(n),
+                crate::init::InitValue::List(n) => {
+                    let known = (reuse && n.lbrace.is_valid())
+                        .then(|| self.written_lists.get(&(n.lbrace, n.rbrace)).copied())
+                        .flatten();
+                    match known {
+                        Some(w) => w,
+                        None => self.dependent_init_list_in(n, reuse),
+                    }
+                }
             };
             let e = if it.designator.is_empty() {
                 e
@@ -2169,15 +2184,21 @@ impl Sema<'_, '_> {
     /// Records the written form of the semantic list `sem` built from
     /// the designated list `l` in a template pattern, for its
     /// instantiation to rebuild from (§5.6 of spec/ast.md; clang keeps
-    /// the syntactic form of every list).
+    /// the syntactic form of every list). A nested designated list was
+    /// recorded first (it is checked first): the form shares its node,
+    /// as clang's syntactic forms share their nested lists, so a nest of
+    /// N lists records N written lists, not (N+1)(N+2)/2 (WP-2478).
     pub(crate) fn note_syntactic_list(&mut self, sem: ExprId, l: &crate::init::InitList) {
         if self.ast.exprs.get(sem).kind() != ExprKind::InitListExpr
             || self.ast.exprs.syntactic_list(sem).is_some()
         {
             return;
         }
-        let w = self.dependent_init_list(l);
+        let w = self.dependent_init_list_in(l, true);
         self.ast.exprs.set_syntactic_list(sem, w);
+        if l.lbrace.is_valid() {
+            let _ = self.written_lists.insert((l.lbrace, l.rbrace), w);
+        }
     }
 
     /// True if any initializer of `l` (recursively) is type-dependent,

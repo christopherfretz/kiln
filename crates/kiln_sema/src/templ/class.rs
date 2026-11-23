@@ -30,7 +30,7 @@ use crate::templ::subst::{LocalLate, LocalMethod, SubstFail, SubstResult, Substi
 /// inside any declaration, statement or expression.
 #[derive(Default)]
 struct SavedState {
-    scopes: Vec<Scope>,
+    scopes: crate::scope::ScopeStack,
     ctx: Option<DeclId>,
     func: Option<crate::stmt::FnState>,
     unevaluated: u32,

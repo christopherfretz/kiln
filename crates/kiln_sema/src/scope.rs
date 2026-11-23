@@ -147,33 +147,304 @@ impl Scope {
         matches!(self.kind, ScopeKind::LinkageSpec | ScopeKind::TemplateParams)
     }
 
+    /// Whether the unqualified-lookup walk must visit this scope: any
+    /// scope but a block or control scope holding no locals,
+    /// using-declarators or using-directives ([`ScopeStack::walk_below`];
+    /// a function, prototype or requires-expression scope bounds the
+    /// NRVO walk of a `return`, so it is always visited).
+    pub fn walk_visits(&self) -> bool {
+        !matches!(self.kind, ScopeKind::Block | ScopeKind::Control)
+            || !self.locals.is_empty()
+            || !self.local_names.is_empty()
+            || !self.using_dirs.is_empty()
+    }
+
     /// The most recent local `name` in name space `ns`.
     pub fn find(&self, name: Symbol, ns: Ns) -> Option<DeclId> {
         self.locals.iter().rev().find(|(s, _, n)| *s == name && *n == ns).map(|e| e.1)
     }
 }
 
+/// The next [`ScopeStack`] revision: one counter for every stack, so two
+/// stacks (one moved aside and later reinstated, a fresh one in its
+/// place) never share a revision unless one is an unchanged clone of the
+/// other.
+static NEXT_REVISION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn fresh_revision() -> u64 {
+    NEXT_REVISION.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The scope stack, innermost last (spec/sema.md §2.1). It reads as the
+/// `Vec<Scope>` it holds; every mutable access but one of NRVO state
+/// ([`ScopeStack::nrvo_mut`]) gives it a new revision
+/// ([`ScopeStack::revision`], the scope part of [`crate::Sema::lookup_stamp`]),
+/// so the fingerprint costs O(1), not a hash of every open scope per
+/// lookahead query, which made an `else if` chain of depth N O(N^2)
+/// (WP-2478).
+///
+/// It also keeps the walk index of the unqualified-lookup walk: for each
+/// scope, the nearest scope below it that the walk must visit, skipping
+/// the block and control scopes that hold nothing (no locals,
+/// using-declarators or using-directives; [`ScopeStack::walk_below`]),
+/// and the template parameter scopes. `push`, `pop`, `truncate` and
+/// `last_mut` keep the index; any other mutable access (through the
+/// `Vec`) drops it, rebuilt on the next walk.
+#[derive(Clone, Debug)]
+pub struct ScopeStack {
+    scopes: Vec<Scope>,
+    revision: u64,
+    /// Per scope, the revision before its push and the `epoch` then:
+    /// popping it gives that revision back when no access through the
+    /// `Vec` came in between, so a lookahead memo keyed on the stamp
+    /// survives a scope entered and left.
+    pushed: Vec<(u64, u64)>,
+    /// Bumped by every access through the `Vec`.
+    epoch: u64,
+    index: std::cell::RefCell<WalkIndex>,
+}
+
+/// [`ScopeStack`]'s walk index.
+#[derive(Clone, Debug, Default)]
+struct WalkIndex {
+    /// Whether `below` and `tparams` describe the stack.
+    valid: bool,
+    /// Per scope, the nearest scope below it the walk visits
+    /// (`u32::MAX`: none).
+    below: Vec<u32>,
+    /// The template parameter scopes, innermost last.
+    tparams: Vec<usize>,
+}
+
+impl WalkIndex {
+    /// The `below` entry of a scope pushed on `scopes`.
+    fn below_of_next(&self, scopes: &[Scope]) -> u32 {
+        match scopes.len().checked_sub(1) {
+            None => u32::MAX,
+            Some(t) if scopes[t].walk_visits() => u32::try_from(t).unwrap_or(u32::MAX),
+            Some(t) => self.below[t],
+        }
+    }
+
+    fn rebuild(&mut self, scopes: &[Scope]) {
+        kiln_ast::expr::note_search_steps(scopes.len() as u64);
+        self.below.clear();
+        self.tparams.clear();
+        for i in 0..scopes.len() {
+            let b = self.below_of_next(&scopes[..i]);
+            self.below.push(b);
+            if scopes[i].kind == ScopeKind::TemplateParams {
+                self.tparams.push(i);
+            }
+        }
+        self.valid = true;
+    }
+
+    fn truncate(&mut self, n: usize) {
+        self.below.truncate(n);
+        while self.tparams.last().is_some_and(|&j| j >= n) {
+            self.tparams.pop();
+        }
+    }
+}
+
+impl Default for ScopeStack {
+    fn default() -> Self {
+        ScopeStack::from(Vec::new())
+    }
+}
+
+impl From<Vec<Scope>> for ScopeStack {
+    fn from(scopes: Vec<Scope>) -> Self {
+        let pushed = vec![(0, u64::MAX); scopes.len()];
+        ScopeStack {
+            scopes,
+            revision: fresh_revision(),
+            pushed,
+            epoch: 0,
+            index: std::cell::RefCell::default(),
+        }
+    }
+}
+
+impl std::ops::Deref for ScopeStack {
+    type Target = Vec<Scope>;
+    fn deref(&self) -> &Vec<Scope> {
+        &self.scopes
+    }
+}
+
+impl std::ops::DerefMut for ScopeStack {
+    /// Any mutable access: a new revision, and the walk index dropped.
+    fn deref_mut(&mut self) -> &mut Vec<Scope> {
+        self.revision = fresh_revision();
+        self.epoch += 1;
+        self.index.get_mut().valid = false;
+        &mut self.scopes
+    }
+}
+
+impl<'a> IntoIterator for &'a ScopeStack {
+    type Item = &'a Scope;
+    type IntoIter = std::slice::Iter<'a, Scope>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.scopes.iter()
+    }
+}
+
+impl ScopeStack {
+    /// The revision: equal revisions mean equal stacks.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// Enters `s` (the walk index kept).
+    pub fn push(&mut self, s: Scope) {
+        self.pushed.resize(self.scopes.len(), (0, u64::MAX));
+        self.pushed.push((self.revision, self.epoch));
+        self.revision = fresh_revision();
+        let index = self.index.get_mut();
+        if index.valid {
+            let b = index.below_of_next(&self.scopes);
+            index.below.push(b);
+            if s.kind == ScopeKind::TemplateParams {
+                index.tparams.push(self.scopes.len());
+            }
+        }
+        self.scopes.push(s);
+    }
+
+    /// Leaves the innermost scope (the walk index kept).
+    pub fn pop(&mut self) -> Option<Scope> {
+        let n = self.scopes.len().checked_sub(1)?;
+        let s = self.scopes.pop();
+        self.left(n);
+        s
+    }
+
+    /// Leaves every scope above the first `n` (the walk index kept).
+    pub fn truncate(&mut self, n: usize) {
+        if n < self.scopes.len() {
+            self.scopes.truncate(n);
+            self.left(n);
+        }
+    }
+
+    /// The scopes from the `n`th on were left: the revision before the
+    /// `n`th was pushed comes back when nothing changed the scopes below
+    /// it since.
+    fn left(&mut self, n: usize) {
+        self.revision = match self.pushed.get(n) {
+            Some(&(r, e)) if e == self.epoch => r,
+            _ => fresh_revision(),
+        };
+        self.pushed.truncate(n);
+        self.index.get_mut().truncate(n);
+    }
+
+    /// The innermost scope, to change (the walk index kept: an entry
+    /// depends on the scopes below its own only).
+    pub fn last_mut(&mut self) -> Option<&mut Scope> {
+        self.revision = fresh_revision();
+        self.scopes.last_mut()
+    }
+
+    /// Scope `i`, to change: as [`ScopeStack::last_mut`] for the
+    /// innermost scope, else an access through the `Vec`.
+    pub fn scope_mut(&mut self, i: usize) -> &mut Scope {
+        if i + 1 == self.scopes.len() {
+            self.revision = fresh_revision();
+            &mut self.scopes[i]
+        } else {
+            &mut (**self)[i]
+        }
+    }
+
+    /// The NRVO state of scope `i`, to change. The revision and the walk
+    /// index stay: no lookup reads NRVO state, and it does not decide
+    /// which scopes the walk visits.
+    pub fn nrvo_mut(&mut self, i: usize) -> &mut NrvoState {
+        &mut self.scopes[i].nrvo
+    }
+
+    fn with_index<R>(&self, f: impl FnOnce(&WalkIndex) -> R) -> R {
+        if let Ok(mut index) = self.index.try_borrow_mut()
+            && !index.valid
+        {
+            index.rebuild(&self.scopes);
+        }
+        match self.index.try_borrow() {
+            Ok(index) if index.valid => f(&index),
+            _ => {
+                let mut fresh = WalkIndex::default();
+                fresh.rebuild(&self.scopes);
+                f(&fresh)
+            }
+        }
+    }
+
+    /// The nearest scope below scope `i` that the unqualified-lookup
+    /// walk visits: every scope but a block or control scope that holds
+    /// nothing ([`Scope::walk_visits`]).
+    pub fn walk_below(&self, i: usize) -> Option<usize> {
+        kiln_ast::expr::note_search_steps(1);
+        self.with_index(|x| x.below.get(i).copied()).filter(|&b| b != u32::MAX).map(|b| b as usize)
+    }
+
+    /// The scopes the walk visits, innermost first, with their indices:
+    /// the innermost scope, then [`ScopeStack::walk_below`] in turn.
+    pub fn walk(&self) -> impl Iterator<Item = (usize, &Scope)> + '_ {
+        let mut next = self.scopes.len().checked_sub(1);
+        std::iter::from_fn(move || {
+            let i = next?;
+            next = self.walk_below(i);
+            Some((i, &self.scopes[i]))
+        })
+    }
+
+    /// The indices of the template parameter scopes, innermost last.
+    pub fn template_param_scopes(&self) -> Vec<usize> {
+        self.with_index(|x| x.tparams.clone())
+    }
+}
+
+/// [`ScopeStack`] is written as its scopes (the revision and the walk
+/// index are rebuilt).
+impl kiln_snap::Snap for ScopeStack {
+    const SCHEMA_HASH: u64 = <Vec<Scope> as kiln_snap::Snap>::SCHEMA_HASH;
+    const SHAPE_HASH: u64 = <Vec<Scope> as kiln_snap::Snap>::SHAPE_HASH;
+
+    fn put(&self, w: &mut kiln_snap::Writer) {
+        self.scopes.put(w);
+    }
+
+    fn get(r: &mut kiln_snap::Reader<'_>) -> Result<Self, kiln_snap::SnapError> {
+        Ok(ScopeStack::from(<Vec<Scope> as kiln_snap::Snap>::get(r)?))
+    }
+
+    fn schema(s: &mut kiln_snap::Schema) {
+        <Vec<Scope> as kiln_snap::Snap>::schema(s);
+    }
+}
+
 impl crate::Sema<'_, '_> {
     /// A fingerprint of the state name classification reads: the number
     /// of declarations, the AST lookup tables' generation, the current
-    /// context, the scope stack (per scope: kind, entity, number of
-    /// locals and the last of them, number of local using-declarators and
-    /// using-directives) and the open prototype parameter lists. The last
-    /// local tells apart two scope stacks of the same shape, as when the
-    /// declaration scopes of two function templates with alike parameter
-    /// lists are reinstated in turn (WP-919): locals are only appended and
-    /// a declaration is a local of one scope. While it is unchanged, [`crate::Sema::classify_name`]
-    /// answers every query the same way, so the parser may reuse a
-    /// lookahead scan (spec/parse.md §2.5, the template-argument memo).
+    /// context, the scope stack's revision ([`ScopeStack::revision`]:
+    /// a new one at every change of a scope) and the open prototype
+    /// parameter lists and lambda init-captures. A revision tells apart
+    /// two scope stacks of the same shape, as when the declaration scopes
+    /// of two function templates with alike parameter lists are
+    /// reinstated in turn (WP-919). While it is unchanged,
+    /// [`crate::Sema::classify_name`] answers every query the same way, so
+    /// the parser may reuse a lookahead scan (spec/parse.md §2.5, the
+    /// template-argument memo). O(1) in the scope depth (WP-2478).
     pub fn lookup_stamp(&self) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut h = kiln_source::fx::FxHasher::default();
-        (self.ast.decls.len(), self.ast.lookup.generation(), self.ctx).hash(&mut h);
-        for s in &self.scopes {
-            let last = s.locals.last().map(|l| l.1);
-            (s.kind as u8, s.entity, s.locals.len(), last, s.local_names.len(), s.using_dirs.len())
-                .hash(&mut h);
-        }
+        kiln_ast::expr::note_search_steps(1);
+        (self.ast.decls.len(), self.ast.lookup.generation(), self.ctx, self.scopes.revision())
+            .hash(&mut h);
         for f in &self.prototype_params {
             (f.depth, f.params.len(), f.index).hash(&mut h);
         }

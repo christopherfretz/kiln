@@ -1506,26 +1506,38 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         (!split).then_some((end, class))
     }
 
+    /// Whether a name at token `i` may be qualified: not an identifier
+    /// followed by neither `::` nor `<`. The qualified-name predicates
+    /// below answer no for one without a scan, which would look the
+    /// identifier up through every enclosing scope: a class head
+    /// `struct C {` in N nested classes cost O(N^2) lookups (WP-2478).
+    fn may_be_qualified_at(&self, i: usize) -> bool {
+        self.ident_of(self.tok_at(i)).is_none()
+            || matches!(Self::punct_of(self.tok_at(i + 1)), Some(Punct::ColonColon | Punct::Less))
+    }
+
     /// Whether the name at token `i` is qualified by a non-dependent
     /// class or namespace in which lookup finds a non-type (a variable,
     /// function or enumerator).
     pub(crate) fn nontype_scope_name(&self, i: usize) -> bool {
-        matches!(
-            self.scan_name_qual_at(i),
-            Some((end, false, NameClass::Value(_), _, Some(q)))
-                if end > i + 1 && !self.s.is_dependent_ctx(q)
-        )
+        self.may_be_qualified_at(i)
+            && matches!(
+                self.scan_name_qual_at(i),
+                Some((end, false, NameClass::Value(_), _, Some(q)))
+                    if end > i + 1 && !self.s.is_dependent_ctx(q)
+            )
     }
 
     /// Whether the name at token `i` is qualified by a non-dependent
     /// class or namespace in which lookup finds nothing (clang's
     /// `TryAnnotateName` giving `ANK_Unresolved` after a scope).
     pub(crate) fn unresolved_scope_name(&self, i: usize) -> bool {
-        matches!(
-            self.scan_name_qual_at(i),
-            Some((end, false, NameClass::Undeclared, _, Some(q)))
-                if end > i + 1 && !self.s.is_dependent_ctx(q)
-        )
+        self.may_be_qualified_at(i)
+            && matches!(
+                self.scan_name_qual_at(i),
+                Some((end, false, NameClass::Undeclared, _, Some(q)))
+                    if end > i + 1 && !self.s.is_dependent_ctx(q)
+            )
     }
 
     /// Whether the name at token `i` is qualified by a class or
@@ -1535,11 +1547,12 @@ impl<'a, 'sm> Parser<'a, 'sm> {
     ///
     /// [`Sema::nns_ctx_incomplete`]: kiln_sema::Sema::nns_ctx_incomplete
     pub(crate) fn incomplete_scope_name(&self, i: usize) -> bool {
-        matches!(
-            self.scan_name_qual_at(i),
-            Some((end, false, NameClass::Undeclared, _, Some(q)))
-                if end > i + 1 && self.s.nns_ctx_incomplete(q)
-        )
+        self.may_be_qualified_at(i)
+            && matches!(
+                self.scan_name_qual_at(i),
+                Some((end, false, NameClass::Undeclared, _, Some(q)))
+                    if end > i + 1 && self.s.nns_ctx_incomplete(q)
+            )
     }
 
     /// Whether the template argument list between `<` at `lt` and its
