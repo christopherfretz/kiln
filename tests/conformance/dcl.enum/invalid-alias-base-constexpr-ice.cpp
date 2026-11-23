@@ -1,12 +1,12 @@
-// [dcl.enum]/2, [dcl.typedef]: an alias-declaration whose type is
-// invalid declares nothing, so an enum-base naming it is an unknown
-// type name too; constant evaluation of a function that builds a value
-// of that enumeration then stops at the non-constexpr call. kiln keeps
-// the alias with an error type and its Oven aborts on the enumeration's
-// conversion (internal compiler error). Reduced from real code.
+// [dcl.enum]/2, [dcl.typedef]/2: an alias-declaration whose type is
+// invalid declares nothing, so an enum-base naming it is an unknown type
+// name too and the underlying type is `int` (clang `ActOnAliasDeclaration`,
+// `ActOnTag`); constant evaluation of a function that builds a value of
+// that enumeration then stops at the non-constexpr call. kiln kept the
+// alias, the enumeration's underlying type was its error type, and the
+// Oven aborted converting to it (WP-2141, WP-2173). Reduced from real code.
 //@ expect: compile-fail
 //@ strict-diags
-//@ xfail(kiln): WP-2141, an enumeration whose base is an invalid alias has no underlying type and the Oven's convert ICEs on E{1}
 //@ diag: 16:16 error "unknown type name 'undeclared_size_t'"
 //@ diag: 17:16 error "unknown type name 'size_t'"
 //@ diag: 23:15 error "static assertion expression is not an integral constant expression"

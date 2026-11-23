@@ -730,12 +730,22 @@ impl Parser<'_, '_> {
                 l if l.is_valid() => l,
                 _ => tl,
             };
-            let d = self.s.act_on_alias_decl(name, nl, ty, &attrs, own, tl, loc);
-            // Closures in the type-id belong to the alias (spec/ast.md
-            // §5.9); its names are not claimed yet (§18.3).
-            self.s.claim_alias_closures(wmark, d);
-            self.s.note_alias_decl_loc(d, loc);
-            self.ext_name_span(d, Loc::INVALID, Span::new(nl, n_hi));
+            // [dcl.typedef]/2: an alias-declaration whose type-id is
+            // invalid (its error reported) declares nothing, so a later use
+            // of the name is an unknown type name (clang's
+            // `ActOnAliasDeclaration` returns no declaration; WP-2173).
+            let d = if self.s.alias_declares_nothing(ty) {
+                None
+            } else {
+                Some(self.s.act_on_alias_decl(name, nl, ty, &attrs, own, tl, loc))
+            };
+            if let Some(d) = d {
+                // Closures in the type-id belong to the alias (spec/ast.md
+                // §5.9); its names are not claimed yet (§18.3).
+                self.s.claim_alias_closures(wmark, d);
+                self.s.note_alias_decl_loc(d, loc);
+                self.ext_name_span(d, Loc::INVALID, Span::new(nl, n_hi));
+            }
             // clang reports a `typename T...[i]` type-id as unterminated
             // (spec/parse.md, typename-specifiers).
             if let Some((_, end)) = self.typename_pack_index.take()
@@ -745,7 +755,7 @@ impl Parser<'_, '_> {
                 self.emit(e.arg("alias declaration").arg("';'"));
             }
             self.expect_semi_after("alias declaration");
-            return vec![d];
+            return d.into_iter().collect();
         }
         if self.eat_kw(Kw::Enum).is_some() {
             return self.parse_using_enum();

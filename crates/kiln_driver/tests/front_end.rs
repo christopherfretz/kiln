@@ -859,3 +859,45 @@ fn executable_working_directory() {
     let left: Vec<_> = std::fs::read_dir(&elsewhere.0).unwrap().collect();
     assert!(left.is_empty(), "nothing in the process's directory: {left:?}");
 }
+
+/// WP-2173: the two corpus files whose enumeration's underlying type was
+/// an alias of an invalid type ([dcl.typedef]/2, [dcl.enum]/2) panicked
+/// in the constant evaluator. Through the entry they come back with the
+/// diagnostics the `kiln` executable prints for the same command line:
+/// the corpus run's arguments (`-verify` aside, which the entry refuses),
+/// and with `-U__SIZE_TYPE__`, the predefined macro whose absence (a
+/// parse without the target's predefines) made the alias invalid.
+#[test]
+fn invalid_alias_enum_base_matches_the_executable() {
+    let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/conformance")
+        .canonicalize()
+        .unwrap();
+    let path = |rel: &str| corpus.join(rel).to_str().unwrap().to_owned();
+    let aware = path("expr.const/type-aware-direct-call.cpp");
+    let alias = path("dcl.enum/invalid-alias-base-constexpr-ice.cpp");
+    let aware_args = ["-ferror-limit=0", "-Wno-ext-cxx-type-aware-allocators", "-fclang-compat=22"];
+    let kilnpp = std::path::Path::new(env!("CARGO_BIN_EXE_kiln")).with_file_name("kiln++");
+    let kilnpp = kilnpp.as_path();
+    let cases: [(Vec<&str>, &str, u32); 3] = [
+        (aware_args.to_vec(), &aware, 3),
+        ([&aware_args[..], &["-U__SIZE_TYPE__"]].concat(), &aware, 12),
+        (Vec::new(), &alias, 3),
+    ];
+    for (extra, file, errors) in cases {
+        let mut cl = argv(&["-std=c++26", "-fsyntax-only", "-fno-crash-diagnostics"]);
+        cl.extend(extra.iter().map(|&s| s.to_owned()));
+        cl.push(file.to_owned());
+        for own_thread in [true, false] {
+            let (mut opts, buf) = captured();
+            opts.own_thread = own_thread;
+            let r = run_front_end("kiln++", &cl, opts, |fe| fe.main_file.is_some());
+            let r = r.unwrap_or_else(|e| panic!("{cl:?}: {e}"));
+            assert_eq!(r.value, Some(true), "{cl:?}");
+            assert_eq!((r.errors, r.fatal), (errors, false), "{cl:?}: {}", buf.contents());
+            let out = Command::new(kilnpp).args(&cl).output().unwrap();
+            assert_eq!(out.status.code(), Some(1), "{cl:?}");
+            assert_eq!(String::from_utf8_lossy(&out.stderr), buf.contents(), "{cl:?}");
+        }
+    }
+}

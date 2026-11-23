@@ -1716,6 +1716,15 @@ sequence; the evaluation session (spec/eval-session.md §2) uses it too.
   payload's text) with `own_thread` (a scoped thread of
   `-fkiln-stack-size=`, stack guard installed) or without (caught on
   the caller's thread); the panic hook is not touched.
+- The language options are the command line's, the driver's defaults
+  included. `kiln_parse::parse_tu` is not this entry: it preprocesses
+  with no predefined macros (`__SIZE_TYPE__` undefined) and parses with
+  `ParseOptions::default()`, which differs from `kiln -std=c++26` in
+  `reflection`, `contracts` and `gnu_lib_builtins`, for a target the
+  caller passes. A test that wants the command line's parse builds its
+  preprocessor with the predefines (`kiln_pp::build_predefines` over
+  `resource/predefines/<triple>.<std>.txt`) and calls `parse_preprocessed`
+  (`kiln_parse/tests/written_refs_accounting.rs`; WP-2173).
 
 Options (`FrontEndOptions`, `#[non_exhaustive]`, `Default`): `stderr`,
 `record_lookups`, `own_thread` (default on), `pch_probe` (default on;
