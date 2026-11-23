@@ -2,7 +2,8 @@
 
 Status: implemented (WP-1995; nested work, §5.1, WP-2073; `constexpr`
 entries, §3/§4, WP-2072; results of class and other types, §3/§4.1,
-WP-2071). Code: `crates/kiln_sema/src/session.rs`
+WP-2071; class, exception-specification, constraint and default member
+initializer units, §5.1, WP-2075). Code: `crates/kiln_sema/src/session.rs`
 (the session, entries, runs, reports, diagnostic replay),
 `crates/kiln_oven/src/session.rs` (budgets, cancellation, the Oven side
 of a run), `crates/kiln_diag/src/engine.rs` (`DiagEngine::capture_begin`,
@@ -551,8 +552,8 @@ answer whether an earlier run or this one filled them):
 execution; nested work is charged by §5.1. A run's steps, nested steps
 and calls, and whether it exhausts a budget, are the same on run 1 and
 run 1000 and on a fresh or a used session, whatever other entries ran
-before and in whatever order (the residuals at landing, work of kinds
-that are not units yet, are listed in §5.1).
+before and in whatever order (the residuals, kept work that is not a
+unit, are listed in §5.1 "Residuals").
 
 ### 5.1 Nested work (WP-2073)
 
@@ -562,7 +563,7 @@ context `Oven::eval_nested` opens (`kiln_oven/src/lib.rs`), and the
 Oven's own initialization of a variable it reads (`eval_var_init`,
 `kiln_oven/src/value.rs`). A *unit* is a piece of kept semantic work
 that is done once per session and may open nested evaluations. The
-units at landing (`Key` in `kiln_sema/src/session.rs`):
+units (`Key` in `kiln_sema/src/session.rs`):
 
 | unit key | the work | reached at |
 |---|---|---|
@@ -572,6 +573,11 @@ units at landing (`Key` in `kiln_sema/src/session.rs`):
 | `Inst(f)` | a function template specialization's definition instantiated (`instantiate_function_definition`) | each request to instantiate it, done or not (its early return, `note_used_for_instantiation`), and each compilation of it that finds its body instantiated (`SemaBridge::ensure_body`, WP-2072) |
 | `Meta(op, operands)` | a reflection query (`SemaBridge::meta`) | each query with the same op and operands |
 | `Nothrow(f)` | whether `f` is non-throwing, which may instantiate an exception specification (`SemaBridge::is_nothrow`) | each query, the early `known_nothrow` answer included |
+| `Class(c)` (WP-2075) | the definition of class template specialization `c` instantiated ([temp.inst]/2-3: its member declarations, `static_assert`s, bit-field widths, alignments, nested types), or of a member class or member enumeration `c` of one ([temp.inst]/3: an enumeration's enumerator values); `instantiate_class_as`, `instantiate_member_class`, `instantiate_member_enum`. Its member function definitions are `Inst`, its static data members' initializers `Init`, its default member initializers `Nsdmi` | each request that instantiates `c` when it is undefined and finds it defined: the `require_complete` family (`undefined_spec_at`: `require_complete`, `require_complete_silent`, `instantiation_fails`, `require_complete_nns`; `instantiate_for_init`, `require_member_enum`), a class named in a nested-name-specifier, `instantiate_class_as`'s early return (base matching in deduction, explicit instantiation), every class associated with an argument-dependent lookup, and a reflection query that completes a type (`meta_undefined_spec`) |
+| `Exc(f)` (WP-2075) | the exception specification of `f` (its first declaration): a `noexcept(e)` or dependent dynamic specification instantiated ([except.spec]/13; `substitute_exception_spec`), or the implicit one of a special member, inheriting constructor or defaulted comparison computed from the functions it calls ([except.spec]/7-8, 10; `resolve_deferred_exc`) | each resolution that finds it resolved (`resolve_exc`, `instantiate_exception_spec`'s early return): the `noexcept` operator, a use ([except.spec]/13), a conversion to a pointer to a non-throwing function, an overriding check, a trait, and the Oven's `is_nothrow` with its early `known_nothrow` answer |
+| `Sat(t, args)` (WP-2075) | a satisfaction check cached by the satisfaction cache (`sat_cache`): a concept-id `t<args>` (`check_concept`) or the associated constraints of template `t` with one level of arguments (`check_constraints`), `args` canonical; its atoms are children | each check with the same key that hits the cache |
+| `Atom(e, args)` (WP-2075) | the satisfaction of atomic constraint `e` with the canonical arguments of each level (the atom cache's key, `atom_cache`: two atoms are identical when they are the same expression with the same mapping, [temp.constr.atomic]/2): its substitution and evaluation ([temp.constr.atomic]/3) | each check with the same key that hits the cache, from any constrained template, concept or requires-expression |
+| `Nsdmi(m)` (WP-2075) | the default member initializer of field `m` of a class template specialization instantiated ([temp.inst]/3, at its first use by a constructor, [class.base.init]/9.1; `instantiate_nsdmi`) | each use that finds it instantiated: `default_member_init` (a constructor's mem-initializers, user-provided or defaulted) and a defaulted default constructor's exception specification |
 
 A unit is *reached* each time a run, or a unit's work in it, asks for
 it: the call that does it, and every later request that finds it done.
@@ -671,23 +677,37 @@ fresh session per run is the reference:
 - The sema units: the hooks test one `Option` (`Sema::eval_replay`,
   set only inside a run).
 
-**Not hooked at landing (WP-2075).** A class template
-specialization's instantiation, an exception specification's
-instantiation outside `is_nothrow`, an atomic constraint's
-satisfaction and a default member initializer's instantiation are not
-units. Their work, its nested evaluations and its diagnostics, belong
-to the unit whose work first did them. Undercharged meanwhile: a later
-unit (in the same or a later run) that needs such work already done is
-charged neither its nested cost nor shown its diagnostics, so a run
-that reaches it through a different unit than a fresh session would
-reports less `nested_steps`/`nested_calls` and can miss its
-diagnostics. Other kept work that is not a unit (a default argument's
-instantiation, an alias substitution's cache, a reflection table
-entry) is the same residual (WP-2076). So is the reflection-bytes
-charge (spec/oven.md "Limits": a value already interned charges 0),
-which makes a run's peak bytes depend on what earlier runs interned
-(WP-2077). The nested limits are the translation unit's; a
-session-level setting for them is WP-2078.
+**Hooked by WP-2075.** Before WP-2075 the last five units were not
+units: their work, its nested evaluations and its diagnostics belonged
+to the unit whose work first did them, so a later unit (in the same or a
+later run) that needed the work done was charged neither its nested cost
+nor shown its diagnostics. Each is now recorded by its own window
+(`Sema::sess_unit_begin`, opened after the instantiation frame it pushes,
+or `sess_unit_begin_frameless` for an `Atom` and a computed `Exc`, which
+push none: a reach replays those in the reach's context) and reached by
+`Sema::sess_reach_at` wherever a request finds the work done. Every
+hook is behind `Sema::eval_replay` (one `Option` test, no allocation,
+without a run; an `Atom` key's argument list is copied only in a run).
+The keys are content (§7): a `DeclId`, the atom's `ExprId`, and interned
+canonical argument lists (`ArgListId`, a bijection with their content
+for the session). A cached satisfaction keeps a failure (an atom whose
+evaluation exceeds the translation unit's step limit is not a constant
+expression, `sema_non_constant_constraint`): the `Sat` record keeps the
+error, so every run that reaches the check, through any unit, fails the
+same way. Not units, still: a class template specialization's partial
+specialization selection that fails (ambiguous: the class is made
+invalid before its frame is pushed, and a later request finds it invalid
+without the error, as in the translation unit itself); a satisfaction
+check with more than one level of arguments (not cached: redone, and so
+charged, at each check; its atoms are cached and are units).
+
+**Residuals.** Other kept work that is not a unit (a default argument's
+instantiation, an alias substitution's cache, a reflection table entry)
+is charged only to the unit that first did it (WP-2076). So is the
+reflection-bytes charge (spec/oven.md "Limits": a value already
+interned charges 0), which makes a run's peak bytes depend on what
+earlier runs interned (WP-2077). The nested limits are the translation
+unit's; a session-level setting for them is WP-2078.
 
 **Unchanged.** The translation unit's own nested evaluations, before
 any run, run under its limits and its handler, are not units and are
@@ -779,10 +799,11 @@ duplicates of another run or of the translation unit.
 - **Limits.** A reflection query's record is keyed by the query
   (below); the units its work reaches are keyed by unit, so a different
   query, or a run's own code, that needs the same already-done unit
-  replays it. Work of the kinds that are not units at landing (§5.1,
-  WP-2075; a class instantiated by `substitute`, then needed by another
-  query) is replayed with the first unit or query that did it only
-  (WP-2160). A replayed diagnostic has the location of its recording;
+  replays it: a class a query completed (`members_of`, `size_of`, a
+  type trait) is a `Class` unit (WP-2075), reached by a later query that
+  completes it (`meta_undefined_spec`) or by any other request for it.
+  Work of the kinds that are still not units (§5.1 "Residuals", WP-2076)
+  is replayed with the first unit or query that did it only (WP-2160). A replayed diagnostic has the location of its recording;
   only its context notes are those of the reach.
 - **Keys are content.** No replay key, memoization key or kept result
   depends on an address or on what earlier runs did. A reflection
@@ -858,6 +879,8 @@ they key exactly.
 | replay `Key::Var` | `kiln_oven` `session.rs` `kept_vars`, `value.rs` `eval_var_init` | Oven global index | one index per global for the session |
 | replay `Key::Init`, `Key::Inst` | `kiln_sema` `templ/class.rs`, `templ/var.rs` | `DeclId` | no address |
 | replay `Key::Nothrow` | `oven_bridge.rs` `is_nothrow` | `DeclId` | no address |
+| replay `Key::Class`, `Key::Exc`, `Key::Nsdmi` | `kiln_sema` `templ/class.rs`, `except.rs`, `class/special/excspec.rs` | first `DeclId` (the field for `Nsdmi`) | no address |
+| replay `Key::Sat`, `Key::Atom` | `kiln_sema` `templ/concepts/sat.rs` | `DeclId` or the atom's `ExprId`, canonical `ArgListId`s | the satisfaction caches' own keys; argument lists interned by content |
 | memoization | `kiln_oven` `memo.rs` `MemoKey`; eligibility `compile.rs` (`memo =`) | function index, flags, up to 4 scalar arguments | only integer, `bool`, floating and `info` parameters, no `this`, no pointer result: a pointer or reference argument (an address) makes the function not memoizable; an `info` of an automatic variable is a handle to the running evaluation's frame, so `extract` and `constant_of` of one mark the calls in progress impure (fixed by WP-2074: a call given `^^x` was memoized by its bits and read a stale `x`); otherwise a memoized function reaches only static objects; tests `memoized_results_are_not_keyed_by_addresses`, `reflections_of_locals_are_not_memoized`, `tests/conformance/meta.reflection.extract/local-reflection-argument-memo.cpp` |
 | `substitute` memo | `kiln_sema` `meta/templ.rs` `SubstMemo` | template and argument reflection bits | the arguments are read from the range before the lookup |
 | member lists | `kiln_oven` `meta/member_cache.rs` `MemberCache` | `DeclId` and list kind | no address |
@@ -1037,7 +1060,14 @@ session's translation unit is parsed without recording either.
   fresh and used, both orders, nested inside nested work, the memo),
   the budget decision on own plus charged nested steps, depth and
   bytes, cancellation, a host call refused in nested work, and nested
-  work over the translation unit's limit.
+  work over the translation unit's limit. WP-2075: each of the `Class`
+  (a specialization, a member class and enumeration, a class a
+  reflection query completed), `Exc` (a `noexcept(e)` instantiated, a
+  defaulted constructor's computed specification), `Nsdmi`, `Sat` and
+  `Atom` units reached through two different units, fresh and used, in
+  both orders, with the same `nested_steps`, `nested_calls` and
+  diagnostics; a constraint over the translation unit's step limit
+  failing every run alike.
 - `crates/kiln_driver/tests/eval_session.rs`: `with_eval_session` from a
   command line (an include path and a define, a refused translation
   unit); content keys (WP-2074): a query over operands a run built

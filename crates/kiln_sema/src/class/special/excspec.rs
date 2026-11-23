@@ -54,6 +54,11 @@ impl Sema<'_, '_> {
         let first = self.ast.first(f);
         if self.uninstantiated_exc.contains_key(&first) {
             self.instantiate_exception_spec(first, at);
+        } else if self.eval_replay.is_some() {
+            // Instantiated or computed by an earlier unit of an evaluation
+            // session's run: this request reaches it (spec/eval-session.md
+            // §5.1 `Exc`).
+            self.sess_reach_at(&crate::session::Key::Exc(first), at);
         }
         let exc = self.exc_of(first);
         if !matches!(exc, ExcSpec::Deferred(_)) {
@@ -63,7 +68,13 @@ impl Sema<'_, '_> {
             return false;
         }
         if self.cmp_kind(first).is_some() {
-            return self.resolve_cmp_exc(first);
+            // In an evaluation session's run: a unit of its own (its
+            // comparison's definition is located where it is defaulted, so
+            // a reach replays it in the reach's context).
+            let unit = self.sess_unit_begin_frameless();
+            let nothrow = self.resolve_cmp_exc(first);
+            self.sess_window_end(crate::session::Key::Exc(first), unit);
+            return nothrow;
         }
         // An inheriting constructor: its inherited constructors, then
         // as a default constructor (clang
@@ -95,7 +106,11 @@ impl Sema<'_, '_> {
             loc: at,
             inst_depth,
         });
+        // In an evaluation session's run: a unit of its own, under its
+        // exception-specification context (spec/eval-session.md §5.1).
+        let unit = self.sess_unit_begin_synth();
         let nothrow = self.implicit_nothrow(first, class, k, &inherited, depth);
+        self.sess_window_end(crate::session::Key::Exc(first), unit);
         if self.synth_noted.get() == self.synth.len() {
             self.synth_noted.set(0);
         }
@@ -267,7 +282,11 @@ impl Sema<'_, '_> {
             }
         }
         for fld in self.special_fields(class) {
-            if k == K::DefaultCtor && self.inst.deferred_nsdmis.contains_key(&fld) {
+            // In a session's run, a use of one already instantiated
+            // reaches it (spec/eval-session.md §5.1 `Nsdmi`).
+            if k == K::DefaultCtor
+                && (self.inst.deferred_nsdmis.contains_key(&fld) || self.eval_replay.is_some())
+            {
                 // clang `BuildCXXDefaultInitExpr` instantiates it, from
                 // the constructor, under the exception-specification
                 // context.

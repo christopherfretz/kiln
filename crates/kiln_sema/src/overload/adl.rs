@@ -341,6 +341,15 @@ impl Sema<'_, '_> {
                 self.assoc_arg(a, &mut assoc);
             }
         }
+        // In an evaluation session's run: every associated class this
+        // lookup would have instantiated reaches its kept instantiation
+        // (spec/eval-session.md §5.1 `Class`).
+        if self.eval_replay.is_some() {
+            for i in 0..assoc.classes.len() {
+                let c = assoc.classes[i];
+                self.sess_reach_class_decl(c, loc);
+            }
+        }
         for &ns in &assoc.namespaces {
             let r = self.ast.lookup_local(ns, name);
             for (raw, flags) in r.iter_with_flags() {

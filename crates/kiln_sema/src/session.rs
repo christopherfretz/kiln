@@ -13,9 +13,10 @@
 
 use std::fmt;
 
-use kiln_ast::DeclId;
 use kiln_ast::decl::{ConstexprKind, DeclKind};
+use kiln_ast::ids::ArgListId;
 use kiln_ast::types::TypeView;
+use kiln_ast::{DeclId, ExprId};
 use kiln_diag::{DiagEngine, DiagId, Diagnostic};
 use kiln_oven::RunRaw;
 pub use kiln_oven::{CANCEL_INTERVAL, CancelToken, RELEASE_FLOOR, RunBudget, RunError};
@@ -25,6 +26,7 @@ use kiln_source::fx::{FxHashMap, FxHashSet};
 use kiln_source::symbol::Symbol;
 
 use crate::Sema;
+use crate::class::{SynthContext, SynthKind};
 use crate::lookup::LookupKind;
 use crate::oven_bridge::Bridge;
 pub use crate::session_value::{
@@ -264,6 +266,22 @@ pub(crate) enum Key {
     Meta(MetaOp, Box<[u128]>),
     /// A `noexcept` query.
     Nothrow(DeclId),
+    /// The instantiation of a class template specialization's definition,
+    /// or of a member class or member enumeration of one (WP-2075).
+    Class(DeclId),
+    /// A function's exception specification (its first declaration)
+    /// instantiated or, for a special member, computed (WP-2075).
+    Exc(DeclId),
+    /// A satisfaction check of a concept-id or of a template's associated
+    /// constraints, by the satisfaction cache's key: the concept or
+    /// template and the canonical arguments (WP-2075).
+    Sat(DeclId, ArgListId),
+    /// An atomic constraint's satisfaction, by the atom cache's key: the
+    /// atom and the canonical arguments of each level (WP-2075).
+    Atom(ExprId, Box<[ArgListId]>),
+    /// A default member initializer instantiated, by the field of the
+    /// class specialization (WP-2075).
+    Nsdmi(DeclId),
 }
 
 impl From<SessUnit> for Key {
@@ -283,14 +301,20 @@ enum Seg {
     Child(Key, Vec<Diagnostic>),
 }
 
-/// The instantiation frame a unit opens (its context note names where it
-/// was required, which is where a later reach requires it).
+/// The instantiation frame or code-synthesis context a unit opens (its
+/// context note names where it was required, which is where a later reach
+/// requires it).
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct UnitFrame {
-    kind: FrameKind,
-    entity: DeclId,
-    template: DeclId,
-    sfinae: Option<bool>,
+pub(crate) enum UnitFrame {
+    Inst {
+        kind: FrameKind,
+        entity: DeclId,
+        template: DeclId,
+        sfinae: Option<bool>,
+        args: Option<ArgListId>,
+    },
+    /// An implicit exception specification's evaluation (WP-2075).
+    Synth { member: DeclId, kind: SynthKind },
 }
 
 /// What a unit recorded: its diagnostics (with the units nested in it
@@ -505,9 +529,13 @@ impl Replay {
         }
         self.count +=
             segs.iter().map(|s| if let Seg::Diags(v) = s { v.len() } else { 0 }).sum::<usize>();
-        if let Key::Meta(op, words) = &key {
-            self.meta_ops.insert(*op);
-            self.key_words += words.len();
+        match &key {
+            Key::Meta(op, words) => {
+                self.meta_ops.insert(*op);
+                self.key_words += words.len();
+            }
+            Key::Atom(_, args) => self.key_words += args.len(),
+            _ => {}
         }
         if let Some(p) = self.windows.last_mut() {
             p.children.push((key.clone(), w.ctx.clone(), w.from, end));
@@ -545,30 +573,71 @@ impl Replay {
 }
 
 impl Sema<'_, '_> {
-    /// The context notes a diagnostic emitted now would have.
+    /// The context notes a diagnostic emitted now would have: the
+    /// instantiation frames and the code-synthesis contexts, ordered as
+    /// `Sema::emit` orders them.
     fn sess_context(&self) -> Vec<Diagnostic> {
-        if self.inst.stack.is_empty() {
+        if self.inst.stack.is_empty() && self.synth.is_empty() {
             return Vec::new();
         }
-        // Computing the notes marks them printed (`last_emitted`); the
-        // real diagnostics that follow must still print theirs.
+        // Computing the notes marks them printed (`last_emitted`,
+        // `synth_noted`); the real diagnostics that follow must still
+        // print theirs.
         let printed = self.inst.stack.last_emitted.get();
         self.inst.stack.last_emitted.set(0);
-        let notes = self.inst_context_notes();
+        let mut notes = self.inst_context_notes();
         self.inst.stack.last_emitted.set(printed);
+        if !self.synth.is_empty() {
+            let synth_printed = self.synth_noted.replace(0);
+            let synth = self.synth_context_notes();
+            self.synth_noted.set(synth_printed);
+            let inner = self
+                .synth
+                .last()
+                .map_or(0, |c| self.inst.stack.len().saturating_sub(c.inst_depth))
+                .min(notes.len());
+            let outer = notes.split_off(inner);
+            notes.extend(synth);
+            notes.extend(outer);
+        }
         self.diags.note_records(notes)
     }
 
     /// Opens a recording window in a session's run (§7) for a unit whose
     /// instantiation frame is the innermost one; its mark.
     pub(crate) fn sess_unit_begin(&mut self) -> Option<usize> {
+        self.sess_unit_open(true)
+    }
+
+    /// Opens a recording window in a session's run (§7) for a unit that
+    /// opens no instantiation frame of its own (an atomic constraint, a
+    /// special member's exception specification): a reach replays it in
+    /// the reach's context; its mark.
+    pub(crate) fn sess_unit_begin_frameless(&mut self) -> Option<usize> {
+        self.sess_unit_open(false)
+    }
+
+    /// Opens a recording window in a session's run (§7) for a unit whose
+    /// code-synthesis context is the innermost one (an implicit exception
+    /// specification's evaluation); its mark.
+    pub(crate) fn sess_unit_begin_synth(&mut self) -> Option<usize> {
         self.eval_replay.as_ref()?;
         let ctx = self.sess_context();
-        let frame = self.inst.stack.frames.last().map(|f| UnitFrame {
+        let frame = self.synth.last().map(|c| UnitFrame::Synth { member: c.member, kind: c.kind });
+        let from = self.diags.captured_len();
+        self.eval_replay.as_deref_mut()?.begin(from, ctx, frame);
+        Some(from)
+    }
+
+    fn sess_unit_open(&mut self, framed: bool) -> Option<usize> {
+        self.eval_replay.as_ref()?;
+        let ctx = self.sess_context();
+        let frame = self.inst.stack.frames.last().filter(|_| framed).map(|f| UnitFrame::Inst {
             kind: f.kind,
             entity: f.entity,
             template: f.template,
             sfinae: f.sfinae,
+            args: f.args,
         });
         let from = self.diags.captured_len();
         self.eval_replay.as_deref_mut()?.begin(from, ctx, frame);
@@ -592,20 +661,30 @@ impl Sema<'_, '_> {
     /// required at `poi`: its diagnostics are reported with the context
     /// notes they would have now.
     pub(crate) fn sess_reach_at(&mut self, key: &Key, poi: Loc) {
-        let Some(frame) =
-            self.eval_replay.as_deref().and_then(|rp| rp.records.get(key)).map(|r| r.frame)
+        let Some((frame, in_ctx)) = self
+            .eval_replay
+            .as_deref()
+            .and_then(|rp| rp.records.get(key))
+            .map(|r| (r.frame, !r.ctx.is_empty()))
         else {
             return;
         };
         let target = match frame {
-            Some(f) => {
+            Some(UnitFrame::Synth { member, kind }) => {
+                let inst_depth = self.inst.stack.len();
+                self.synth.push(SynthContext { member, kind, loc: poi, inst_depth });
+                let ctx = self.sess_context();
+                let _ = self.synth.pop();
+                Some(ctx)
+            }
+            Some(UnitFrame::Inst { kind, entity, template, sfinae, args }) => {
                 self.inst.stack.push(InstFrame {
-                    kind: f.kind,
-                    entity: f.entity,
-                    template: f.template,
+                    kind,
+                    entity,
+                    template,
                     poi,
-                    sfinae: f.sfinae,
-                    args: None,
+                    sfinae,
+                    args,
                     start: None,
                     start_bytes: 0,
                     start_nodes: 0,
@@ -616,7 +695,9 @@ impl Sema<'_, '_> {
                 let _ = self.inst.stack.pop();
                 Some(ctx)
             }
-            None => None,
+            // A frameless unit recorded inside other work: in the reach's
+            // context (as `Bridge::reach`).
+            None => in_ctx.then(|| self.sess_context()),
         };
         let diags = self.diags;
         let Some(rp) = self.eval_replay.as_deref_mut() else { return };

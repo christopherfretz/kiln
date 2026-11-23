@@ -133,6 +133,16 @@ impl SemaBridge for Bridge<'_, '_, '_> {
                 oven.mark_impure();
                 oven.session_charge(c);
             }
+            // Resolved by other work (a `noexcept` operator, a use): its
+            // `Exc` unit is reached (WP-2075).
+            if self.sema.eval_replay.is_some() {
+                let key = crate::session::Key::Exc(self.sema.ast.first(f));
+                if self.sema.sess_recorded(&key) {
+                    let at =
+                        self.sema.inst.eval_loc.unwrap_or_else(|| self.sema.ast.decls.get(f).loc());
+                    self.sema.lend_oven(oven, |s| s.sess_reach_at(&key, at));
+                }
+            }
             return n;
         }
         let at = self.sema.inst.eval_loc.unwrap_or_else(|| self.sema.ast.decls.get(f).loc());

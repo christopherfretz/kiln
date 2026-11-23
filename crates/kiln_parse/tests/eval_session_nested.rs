@@ -67,15 +67,26 @@ fn session_with<R>(
     tu_steps: Option<u64>,
     f: impl for<'a, 'sm> FnOnce(&mut EvalSession<'a, 'sm>, &'sm SourceManager) -> R,
 ) -> R {
+    session_opts(src, tu_steps, false, f)
+}
+
+/// [`session_with`], with `-freflection` when `reflection`.
+fn session_opts<R>(
+    src: &str,
+    tu_steps: Option<u64>,
+    reflection: bool,
+    f: impl for<'a, 'sm> FnOnce(&mut EvalSession<'a, 'sm>, &'sm SourceManager) -> R,
+) -> R {
     let sm = SourceManager::new();
     let file = sm.add_virtual("t.cpp", format!("{PRE}{src}")).expect("location space");
     let interner = Arc::new(Interner::new());
     let sink = MemorySink::new();
-    let opts = ParseOptions::default();
+    let opts = ParseOptions { reflection, ..ParseOptions::default() };
     let dopts = DiagOptions { clang_compat: opts.clang_compat, ..DiagOptions::default() };
     let engine = DiagEngine::new(&sm, &dopts, sink.clone());
     let mut ppo = PpOptions::new(opts.std);
     ppo.parser_pragmas = true;
+    ppo.reflection = reflection;
     ppo.modules = Some(ModuleOptions::default());
     let mut pp = Preprocessor::new(&sm, &engine, &interner, ppo);
     let features = ClangFeatures::new("x86_64-unknown-linux-gnu", opts.std, &[])
@@ -500,5 +511,230 @@ fn nested_work_over_the_translation_units_limit_fails_alike() {
                 }
             }
         });
+    }
+}
+
+// ---- WP-2075: the units of class instantiation, exception specifications,
+// constraints and default member initializers --------------------------------
+
+/// `src` run with entries `a` and `b`, each in a fresh session as the
+/// reference, then in used sessions in both orders, three rounds each.
+fn shared_by_two(src: &str, a: &str, b: &str, tu_steps: Option<u64>) -> Vec<Seen> {
+    shared_by_two_opts(src, a, b, tu_steps, false)
+}
+
+/// [`shared_by_two`], with `-freflection` when `reflection`.
+fn shared_by_two_opts(
+    src: &str,
+    a: &str,
+    b: &str,
+    tu_steps: Option<u64>,
+    reflection: bool,
+) -> Vec<Seen> {
+    let f: Vec<Seen> = [a, b]
+        .iter()
+        .map(|n| session_opts(src, tu_steps, reflection, |s, sm| run(s, sm, n)))
+        .collect();
+    for order in [[a, b], [b, a]] {
+        session_opts(src, tu_steps, reflection, |s, sm| {
+            for _ in 0..3 {
+                for n in order {
+                    let want = &f[usize::from(n == b)];
+                    assert_eq!(&run(s, sm, n), want, "{n} in order {order:?}");
+                }
+            }
+        });
+    }
+    f
+}
+
+/// Each reference reports nested work (`nested_steps`, `nested_calls`)
+/// and, when `warning`, the deprecation warning of `old` (both come from
+/// the shared work).
+fn assert_nested(f: &[Seen], warning: bool) {
+    for x in f {
+        assert!(x.nested_steps > 0 && x.nested_calls > 0, "{x:?}");
+        assert_eq!(has(x, "'old' is deprecated"), warning, "{x:?}");
+    }
+}
+
+/// `Class(c)`: a class template specialization's instantiation (here its
+/// `static_assert`'s evaluation) shared by two member functions'
+/// instantiations, the class required complete by `sizeof` ([temp.inst]/2)
+/// and by a member access.
+const CLASS_SRC: &str = "constexpr int big(int n) { int s = 0; for (int i = 0; i < n; ++i) s += i; return s; }\n\
+template <class T> struct C { static_assert(big(300) + old(T{}) > 0); int x; };\n\
+template <class T> struct A { static consteval int f() { return sizeof(C<T>); } };\n\
+template <class T> struct B { static consteval int f() { C<T> c{}; return c.x + 1; } };\n\
+static_assert(sizeof(A<int>) + sizeof(B<int>) > 0);\n\
+using XA = A<int>;\n\
+using XB = B<int>;\n";
+
+#[test]
+fn a_class_instantiation_is_a_unit() {
+    let f = shared_by_two(CLASS_SRC, "XA::f", "XB::f", None);
+    assert_nested(&f, true);
+}
+
+/// A class completed by a reflection query (`size_of`, [meta.reflection.layout])
+/// in one run and by `sizeof` in the other: the query's record reaches
+/// the `Class` unit, so a later request for the class through any other
+/// unit, or another query, replays it (spec/eval-session.md §7 "Limits").
+const META_CLASS_SRC: &str = "namespace std::meta {\n\
+using info = decltype(^^int);\n\
+consteval decltype(sizeof(0)) size_of(info r);\n\
+}\n\
+constexpr int big(int n) { int s = 0; for (int i = 0; i < n; ++i) s += i; return s; }\n\
+template <class T> struct C { static_assert(big(300) + old(T{}) > 0); int x; };\n\
+template <class T> struct A { static consteval int f() { return std::meta::size_of(^^C<T>); } };\n\
+template <class T> struct B { static consteval int f() { return sizeof(C<T>) + 1; } };\n\
+static_assert(sizeof(A<int>) + sizeof(B<int>) > 0);\n\
+using XA = A<int>;\n\
+using XB = B<int>;\n";
+
+#[test]
+fn a_class_completed_by_a_reflection_query_is_a_unit() {
+    let f = shared_by_two_opts(META_CLASS_SRC, "XA::f", "XB::f", None, true);
+    assert_nested(&f, true);
+    assert_eq!(f[0].result, Ok(RunValue::Signed(4)), "{:?}", f[0]);
+}
+
+/// A member class and a member enumeration of a class template
+/// specialization ([temp.inst]/3), defined when required.
+const MEMBER_CLASS_SRC: &str = "constexpr int big(int n) { int s = 0; for (int i = 0; i < n; ++i) s += i; return s; }\n\
+template <class T> struct O {\n\
+  struct In { static_assert(big(300) + old(T{}) > 0); int x; };\n\
+  enum class E { e = big(200) + old(T{}) };\n\
+};\n\
+template <class T> struct A { static consteval int f() { return sizeof(typename O<T>::In) + int(O<T>::E::e); } };\n\
+template <class T> struct B { static consteval int f() { typename O<T>::In i{}; return i.x + int(O<T>::E::e) + 1; } };\n\
+static_assert(sizeof(A<int>) + sizeof(B<int>) > 0);\n\
+using XA = A<int>;\n\
+using XB = B<int>;\n";
+
+#[test]
+fn a_member_class_instantiation_is_a_unit() {
+    let f = shared_by_two(MEMBER_CLASS_SRC, "XA::f", "XB::f", None);
+    assert_nested(&f, true);
+}
+
+/// `Exc(f)`: a function template specialization's `noexcept(e)`
+/// instantiated ([except.spec]/13) by a `noexcept` operator in one unit
+/// and by a conversion to a pointer to a non-throwing function in the
+/// other ([conv.fctptr], [over.ics.rank]), outside `SemaBridge::is_nothrow`.
+const EXC_SRC: &str = "constexpr int big(int n) { int s = 0; for (int i = 0; i < n; ++i) s += i; return s; }\n\
+template <class T> constexpr int g(T) noexcept(big(300) + old(T{}) > 0) { return 1; }\n\
+template <class T> struct A { static consteval bool f() { return noexcept(g(T{})); } };\n\
+template <class T> struct B { static consteval int f() { int (*p)(T) noexcept = &g<T>; return p(T{}); } };\n\
+static_assert(sizeof(A<int>) + sizeof(B<int>) > 0);\n\
+using XA = A<int>;\n\
+using XB = B<int>;\n";
+
+#[test]
+fn an_exception_specification_is_a_unit() {
+    let f = shared_by_two(EXC_SRC, "XA::f", "XB::f", None);
+    assert_nested(&f, true);
+    assert_eq!(f[0].result, Ok(RunValue::Bool(true)), "{:?}", f[0]);
+}
+
+/// The deduced `noexcept` of a defaulted default constructor
+/// ([except.spec]/8), which instantiates a member's default member
+/// initializer ([class.base.init]/9.1) and the member class's own
+/// constructor's specification: asked by a `noexcept` operator in one
+/// unit and by a `noexcept` operator on another expression in the other.
+const DEFAULTED_SRC: &str = "constexpr int big(int n) { int s = 0; for (int i = 0; i < n; ++i) s += i; return s; }\n\
+template <class T> struct M { int v = big(300) + old(T{}); };\n\
+template <class T> struct D { M<T> m; D() = default; };\n\
+template <class T> struct A { static consteval bool f() { return noexcept(D<T>()); } };\n\
+template <class T> struct B { static consteval bool f() { return noexcept(D<T>{}) && noexcept(T{}); } };\n\
+static_assert(sizeof(A<int>) + sizeof(B<int>) > 0);\n\
+using XA = A<int>;\n\
+using XB = B<int>;\n";
+
+#[test]
+fn a_deduced_exception_specification_is_a_unit() {
+    let f = shared_by_two(DEFAULTED_SRC, "XA::f", "XB::f", None);
+    assert_nested(&f, true);
+    // `old` is not `noexcept`, so neither is the initializer.
+    assert_eq!(f[0].result, Ok(RunValue::Bool(false)), "{:?}", f[0]);
+}
+
+/// `Nsdmi(field)`: a default member initializer instantiated at its first
+/// use by a constructor ([class.base.init]/9.1, [temp.inst]/3): the
+/// defaulted default constructor in one unit, a user-provided one in the
+/// other.
+const NSDMI_SRC: &str = "constexpr int big(int n) { int s = 0; for (int i = 0; i < n; ++i) s += i; return s; }\n\
+template <class T> struct N { int v = big(300) + old(T{}); constexpr N() = default; constexpr N(char) {} };\n\
+template <class T> struct A { static consteval int f() { N<T> n; return n.v; } };\n\
+template <class T> struct B { static consteval int f() { N<T> n('a'); return n.v + 1; } };\n\
+static_assert(sizeof(A<int>) + sizeof(B<int>) > 0);\n\
+using XA = A<int>;\n\
+using XB = B<int>;\n";
+
+#[test]
+fn a_default_member_initializer_is_a_unit() {
+    let f = shared_by_two(NSDMI_SRC, "XA::f", "XB::f", None);
+    assert_nested(&f, true);
+}
+
+/// `Sat(c, args)` and `Atom(e, args)`: a concept's satisfaction
+/// ([temp.constr.atomic]/3) needed by two constrained function templates,
+/// one through a second concept that names it, and one atom reached
+/// directly by two callers with one argument mapping.
+const SAT_SRC: &str = "constexpr int big(int n) { int s = 0; for (int i = 0; i < n; ++i) s += i; return s; }\n\
+template <class T> concept K = big(sizeof(T) * 100) > 0;\n\
+template <class T> concept K2 = K<T> && sizeof(T) > 0;\n\
+template <class T> requires K<T> constexpr int ka() { return 1; }\n\
+template <class T> requires K2<T> constexpr int kb() { return 2; }\n\
+template <class T> struct A { static consteval int f() { return ka<T>(); } };\n\
+template <class T> struct B { static consteval int f() { return kb<T>(); } };\n\
+static_assert(sizeof(A<int>) + sizeof(B<int>) > 0);\n\
+using XA = A<int>;\n\
+using XB = B<int>;\n";
+
+#[test]
+fn a_constraint_satisfaction_is_a_unit() {
+    let f = shared_by_two(SAT_SRC, "XA::f", "XB::f", None);
+    assert_nested(&f, false);
+}
+
+/// One atom of a requires-clause of a member function of a class template
+/// specialization (checked with the class's level and the function's own,
+/// so the check itself is not cached; [temp.constr.decl]/3.3), reached by
+/// two calls with one argument mapping.
+const ATOM_SRC: &str = "constexpr int big(int n) { int s = 0; for (int i = 0; i < n; ++i) s += i; return s; }\n\
+template <class T> struct S {\n\
+  template <class U> static constexpr int m(U) requires (big(sizeof(T) * 100) > 0) { return 1; }\n\
+};\n\
+template <class T> struct A { static consteval int f() { return S<T>::m(1); } };\n\
+template <class T> struct B { static consteval int f() { return S<T>::m(2) + 1; } };\n\
+static_assert(sizeof(A<int>) + sizeof(B<int>) > 0);\n\
+using XA = A<int>;\n\
+using XB = B<int>;\n";
+
+#[test]
+fn an_atomic_constraint_is_a_unit() {
+    let f = shared_by_two(ATOM_SRC, "XA::f", "XB::f", None);
+    assert_nested(&f, false);
+}
+
+/// A kept failure: a constraint whose evaluation exceeds the translation
+/// unit's step limit ([expr.const]/2, [temp.constr.atomic]/3: not a
+/// constant expression) fails every run that reaches it, through either
+/// unit, fresh or used, in either order.
+const SAT_LIMIT_SRC: &str = "constexpr int big(int n) { int s = 0; for (int i = 0; i < n; ++i) s += i; return s; }\n\
+template <class T> requires (big(sizeof(T) * 25000) > 0) constexpr int k() { return 1; }\n\
+template <class T> struct A { static consteval int f() { return k<T>(); } };\n\
+template <class T> struct B { static consteval int f() { return k<T>() + 1; } };\n\
+static_assert(sizeof(A<int>) + sizeof(B<int>) > 0);\n\
+using XA = A<int>;\n\
+using XB = B<int>;\n";
+
+#[test]
+fn a_constraint_over_the_translation_units_limit_fails_alike() {
+    let f = shared_by_two(SAT_LIMIT_SRC, "XA::f", "XB::f", Some(5000));
+    for x in &f {
+        assert_eq!(x.result, Err(RunError::Failed), "{x:?}");
+        assert!(x.nested_steps > 0, "{x:?}");
     }
 }

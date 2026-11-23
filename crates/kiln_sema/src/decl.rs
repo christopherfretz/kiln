@@ -13930,6 +13930,9 @@ impl Sema<'_, '_> {
                 if self.ast.definition(d).is_none() && self.ast.instantiated_from(d).is_some() {
                     let poi = self.nns_poi(loc);
                     let _ = self.instantiate_class(d, poi, true);
+                } else if self.eval_replay.is_some() {
+                    let poi = self.nns_poi_peek(loc);
+                    self.sess_reach_class_decl(d, poi);
                 }
                 Some(self.ast.definition(d).unwrap_or(d))
             }
@@ -13970,7 +13973,8 @@ impl Sema<'_, '_> {
                 let ty = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
                 // [temp.inst]/2: a specialization named through an alias
                 // is instantiated like one named by its template-id.
-                if (self.undefined_spec(ty).is_some() || self.undefined_member_enum(ty).is_some())
+                if (self.undefined_spec_at(ty, self.nns_poi_peek(loc)).is_some()
+                    || self.undefined_member_enum(ty).is_some())
                     && !self.require_complete_nns(ty, loc)
                 {
                     return None;
