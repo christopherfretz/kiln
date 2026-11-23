@@ -57,8 +57,12 @@ void fn(int p, int = 2) try { struct Local { int l, k; }; auto [q, r] = Local{};
 ";
 
 fn parse(on: bool) -> (SourceManager, kiln_source::FileId, kiln_parse::ParsedTu) {
+    parse_src(SRC, on)
+}
+
+fn parse_src(src: &str, on: bool) -> (SourceManager, kiln_source::FileId, kiln_parse::ParsedTu) {
     let sm = SourceManager::new();
-    let file = sm.add_virtual("t.cpp", SRC.to_owned()).expect("location space");
+    let file = sm.add_virtual("t.cpp", src.to_owned()).expect("location space");
     let interner = Arc::new(Interner::new());
     let engine = DiagEngine::new(&sm, &DiagOptions::default(), MemorySink::new());
     let opts = ParseOptions { decl_extents: on, ..ParseOptions::default() };
@@ -191,4 +195,53 @@ fn find_ctor(ast: &Ast) -> DeclId {
             format!("{:?}", n.kind()) == "CXXConstructor" && !n.has(DeclFlags::IMPLICIT)
         })
         .expect("a constructor")
+}
+
+/// Declarations kiln gives one `DeclId` across redeclarations.
+const REDECLS: &str = "\
+template <class T> struct Q {};
+template <> struct Q<int>;
+template <> struct Q<int>;
+template <> struct Q<int> { int m; };
+template <class T> void t(T) {}
+extern template void t(int);
+template void t(int);
+template void t(short);
+";
+
+/// One row per written declaration (spec/ast.md §19.1, WP-2470): a
+/// declaration kiln reuses across redeclarations (an explicit
+/// specialization, an explicit instantiation) keeps every row in source
+/// order, and `decl_extent` answers from the last.
+#[test]
+fn every_redeclaration_keeps_its_row() {
+    let (sm, _, tu) = parse_src(REDECLS, true);
+    let ast = &tu.ast;
+    let t = &ast.decl_extents;
+    let rows = |d: DeclId| -> Vec<&str> { t.rows_of(d).map(|e| text(&sm, e.full)).collect() };
+    let q: Vec<DeclId> =
+        find_all(ast, "Q", "CXXRecord").into_iter().filter(|&d| t.rows_of(d).count() > 1).collect();
+    assert_eq!(q.len(), 1, "one specialization Q<int>");
+    assert_eq!(
+        rows(q[0]),
+        [
+            "template <> struct Q<int>;",
+            "template <> struct Q<int>;",
+            "template <> struct Q<int> { int m; };"
+        ]
+    );
+    assert_eq!(text(&sm, ast.decl_extent(q[0]).expect("Q<int>").body), "{ int m; }");
+    let mut ts: Vec<Vec<&str>> = find_all(ast, "t", "Function")
+        .into_iter()
+        .map(rows)
+        .filter(|r| !r.is_empty() && !r.iter().any(|x| x.contains('{')))
+        .collect();
+    ts.sort();
+    assert_eq!(
+        ts,
+        [
+            vec!["extern template void t(int);", "template void t(int);"],
+            vec!["template void t(short);"],
+        ]
+    );
 }

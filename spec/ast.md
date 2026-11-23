@@ -2126,11 +2126,24 @@ Stage-3 recording sites (WP-1932; all in `kiln_parse`, entries made by
   one naming no member stays `UNRESOLVED`;
 - offsetof member-designators (`Sema::act_on_builtin_offsetof`, a
   sema site: only member lookup knows the member), role `designator`:
-  each member name of `__builtin_offsetof(T, a.b[i].c)`
-  ([support.types.layout]/1), with `MEMBER` and the member lookup found
-  (the member written, past the anonymous members on its way), `DEPENDENT`
-  for each name of a designator deferred to instantiation, `UNRESOLVED`
-  for a name lookup did not find;
+  each member name of `__builtin_offsetof(T, a.b[i].c)` and of the
+  `offsetof` macro that spells it ([support.types.layout]/1; `a`, `b` and
+  `c` are three entries), with `MEMBER` and the member lookup found (the
+  member written, past the anonymous members on its way: the `Field`
+  node of `ExprArena::offsetof_designator` for the name, §6), or
+  `UNRESOLVED` when it names nothing: a name lookup did not find, and
+  every name after a component that failed (a member not found, a
+  bit-field, a subscript of a non-array, an operand that is not a
+  complete class; WP-2471). In a template pattern whose designator is
+  deferred to instantiation (a dependent operand type or a
+  value-dependent index), the names are resolved as clang's
+  `BuildBuiltinOffsetOf` resolves them at the definition: a name into a
+  type that is not dependent is looked up there and has its member
+  (`offsetof(S, a.b[N].c)` names `S::a`, `M::b` and `In::c`), each name
+  from the first dependent type on is `DEPENDENT`, as is one into a class
+  not complete at the definition (the table instantiates nothing), and a
+  name not found there, with every name after it, is `UNRESOLVED`
+  (WP-2471);
 - deduction guides (WP-2100; `note_declarator_ref` on a
   `SpecialName::DeductionGuide` declarator), role `template`: the
   guide's own name names the class template ([temp.deduct.guide]/1),
@@ -3358,6 +3371,29 @@ body, without re-lexing. `kiln_ast::decl_extents`; the field
   (`FunctionTemplate`/`Function`, `ClassTemplate`/`CXXRecord`,
   `VarTemplate`/`Var`, `TypeAliasTemplate`/`TypeAlias`) are one shared
   row.
+- **Keys** (WP-2470). Most redeclarations have a `DeclId` of their own.
+  Some written declarations have none: the AST keeps them under the
+  `DeclId` of the entity they redeclare or name, namely a repeated
+  explicit specialization declaration of a class template
+  (`template <> struct Q<int>;` twice, then its definition), a repeated
+  partial specialization declaration, an opaque enumeration declaration
+  repeated (`enum class E : int;` twice), an explicit instantiation of a
+  class, function or variable specialization or of a member
+  (`template struct S<int>;`, `template void t<int>(int);`,
+  `template void t(short);`, `template int v<int>;`,
+  `template void S<long>::m();`, `template int S<long>::sm;`, an
+  explicit instantiation of a constructor) and an `extern template`
+  declaration of any of these. A row is keyed by (`DeclId`, ordinal):
+  the *n*th declaration of the entity written under that `DeclId` is its
+  *n*th row, in source order, and no later declaration overwrites an
+  earlier one's row. `get(d)` (and `Ast::decl_extent(d)`) is `d`'s last
+  row, `rows_of(d)` every row of `d` in source order; a template sharing
+  its pattern's row shares all of them. An explicit instantiation's row
+  is keyed by the first declaration of the specialization it names (a
+  function template specialization's, a static data member's of the
+  class template specialization): the explicitly instantiated
+  specialization when nothing declared it before, else the explicit
+  specialization it names (which then has a row before it).
 - **No row**: implicit declarations (special members, implicit
   deduction guides, builtins, injected class names, a lambda's closure
   type and its members), instantiations and their members (a client
@@ -3365,17 +3401,30 @@ body, without re-lexing. `kiln_ast::decl_extents`; the field
   the pattern's row), the parameter a `(void)` clause makes and drops,
   and the declarations an error recovery skipped.
   An explicit specialization and an explicit instantiation are written
-  declarations: the row is the specialization's, its range that of the
-  declaration that names it.
-- **Read access** (all on `DeclExtents`): `is_on()`, `get(d)`,
-  `iter()` (every declaration with a row in `DeclId` order, a shared row
-  once per declaration), `len()` (rows, a shared row once),
+  declarations: the row is the specialization's (or the member's, for
+  `template void S<long>::m();`), its range that of the declaration that
+  names it, with its own range, name and qualifier those of its
+  declarator, as for any declarator (a class template's, in the
+  class-specifier's place, those of its elaborated-type-specifier). An
+  explicit instantiation of a function template without template
+  arguments (`template void t(short);`, the specialization deduced,
+  [temp.explicit]/8) has the name `t`. A friend declaration naming a
+  specialization that has a row (`friend struct Q<int>;`) declares
+  nothing new and adds none (§19.5).
+- **Read access** (all on `DeclExtents`): `is_on()`, `get(d)` (the last
+  row), `rows_of(d)` (every row, in source order), `iter()` (every row,
+  by declaration in `DeclId` order and a declaration's rows in source
+  order, a shared row once per declaration), `len()` (rows, a shared
+  row once),
   `module_decls()` (the module and import declarations' rows, §19.9),
   `dump(ast, sm, main)` (§19.7). Helpers on the row: `semi()` (the `;`
   as a span), `qualified_name()` (`[qual, name.hi)`), `prefix()` (the
   decl-specifier part shared by a declarator group).
 - **Writes** go through `set(d, e)`, `entry(d)`, `share(alias, d)`,
-  `push_module_decl(m)` and `get_mut(d)` (no-ops when off), `forget(d)`
+  `push_module_decl(m)` and `get_mut(d)` (no-ops when off; each writes
+  `d`'s last row), `redeclare(d)` (a later declaration of `d` under the
+  same `DeclId` begins: a new, empty last row; the parser's
+  `ext_redecl`), `forget(d)`
   (a declaration the parse made and dropped), `mark()`/`truncate(mark)`
   (§19.6) and `shrink_to_fit()`, which the parser calls once the
   translation unit is parsed (after the end-of-unit instantiations,
@@ -3399,7 +3448,8 @@ kiln token locations (§19.6). An absent part is `Span::INVALID` /
 | `end` | `DeclEnd` (1) | the last token: `Semi` (`;`, `semi()` gives its span), `Brace` (the `}` that ends the body, `full.hi == body.hi`) or `Other` (§19.3) |
 
 Three padding bytes remain. 44 bytes for the row plus 4 bytes of index
-per declaration up to the last one with a row.
+per declaration up to the last one with a row, and 8 more per later row
+of a declaration written more than once under one `DeclId` (§19.1).
 
 ### 19.3 First and last tokens
 
@@ -3463,7 +3513,9 @@ declares. A friend declaration that names a class declared before it
 (`friend struct P;`) or a member of another class (`friend void
 H::h(G&);`, `friend B::~B();`) declares nothing new: the earlier
 declaration keeps its row (WP-1932; the identifier-accounting test of
-§18.8 found the overwrite).
+§18.8 found the overwrite); so does one naming a class template
+specialization with a row (`friend struct Q<int>;` after `template <>
+struct Q<int> {};`, WP-2470). The `Friend` has its own row either way.
 
 ### 19.6 Locations, speculation, PCH, modules
 
@@ -3482,12 +3534,15 @@ declaration keeps its row (WP-1932; the identifier-accounting test of
   and unit-tested.
 - **PCH.** The table is written into snapshots (§17; FORMAT_VERSION
   129; 146 since WP-2091, which adds the module and import declarations'
-  rows), with its on bit; the consumer then sets that bit from its own
+  rows; 152 since WP-2470, which adds the later rows of §19.1), with its
+  on bit; the consumer then sets that bit from its own
   options. `-fkiln-decl-extents` is part of the PCH identity (a producer
   and a consumer must agree); `-fkiln-dump-decl-extents` is not, and
   makes the producer take two passes.
 - **Module images** (spec/modules.md §11.11; IMAGE_VERSION 62, 79
-  since WP-2091). A module unit parsed with the table on carries a row
+  since WP-2091, 81 since WP-2470, which carries every row of a
+  declaration written more than once). A module unit parsed with the
+  table on carries a row
   per record that has one and per parameter of a function record,
   located in the image's location space; an importer whose table is on
   gives the declarations it builds the same rows (a template sharing its
@@ -3518,7 +3573,8 @@ declaration keeps its row (WP-1932; the identifier-accounting test of
 ### 19.7 The dump
 
 `-fkiln-dump-decl-extents` prints, at the end of the TU, one line per
-declaration with a row in `DeclId` order:
+row (`iter()`): by declaration in `DeclId` order, a declaration written
+more than once under one `DeclId` (§19.1) once per row in source order:
 
 ```
 <Kind> '<name>'  full=<L:C>-<L:C> <;|}|-> [own=..] [name=<L:C>-<L:C> '<text>'] [qual=<L:C>] [body=..] [specs-end=<L:C>] [exp=<L:C>]

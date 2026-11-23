@@ -604,3 +604,83 @@ fn leading_colons_and_tildes_through_the_api() {
         assert!(t.is_empty() && t.leads().is_empty());
     });
 }
+
+const OFFSETOF: &str = "struct In { int c; int d[3]; };\n\
+                        struct M { int x; In b[2]; };\n\
+                        struct S { int q; M a; union { int u; float f; }; };\n\
+                        unsigned long o1 = __builtin_offsetof(S, a.b[1].c);\n\
+                        unsigned long o2 = __builtin_offsetof(S, u);\n\
+                        template <int N> unsigned long o3 = __builtin_offsetof(S, a.b[N].nope.c);\n\
+                        template <class T> unsigned long o4 = __builtin_offsetof(T, a.b);\n";
+
+/// The member names of an offsetof designator ([support.types.layout]/1;
+/// spec/ast.md §18.4, WP-2471): each component is an entry naming the
+/// member the expression's resolved designator holds at that name
+/// (`ExprArena::offsetof_designator`, the last `Field` node ending
+/// there: a union's member, not the anonymous union); with a
+/// value-dependent index the names into a non-dependent type bind at
+/// the definition, the one lookup does not find and every name after it
+/// are `UNRESOLVED` (not `DEPENDENT`), and the names into a dependent
+/// type are `DEPENDENT`.
+#[test]
+fn offsetof_designators_are_entries_support_types_layout_1() {
+    use kiln_ast::ExprId;
+    use kiln_ast::expr::{ExprKind, OffsetofNode};
+    use kiln_ast::written_refs::{REF_DEPENDENT, REF_MEMBER, REF_UNRESOLVED, WrittenRef};
+    with_ast(OFFSETOF, |ast, sm| {
+        let des: Vec<WrittenRef> = ast
+            .written_refs
+            .iter()
+            .map(|(_, r)| *r)
+            .filter(|r| r.role == RefRole::Designator)
+            .collect();
+        assert!(des.iter().all(|r| r.flags & REF_MEMBER != 0));
+        let line = |r: &WrittenRef| line_col(sm, r.range.lo).0;
+        let on = |l: u32| -> Vec<(String, bool, u8)> {
+            des.iter()
+                .filter(|r| line(r) == l)
+                .map(|r| {
+                    let text = sm.span_text(r.range).unwrap_or("?").to_owned();
+                    (text, r.entity.is_some(), r.flags & (REF_DEPENDENT | REF_UNRESOLVED))
+                })
+                .collect()
+        };
+        let named = |v: &[(&str, bool, u8)]| -> Vec<(String, bool, u8)> {
+            v.iter().map(|&(n, e, f)| (n.to_owned(), e, f)).collect()
+        };
+        assert_eq!(on(4), named(&[("a", true, 0), ("b", true, 0), ("c", true, 0)]));
+        assert_eq!(on(5), named(&[("u", true, 0)]));
+        assert_eq!(
+            on(6),
+            named(&[
+                ("a", true, 0),
+                ("b", true, 0),
+                ("nope", false, REF_UNRESOLVED),
+                ("c", false, REF_UNRESOLVED),
+            ])
+        );
+        assert_eq!(on(7), named(&[("a", false, REF_DEPENDENT), ("b", false, REF_DEPENDENT)]));
+        // Each entry of a non-dependent designator names the member its
+        // resolved designator holds at that name.
+        let mut checked = 0;
+        for e in (1..=ast.exprs.len()).map(|i| ExprId::new(u32::try_from(i).expect("index"))) {
+            if ast.exprs.get(e).kind() != ExprKind::OffsetOfExpr {
+                continue;
+            }
+            let Some((_, nodes)) = ast.exprs.offsetof_designator(e) else { continue };
+            let field = |r: &WrittenRef| {
+                nodes.iter().rev().find_map(|n| match *n {
+                    OffsetofNode::Field { field, end, .. } if end == r.range.lo => Some(field),
+                    _ => None,
+                })
+            };
+            for r in &des {
+                if let Some(f) = field(r) {
+                    assert_eq!(r.entity, Some(f), "{:?}", sm.span_text(r.range));
+                    checked += 1;
+                }
+            }
+        }
+        assert_eq!(checked, 4, "a, b, c and u");
+    });
+}

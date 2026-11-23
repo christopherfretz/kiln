@@ -938,6 +938,20 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   `/etc/localtime`), as clang spells it (`"Sun Nov 22 21:05:00 2026"`),
   instead of `??? ??? ?? ??:??:?? ????`; standard input has time 0, as in
   clang (WP-2331, spec/pp.md "Builtin macros").
+- The declaration-extent table (`-fkiln-decl-extents`) gives every
+  written declaration its own row (WP-2470, spec/ast.md §19.1): an
+  explicit instantiation of a function template, a variable template, a
+  member function or a static data member (`template void S<long>::m();`,
+  `template void t(short);`) has one, and an `extern template`
+  declaration and the later explicit instantiation definition, a
+  repeated explicit or partial specialization declaration and a repeated
+  opaque enumeration declaration no longer overwrite the earlier
+  declaration's row: rows are keyed by declaration and ordinal
+  (`DeclExtents::rows_of`). The written-reference table records every
+  member name of an `offsetof` designator (WP-2471, §18.4): the names
+  after a component that failed are `UNRESOLVED`, and a template's
+  designator deferred to instantiation resolves the names into a type
+  that is not dependent. PCH format 152, module image 81.
 - An evaluation-session run on a thread other than the one that
   compiled the session checks that thread's stack guard (WP-2410,
   spec/eval-session.md §9): it failed "stack exhausted" at its first

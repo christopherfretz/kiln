@@ -12,3 +12,11 @@ enum class Color { red, green };
 export {
 int top(int a, int b = 2);
 }
+export namespace geo {
+template <class T> struct Box {};
+template <class T> struct Box<T *>;
+template <class T> struct Box<T *> {};
+enum class Opaque : int;
+enum class Opaque : int;
+template struct Box<int>;
+} // namespace geo

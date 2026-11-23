@@ -5,8 +5,11 @@
 //! Opt-in, like the written-reference table (§18): off by default, and
 //! off every recording site is one branch on [`DeclExtents::is_on`] and
 //! nothing is allocated. On, the parser records one [`DeclExtent`] per
-//! declaration it parsed, keyed by the declaration; a template shares its
-//! pattern's row. Implicit declarations and instantiations have none.
+//! declaration it parsed, keyed by the declaration and, for a declaration
+//! written more than once under one id (an explicit instantiation, a
+//! repeated explicit specialization), its ordinal among those writings
+//! ([`DeclExtents::rows_of`]; WP-2470); a template shares its pattern's
+//! rows. Implicit declarations and instantiations have none.
 //! Module and import declarations, which are preprocessing directives
 //! with no declaration node, have rows of their own kind
 //! ([`ModuleDeclExtent`], spec/ast.md §19.9).
@@ -176,9 +179,14 @@ pub struct DeclExtents {
     on: bool,
     /// The rows, in recording order.
     rows: Vec<DeclExtent>,
-    /// By declaration index: the row + 1, or 0 for none. Grown on demand,
-    /// so it ends at the last declaration with a row.
+    /// By declaration index: its first row + 1, or 0 for none. Grown on
+    /// demand, so it ends at the last declaration with a row.
     index: Vec<u32>,
+    /// The later rows of a declaration written more than once under one
+    /// [`DeclId`] (a redeclaration the AST merges into the declaration it
+    /// redeclares, an explicit instantiation of a specialization; WP-2470):
+    /// `(first row, row)`, ascending.
+    more: Vec<(u32, u32)>,
     /// The module and import declarations, in the order the parser saw
     /// them (WP-2091).
     modules: Vec<ModuleDeclExtent>,
@@ -196,7 +204,8 @@ impl DeclExtents {
         self.on = on;
     }
 
-    /// The number of rows (a template sharing its pattern's counts once).
+    /// The number of rows (a template sharing its pattern's counts once;
+    /// a declaration written more than once counts once per writing).
     pub fn len(&self) -> usize {
         self.rows.len()
     }
@@ -206,26 +215,54 @@ impl DeclExtents {
         self.rows.is_empty()
     }
 
-    fn row_of(&self, d: DeclId) -> Option<usize> {
+    /// `d`'s first row.
+    fn first_row(&self, d: DeclId) -> Option<usize> {
         match self.index.get(d.index() as usize) {
             Some(&r) if r != 0 => Some(r as usize - 1),
             _ => None,
         }
     }
 
-    /// The extents of declaration `d`, if it was parsed with recording on.
+    /// The later rows of the declaration whose first row is `first`.
+    fn more_of(&self, first: usize) -> &[(u32, u32)] {
+        let f = first as u32;
+        let lo = self.more.partition_point(|&(x, _)| x < f);
+        let hi = self.more.partition_point(|&(x, _)| x <= f);
+        &self.more[lo..hi]
+    }
+
+    /// `d`'s last row: that of the last declaration of it written.
+    fn row_of(&self, d: DeclId) -> Option<usize> {
+        let first = self.first_row(d)?;
+        Some(self.more_of(first).last().map_or(first, |&(_, r)| r as usize))
+    }
+
+    /// The extents of declaration `d`, if it was parsed with recording
+    /// on: the row of the last declaration of `d` written, when `d` was
+    /// written more than once under one id ([`Self::rows_of`] has every
+    /// one).
     pub fn get(&self, d: DeclId) -> Option<&DeclExtent> {
         self.row_of(d).map(|r| &self.rows[r])
     }
 
-    /// Every declaration with extents, in declaration-id order.
+    /// Every row of declaration `d`, in source order: one per declaration
+    /// of `d` written under this id (spec/ast.md §19.1; WP-2470).
+    pub fn rows_of(&self, d: DeclId) -> impl Iterator<Item = &DeclExtent> + '_ {
+        let first = self.first_row(d);
+        let more = first.map_or(&[][..], |f| self.more_of(f));
+        first.into_iter().chain(more.iter().map(|&(_, r)| r as usize)).map(|r| &self.rows[r])
+    }
+
+    /// Every row, by declaration in declaration-id order, a declaration's
+    /// rows in source order ([`Self::rows_of`]).
     pub fn iter(&self) -> impl Iterator<Item = (DeclId, &DeclExtent)> + '_ {
-        self.index.iter().enumerate().filter(|(_, r)| **r != 0).map(|(i, &r)| {
-            (DeclId::new(u32::try_from(i).unwrap_or(u32::MAX)), &self.rows[r as usize - 1])
+        self.index.iter().enumerate().filter(|(_, r)| **r != 0).flat_map(|(i, _)| {
+            let d = DeclId::new(u32::try_from(i).unwrap_or(u32::MAX));
+            self.rows_of(d).map(move |e| (d, e))
         })
     }
 
-    /// Records `e` as `d`'s extents (replacing earlier ones); nothing
+    /// Records `e` as `d`'s extents (replacing its last row); nothing
     /// when off.
     pub fn set(&mut self, d: DeclId, e: DeclExtent) {
         if !self.on {
@@ -241,6 +278,29 @@ impl DeclExtents {
         }
         self.rows.push(e);
         self.index[i] = u32::try_from(self.rows.len()).expect("extent table exhausted");
+    }
+
+    /// Starts a new, empty row for `d`, written by a later declaration of
+    /// it under the same id (an explicit instantiation of a specialization
+    /// declared before, a repeated explicit or partial specialization
+    /// declaration, an opaque enumeration redeclared; WP-2470): the
+    /// earlier rows stay, and the writes that follow (`set`, `entry`,
+    /// `get_mut`) go to the new one. Nothing when off; the first row
+    /// when `d` has none.
+    pub fn redeclare(&mut self, d: DeclId) {
+        if !self.on {
+            return;
+        }
+        let Some(first) = self.first_row(d) else {
+            self.set(d, DeclExtent::default());
+            return;
+        };
+        self.rows.push(DeclExtent::default());
+        let r = u32::try_from(self.rows.len() - 1).expect("extent table exhausted");
+        // `r` is the largest row: it goes after `first`'s other rows.
+        let f = first as u32;
+        let at = self.more.partition_point(|&(x, _)| x <= f);
+        self.more.insert(at, (f, r));
     }
 
     /// The module and import declarations' rows, in source order.
@@ -260,6 +320,7 @@ impl DeclExtents {
     pub fn shrink_to_fit(&mut self) {
         self.rows.shrink_to_fit();
         self.index.shrink_to_fit();
+        self.more.shrink_to_fit();
         self.modules.shrink_to_fit();
     }
 
@@ -289,12 +350,23 @@ impl DeclExtents {
         }
     }
 
+    /// True when `alias` shares `d`'s rows ([`Self::share`]).
+    pub fn shares(&self, alias: DeclId, d: DeclId) -> bool {
+        self.first_row(alias).is_some_and(|a| Some(a) == self.first_row(d))
+    }
+
     /// Drops `d`'s row, for a declaration the parse made and then
     /// discarded (the `void` of `(void)`): the row itself when it is the
     /// last one, else only `d`'s entry.
     pub fn forget(&mut self, d: DeclId) {
         let Some(r) = self.row_of(d) else { return };
-        if r + 1 == self.rows.len() {
+        if let Some(k) = self.more.iter().position(|&(_, x)| x as usize == r) {
+            // A later row of `d`: only it goes.
+            self.more.remove(k);
+            if r + 1 == self.rows.len() {
+                self.rows.pop();
+            }
+        } else if r + 1 == self.rows.len() {
             self.truncate(ExtentMark(r as u32));
         } else if let Some(x) = self.index.get_mut(d.index() as usize) {
             *x = 0;
@@ -319,6 +391,8 @@ impl DeclExtents {
             return;
         }
         self.rows.truncate(n as usize);
+        // A later row's first row is before it.
+        self.more.retain(|&(_, r)| r < n);
         for r in &mut self.index {
             if *r > n {
                 *r = 0;
@@ -339,6 +413,13 @@ impl DeclExtents {
         if self.index.iter().any(|&r| r as usize > self.rows.len()) {
             return Err("declaration extent index past its rows");
         }
+        // A later row comes after its first row, inside the rows, and the
+        // list ascends.
+        let later_ok = self.more.iter().all(|&(f, r)| f < r && (r as usize) < self.rows.len())
+            && self.more.windows(2).all(|w| w[0] < w[1]);
+        if !later_ok {
+            return Err("declaration extent later rows out of order");
+        }
         if self.modules.iter().any(|m| m.before as usize > decls + 1) {
             return Err("module declaration extent past the decl arena");
         }
@@ -357,9 +438,11 @@ impl DeclExtents {
             (self.rows.len() + self.modules.len()) as u64,
             self.rows.len() as u64 * sz
                 + self.index.len() as u64 * 4
+                + self.more.len() as u64 * 8
                 + self.modules.len() as u64 * msz,
             self.rows.capacity() as u64 * sz
                 + self.index.capacity() as u64 * 4
+                + self.more.capacity() as u64 * 8
                 + self.modules.capacity() as u64 * msz,
         ))
     }
@@ -585,6 +668,47 @@ mod tests {
         assert_eq!(t.get(b).map(|e| e.full.hi), Some(Loc::from_raw(4)));
         assert_eq!(t.iter().count(), 1);
         t.forget(a);
+    }
+
+    #[test]
+    fn redeclare_keeps_every_row() {
+        let mut t = DeclExtents::default();
+        t.redeclare(row_id(3));
+        assert!(t.is_empty());
+        t.set_on(true);
+        let (a, b, alias) = (row_id(3), row_id(5), row_id(6));
+        // No row yet: the first one.
+        t.redeclare(a);
+        t.set(a, row(1, 2));
+        t.set(b, row(3, 4));
+        t.share(alias, b);
+        t.redeclare(a);
+        t.set(a, row(5, 6));
+        t.redeclare(b);
+        t.set(b, row(7, 8));
+        t.redeclare(a);
+        t.set(a, row(9, 10));
+        let his = |t: &DeclExtents, d| t.rows_of(d).map(|e| e.full.hi.to_raw()).collect::<Vec<_>>();
+        assert_eq!(his(&t, a), [2, 6, 10]);
+        assert_eq!(his(&t, b), [4, 8]);
+        // A template sharing its pattern's row shares its later rows.
+        assert_eq!(his(&t, alias), [4, 8]);
+        assert_eq!(t.get(a).map(|e| e.full.hi.to_raw()), Some(10));
+        assert_eq!(t.len(), 5);
+        let all: Vec<_> = t.iter().map(|(d, e)| (d.index(), e.full.hi.to_raw())).collect();
+        assert_eq!(all, [(3, 2), (3, 6), (3, 10), (5, 4), (5, 8), (6, 4), (6, 8)]);
+        assert_eq!(t.check_restored(6), Ok(()));
+        // The last declaration made and dropped takes only its row.
+        t.forget(a);
+        assert_eq!(his(&t, a), [2, 6]);
+        let m = t.mark();
+        t.redeclare(b);
+        t.set(b, row(11, 12));
+        t.truncate(m);
+        assert_eq!(his(&t, b), [4, 8]);
+        t.shrink_to_fit();
+        let m = t.mem_row().map(|r| (r.live_bytes, r.reserved_bytes));
+        assert!(m.is_some_and(|(b, r)| b == r), "{m:?}");
     }
 
     #[test]

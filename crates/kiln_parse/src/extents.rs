@@ -80,6 +80,18 @@ impl Parser<'_, '_> {
         self.s.ast.decl_extents.get_mut(d)
     }
 
+    /// A declaration of `d` written after an earlier one that the AST
+    /// keeps under the same id (an explicit instantiation of a
+    /// specialization, a repeated explicit or partial specialization, an
+    /// opaque enumeration redeclared) begins: when `d` has a row, the
+    /// writes that follow go to a new row of its own, and the earlier
+    /// declaration keeps its row (spec/ast.md §19.1; WP-2470).
+    pub(crate) fn ext_redecl(&mut self, d: DeclId) {
+        if self.ext_on() && self.s.ast.decl_extents.get(d).is_some() {
+            self.s.ast.decl_extents.redeclare(d);
+        }
+    }
+
     /// Completes the rows of `decls`, one declaration that began at
     /// `begin` and ends at the last token consumed: `full`, `end`, and
     /// `own` where no narrower part was recorded.
