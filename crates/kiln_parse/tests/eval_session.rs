@@ -470,7 +470,7 @@ fn entry_lookup_errors() {
     session(
         "consteval int ov() { return 1; }\n\
          consteval int ov(int) { return 2; }\n\
-         constexpr int not_consteval() { return 3; }\n\
+         int not_constexpr() { return 3; }\n\
          consteval int params(int x) { return x; }\n\
          consteval double real() { return 1.0; }\n\
          int var;\n\
@@ -486,7 +486,7 @@ fn entry_lookup_errors() {
             assert!(matches!(err(s, "n::missing"), EntryError::NotFound { .. }));
             assert!(matches!(err(s, "nowhere::f"), EntryError::NotFound { .. }));
             assert_eq!(err(s, "ov"), EntryError::Overloaded { name: "ov".into(), count: 2 });
-            assert_eq!(err(s, "not_consteval"), EntryError::NotConsteval);
+            assert_eq!(err(s, "not_constexpr"), EntryError::NotConstexpr);
             assert_eq!(err(s, "params"), EntryError::HasParameters);
             assert_eq!(err(s, "real"), EntryError::WrongReturnType);
             assert_eq!(err(s, "var"), EntryError::NotAFunction);

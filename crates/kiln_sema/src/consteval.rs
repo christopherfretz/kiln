@@ -1662,7 +1662,7 @@ impl Sema<'_, '_> {
 
     /// clang `DiagnoseImmediateEscalatingReason`: why the escalated
     /// function `f` is immediate, if it is one.
-    fn escalation_reason_note(&self, f: DeclId) -> Option<kiln_diag::Diag> {
+    pub(crate) fn escalation_reason_note(&self, f: DeclId) -> Option<kiln_diag::Diag> {
         // clang names the reason for a generic lambda's call operator
         // specialization, not for a non-template call operator.
         let plain_call_op = self.is_lambda_call_op(f)

@@ -331,8 +331,10 @@ impl Oven {
         self.memo.entries()
     }
 
-    /// Runs entry `f` (a `consteval` function without parameters
-    /// returning `void` or an integral type; the caller checked) under
+    /// Runs entry `f` (a `constexpr` or `consteval` function without
+    /// parameters returning `void` or an integral type; the caller
+    /// checked) as a manifestly constant-evaluated call that is not
+    /// plainly constant-evaluated (spec/eval-session.md §4) under
     /// `budget`, stopping when `cancel` is cancelled. `at` is the
     /// location the call is reported at. Host calls reach `b`'s handler
     /// (`SemaBridge::host_calls`).

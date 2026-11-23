@@ -110,6 +110,52 @@ fn opened_from_a_command_line() {
     std::fs::remove_dir_all(&d).unwrap();
 }
 
+/// WP-2072: a `constexpr` entry over the standard library's own
+/// constant-evaluation paths (`std::is_constant_evaluated()` in
+/// `std::vector` and `std::string`, [meta.const.eval]): the run is
+/// manifestly constant-evaluated (spec/eval-session.md §4).
+#[test]
+fn a_constexpr_entry_over_the_standard_library() {
+    let d = scratch(
+        "constexpr",
+        &[(
+            "t.cpp",
+            "#include <string>\n\
+             #include <type_traits>\n\
+             #include <vector>\n\
+             constexpr int entry() {\n\
+               std::vector<int> v;\n\
+               for (int i = 0; i < 1000; ++i) v.push_back(i);\n\
+               std::string s = \"abc\";\n\
+               s += \"defgh\";\n\
+               return v.back() + (int)s.size() + (std::is_constant_evaluated() ? 1000 : 0);\n\
+             }\n\
+             constexpr int leaks() { return *new int(1); }\n",
+        )],
+    );
+    let err = Captured::default();
+    let cl = ["-std=c++26".to_owned(), d.join("t.cpp").to_string_lossy().into_owned()];
+    let got = with_eval_session(&kilnpp(), &cl, io(&err), |fe| {
+        let mut fe = fe.expect("session opens");
+        let e = fe.session.entry_named("entry").expect("a constexpr entry");
+        let mut out = Vec::new();
+        for _ in 0..3 {
+            let r = fe.session.run(e, &mut Seven, RunBudget::PROGRAM, &CancelToken::new());
+            assert!(r.diagnostics.is_empty(), "{:?}", r.diagnostics);
+            out.push((r.result, r.steps, r.calls));
+        }
+        let e = fe.session.entry_named("leaks").expect("a constexpr entry");
+        let r = fe.session.run(e, &mut Seven, RunBudget::PROGRAM, &CancelToken::new());
+        let text: Vec<&str> = r.diagnostics.iter().map(|d| d.message.as_str()).collect();
+        assert_eq!(text, ["call to constexpr function 'leaks' is not a constant expression"]);
+        out
+    });
+    assert_eq!(err.text(), "");
+    assert_eq!(got[0].0, Ok(RunValue::Signed(999 + 8 + 1000)));
+    assert!(got.iter().all(|g| *g == got[0]), "{got:?}");
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
 #[test]
 fn a_translation_unit_with_errors_is_refused() {
     let d = scratch("refused", &[("t.cpp", "int x = ;\n")]);

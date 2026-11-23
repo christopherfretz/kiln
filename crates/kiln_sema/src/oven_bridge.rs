@@ -87,6 +87,19 @@ impl SemaBridge for Bridge<'_, '_, '_> {
         // evaluation). Implicit and defaulted members are defined here on
         // demand from WP-067b.
         if let Some(b) = self.sema.defined_body(f) {
+            // Instantiated by other work (another function's
+            // instantiation, in this run or an earlier one): this
+            // compilation reaches it, so the function's compilation is
+            // recorded with it and every later call replays and charges
+            // it (spec/eval-session.md §5.1; WP-2072).
+            if self.sema.eval_replay.is_some() && self.sema.ast.instantiated_from(f).is_some() {
+                let key = crate::session::Key::Inst(self.sema.member_redecl_instance(f));
+                if self.sema.sess_recorded(&key) {
+                    let poi =
+                        self.sema.inst.eval_loc.unwrap_or_else(|| self.sema.ast.decls.get(f).loc());
+                    self.sema.lend_oven(oven, |s| s.sess_reach_at(&key, poi));
+                }
+            }
             return Some(b);
         }
         if let Some(b) = self.sema.define_virtual_dtor(f) {

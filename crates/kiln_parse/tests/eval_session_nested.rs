@@ -295,6 +295,32 @@ fn an_initializer_read_under_a_small_budget_keeps_no_failure() {
     }
 }
 
+/// Found by WP-2072: a member function instantiated by another
+/// function's instantiation (`c`'s body uses `a`) was compiled later in
+/// the same run without reaching its instantiation, so the next run that
+/// called it first (`X::a`) was charged nothing and replayed nothing.
+const INST_BY_OTHER_SRC: &str = "constexpr int fib(int n) { return n < 2 ? n : fib(n - 1) + fib(n - 2); }\n\
+template <class T> struct W {\n\
+  static constexpr int k = sizeof(T) + fib(10);\n\
+  static constexpr int helper() { return old(k + T{}) + fib(12); }\n\
+  static consteval int a() { return helper() + 1; }\n\
+  static consteval int c() { return a() + 2; }\n\
+};\n\
+static_assert(sizeof(W<long>) > 0);\n\
+using X = W<long>;\n";
+
+#[test]
+fn a_function_instantiated_by_other_work_is_reached_by_its_compile() {
+    let f = fresh(INST_BY_OTHER_SRC, &["X::a", "X::c"]);
+    assert!(has(&f[0], "'old' is deprecated") && f[0].nested_steps > 0, "{:?}", f[0]);
+    session(INST_BY_OTHER_SRC, |s, sm| {
+        for _ in 0..2 {
+            assert_eq!(run(s, sm, "X::c"), f[1]);
+            assert_eq!(run(s, sm, "X::a"), f[0]);
+        }
+    });
+}
+
 // ---- the acceptance criterion: determinism ---------------------------------
 
 /// Nested work inside nested work (`Outer<T>::v`'s evaluation calls
