@@ -274,9 +274,10 @@ pub enum RunError {
     /// An exception left the entry (§8 "`Uncaught`").
     Uncaught {
         /// The exception object's type, fully qualified as
-        /// `display_string_of` spells it, with its class's (or
-        /// enumeration's) first declaration when that existed at open
-        /// (§4.1's rule; WP-2480).
+        /// `display_string_of` spells it, its key (the type's
+        /// `type_key`), and its class's (or enumeration's) first
+        /// declaration when that existed at open (§4.1's rules;
+        /// WP-2480, WP-3481).
         ty: Entity,
         /// Its `what()`, when it derives from `std::exception`.
         what: Option<String>,

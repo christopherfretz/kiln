@@ -513,7 +513,7 @@ fn classes_with_virtual_bases() {
                 |kind, name: &str, value| kiln_parse::Field { kind, name: name.into(), value };
             let rec = |ty: &str, fields: Vec<kiln_parse::Field>, vb: Vec<kiln_parse::Field>| {
                 RunValue::Record(Box::new(kiln_parse::RecordValue {
-                    ty: kiln_parse::Entity { display: ty.into(), decl: None },
+                    ty: kiln_parse::Entity { display: ty.into(), key: ty.into(), decl: None },
                     union: false,
                     fields: fields.into_boxed_slice(),
                     virtual_bases: vb.into_boxed_slice(),
@@ -1532,6 +1532,212 @@ fn an_uncaught_type_is_spelled_by_one_rule() {
                 let quoted = format!("of type '{note_spelling}");
                 assert!(notes.iter().any(|n| n.contains(&quoted)), "{entry}: {notes:?}");
             }
+        },
+    );
+}
+
+/// The source of the entity key tests (WP-3481): types and declarations
+/// that `display_string_of` can spell alike.
+const KEYED: &str = "template <class T> struct store { int n; };\n\
+template <auto P> struct S { int n; };\n\
+namespace { struct Hidden { int h; }; }\n\
+namespace m { struct Hidden { int h; }; }\n\
+enum class Color : int { red, green };\n\
+consteval auto lf() { struct Local { int a; }; return store<Local>{1}; }\n\
+consteval auto lg() { struct Local { int a; }; return store<Local>{2}; }\n\
+consteval S<(int *)nullptr> sint() { return {1}; }\n\
+consteval S<(char *)nullptr> schar() { return {2}; }\n\
+consteval S<nullptr> snull() { return {3}; }\n\
+consteval Hidden hidden() { return {4}; }\n\
+consteval m::Hidden mhidden() { return {5}; }\n\
+consteval Color color() { return Color::green; }\n\
+consteval auto local_enum() { enum class E { a, b }; return E::b; }\n\
+constexpr void sib(bool b) {\n\
+  if (b) { struct L { int x; }; throw L{1}; }\n\
+  else { struct L { int y; }; throw L{2}; }\n\
+}\n\
+consteval int sib1() { sib(true); return 0; }\n\
+consteval int sib2() { sib(false); return 0; }\n\
+consteval int throw_enum() { throw Color::red; }\n\
+constexpr const int* stat(bool b) {\n\
+  if (b) { static constexpr int x = 1; return &x; }\n\
+  else { static constexpr int x = 2; return &x; }\n\
+}\n\
+consteval const int* x1() { return stat(true); }\n\
+consteval const int* x2() { return stat(false); }\n\
+constexpr int ov(int) { return 1; }\n\
+constexpr int ov(long) { return 2; }\n\
+consteval auto ov_int() { return static_cast<int (*)(int)>(ov); }\n\
+consteval auto ov_long() { return static_cast<int (*)(long)>(ov); }\n\
+struct Mb { int a; };\n\
+struct Md : Mb { int d; };\n\
+consteval int Md::* mp() { return &Md::a; }\n\
+constexpr const int& tref = 5;\n\
+consteval const int* temp() { return &tref; }\n";
+
+/// Every key the [`KEYED`] entries give, by entry, in a fixed order;
+/// `rev` runs the entries in the reverse order first (no key depends on
+/// what ran before).
+fn keyed_keys(s: &mut EvalSession<'_, '_>, rev: bool) -> Vec<(String, String)> {
+    let records = ["lf", "lg", "sint", "schar", "snull", "hidden", "mhidden"];
+    let enums = ["color", "local_enum"];
+    let throws = ["sib1", "sib2", "throw_enum"];
+    let ptrs = ["x1", "x2", "ov_int", "ov_long", "temp"];
+    if rev {
+        for e in ptrs.iter().rev().chain(enums.iter().rev()).chain(records.iter().rev()) {
+            let _ = val(s, e);
+        }
+        for e in throws.iter().rev() {
+            let _ = uncaught(s, e);
+        }
+    }
+    let mut out = Vec::new();
+    for e in records {
+        out.push((e.to_owned(), record(&val(s, e)).ty.key.to_string()));
+    }
+    for e in enums {
+        let RunValue::Enum(v) = val(s, e) else { panic!("{e}: not an enumeration") };
+        out.push((e.to_owned(), v.ty.key.to_string()));
+    }
+    for e in throws {
+        out.push((e.to_owned(), uncaught(s, e).0.key.to_string()));
+    }
+    for e in ptrs {
+        let p = val(s, e);
+        let key = match &pointer(&p).base {
+            PointerBase::Variable(x) | PointerBase::Function(x) | PointerBase::Temporary(x) => {
+                x.key.to_string()
+            }
+            other => panic!("{e}: {other:?}"),
+        };
+        out.push((e.to_owned(), key));
+    }
+    let RunValue::MemberPointer(m) = val(s, "mp") else { panic!("mp: not a member pointer") };
+    out.push(("mp".to_owned(), m.member.key.to_string()));
+    out.extend(m.path.iter().map(|c| ("mp path".to_owned(), c.key.to_string())));
+    out
+}
+
+/// WP-3481 (spec/eval-session.md §4.1 "Entity keys", spec/types.md §12.1): an
+/// `Entity` carries the key printer's key, which tells apart the types
+/// and declarations `display_string_of` spells alike: local classes of
+/// one name in two functions and in sibling blocks of one function
+/// ([class.local]), an unnamed namespace's class ([namespace.unnamed]),
+/// null pointer template arguments of different types ([temp.arg.nontype]),
+/// enumerations, uncaught exceptions' types ([except.throw]), static
+/// locals of one name ([stmt.dcl]/3), overloads ([over]) and members.
+/// The keys are the same in a second session on the same translation
+/// unit that ran the entries in another order.
+#[test]
+fn entity_keys_tell_apart_what_spellings_do_not() {
+    let first = session(KEYED, |s| {
+        // The displays the keys disambiguate print alike.
+        let st = |s: &mut EvalSession<'_, '_>, e: &str| record(&val(s, e)).ty.clone();
+        let (a, b) = (st(s, "sint"), st(s, "schar"));
+        assert_eq!(a.display, b.display, "{a:?} {b:?}");
+        assert_ne!(a.key, b.key);
+        let (a, b) = (uncaught(s, "sib1").0, uncaught(s, "sib2").0);
+        assert_eq!(a.display, b.display, "{a:?} {b:?}");
+        assert_ne!(a.key, b.key);
+        // Both local `L`s were declared before open: `decl` tells them
+        // apart too, and agrees with the key.
+        assert!(a.decl.is_some() && b.decl.is_some() && a.decl != b.decl);
+        let (x1, x2) = (val(s, "x1"), val(s, "x2"));
+        let (PointerBase::Variable(a), PointerBase::Variable(b)) =
+            (&pointer(&x1).base, &pointer(&x2).base)
+        else {
+            panic!("{x1:?} {x2:?}")
+        };
+        assert_eq!(a.display, b.display, "{a:?} {b:?}");
+        assert_ne!(a.key, b.key);
+        keyed_keys(s, false)
+    });
+    let k: Vec<(&str, &str)> = first.iter().map(|(e, k)| (e.as_str(), k.as_str())).collect();
+    assert_eq!(
+        k,
+        [
+            ("lf", "store<lf()::Local>"),
+            ("lg", "store<lg()::Local>"),
+            ("sint", "S<(int *)nullptr>"),
+            ("schar", "S<(char *)nullptr>"),
+            ("snull", "S<nullptr>"),
+            ("hidden", "(anonymous namespace)::Hidden"),
+            ("mhidden", "m::Hidden"),
+            ("color", "Color"),
+            ("local_enum", "local_enum()::E"),
+            ("sib1", "sib(bool)::L"),
+            ("sib2", "sib(bool)::L#2"),
+            ("throw_enum", "Color"),
+            ("x1", "stat(bool)::x"),
+            ("x2", "stat(bool)::x#2"),
+            ("ov_int", "ov(int)"),
+            ("ov_long", "ov(long)"),
+            ("temp", "tref"),
+            ("mp", "Mb::a"),
+            ("mp path", "Md"),
+        ]
+    );
+    // An enumeration's key is the same as a value and as a thrown type.
+    assert_eq!(first[7].1, first[11].1);
+    // Distinct entities of one kind never share a key.
+    for (i, (e, key)) in first.iter().enumerate().take(11) {
+        if *e != "throw_enum" {
+            assert!(!first[..i].iter().any(|(f, k)| k == key && *f != "throw_enum"), "{e}: {key}");
+        }
+    }
+    let second = session(KEYED, |s| keyed_keys(s, true));
+    assert_eq!(first, second);
+}
+
+/// WP-3481 (spec/eval-session.md §4.1 "Entity keys", [temp.inst]): a class
+/// template specialization the run instantiates (by reflection) has no
+/// `decl`, and its key is the one the key printer gives the type named
+/// after the run, as the thrown type and as the thrown value's record;
+/// a second run gives the same key, and a specialization with other
+/// arguments that existed at open another one.
+#[test]
+fn a_class_the_run_instantiates_has_a_key_and_no_decl() {
+    session(
+        "template <class T, class U> struct pair { T first; U second; };\n\
+         struct A { int a; };\n\
+         struct B { int b; };\n\
+         pair<A, A> at_open{};\n\
+         template <info R> constexpr void thrower() { throw typename [:R:]{}; }\n\
+         consteval info made() { info a[2] = {^^A, ^^B}; return std::meta::substitute(^^pair, a); }\n\
+         consteval int boom() {\n\
+           info t[1] = {std::meta::reflect_constant(made())};\n\
+           std::meta::extract<void (*)()>(std::meta::substitute(^^thrower, t))();\n\
+           return 0;\n\
+         }\n\
+         consteval int boom_open() { throw pair<A, A>{}; }\n",
+        |s| {
+            let (ty, _, value, _) = uncaught(s, "boom");
+            assert_eq!(ty.decl, None, "{ty:?}");
+            assert_eq!(&*ty.key, "pair<A, B>");
+            let value = value.expect("the thrown value");
+            assert_eq!(record(&value.root).ty, ty);
+            // The type named after the run, by the key printer.
+            let sema = s.sema();
+            let names = kiln_ast::dump::AstNames::for_keys(&sema.ast, sema.diags.sm());
+            let ast = &sema.ast;
+            let after_run: Vec<String> = ast
+                .decls
+                .ids()
+                .filter(|&d| {
+                    let n = ast.decls.get(d);
+                    n.kind() == kiln_ast::decl::DeclKind::CXXRecord
+                        && ast.first(d) == d
+                        && ast.spec_info(d).is_some()
+                })
+                .filter_map(|d| ast.decls.get(d).ty().map(|t| names.type_key(t)))
+                .collect();
+            assert!(after_run.iter().any(|k| *k == *ty.key), "{after_run:?}");
+            let (again, _, _, _) = uncaught(s, "boom");
+            assert_eq!(again, ty);
+            let (open, _, _, _) = uncaught(s, "boom_open");
+            assert!(open.decl.is_some());
+            assert_eq!(&*open.key, "pair<A, A>");
+            assert_ne!(open.key, ty.key);
         },
     );
 }

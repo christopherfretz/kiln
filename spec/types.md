@@ -1321,8 +1321,10 @@ Three printers name types, and only one is a key:
     as a cast, `S<(int *)nullptr>`, `S<(int X::*)nullptr>` (`nullptr` of
     `std::nullptr_t` stays `S<nullptr>`); a parameter with a written
     type fixes the pointer type, so `T<nullptr>` is already unique;
-  - a pointer or reference argument names its object with the same
-    scope (`P<&f()::x>` for a static local `x`).
+  - a pointer or reference argument names its object or function by
+    its declaration key (below): `P<&f()::x>` for a static local `x`,
+    `P<&f()::x#2>` for a second one of the name in a sibling block,
+    `P<&ov(long)>` for one of two overloads `ov` (WP-3481).
 
   An unnamed class's or closure's key is its location `F:L:C` (the
   presumed location of its declaration): two unnamed classes declared
@@ -1333,6 +1335,20 @@ Three printers name types, and only one is a key:
   `crates/kiln_parse/tests/type_keys.rs`; the diagnostic printer's scopes
   in `class.local/local-class-scope-printing.cpp` (clang 22) and
   `local-class-scope-printing-clang19.cpp`.
+
+  **Declaration keys** (WP-3481): `AstNames::decl_key(d)` names a
+  declaration by the same rule: its whole scope (as above) and its own
+  component; a function with its signature as a scope prints it
+  (`n::f(int)`, `k<int>()`, `C::m() const &`), never with an ordinal;
+  a static or `thread_local` variable declared in a function after the
+  first of its name there adds its ordinal (`f()::x`, `f()::x#2`, the
+  mangling's discriminator `_ZZ1fvE1x_0`); anything else its scoped
+  name (`n::v`, `Mb::a`). Two distinct declarations (first
+  declarations) never print alike, which the type key's pointer and
+  reference arguments rely on. Evaluation sessions expose both keys to
+  tooling clients as `Entity::key` (spec/eval-session.md §4.1 "Entity
+  keys"): a type entity's is its `type_key`, a declaration entity's its
+  `decl_key`.
 
 ## 13. Interface sketch
 ```rust

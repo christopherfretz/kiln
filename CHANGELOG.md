@@ -10,6 +10,18 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- Entity keys in evaluation session results (WP-3481,
+  spec/eval-session.md §4.1 "Entity keys"): every `Entity` of a run's
+  value tree and of `RunError::Uncaught` carries `key`, the key
+  printer's text (spec/types.md §12.1): a type's `type_key`
+  (`store<f()::Local>`, `S<(int *)nullptr>`, `sib(bool)::L#2`), a
+  declaration's new `AstNames::decl_key` (`stat(bool)::x#2`,
+  `ov(long)`). Two entities are the same exactly when their keys are
+  equal, within a session and across sessions on one translation unit,
+  also for a class a run instantiated (`decl` `None`). The type key now
+  names a pointer or reference template argument by its declaration key,
+  so a second static local of one name and an overload print apart
+  (`P<&f()::x#2>`, `P<&ov(long)>`).
 - The shadow a using-declaration named, for tooling clients (WP-3401,
   spec/ast.md §4.2): when a using-declarator's lookup finds a
   using-shadow (`namespace acme { using std::string; } using
@@ -1156,6 +1168,10 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Changed
 
+- `kiln_parse::Entity` (evaluation session results) has a new public
+  field `key: Arc<str>` (WP-3481): a client that builds an `Entity` by a
+  struct literal (a test's expected tree) adds it; reading code is
+  unaffected.
 - `PatternMemInits::colon` is an `Option<Loc>` and every constructor
   definition in a template has a record, the empty list included
   (WP-3200, spec/ast.md §8.6): `S() {}` is a record with `colon: None`

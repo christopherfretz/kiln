@@ -251,3 +251,22 @@ fn local_entities_as_values_carry_their_function() {
         "T<&x>",
     );
 }
+
+/// WP-3481 (spec/types.md §12.1 "Declaration keys"): a pointer argument
+/// names its object or function by its declaration key, so the static
+/// locals `x` of sibling blocks ([stmt.dcl]/3) and two overloads ([over])
+/// print apart, where the diagnostic printer prints them alike.
+#[test]
+fn declarations_as_values_are_told_apart() {
+    check(
+        "template <int *P> struct T {};\n\
+         template <auto F> struct H {};\n\
+         int ov(int);\n\
+         int ov(long);\n\
+         void s() { { static int x; T<&x> v0; } { static int x; T<&x> v1; } }\n\
+         H<static_cast<int (*)(int)>(ov)> v2;\n\
+         H<static_cast<int (*)(long)>(ov)> v3;\n",
+        &["T<&s()::x>", "T<&s()::x#2>", "H<&ov(int)>", "H<&ov(long)>"],
+        "T<&x>",
+    );
+}

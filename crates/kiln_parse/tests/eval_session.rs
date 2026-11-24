@@ -252,7 +252,7 @@ consteval int nothrow_exit() { return L::f(); }\n";
 /// `RunError::Uncaught` of type `ty` (spelled), as [`shape`] leaves it.
 fn uncaught(ty: &str, what: Option<&str>, scalars: &[u64]) -> RunError {
     RunError::Uncaught {
-        ty: Entity { display: ty.into(), decl: None },
+        ty: Entity { display: ty.into(), key: ty.into(), decl: None },
         what: what.map(str::to_owned),
         scalars: scalars.to_vec(),
         value: Err(String::new()),
@@ -264,7 +264,7 @@ fn uncaught(ty: &str, what: Option<&str>, scalars: &[u64]) -> RunError {
 fn shape(e: &RunError) -> RunError {
     match e {
         RunError::Uncaught { ty, what, scalars, .. } => RunError::Uncaught {
-            ty: Entity { display: Arc::clone(&ty.display), decl: None },
+            ty: Entity { display: Arc::clone(&ty.display), key: Arc::clone(&ty.key), decl: None },
             what: what.clone(),
             scalars: scalars.clone(),
             value: Err(String::new()),

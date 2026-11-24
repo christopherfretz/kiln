@@ -3,8 +3,9 @@
 //! the frozen constant the Oven's freezer made of the run's result.
 //!
 //! The tree holds no id numbered by history: names are strings (as
-//! `std::meta::display_string_of` spells them), `decl` is given only for
-//! an entity that existed when the session was opened, and objects
+//! `std::meta::display_string_of` spells them), an entity's identity is
+//! its key (the key printer's, spec/types.md §12.1), `decl` is given only
+//! for an entity that existed when the session was opened, and objects
 //! without a name are entries of a constants table, indexed in
 //! first-reached order. Decoding interns nothing: every table it uses is
 //! local to one read.
@@ -116,13 +117,20 @@ impl RunValue {
     }
 }
 
-/// An entity by its spelling, and its declaration when it existed at
-/// open (spec/eval-session.md §4.1: `decl` is `Some` if and only if the
-/// entity existed when the session was opened).
+/// An entity by its spelling and its key, and its declaration when it
+/// existed at open (spec/eval-session.md §4.1: `decl` is `Some` if and
+/// only if the entity existed when the session was opened).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Entity {
     /// As `display_string_of` spells it (a spelling, not an identity).
     pub display: Arc<str>,
+    /// Its identity (spec/eval-session.md §4.1 "Entity keys"): a type's
+    /// `AstNames::type_key`, a declaration's `AstNames::decl_key`
+    /// (spec/types.md §12.1). Two entities in the same position (two
+    /// types, two declarations) are the same exactly when their keys
+    /// are equal, within a session and across sessions on one
+    /// translation unit, whether or not `decl` is given.
+    pub key: Arc<str>,
     /// The first declaration, if the entity existed at open.
     pub decl: Option<DeclId>,
 }
@@ -357,12 +365,15 @@ pub(crate) fn decode(sema: &Sema<'_, '_>, v: ConstValueId, open: usize, cap: u64
         sema,
         ast: &sema.ast,
         names: AstNames::new(&sema.ast),
+        key_names: AstNames::for_keys(&sema.ast, sema.diags.sm()),
         open,
         cap,
         used: 0,
         strings: FxHashSet::default(),
         decl_display: FxHashMap::default(),
         type_display: FxHashMap::default(),
+        decl_keys: FxHashMap::default(),
+        type_keys: FxHashMap::default(),
         idents: FxHashMap::default(),
         shapes: FxHashMap::default(),
         keys: FxHashMap::default(),
@@ -381,8 +392,8 @@ pub(crate) fn decode(sema: &Sema<'_, '_>, v: ConstValueId, open: usize, cap: u64
 }
 
 /// Type `t` named as a tree names it (spec/eval-session.md §4.1): spelled
-/// as `display_string_of` spells it, with the first declaration of its
-/// class or enumeration when that existed at open (`open`, the
+/// as `display_string_of` spells it, its key, and the first declaration
+/// of its class or enumeration when that existed at open (`open`, the
 /// declaration count then).
 pub(crate) fn type_entity(sema: &Sema<'_, '_>, t: QualType, open: usize) -> Entity {
     let ast = &sema.ast;
@@ -393,7 +404,8 @@ pub(crate) fn type_entity(sema: &Sema<'_, '_>, t: QualType, open: usize) -> Enti
         .or_else(|| ast.types.as_enum(t))
         .map(|d| ast.first(d))
         .filter(|f| f.index() as usize <= open);
-    Entity { display: Arc::from(sema.gcc_type_string(t)), decl }
+    let key = AstNames::for_keys(ast, sema.diags.sm()).type_key(t);
+    Entity { display: Arc::from(sema.gcc_type_string(t)), key: Arc::from(key), decl }
 }
 
 /// Whether `q` is a result type (spec/eval-session.md §3), `top` for an
@@ -447,6 +459,8 @@ struct Decoder<'s, 'a, 'sm> {
     sema: &'s Sema<'a, 'sm>,
     ast: &'s Ast,
     names: AstNames<'s>,
+    /// The key printer (spec/types.md §12.1), for [`Entity::key`].
+    key_names: AstNames<'s>,
     open: usize,
     cap: u64,
     used: u64,
@@ -454,6 +468,8 @@ struct Decoder<'s, 'a, 'sm> {
     strings: FxHashSet<Arc<str>>,
     decl_display: FxHashMap<DeclId, Arc<str>>,
     type_display: FxHashMap<QualType, Arc<str>>,
+    decl_keys: FxHashMap<DeclId, Arc<str>>,
+    type_keys: FxHashMap<QualType, Arc<str>>,
     idents: FxHashMap<DeclId, Arc<str>>,
     shapes: FxHashMap<QualType, Rc<Shape>>,
     /// The constants table's index of each object reached.
@@ -505,6 +521,28 @@ impl<'s> Decoder<'s, '_, '_> {
         Ok(s)
     }
 
+    /// Declaration `d`'s key ([`AstNames::decl_key`]).
+    fn decl_key(&mut self, d: DeclId) -> R<Arc<str>> {
+        if let Some(s) = self.decl_keys.get(&d) {
+            return Ok(Arc::clone(s));
+        }
+        let s = self.string(self.key_names.decl_key(d))?;
+        self.decl_keys.insert(d, Arc::clone(&s));
+        Ok(s)
+    }
+
+    /// Type `t`'s key ([`AstNames::type_key`], of the canonical
+    /// cv-unqualified type).
+    fn type_key(&mut self, t: QualType) -> R<Arc<str>> {
+        let t = self.ast.types.canonical(t).without_quals();
+        if let Some(s) = self.type_keys.get(&t) {
+            return Ok(Arc::clone(s));
+        }
+        let s = self.string(self.key_names.type_key(t))?;
+        self.type_keys.insert(t, Arc::clone(&s));
+        Ok(s)
+    }
+
     /// A member's identifier (empty for an unnamed one).
     fn ident(&mut self, d: DeclId) -> R<Arc<str>> {
         if let Some(s) = self.idents.get(&d) {
@@ -533,12 +571,20 @@ impl<'s> Decoder<'s, '_, '_> {
     }
 
     fn entity(&mut self, d: DeclId) -> R<Entity> {
-        Ok(Entity { display: self.decl_display(d)?, decl: self.decl_at_open(d) })
+        Ok(Entity {
+            display: self.decl_display(d)?,
+            key: self.decl_key(d)?,
+            decl: self.decl_at_open(d),
+        })
     }
 
     fn type_entity(&mut self, t: QualType) -> R<Entity> {
         let d = self.ast.types.as_record(t).or_else(|| self.ast.types.as_enum(t));
-        Ok(Entity { display: self.type_display(t)?, decl: d.and_then(|d| self.decl_at_open(d)) })
+        Ok(Entity {
+            display: self.type_display(t)?,
+            key: self.type_key(t)?,
+            decl: d.and_then(|d| self.decl_at_open(d)),
+        })
     }
 
     /// Class `d` by its type.
