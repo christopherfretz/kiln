@@ -385,8 +385,8 @@ read with `Ast::using_target`/`Ast::using_qualifier`):
   DeclId>` (the reverse). Sema writes both with
   `AstBuilder::set_using_shadows` once the declaration's last shadow is
   made: a namespace-, block- or class-scope `using N::f;` (one
-  `UsingShadow` per declaration the lookup found that was not already
-  introduced, an `UnresolvedUsingIfExists`'s for `using_if_exists`), an
+  `UsingShadow` per declaration the lookup found, a repeated one too,
+  WP-3403; none for an enumerator already a member of the class, an `UnresolvedUsingIfExists`'s for `using_if_exists`), an
   inheriting-constructor `using B::B;` (one `ConstructorUsingShadow` per
   constructor of the base, its implicit copy and move constructors
   included, one a constructor of the class hides marked hidden), and `using
@@ -409,6 +409,97 @@ read with `Ast::using_target`/`Ast::using_qualifier`):
   span per using-declaration, 4 B per shadow in the list arena and a
   reverse-map entry per shadow (9 B live each); about 24 KB on a TU of
   fifteen standard headers, spec/landed/ast/WP-2025.md.
+- **What a using-declaration names, for tooling clients** (WP-3403,
+  [namespace.udecl]/1, /4, /14). The record alone answers which members
+  a class-scope `using B::f;` names and which of them are hidden; a
+  client needs no lookup of its own. The accessors are total:
+  - `Ast::using_named(u)`: per shadow of `u`, in `using_shadows` order,
+    a `UsingNamed { shadow, target, hider }`. The *named set* of `u` is
+    the targets; the members `u` brings into its class are those whose
+    `hider` is `None`. Empty for any other declaration, for a dependent
+    using-declarator (read the `Using` of each specialization, whose
+    marks are its own), and for a class-scope `using E::A;` naming an
+    enumerator of a member enumeration: the enumerator is already a
+    member of the class, so no shadow is made.
+  - `Ast::shadow_hider(s)` (= `DeclArena::hidden_shadow`): the member
+    of `s`'s class that hides it, `None` for a visible shadow or any
+    other declaration.
+  - `Ast::shadows_hidden_by(m)`: the shadows whose hider is `m`'s first
+    declaration, in member order (a scan of the class's members, no
+    storage): what renaming or removing `m` would make visible. Empty
+    for anything but a member function or member function template.
+  - `Ast::overridden_methods(m)`: the virtual functions `m` overrides,
+    read at its first declaration, so any redeclaration answers.
+
+  The rules the record keeps:
+  - *One mark in either order.* A member declared before or after the
+    using-declarator hides the shadow when the two correspond
+    (`member_hides_using_target`, spec/sema.md "Member hiding"); the
+    shadow is made either way. In a class template specialization the
+    members are redone in declaration order, each through the parser's
+    declarator actions (`act_on_declarator`), so a member function
+    (template) redone after the using-declaration marks the shadows it
+    hides as in a non-template class (`check_using_shadow_conflict`): a
+    specialization's record has the same shape.
+  - *Dependent correspondence.* In a pattern, a member whose
+    parameter-type-list depends on a template parameter corresponds to
+    no base member (`template <class T> struct D : B { using B::f; void
+    f(T); };`: the pattern's shadow of `B::f(int)` is unmarked); each
+    specialization marks per its arguments (`D<int>`'s is hidden by
+    `D<int>::f(int)`, `D<char>`'s is not), in either order.
+  - *The hider.* The member's declaration in the member-specification,
+    which is its first declaration (`first(h) == h`), never an
+    out-of-line definition. For a member template it is the
+    `FunctionTemplate`; in a specialization, the specialization's
+    member; for an implicitly-declared member, its implicit declaration
+    (`DeclFlags::IMPLICIT`). It is exactly the member that corresponds
+    to the shadow's target: the other overloads of that name hide
+    nothing.
+  - *Implicit hiders, by the class's `}`.* A mark never depends on what
+    the unit uses. Every implicit member that can hide a shadow is
+    declared by the class's `}` at the latest, and the mark is set when
+    it is declared: the copy and move assignment operators for `using
+    B::operator=;` (WP-3146), the default, copy and move constructors for
+    `using B::B;` (declared eagerly, `HAS_INHERITED_CTOR`), in a class
+    template specialization too. The `operator==` a defaulted
+    `operator<=>` declares ([class.compare.default]/5) hides nothing:
+    it is declared only when the class declares no `operator==`, and a
+    `using B::operator==;` counts (clang 19, clang 22 and GCC 14 agree).
+  - *A virtual override* hides the shadow of the function it overrides
+    ([namespace.udecl]/14: members "override and/or hide"): one mark,
+    whose hider is the overrider, in either order;
+    `overridden_methods(hider)` tells an override from a plain hide.
+  - *A conversion function* hides only the base's conversion function
+    to the same type (the type is part of its name); a conversion
+    function template cannot be named by a using-declarator.
+  - *A repeated using-declarator.* A second class-scope
+    using-declarator naming an entity another using-declarator of the
+    class already introduced (through another class: `using B1::f;
+    using B2::f;` with a virtual base `A` declaring `f`) makes its own
+    shadow, which replaces the earlier one in lookup (as at namespace
+    scope, and as clang chains `PrevShadow`). Each using-declaration
+    keeps its shadow in its list, so both name the entity. There is no
+    redeclaration group of shadows: two shadows of one class name one
+    entity when their targets are the same declaration. A member that
+    hides one of them marks every shadow of that entity in the class
+    (`mark_hidden_shadow`).
+  - *Lookup never finds a hidden shadow; the table holds it.*
+    `Ast::lookup_local` is the raw per-context table ("no hiding") and
+    returns a hidden shadow in either order, as both orders enter the
+    shadow. Sema's lookup results never contain one (`lookup::Found`;
+    the found declaration of a reference; the written-reference table's
+    found sets, §18; an `UnresolvedLookupExpr`'s found list, §8.8,
+    whether built from a lookup or substituted from its pattern: a
+    substituted overload set leaves out an element whose shadow the
+    specialization hides).
+
+  Tests: `crates/kiln_parse/tests/using_hidden_shadow.rs` (each rule
+  above, the snapshot round trip and totality),
+  `crates/kiln_driver/tests/modules_image_using.rs` (the repeated
+  using-declarators' marks in the module image; a class template's
+  using-declarations are not in the image, spec/modules.md §11.11),
+  `tests/conformance/namespace.udecl/p14-hidden-after-using-specialization-run.cpp`,
+  `p14-repeated-using-through-bases-run.cpp`.
 - **Repeated using-declarations and namespace aliases** ([namespace.udecl],
   [namespace.alias]; WP-2025 Q14). Two using-declarations of the same
   name in one scope are two `Using` declarations, never chained: each
@@ -1645,8 +1736,17 @@ kept here (§18.7, §18.9.1 for the written-reference table's).
   pattern's shadows, element by element (by entity when the lengths
   differ); a shadow that is a member of a class template's pattern
   becomes the shadow the instantiated using-declaration introduced in
-  the enclosing specialization (dropped if none). A node made by a new
-  lookup at instantiation records that lookup's shadows.
+  the enclosing specialization (dropped if none). That map is structural:
+  the specialization's shadow may be hidden there by a member of the
+  specialization (`Ast::shadow_hider`, §4.2). A rebuilt overload set
+  leaves out an element the pattern found through a shadow the
+  specialization hides, since lookup in the specialization finds the
+  hider, which the set has: in `template <class T> struct D : B { using
+  B::m; static int m(T); int call(T t) { return m(t); } };`, `D<int>`'s
+  `m(t)` lists `D<int>::m(int)` and `B::m(double)` through `D<int>`'s
+  shadow, not `B::m(int)` (WP-3403; before, the call was ambiguous). So
+  no found list names a hidden shadow. A node made by a new lookup at
+  instantiation records that lookup's shadows.
 - **Snapshots and images.** PCH snapshots carry the map (§17). Module
   images carry it per node (`COLD_SHADOWS`, spec/modules.md §11.11); the
   importer records it through `note_unresolved_found`, so the same

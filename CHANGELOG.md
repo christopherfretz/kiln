@@ -10,6 +10,18 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- What a using-declaration names, for tooling clients (WP-3403,
+  spec/ast.md §4.2): total accessors `Ast::using_named(u)` (each shadow
+  with its target and the member that hides it, `UsingNamed`),
+  `Ast::shadow_hider(s)`, `Ast::shadows_hidden_by(m)` (a scan of the
+  class) and `Ast::overridden_methods(m)` (read at the first declaration).
+  The rules the record keeps are stated: one mark in either declaration
+  order, the hider is the corresponding member's in-class declaration,
+  marks set by the class's `}` for implicit hiders, a pattern's dependent
+  correspondence left to each specialization, and `Ast::lookup_local`
+  holding hidden shadows while sema's lookups never find one. A class-scope
+  using-declarator repeated through another class now makes its own shadow,
+  which replaces the earlier one in lookup, as at namespace scope.
 - Using-shadows of unresolved names (WP-3400, spec/ast.md §8.8): an
   `UnresolvedLookupExpr` keeps, per element of its declarations, the
   `UsingShadow` through which lookup found it (`legacy::forward<T>` after
@@ -1327,6 +1339,13 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   scope (it named the enclosing one). The written-reference table gives
   the rebound qualifier components per-specialization rows
   (spec/ast.md §18.9.1).
+- A dependent call to a static member function of a class template whose
+  using-declaration names a base member the specialization hides
+  ([namespace.udecl]/14: `using B::m; static int m(T); int call(T t) {
+  return m(t); }` in `D<int>`) is no longer ambiguous: the substituted
+  overload set leaves out the hidden base member, as lookup in the
+  specialization does (WP-3403, spec/ast.md §8.8).
+
 - The first use of a reference variable template specialization or of a
   reference static data member of a class template specialization
   (`template<class T> const S &vt = S{...}; ... vt<int>.a[0]`) loads

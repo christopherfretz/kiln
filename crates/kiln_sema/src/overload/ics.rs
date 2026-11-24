@@ -1867,7 +1867,7 @@ impl Sema<'_, '_> {
     /// declares, those using-declarations name included, as `(found,
     /// function or template, canonical converted-to type)`.
     fn own_conversion_functions(&self, def: DeclId) -> Vec<(DeclId, DeclId, QualType)> {
-        let mut v = Vec::new();
+        let mut v: Vec<(DeclId, DeclId, QualType)> = Vec::new();
         for found in self.ast.decls.members(def) {
             // A using-declaration names a base's conversion function in
             // this class ([namespace.udecl]/1): found as its shadow, whose
@@ -1894,6 +1894,16 @@ impl Sema<'_, '_> {
             let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
             let ret =
                 self.ast.types.proto(fty).map_or(QualType::ERROR, kiln_ast::types::FuncProto::ret);
+            // Two using-declarators naming one conversion function each
+            // make a shadow (WP-3403): one candidate, found through the
+            // later shadow, as lookup finds it.
+            if found != m {
+                let first = self.ast.first(m);
+                if let Some(e) = v.iter_mut().find(|e| e.0 != e.1 && self.ast.first(e.1) == first) {
+                    e.0 = found;
+                    continue;
+                }
+            }
             v.push((found, m, self.ast.types.canonical(ret)));
         }
         v

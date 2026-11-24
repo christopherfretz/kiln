@@ -2480,9 +2480,23 @@ impl Substituter<'_, '_, '_> {
             }
             return Ok(self.sema.build_decl_ref_qualified(d, n.loc(), None, nns));
         }
-        // An overload set: resolved again at the call.
+        // An overload set: resolved again at the call. An element the
+        // pattern found through a using-declaration of a class template
+        // whose specialization hides it ([namespace.udecl]/14: `using
+        // B::m; static int m(T);` in `D<int>`) is not a member of the
+        // specialization's set: lookup there finds the hider, which the set
+        // has (WP-3403, spec/ast.md §8.8).
+        let pairs: Vec<(DeclId, Option<DeclId>)> =
+            self.sema.ast.unresolved_found_pairs(c).collect();
         let mut ds = Vec::with_capacity(decls.len());
-        for &d in decls {
+        for (i, &d) in decls.iter().enumerate() {
+            if pairs.len() == decls.len()
+                && pairs[i].0 == d
+                && let Some(s) = pairs[i].1
+                && self.hidden_in_specialization(s, d)
+            {
+                continue;
+            }
             ds.push(self.find_instantiated_decl(d, n.loc())?);
         }
         let nns = match self.sema.ast.templates.expr_nns.get(c).copied() {
@@ -2555,6 +2569,17 @@ impl Substituter<'_, '_, '_> {
             found[i] = s;
         }
         self.sema.ast.note_unresolved_found(r, &found);
+    }
+
+    /// Whether pattern shadow `s` (of `target`) becomes, in the
+    /// specialization enclosing the substitution, a shadow a member of
+    /// that specialization hides ([`Self::instantiated_shadow`],
+    /// `Ast::shadow_hider`; WP-3403).
+    fn hidden_in_specialization(&self, s: DeclId, target: DeclId) -> bool {
+        self.sema.ast.decls.get(s).has(kiln_ast::decl::DeclFlags::DEPENDENT_CTX)
+            && self
+                .instantiated_shadow(s, target)
+                .is_some_and(|x| self.sema.ast.decls.hidden_shadow(x).is_some())
     }
 
     /// The shadow of `target` the instantiation of pattern shadow `s`'s

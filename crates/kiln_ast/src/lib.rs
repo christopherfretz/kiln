@@ -56,7 +56,7 @@ pub mod types;
 pub mod written_refs;
 mod x86_builtins;
 
-pub use ast::Ast;
+pub use ast::{Ast, UsingNamed};
 pub use builder::{AstBuilder, DeclHead};
 pub use ids::{
     AnnId, ArgListId, AttrId, BlobId, ConstValueId, DeclId, DmsId, ExprId, LambdaId, ListId, NnsId,

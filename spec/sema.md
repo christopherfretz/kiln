@@ -5855,7 +5855,25 @@ specializations ([class.mem.general]/7, [except.spec]/13, [temp.inst]/14):
     dump has none in either; kiln's record keeps the hidden shadow in both
     (spec/ast.md §4.2) and its dump leaves it out, as clang's
     (`namespace.udecl/p14-hidden-either-order-run.cpp`,
-    `ast/namespace.udecl/hidden-shadow-either-order.cpp`). The
+    `ast/namespace.udecl/hidden-shadow-either-order.cpp`). In a class
+    template specialization the members are redone in declaration
+    order through the declarator actions, so a member function
+    (template) redone after the using-declaration marks the shadows it
+    hides (`check_using_shadow_conflict`) and one redone before it is
+    found by `introduce_shadow`, as in any class (pinned by WP-3403). A
+    using-declarator repeated through another class (`using B1::f;
+    using B2::f;`, both naming a virtual base's `f`) makes its own
+    shadow, which replaces the earlier one in lookup, as at namespace
+    scope (clang `CheckUsingShadowDecl` chains it as `PrevShadow`); a
+    member that hides one of them marks all of that entity's shadows
+    in the class (`mark_hidden_shadow`), and the conversion functions
+    of the class count the entity once (WP-3403,
+    `namespace.udecl/p14-hidden-after-using-specialization-run.cpp`,
+    `namespace.udecl/p14-repeated-using-through-bases-run.cpp`). The
+    text makes two using-declarators of one class scope that name one
+    declaration ill-formed ([namespace.udecl]/8); clang 19, clang 22 and
+    GCC 14 accept it through different classes, and kiln diagnoses only
+    the same class twice (`previous_class_using`). The
     implicitly-declared copy or move assignment operator hides the
     class's not yet hidden `operator=` shadows it corresponds to when it
     is declared (`declare_implicit`), so `struct A : B { using

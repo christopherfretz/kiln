@@ -2212,8 +2212,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
     fn overrides_line(&mut self, d: DeclId) {
         let ast = self.ast;
         self.line.push_str("Overrides: [ ");
-        let list = ast.decls.cold.overrides.get(d).copied().unwrap_or(ListId::EMPTY);
-        for (k, m) in ast.lists.iter::<DeclId>(list).enumerate() {
+        for (k, m) in ast.overridden_methods(d).enumerate() {
             if k > 0 {
                 self.line.push_str(", ");
             }

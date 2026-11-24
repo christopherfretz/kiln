@@ -28,6 +28,19 @@ use crate::strings::StringPool;
 use crate::templates::TemplateTables;
 use crate::types::{LayoutCache, TypeContext};
 
+/// One shadow of a using-declaration as [`Ast::using_named`] reads it
+/// (spec/ast.md §4.2, WP-3403).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct UsingNamed {
+    /// The `UsingShadow` (or `ConstructorUsingShadow`).
+    pub shadow: DeclId,
+    /// The declaration the shadow names ([`Ast::strip_shadow`]).
+    pub target: DeclId,
+    /// The member of the class that hides the shadow
+    /// ([`Ast::shadow_hider`]), `None` when it is visible.
+    pub hider: Option<DeclId>,
+}
+
 /// The typed AST of one translation unit.
 ///
 /// Created by sema at TU start, owned by `kiln_sema::Sema` while parsing,
@@ -566,8 +579,10 @@ impl Ast {
     /// of each declaration its using-declarator named (at namespace,
     /// block or class scope; a `ConstructorUsingShadow` per inherited
     /// constructor for `using B::B;`); for a `UsingEnum`, one per
-    /// enumerator. Empty for any other declaration, for a using-declaration
-    /// whose names were all already introduced, and for a dependent
+    /// enumerator. A using-declarator repeated through another class makes
+    /// its own shadow of the entity (WP-3403). Empty for any other
+    /// declaration, for a class-scope `using E::A;` naming an enumerator
+    /// of a member enumeration (already a member), and for a dependent
     /// using-declarator (`UnresolvedUsingValue`/`UnresolvedUsingTypename`),
     /// which introduces nothing until instantiated: the instantiation's
     /// `Using` has the shadows. A shadow a member of the class hides
@@ -583,6 +598,74 @@ impl Ast {
     /// declaration that is not a shadow.
     pub fn shadow_using(&self, s: DeclId) -> Option<DeclId> {
         self.decls.shadow_using(s)
+    }
+
+    /// The member of its class that hides using-shadow `s`
+    /// ([namespace.udecl]/4, /14; [`crate::decl::DeclArena::hidden_shadow`]):
+    /// the member's declaration in the member-specification (its first
+    /// declaration; an implicit one for an implicitly-declared member),
+    /// exactly the member that corresponds to the shadow's target, the
+    /// same in either declaration order (spec/ast.md §4.2, WP-3403).
+    /// `None` for a shadow no member hides and for any other declaration.
+    pub fn shadow_hider(&self, s: DeclId) -> Option<DeclId> {
+        self.decls.hidden_shadow(s)
+    }
+
+    /// What using-declaration `u` names, in [`Ast::using_shadows`] order:
+    /// each shadow with its target and the member that hides it, if any
+    /// ([`Ast::shadow_hider`]). The named set is the targets; the members
+    /// it brings into its class are those with no hider (spec/ast.md §4.2,
+    /// WP-3403). Empty for any other declaration, for a dependent
+    /// using-declarator (its instantiation's `Using` has the shadows) and
+    /// for a class-scope `using E::A;` naming an enumerator of a member
+    /// enumeration (already a member of the class: no shadow).
+    pub fn using_named(&self, u: DeclId) -> impl ExactSizeIterator<Item = UsingNamed> + '_ {
+        self.using_shadows(u).map(move |shadow| UsingNamed {
+            shadow,
+            target: self.strip_shadow(shadow),
+            hider: self.decls.hidden_shadow(shadow),
+        })
+    }
+
+    /// The using-shadows of `m`'s class that member `m` hides (those whose
+    /// [`Ast::shadow_hider`] is `m`'s first declaration), in member order:
+    /// what would become visible in the class if `m` were renamed or
+    /// removed. A scan of the class's members; empty when `m` is not a
+    /// member function or member function template of a class, or hides
+    /// nothing (spec/ast.md §4.2, WP-3403).
+    pub fn shadows_hidden_by(&self, m: DeclId) -> impl Iterator<Item = DeclId> + '_ {
+        let m = self.first(m);
+        let k = self.decls.get(m).kind();
+        let fnlike = k.is_function() || k == DeclKind::FunctionTemplate;
+        let class = self.decls.get(m).ctx().filter(|&c| {
+            fnlike
+                && matches!(
+                    self.decls.get(c).kind(),
+                    DeclKind::CXXRecord
+                        | DeclKind::ClassTemplateSpecialization
+                        | DeclKind::ClassTemplatePartialSpecialization
+                )
+        });
+        class
+            .into_iter()
+            .flat_map(move |c| self.decls.members(c))
+            .filter(move |&s| self.decls.hidden_shadow(s) == Some(m))
+    }
+
+    /// The virtual functions method `m` overrides ([class.virtual]/2), as
+    /// recorded at its first declaration; any redeclaration of `m`
+    /// answers the same. Empty for a method that overrides nothing and for
+    /// any other declaration (WP-3403).
+    pub fn overridden_methods(&self, m: DeclId) -> impl ExactSizeIterator<Item = DeclId> + '_ {
+        let list = self
+            .decls
+            .cold
+            .overrides
+            .get(m)
+            .or_else(|| self.decls.cold.overrides.get(self.first(m)))
+            .copied()
+            .unwrap_or(crate::ids::ListId::EMPTY);
+        self.lists.iter::<DeclId>(list)
     }
 
     /// The template (a `StringLiteral`) of a `FileScopeAsm` declaration.

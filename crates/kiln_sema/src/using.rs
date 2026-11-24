@@ -926,15 +926,16 @@ impl Sema<'_, '_> {
             let es = self.ast.strip_shadow(e);
             if self.ast.first(es) == self.ast.first(target) {
                 if e != es {
-                    if in_class && self.ast.decls.hidden_shadow(e).is_none() {
-                        // The member is already introduced into the class
-                        // by an earlier using-declarator through another
-                        // class (clang `CheckUsingShadowDecl`: an
-                        // equivalent declaration makes no new shadow). The
-                        // same class twice was diagnosed by
-                        // `previous_class_using`.
-                        return None;
-                    }
+                    // A repeated using-declaration of the entity: its own
+                    // shadow, which replaces the earlier one in lookup. In
+                    // a class the earlier one came from a using-declarator
+                    // through another class (the same class twice was
+                    // diagnosed by `previous_class_using`); clang's
+                    // `CheckUsingShadowDecl` finds it as `PrevShadow` and
+                    // `BuildUsingShadowDecl` chains the new shadow to it.
+                    // Each using-declaration keeps its shadow in its list
+                    // (`Ast::using_shadows`), so both name the entity
+                    // (spec/ast.md §4.2, WP-3403).
                     prev = Some(e);
                 } else if in_class && self.kind_of(es) == DeclKind::EnumConstant {
                     // The enumerator of a member enumeration is already a
@@ -1266,7 +1267,7 @@ impl Sema<'_, '_> {
                 // hides a corresponding one the shadow introduced;
                 // otherwise they overload.
                 if self.member_hides_using_target(d, t) {
-                    let _ = self.ast.decls.set_hidden_shadow(s, d);
+                    self.mark_hidden_shadow(s, d);
                 }
                 continue;
             }
@@ -1295,6 +1296,42 @@ impl Sema<'_, '_> {
             return self.report_using_shadow_conflict(d, s, t, at);
         }
         false
+    }
+
+    /// Marks using-shadow `s` hidden by member `by` of its class
+    /// ([namespace.udecl]/14, `DeclArena::hidden_shadow`), and with it
+    /// every other unmarked shadow of the same entity in that class: a
+    /// using-declarator repeated through another class makes its own
+    /// shadow, which replaces the earlier one in lookup (WP-3403), so a
+    /// member declared after both finds only the later one there.
+    pub(crate) fn mark_hidden_shadow(&mut self, s: DeclId, by: DeclId) {
+        let _ = self.ast.decls.set_hidden_shadow(s, by);
+        let Some(class) = self.ast.decls.get(s).ctx() else { return };
+        if !matches!(
+            self.kind_of(class),
+            DeclKind::CXXRecord
+                | DeclKind::ClassTemplateSpecialization
+                | DeclKind::ClassTemplatePartialSpecialization
+        ) {
+            return;
+        }
+        let name = self.ast.decls.get(s).name();
+        let entity = self.ast.first(self.ast.strip_shadow(s));
+        let chained: Vec<DeclId> = self
+            .ast
+            .decls
+            .members(class)
+            .filter(|&m| {
+                m != s
+                    && self.kind_of(m) == DeclKind::UsingShadow
+                    && self.ast.decls.get(m).name() == name
+                    && self.ast.decls.hidden_shadow(m).is_none()
+                    && self.ast.first(self.ast.strip_shadow(m)) == entity
+            })
+            .collect();
+        for m in chained {
+            let _ = self.ast.decls.set_hidden_shadow(m, by);
+        }
     }
 
     /// Reports new declaration `d` conflicting with target `t` of
