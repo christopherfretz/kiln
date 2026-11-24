@@ -58,6 +58,9 @@ pub(crate) const SCHEMA_HASH: u64 = kiln_snap::SchemaHash::new("snapshot", "root
     .root_field("preprocessor", Preprocessor::SNAP_SCHEMA_HASH)
     .root_field("sema", Sema::SNAP_SCHEMA_HASH)
     .field::<kiln_pp::PpRecord>("preprocessing record")
+    // The head's lookup log (WP-3275: hashed so a change of its shape is
+    // a format change).
+    .field::<kiln_pp::LookupLog>("lookup log")
     .finish();
 
 /// The descriptor walk of the same roots ([`SCHEMA_HASH`]'s readable
@@ -73,6 +76,7 @@ pub(crate) fn schema() -> kiln_snap::Schema {
     Preprocessor::snap_schema(&mut s);
     Sema::snap_schema(&mut s);
     kiln_pp::PpRecord::schema(&mut s);
+    kiln_pp::LookupLog::schema(&mut s);
     s
 }
 
@@ -132,8 +136,10 @@ pub(crate) const MAGIC: [u8; 8] = *b"KILNSNAP";
 /// version 5 (WP-1422) a new note id; version 6 (WP-1419) a new
 /// driver warning id; version 7 (WP-1433) a new AST cold map
 /// (`offsetof_layout`); version 8 (WP-1426) the SME diagnostic ids and
-/// attribute kinds and the 32-bit `FuncInfo`.
-pub(crate) const FORMAT_VERSION: u32 = 173;
+/// attribute kinds and the 32-bit `FuncInfo`; version 174 (WP-3275,
+/// WP-3276) the lookup log's dropped search directories and module
+/// probes, in the head, whose lookup log the schema hash now covers.
+pub(crate) const FORMAT_VERSION: u32 = 174;
 /// The length of the magic and the format version.
 pub(crate) const HEADER_LEN: usize = 12;
 

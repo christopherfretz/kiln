@@ -129,8 +129,9 @@ and `header_unit_key_in` resolve against the source manager's.
 
 **Realizing the list.** `SearchList::build(specs, cplusplus, fs)`
 implements clang `InitHeaderSearch::AddPath`, `Realize` and
-`RemoveDuplicates`. It takes `SearchDirSpec { path, group }` in `cc1`
-order.
+`RemoveDuplicates`. It takes `SearchDirSpec { path, group, toolchain }`
+in `cc1` order (`toolchain` marks the toolchain's own directories,
+WP-3275).
 
 - A nonexistent directory is dropped with an
   `ignoring nonexistent directory` note.
@@ -145,6 +146,10 @@ order.
   directory is the one dropped (`as it is a non-system directory that
   duplicates a system directory`).
 - `verbose_text()` is clang's `-v` block, byte for byte.
+- `dropped()` names each directory dropped, with its group, its place
+  in the requested order and in the list, why, and the directory kept
+  for a duplicate (WP-3275, spec/driver.md "Dropped directories"); the
+  lookup log carries it (below).
 
 **Lookup.**
 
@@ -222,13 +227,15 @@ search record what the PCH snapshot's lookup-tolerant search path needs
 `None`) and `Preprocessor::take_lookup_log` hand it over. A
 `LookupLog` holds a table of directory names and, in the order first
 seen, one `Lookup` per distinct key, and the search list the lookups
-used (`list`, `angled_start`) and the `--embed-dir` list
-(`embed_dirs`, WP-2829):
+used (`list`, `angled_start`), the `--embed-dir` list
+(`embed_dirs`, WP-2829) and the search directories the command named
+that the list does not search (`dropped`, WP-3275, below):
 
 - the key: the name; the form (`Include` for `#include`, `#import`,
   `__has_include`, and an `_next` form that starts from the beginning;
   `Next` for an `_next` form that continues after a directory; `Embed`
-  for `#embed` and `__has_embed`); `<...>` or not; the includer's
+  for `#embed` and `__has_embed`; `Module` for a module probe of
+  `import`, WP-3276, below); `<...>` or not; the includer's
   directory where the form tries it (`"..."` includes and embeds); the
   directory a `Next` continues after;
 - the result (`Found`): `Missing`; `Includer` (found relative to the
@@ -268,7 +275,41 @@ file found is identified by its path; its content is the PCH record's
 file list's to check. Such a result is a function of the file system
 alone, so every replay asks it again, whatever the trust (one `stat`,
 none for a `known` file): a missing name that now exists, or a found
-one that is gone, is a difference. `LookupLog::check_absolute(fs,
+one that is gone, is a difference.
+
+Module probes (WP-3276, spec/modules.md §2) are `Module` lookups,
+recorded as `import` asks them, in probe order: for each
+`-fprebuilt-module-path` directory `<d>`, `<d>/<m>.pcm`, `.cppm`,
+`.ixx` and `.cpp` (`<m>` the module name with `:` as `-`), up to the
+first that is a file, and, for `std` and `std.compat` not found
+before, `<std dir>/<m>.cppm`. A `-fmodule-file=<m>=<path>`, an
+in-memory module buffer and a path a module file read earlier recorded
+for its import are not probes and are not logged. The name is the
+candidate's path joined onto the working directory as a dependency
+file names a prebuilt-path find (`./` kept): absolute, as WP-2620's
+names are (relative only when the working directory cannot be read);
+not `<...>`, no includer's directory, no `after`; the result `Absolute`
+(a file) or `Missing`. It is repeated as an absolute name is, whatever
+its name (`tried` names nothing for it; `-v` spells it
+`module file "<path>"`).
+
+Dropped search directories (WP-3275): `dropped` is
+`SearchList::dropped()` (spec/driver.md "Dropped directories"), a
+`DroppedDir` per requested directory `SearchList::build` did not keep,
+in the order its `-v` notes name them: the path as given, its group,
+whether it is one of the toolchain's own (`SearchDirSpec::toolchain`:
+the standard library's, the resource directory's, the sysroot's, the
+GCC installation's), `spec` (its index among the requested directories,
+the command's order), `position` (the index in `list` it would have
+been searched at: the number of kept directories that precede it in
+search order), the reason (`Nonexistent`; `Duplicate`, the same
+directory by identity as an earlier one of its part of the list, quote
+or angled-and-after; `DuplicatesSystem`, a user directory the same as a
+later system one, which is kept instead) and, for a duplicate, `kept`
+(the index in `list` of the directory searched in its place). It is a
+statement about the producer's list, for tooling clients; replay does
+not repeat it (the consumer builds its own list), and `validate`
+checks that every `position` and `kept` is within `list`. `LookupLog::check_absolute(fs,
 known)` repeats only these, for a consumer that takes the others as
 recorded (the PCH consumer with the producer's search list). A run
 under an overlay records them as it records any lookup: the name as
@@ -290,12 +331,12 @@ under an overlay records exactly what a run over the edited tree
 records: a log is replayed with `ProducerMisses` only against the view
 it was recorded under (the PCH consumer: the same files but for the
 `known` names); under another overlay, or none after one, with
-`Nothing` and an `OverlayFs` of the consumer's view. Not in the log,
-so not answerable by replay: module lookups
-(prebuilt module files, the module cache), the main input, and a `-I`
-directory the producer dropped as nonexistent that an overlay creates
-(the consumer's own search list, built over its view, covers that
-one). It asks
+`Nothing` and an `OverlayFs` of the consumer's view. Not answerable by
+replay: the module cache and the module files of the command line
+(`-fmodule-file`), the main input, and a `-I` directory the producer
+dropped as nonexistent that an overlay creates (it is in `dropped`,
+which is not repeated; the consumer's own search list, built over its
+view, covers it). It asks
 `HeaderFs::is_file` (a `stat`, no read) and, after four misses in one
 directory, reads that directory's listing once (`HeaderFs::list_dir`);
 `known` names files that are known to exist (the record's file list),

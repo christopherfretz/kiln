@@ -1243,6 +1243,24 @@ toolchain's (clang 19 `Linux::AddClangCXXStdlibIncludeArgs` followed by
 list is realized by `kiln_pp::SearchList::build` (`spec/pp.md` "Header
 search"), which drops nonexistent and duplicate directories.
 
+**Dropped directories** (WP-3275). The directories `build` drops are
+kept beside the list, `SearchList::dropped()`, one `DroppedDir` each:
+the path as given, its group (`Quoted`, `Angled`, `System`,
+`ExternCSystem`, `CSystem`, `CxxSystem`, `After`, ...), whether it is
+one of the toolchain's (the directories above, given as
+`SearchDirSpec::of_toolchain`; the user's are `SearchDirSpec::new`),
+its index among the requested directories (`spec`: the order of the
+command line, then the toolchain's), the index in the list it would
+have been searched at (`position`), why it was dropped (`Nonexistent`;
+`Duplicate`, the same directory by identity as an earlier one, as a
+symbolic link to it is; `DuplicatesSystem`, a user directory that a
+later system one duplicates, which is searched instead) and, for a
+duplicate, the index of the directory searched in its place (`kept`).
+The list, and so every lookup and `-v`'s notes, are unchanged: clang
+reports nothing of this beyond those notes. The lookup log carries it
+(`LookupLog::dropped`, spec/pp.md "Lookup log") to tooling clients of
+the front-end library entry.
+
 **No environment search lists** (WP-2026). The search list comes from
 the command line and the toolchain alone: kiln reads none of `CPATH`,
 `C_INCLUDE_PATH`, `CPLUS_INCLUDE_PATH`, `OBJC_INCLUDE_PATH` (clang adds

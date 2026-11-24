@@ -730,6 +730,31 @@ capture initializers and shares the closure type, call operator and body
 (WP-2507): the copy is the same lambda-expression, so it has the same
 closure type.
 
+**Lifetime-extended temporaries of instantiations** (WP-3271). Every
+extended `MaterializeTemporaryExpr` reached from a variable's
+initializer names a `LifetimeExtendedTemporary` whose `extending` is
+that variable, and no other variable's initializer reaches it: an
+instantiation's variables extend their own temporaries, never the
+pattern's ([temp.inst]: each specialization's variables are distinct
+objects, and so are the temporaries bound to them). This covers every
+extending context: a local or static reference and what its initializer
+binds (a member subobject of a temporary included), the reference
+members of an aggregate, a structured binding's hidden variable, an
+inline static data member or variable template specialization, and the
+range-based `for`'s `__range` with its P2718R0 temporaries (default
+arguments included). The substituter shares non-dependent
+subexpressions with the pattern by id (spec/sema-templates.md §5.4);
+in the initializer of a variable it instantiates (and of `__range`) it
+first copies the spine above each such temporary
+(`Sema::unshare_temporaries`): `ExprArena::clone_unextended(mte,
+operand)` copies an MTE as a full-expression temporary with no record,
+which extension then gives the instantiated variable's own record
+(mangled `_ZGR<the specialization's name>_`, as clang). Copying stops
+where a new full-expression or unevaluated operand starts (a nested
+`ExprWithCleanups`, a `ConstantExpr`, a lambda, a statement expression,
+`sizeof`, `noexcept`, a requires-expression, ...) and below 256 levels.
+Constant evaluation is unchanged: the copies are the same expressions.
+
 Builtin *functions* (`__builtin_memcpy`, `__builtin_is_constant_evaluated`,
 `__builtin_is_within_lifetime`, `__builtin_constant_p`, ...) are ordinary
 `CallExpr`s whose callee is a `DeclRefExpr` to an implicit `Function`

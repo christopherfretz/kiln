@@ -155,7 +155,9 @@ Version 1 (WP-1392) had no lookup log; version 2 (WP-1403) added it;
 version 3 (WP-1411) is a new diagnostic id, which changes `DiagId`'s
 schema hash; version 4 (WP-1417) is two more diagnostic ids and the
 `Sema` target-feature configuration (`target_features`,
-`target_attr_features`).
+`target_attr_features`). Version 174 (WP-3275, WP-3276) is the lookup
+log's dropped search directories and module probes; from it the schema
+hash covers the head's lookup log as well as the roots.
 
 ### SCHEMA_HASH and SHAPE_HASH
 
@@ -244,7 +246,7 @@ same state agree (`tests/pch_snapshot.rs` `identity_components`;
 
 | component | what it is | covers |
 |---|---|---|
-| (schema hash) | checked first, before the identity is decoded | the layout of every root |
+| (schema hash) | checked first, before the identity is decoded | the layout of every root and of the lookup log |
 | kiln build | `kiln <version> <commit>` | the build that wrote it |
 | working directory | the current directory; not compared when the prefix does not depend on it (below) | relative paths: the header, `-I`, `__FILE__` |
 | language | the resolved standard (`LangStd`: C or C++, the standard, GNU or not; a C header's snapshot is refused by a C++ consumer and by another C standard) | `-std=`, `-ansi`, `-x`, the driver mode's default |

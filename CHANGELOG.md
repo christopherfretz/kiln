@@ -10,6 +10,25 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- The search directories the driver drops, in the lookup log (WP-3275,
+  spec/driver.md "Dropped directories", spec/pp.md "Lookup log"):
+  `SearchList::dropped()` and `LookupLog::dropped` give each requested
+  directory the list does not search (nonexistent ones, the toolchain's
+  own included, and duplicates by identity such as a symbolic link to an
+  earlier `-I`) with its path, group, whether it is the toolchain's
+  (`SearchDirSpec::toolchain`, `SearchDirSpec::of_toolchain`), its index
+  in the command's order, the position in the list it would have been
+  searched at, why (`DropReason`) and, for a duplicate, the directory
+  searched instead. The search list and `-v` are unchanged. PCH
+  snapshots (format 174) carry it, and their schema hash now covers the
+  lookup log.
+- The module probes of `import` in the lookup log (WP-3276, spec/pp.md
+  "Lookup log", spec/modules.md §2): each `-fprebuilt-module-path`
+  candidate (`.pcm`, `.cppm`, `.ixx`, `.cpp`) and the standard library
+  module's source, hit or miss, in probe order, as a `LookupForm::Module`
+  lookup whose name is the candidate joined onto the working directory;
+  replay repeats them as it repeats absolute names
+  (`IncludeResolver::record_module_probe`).
 - Written constant array bounds for tooling clients (WP-3015,
   spec/types.md §7.2 "Written bounds", §8.4): a constant bound keeps its
   written expression as type sugar after it folds, on a variable, a
@@ -1232,6 +1251,16 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- An instantiation's lifetime-extended temporaries are its own (WP-3271,
+  spec/ast.md "Lifetime-extended temporaries of instantiations"): a
+  reference, structured binding, aggregate reference member, static
+  local, inline static data member, variable template specialization or
+  range-based `for` (`__range` and its P2718R0 temporaries) in a template
+  shared the pattern's temporary when its initializer was not dependent,
+  so a second specialization's temporaries were not extended (destroyed
+  at the end of the full-expression, a dangling reference) and the
+  `_ZGR` objects of static ones were the pattern's, internal and shared.
+  They now get records of their own, mangled as clang mangles them.
 - A class-scope explicit specialization of a member function template in
   a class template ([temp.expl.spec]/2, CWG 727) is a specialization in
   every instantiation of the class (WP-3142, spec/ast.md §8.3): one with

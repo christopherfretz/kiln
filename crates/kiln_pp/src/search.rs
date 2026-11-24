@@ -17,7 +17,7 @@ use kiln_source::{DirCache, FileId, LoadFailures, Overlay, Resolved, SourceManag
 
 /// The group a search directory was given in (clang
 /// `frontend::IncludeDirGroup`).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 pub enum DirGroup {
     /// `-iquote`: searched for `"..."` includes only.
     Quoted,
@@ -74,13 +74,63 @@ pub struct SearchDirSpec {
     pub path: String,
     /// Its group.
     pub group: DirGroup,
+    /// One of the toolchain's own directories (the standard library's,
+    /// the resource directory's, the sysroot's, the GCC installation's),
+    /// not one the command line gave (WP-3275: a [`DroppedDir`] says so).
+    pub toolchain: bool,
 }
 
 impl SearchDirSpec {
-    /// A spec.
+    /// A spec of a directory the command line gave.
     pub fn new(path: impl Into<String>, group: DirGroup) -> SearchDirSpec {
-        SearchDirSpec { path: path.into(), group }
+        SearchDirSpec { path: path.into(), group, toolchain: false }
     }
+
+    /// A spec of one of the toolchain's own directories.
+    pub fn of_toolchain(path: impl Into<String>, group: DirGroup) -> SearchDirSpec {
+        SearchDirSpec { path: path.into(), group, toolchain: true }
+    }
+}
+
+/// Why [`SearchList::build`] dropped a requested directory (WP-3275).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
+pub enum DropReason {
+    /// It does not exist (clang `ignoring nonexistent directory`).
+    Nonexistent,
+    /// It is the same directory (by identity: a symbolic link to it, or
+    /// the same path again) as one searched earlier in its part of the
+    /// list, [`DroppedDir::kept`] (clang `ignoring duplicate directory`).
+    Duplicate,
+    /// A user directory (`-iquote` aside) that is the same directory as
+    /// a later system one, which is kept in its place (clang `ignoring
+    /// duplicate directory` with `as it is a non-system directory that
+    /// duplicates a system directory`).
+    DuplicatesSystem,
+}
+
+/// A requested search directory [`SearchList::build`] dropped (WP-3275):
+/// the search list is unchanged by it, it says what the command named
+/// that header search does not search.
+#[derive(Clone, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
+pub struct DroppedDir {
+    /// The path as given.
+    pub path: String,
+    /// Its group.
+    pub group: DirGroup,
+    /// One of the toolchain's own directories ([`SearchDirSpec::toolchain`]).
+    pub toolchain: bool,
+    /// Its position among the requested directories (the specs
+    /// [`SearchList::build`] was given, in the command's order: the
+    /// user's directories, then the toolchain's).
+    pub spec: u32,
+    /// The position in [`SearchList::dirs`] it would have been searched
+    /// at: the number of directories of the list searched before it.
+    pub position: u32,
+    /// Why it was dropped.
+    pub reason: DropReason,
+    /// For a duplicate, the position in [`SearchList::dirs`] of the same
+    /// directory, which is searched instead.
+    pub kept: Option<u32>,
 }
 
 /// One directory of the realized search list.
@@ -102,6 +152,7 @@ pub struct SearchList {
     dirs: Vec<SearchDir>,
     angled_start: usize,
     messages: Vec<String>,
+    dropped: Vec<DroppedDir>,
 }
 
 impl SearchList {
@@ -110,35 +161,38 @@ impl SearchList {
     /// `InitHeaderSearch::AddPath` + `Realize`).
     pub fn build(specs: &[SearchDirSpec], cplusplus: bool, fs: &mut dyn HeaderFs) -> SearchList {
         let mut messages = Vec::new();
-        let mut existing: Vec<(DirGroup, SearchDir)> = Vec::new();
-        for s in specs {
-            match fs.dir_identity(&s.path) {
-                Some(identity) => existing.push((
-                    s.group,
-                    SearchDir {
-                        path: s.path.clone(),
-                        characteristic: Characteristic::of_group(s.group),
-                        identity,
-                    },
-                )),
-                None => messages.push(format!("ignoring nonexistent directory \"{}\"", s.path)),
-            }
+        let mut dropped = Vec::new();
+        let mut existing: Vec<(DirGroup, Entry)> = Vec::new();
+        for (i, s) in specs.iter().enumerate() {
+            let Some(identity) = fs.dir_identity(&s.path) else {
+                messages.push(format!("ignoring nonexistent directory \"{}\"", s.path));
+                dropped.push((i, DropReason::Nonexistent, None));
+                continue;
+            };
+            let dir = SearchDir {
+                path: s.path.clone(),
+                characteristic: Characteristic::of_group(s.group),
+                identity,
+            };
+            existing.push((s.group, Entry { dir, spec: i }));
         }
-        let pick = |g: &[DirGroup]| -> Vec<SearchDir> {
+        let pick = |g: &[DirGroup]| -> Vec<Entry> {
             existing.iter().filter(|(eg, _)| g.contains(eg)).map(|(_, d)| d.clone()).collect()
         };
         let mut list = pick(&[DirGroup::Quoted]);
-        remove_duplicates(&mut list, 0, &mut messages);
+        remove_duplicates(&mut list, 0, &mut messages, &mut dropped);
         let num_quoted = list.len();
         list.extend(pick(&[DirGroup::Angled]));
-        remove_duplicates(&mut list, num_quoted, &mut messages);
+        remove_duplicates(&mut list, num_quoted, &mut messages, &mut dropped);
         let lang_system = if cplusplus { DirGroup::CxxSystem } else { DirGroup::CSystem };
         // clang adds System / ExternCSystem / the language's system group in
         // their order of appearance, then After.
         list.extend(pick(&[DirGroup::System, DirGroup::ExternCSystem, lang_system]));
         list.extend(pick(&[DirGroup::After]));
-        remove_duplicates(&mut list, num_quoted, &mut messages);
-        SearchList { dirs: list, angled_start: num_quoted, messages }
+        remove_duplicates(&mut list, num_quoted, &mut messages, &mut dropped);
+        let dropped = dropped_dirs(specs, &list, num_quoted, cplusplus, &dropped);
+        let dirs = list.into_iter().map(|e| e.dir).collect();
+        SearchList { dirs, angled_start: num_quoted, messages, dropped }
     }
 
     /// The directories, in search order.
@@ -155,6 +209,13 @@ impl SearchList {
     /// The `ignoring ...` notes clang prints under `-v`, in order.
     pub fn messages(&self) -> &[String] {
         &self.messages
+    }
+
+    /// The requested directories the list does not search, in the order
+    /// they were dropped (the `ignoring ...` notes' order): nonexistent
+    /// ones, then duplicates (WP-3275, spec/pp.md "Header search").
+    pub fn dropped(&self) -> &[DroppedDir] {
+        &self.dropped
     }
 
     /// clang's `-v` search-list report: the `ignoring ...` notes, then
@@ -206,38 +267,102 @@ impl SearchList {
     }
 }
 
+/// A directory of the list being built and the spec it came from.
+#[derive(Clone)]
+struct Entry {
+    dir: SearchDir,
+    spec: usize,
+}
+
 /// clang `RemoveDuplicates` over `list[first..]`: a later duplicate is
 /// dropped, except that a user directory duplicated by a later system
-/// directory is dropped in favor of the system one. Returns the number of
-/// user directories removed that way.
-fn remove_duplicates(list: &mut Vec<SearchDir>, first: usize, messages: &mut Vec<String>) -> usize {
+/// directory is dropped in favor of the system one. Each drop is noted in
+/// `dropped` as (spec, reason, the kept directory's spec).
+fn remove_duplicates(
+    list: &mut Vec<Entry>,
+    first: usize,
+    messages: &mut Vec<String>,
+    dropped: &mut Vec<(usize, DropReason, Option<usize>)>,
+) {
     let mut seen: HashSet<String> = HashSet::new();
-    let mut non_system_removed = 0;
     let mut i = first;
     while i < list.len() {
-        if seen.insert(list[i].identity.clone()) {
+        if seen.insert(list[i].dir.identity.clone()) {
             i += 1;
             continue;
         }
+        let first_dup = (first..i).find(|&j| list[j].dir.identity == list[i].dir.identity);
         let mut to_remove = i;
-        if list[i].characteristic != Characteristic::User {
-            let first_dup = (first..i).find(|&j| list[j].identity == list[i].identity);
-            if let Some(j) = first_dup
-                && list[j].characteristic == Characteristic::User
-            {
-                to_remove = j;
-            }
+        if list[i].dir.characteristic != Characteristic::User
+            && let Some(j) = first_dup
+            && list[j].dir.characteristic == Characteristic::User
+        {
+            to_remove = j;
         }
-        messages.push(format!("ignoring duplicate directory \"{}\"", list[i].path));
-        if to_remove != i {
+        messages.push(format!("ignoring duplicate directory \"{}\"", list[i].dir.path));
+        let (reason, kept) = if to_remove == i {
+            (DropReason::Duplicate, first_dup.map(|j| list[j].spec))
+        } else {
             messages.push(
                 "  as it is a non-system directory that duplicates a system directory".to_owned(),
             );
-            non_system_removed += 1;
-        }
+            (DropReason::DuplicatesSystem, Some(list[i].spec))
+        };
+        dropped.push((list[to_remove].spec, reason, kept));
         list.remove(to_remove);
     }
-    non_system_removed
+}
+
+/// The [`DroppedDir`]s of the drops [`remove_duplicates`] and the
+/// existence check noted, positioned in the realized `list` (its first
+/// `num_quoted` directories the `-iquote` ones): where the group order of
+/// [`SearchList::build`] would have put each.
+fn dropped_dirs(
+    specs: &[SearchDirSpec],
+    list: &[Entry],
+    num_quoted: usize,
+    cplusplus: bool,
+    dropped: &[(usize, DropReason, Option<usize>)],
+) -> Vec<DroppedDir> {
+    let lang_system = if cplusplus { DirGroup::CxxSystem } else { DirGroup::CSystem };
+    // The search order of a spec: its part of the list, its group's
+    // place, its position.
+    let rank = |i: usize| {
+        let g = match specs[i].group {
+            DirGroup::Quoted => 0,
+            DirGroup::Angled => 1,
+            DirGroup::After => 3,
+            g if g == lang_system || matches!(g, DirGroup::System | DirGroup::ExternCSystem) => 2,
+            // The other language's system group is never searched.
+            _ => 4,
+        };
+        (g, i)
+    };
+    let to_u32 = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+    dropped
+        .iter()
+        .map(|&(i, reason, kept)| {
+            let r = rank(i);
+            let position = list.iter().filter(|e| rank(e.spec) < r).count();
+            let kept = kept.and_then(|k| {
+                let mut part = if specs[i].group == DirGroup::Quoted {
+                    0..num_quoted
+                } else {
+                    num_quoted..list.len()
+                };
+                part.find(|&j| list[j].spec == k)
+            });
+            DroppedDir {
+                path: specs[i].path.clone(),
+                group: specs[i].group,
+                toolchain: specs[i].toolchain,
+                spec: to_u32(i),
+                position: to_u32(position),
+                reason,
+                kept: kept.map(to_u32),
+            }
+        })
+        .collect()
 }
 
 /// Joins a header name onto a directory the way `llvm::sys::path::append`

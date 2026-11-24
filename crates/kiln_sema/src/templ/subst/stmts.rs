@@ -781,11 +781,14 @@ impl Substituter<'_, '_, '_> {
             // `for (x : {a, b})`: the braced list, which the analyzed
             // pattern holds as a `std::initializer_list` over its backing
             // array once it is not type-dependent.
-            let range = if let Some(b) = self.braced_source(range_init) {
-                self.braced_list(b).map(crate::RangeInit::List)
-            } else {
-                self.expr(range_init).map(crate::RangeInit::Expr)
-            };
+            // Its temporaries are `__range`'s own (WP-3271).
+            let range = self.unsharing_temporaries(|s| {
+                if let Some(b) = s.braced_source(range_init) {
+                    s.braced_list(b).map(crate::RangeInit::List)
+                } else {
+                    s.expr(range_init).map(crate::RangeInit::Expr)
+                }
+            });
             let temps = self.sema.end_for_range_init(collect);
             let range = range?;
             let lv = d.loop_var;

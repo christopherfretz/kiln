@@ -2706,6 +2706,26 @@ impl ExprArena {
         Some(id)
     }
 
+    /// A copy of the `MaterializeTemporaryExpr` `e` over `operand` that
+    /// is a full-expression temporary again: no storage duration of its
+    /// own and no `LifetimeExtendedTemporary`, so the declaration it is
+    /// used for can extend it (spec/ast.md "Lifetime-extended temporaries
+    /// of instantiations", WP-3271: a template instantiation's copy of
+    /// its pattern's temporary). It keeps `e`'s type, value category,
+    /// location and side records.
+    ///
+    /// # Panics
+    /// If `e` is not a `MaterializeTemporaryExpr`.
+    pub fn clone_unextended(&mut self, e: ExprId, operand: ExprId) -> ExprId {
+        let mut c = *self.expect_kind(e, ExprKind::MaterializeTemporaryExpr);
+        c.a = operand.raw();
+        c.aux = (c.aux & !3) | StorageDuration::FullExpression as u8;
+        c.b = 0;
+        let id = self.push(c);
+        self.copy_cold_records(e, id);
+        id
+    }
+
     /// Copies `e`'s location and side records onto its clone `id`
     /// ([`ExprArena::clone_with_children`]).
     fn copy_cold_records(&mut self, e: ExprId, id: ExprId) {

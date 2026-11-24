@@ -806,11 +806,25 @@ impl Preprocessor<'_, '_> {
     /// The module file or interface source of module `name`
     /// (spec/modules.md §2, §11.6).
     fn find_module(&self, name: &str) -> Option<PathBuf> {
-        self.find_module_where(name).map(|(p, _)| p)
+        self.find_module_where(name, None).map(|(p, _)| p)
     }
 
-    /// [`find_module`](Self::find_module), with where it was found.
-    fn find_module_where(&self, name: &str) -> Option<(PathBuf, Found)> {
+    /// [`find_module`](Self::find_module), with where it was found; the
+    /// files it asked about, and whether each is one, are pushed to
+    /// `probes` in order (WP-3276).
+    fn find_module_where(
+        &self,
+        name: &str,
+        mut probes: Option<&mut Vec<(PathBuf, bool)>>,
+    ) -> Option<(PathBuf, Found)> {
+        let mut probe = |p: &Path| {
+            // Through the overlay, if any (spec/source.md "Overlay").
+            let hit = self.sm.is_regular_file(p);
+            if let Some(v) = probes.as_deref_mut() {
+                v.push((p.to_path_buf(), hit));
+            }
+            hit
+        };
         let m = self.modules.as_ref()?;
         let o = &m.opts;
         if let Some((_, p)) = o.module_files.iter().rev().find(|(n, _)| n == name) {
@@ -820,8 +834,7 @@ impl Preprocessor<'_, '_> {
         for dir in &o.prebuilt_paths {
             for ext in ["pcm", "cppm", "ixx", "cpp"] {
                 let p = dir.join(format!("{stem}.{ext}"));
-                // Through the overlay, if any (spec/source.md "Overlay").
-                if self.sm.is_regular_file(&p) {
+                if probe(&p) {
                     return Some((p, Found::Prebuilt));
                 }
             }
@@ -837,11 +850,29 @@ impl Preprocessor<'_, '_> {
             && let Some(d) = &o.std_dir
         {
             let p = d.join(format!("{name}.cppm"));
-            if self.sm.is_regular_file(&p) {
+            if probe(&p) {
                 return Some((p, Found::StdDir));
             }
         }
         None
+    }
+
+    /// Records the module probes of an `import` in the lookup log, if it
+    /// is recorded (WP-3276, spec/pp.md "Lookup log"): each candidate
+    /// joined onto the working directory, as a dependency file names a
+    /// prebuilt-path find (`./` kept).
+    fn record_module_probes(&mut self, probes: Vec<(PathBuf, bool)>) {
+        if probes.is_empty() {
+            return;
+        }
+        let cwd = self.sm.work_dir().current().ok();
+        for (p, hit) in probes {
+            let p = match &cwd {
+                Some(cwd) if p.is_relative() => cwd.join(&p),
+                _ => p,
+            };
+            self.resolver.record_module_probe(&p.display().to_string(), hit);
+        }
     }
 
     /// The module file the toolchain cache gives for `std` or
@@ -872,7 +903,10 @@ impl Preprocessor<'_, '_> {
             self.import_module_buffer(key, file, span);
             return;
         }
-        let Some((source, found)) = self.find_module_where(key) else {
+        let mut probes = Vec::new();
+        let found = self.find_module_where(key, Some(&mut probes));
+        self.record_module_probes(probes);
+        let Some((source, found)) = found else {
             self.emit(Diag::new(DiagId::pp_module_not_found, span).arg(key));
             return;
         };

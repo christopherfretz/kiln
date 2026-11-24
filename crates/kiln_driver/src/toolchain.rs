@@ -590,8 +590,9 @@ impl Toolchain {
         if o.nostdinc {
             return v;
         }
-        let sys =
-            |v: &mut Vec<SearchDirSpec>, p: String| v.push(SearchDirSpec::new(p, DirGroup::System));
+        let sys = |v: &mut Vec<SearchDirSpec>, p: String| {
+            v.push(SearchDirSpec::of_toolchain(p, DirGroup::System));
+        };
         if cplusplus && !o.nostdincxx && !o.nostdlibinc {
             match o.stdlib {
                 StdLib::LibCxx => self.libcxx_dirs(&mut v),
@@ -616,7 +617,7 @@ impl Toolchain {
             sys(&mut v, format!("{}/../../../../{}/include", g.path, g.triple));
         }
         let externc = |v: &mut Vec<SearchDirSpec>, p: String| {
-            v.push(SearchDirSpec::new(p, DirGroup::ExternCSystem));
+            v.push(SearchDirSpec::of_toolchain(p, DirGroup::ExternCSystem));
         };
         let multiarch = format!("{root}/usr/include/{}", self.target.multiarch);
         if Path::new(&multiarch).is_dir() {
@@ -670,9 +671,9 @@ impl Toolchain {
         let Some(base) = self.libcxx_include_base() else { return };
         let per_target = format!("{base}/{}/c++/v1", self.target.triple);
         if Path::new(&per_target).is_dir() {
-            v.push(SearchDirSpec::new(per_target, DirGroup::System));
+            v.push(SearchDirSpec::of_toolchain(per_target, DirGroup::System));
         }
-        v.push(SearchDirSpec::new(format!("{base}/c++/v1"), DirGroup::System));
+        v.push(SearchDirSpec::of_toolchain(format!("{base}/c++/v1"), DirGroup::System));
     }
 
     /// The include base holding the libc++ headers (`<base>/c++/v1`):
@@ -743,9 +744,9 @@ impl Toolchain {
         // packages), whose target directory is `.../<v>/<triple>`.
         let cross = format!("{}/../../../../{}/include/c++/{}", g.path, g.triple, g.version);
         if Path::new(&cross).is_dir() {
-            v.push(SearchDirSpec::new(cross.clone(), DirGroup::System));
-            v.push(SearchDirSpec::new(format!("{cross}/{}", g.triple), DirGroup::System));
-            v.push(SearchDirSpec::new(format!("{cross}/backward"), DirGroup::System));
+            v.push(SearchDirSpec::of_toolchain(cross.clone(), DirGroup::System));
+            v.push(SearchDirSpec::of_toolchain(format!("{cross}/{}", g.triple), DirGroup::System));
+            v.push(SearchDirSpec::of_toolchain(format!("{cross}/backward"), DirGroup::System));
             return;
         }
         let inc = format!("{}/../../../../include", g.path);
@@ -753,18 +754,18 @@ impl Toolchain {
         if !Path::new(&base).is_dir() {
             return;
         }
-        v.push(SearchDirSpec::new(base.clone(), DirGroup::System));
+        v.push(SearchDirSpec::of_toolchain(base.clone(), DirGroup::System));
         let triple_dir = format!("{inc}/{}/c++/{}", g.triple, g.version);
         let nested = format!("{base}/{}", g.triple);
         // clang `addLibStdCXXIncludePaths`: Debian's multiarch directory if
         // it exists, else the nested one (listed even when missing, so `-v`
         // reports it as nonexistent).
         if Path::new(&triple_dir).is_dir() {
-            v.push(SearchDirSpec::new(triple_dir, DirGroup::System));
+            v.push(SearchDirSpec::of_toolchain(triple_dir, DirGroup::System));
         } else {
-            v.push(SearchDirSpec::new(nested, DirGroup::System));
+            v.push(SearchDirSpec::of_toolchain(nested, DirGroup::System));
         }
-        v.push(SearchDirSpec::new(format!("{base}/backward"), DirGroup::System));
+        v.push(SearchDirSpec::of_toolchain(format!("{base}/backward"), DirGroup::System));
     }
 }
 

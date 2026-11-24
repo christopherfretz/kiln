@@ -106,6 +106,10 @@ Module sources are found in this order (spec/driver.md, "Modules"):
 A module that is not found is `fatal error: module 'M' not found`. A file
 that cannot be read is the include "file not found" error.
 
+The files items 2 and 3 ask about are the module probes of the lookup
+log (WP-3276, spec/pp.md "Lookup log"): each candidate, joined onto the
+working directory, a hit or a miss, in that order, up to the first hit.
+
 Activation inside a TU. The preprocessor scans the main file's text once
 for a line starting with `module`, `import` or `export`; if there is none
 the TU pays nothing (no ownership records, no visibility checks). An

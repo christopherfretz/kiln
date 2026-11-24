@@ -12,14 +12,20 @@
 //!
 //! A lookup of an absolute name (WP-2620) does not use the search list:
 //! its result is a function of the file system alone, and it is always
-//! asked again ([`LookupLog::check_absolute`]).
+//! asked again ([`LookupLog::check_absolute`]). So is a module probe of
+//! `import` (WP-3276, [`LookupForm::Module`]), whose name is the absolute
+//! path of the candidate file.
+//!
+//! Beside the lookups the log carries the search directories the command
+//! named that header search does not search (WP-3275,
+//! [`LookupLog::dropped`]).
 
 use std::collections::{HashMap, HashSet};
 
 use kiln_snap::Snap;
 
 use crate::resolver::{LIST_AFTER_MISSES, Listing, listable};
-use crate::search::{Characteristic, HeaderFs, SearchList, join_path};
+use crate::search::{Characteristic, DroppedDir, HeaderFs, SearchList, join_path};
 
 /// What kind of lookup a [`Lookup`] is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Snap)]
@@ -33,6 +39,14 @@ pub enum LookupForm {
     Next,
     /// `#embed` / `__has_embed`.
     Embed,
+    /// A probe of `import` for a module's file (WP-3276, spec/modules.md
+    /// §2): a `-fprebuilt-module-path` candidate (`<dir>/<m>.pcm`, then
+    /// `.cppm`, `.ixx`, `.cpp`) or the standard library module's source
+    /// in its directory. The name is the candidate's path joined onto
+    /// the working directory (absolute, as WP-2620's names are); the
+    /// result is [`Found::Absolute`] or [`Found::Missing`]. It is never
+    /// angled and has no includer's directory.
+    Module,
 }
 
 /// The result of a [`Lookup`].
@@ -106,6 +120,12 @@ pub struct LookupLog {
     /// [`LookupLog::dirs`] (WP-2829): an `#embed` searches it after the
     /// includer's and the working directory.
     pub embed_dirs: Vec<u32>,
+    /// The search directories the command named that the producer's
+    /// list does not search ([`SearchList::dropped`], WP-3275): what a
+    /// tooling client needs to say why a header was not found there.
+    /// Each names its position in [`LookupLog::list`]; it is not
+    /// repeated (the consumer's list is its own).
+    pub dropped: Vec<DroppedDir>,
 }
 
 /// The recording side: the log and what deduplicates it.
@@ -134,6 +154,7 @@ impl Recorder {
         self.log.list = list.dirs().iter().map(|d| self.dir(&d.path)).collect();
         self.log.angled_start = u32::try_from(list.angled_start()).unwrap_or(u32::MAX);
         self.log.embed_dirs = embed_dirs.iter().map(|d| self.dir(d)).collect();
+        self.log.dropped = list.dropped().to_vec();
     }
 
     /// Records `l` unless it was recorded before.
@@ -200,6 +221,17 @@ impl LookupLog {
                 self.angled_start,
                 self.list.len()
             ));
+        }
+        for d in &self.dropped {
+            if d.position as usize > self.list.len()
+                || d.kept.is_some_and(|k| k as usize >= self.list.len())
+            {
+                return Err(format!(
+                    "its lookup log places dropped directory '{}' outside the search list of {}",
+                    d.path,
+                    self.list.len()
+                ));
+            }
         }
         for l in &self.lookups {
             if let Some(i) = l.includer {
@@ -270,6 +302,8 @@ impl LookupLog {
                 out.extend(self.embed_dirs.iter().take(end).map(|&d| self.dir(d)));
                 out
             }
+            // Its candidate alone, an absolute name (above).
+            LookupForm::Module => Vec::new(),
         }
     }
 
@@ -309,6 +343,7 @@ impl LookupLog {
             LookupForm::Include => name,
             LookupForm::Next => format!("#include_next {name}"),
             LookupForm::Embed => format!("#embed {name}"),
+            LookupForm::Module => format!("module file {name}"),
         }
     }
 
@@ -434,6 +469,8 @@ impl LookupLog {
                     self.embed(l, embed_dirs, &mut p, &trusted)?;
                     continue;
                 }
+                // Repeated above, as an absolute name.
+                LookupForm::Module => continue,
             };
             let was = self.result(&l.found);
             if now != was {
@@ -470,9 +507,11 @@ impl LookupLog {
     /// and asks nothing), by `#embed` too.
     fn repeat_absolute(&self, l: &Lookup, p: &mut Prober<'_>) -> Result<(), String> {
         let now = match l.form {
-            LookupForm::Include if p.file(&l.name) => Res::Absolute,
+            LookupForm::Include | LookupForm::Module if p.file(&l.name) => Res::Absolute,
             LookupForm::Embed if p.file(&l.name) => Res::Embed(&l.name),
-            LookupForm::Include | LookupForm::Embed | LookupForm::Next => Res::Missing,
+            LookupForm::Include | LookupForm::Module | LookupForm::Embed | LookupForm::Next => {
+                Res::Missing
+            }
         };
         let was = self.result(&l.found);
         if now == was { Ok(()) } else { Err(self.difference(l, &was, &now)) }
@@ -600,9 +639,11 @@ enum Res<'a> {
     Absolute,
 }
 
-/// Whether `l` looks up an absolute name, which is opened as is.
+/// Whether `l` looks up an absolute name, which is opened as is: so is
+/// a module probe's candidate (relative only when the working directory
+/// could not be read), whatever the search list.
 fn is_absolute(l: &Lookup) -> bool {
-    l.name.starts_with('/')
+    l.name.starts_with('/') || l.form == LookupForm::Module
 }
 
 /// A search directory's listing in [`LookupLog::check`].
