@@ -1356,6 +1356,23 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   do not convert (an unsatisfied `requires (T &a) { swap(a, a); }` with
   one `swap` found by argument-dependent lookup): the name stays
   unresolved, as with two candidates.
+- Written references (`-fkiln-written-refs`, spec/ast.md §18.5,
+  §18.12.2, WP-3450): in a class template with a dependent base,
+  `this->mw<T>` and `this->template mw<T>` now name the member variable
+  template `mw` when the class declares it itself (also in a nested class
+  of a class template, and through a using-declaration of a non-dependent
+  base's member), since class member lookup finds the class's own
+  declaration before any base ([class.member.lookup]/2); they were left
+  dependent with per-specialization rows. Found sets of overload sets the
+  class declares itself (`this->g(t)`, `g(t)`, `R::g(t)`,
+  `this->template mf<T>()`) lose `+base` (`FoundSet::dependent_base()` is
+  false: the set is closed). A name the class does not declare stays
+  dependent with `+base`, and a using-declaration of a dependent base's
+  member (`using B<T>::mw;`) stays dependent. Changed goldens:
+  `template-id-current-inst` (`R::a`'s `this->template mw<T>`: one entry
+  naming `R::mw`, its `def=` and `spec=` rows gone) and `found-this-base`
+  (`def=2+base` to `def=2` for `D::a`).
+
 - A function template specialization's parameter attributes come from
   the template's latest declaration where the specialization is
   declared, not from its first ([temp.inst]/3, [dcl.attr.grammar]/5,

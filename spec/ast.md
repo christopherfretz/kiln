@@ -3155,14 +3155,22 @@ stage 1.
   `v` each name their template, `w`'s entry first). A member variable
   template of the current instantiation ([temp.dep.type]/1) follows the
   rule §18.12.2 gives members of the current instantiation: class member
-  lookup at the definition found it, and in a class without a dependent
-  base that result is final ([temp.dep.type]/6), so `mw<T>`, `S::mw<T>`,
-  `this->mw<T>` and `this->template mw<T>` name the template (the last
-  two with `MEMBER`; a using-declaration's shadow in `found`); in a class
-  with a dependent base a `this->` name stays `DEPENDENT` with its found
-  set and `+base` (the instantiation looks it up again), while a name
-  the class's own unqualified or qualified lookup finds is resolved as
-  before. A member function template stays an overload set
+  lookup at the definition found it, and that result is final
+  ([temp.dep.type]/6) in a class without a dependent base, and also in
+  one with a dependent base when the class declares the name itself:
+  class member lookup returns the declaration set of a class that
+  declares the name, before any base, dependent or not, so a base's
+  member of the same name is hidden ([class.member.lookup]/2; WP-3450).
+  So `mw<T>`, `S::mw<T>`, `this->mw<T>` and `this->template mw<T>` name
+  the template (the last two with `MEMBER`; a using-declaration's shadow
+  in `found`), in a nested class of a class template too. A
+  using-declaration in the class of a non-dependent base's member is a
+  declaration of the class (`using P::pw;`: `this->pw<T>` names `P::pw`,
+  `found` the shadow); one of a dependent base's member (`using
+  B<T>::mw;`) is not, as only the instantiation resolves it. Only when
+  the class does not declare the name and has a dependent base, which
+  could supply it, does a `this->` name stay `DEPENDENT` with its found
+  set and `+base` (the instantiation looks it up again). A member function template stays an overload set
   (`this->template mf<T>()`: `DEPENDENT`, its found set), and a member
   template of an unknown specialization (`t.template w<T>` with `t` a
   `D<T>`) has no definition-context lookup. A partial specialization's
@@ -3233,7 +3241,12 @@ arguments); WP-3405: `template-id-dependent-args` (every context and
 form of §18.5's rule, nested ids, function template-ids' found sets,
 `T::template x<int>`), `template-id-current-inst` (members of the current
 instantiation, with and without a dependent base, an unknown
-specialization, a partial specialization's member),
+specialization, a partial specialization's member);
+WP-3450: `this-member-dependent-base` (the class's own member variable
+template with a dependent base, with and without `template`, hiding a
+dependent base's, in a nested class; using-declarations of a dependent
+and a non-dependent base's member; data and static members; overload
+sets the class or a non-dependent base declares),
 `template-id-concepts`, and the carriage goldens `template-id-pch`,
 `template-id-pch-include`, `template-id-module-image` and
 `template-id-module-replay`; `crates/kiln_parse/tests/written_refs.rs`
@@ -4564,7 +4577,7 @@ instantiated. The found set is that result.
 | `(f)(t)`, `::f(t)`, `N::f(t)` with several overloads | unqualified (parenthesized) or qualified lookup | none: closed, every instantiation selects from it |
 | a friend function template specialization with dependent arguments or type (`friend void f<>(T);`, `friend void n::f<T>(T);`, §18.4) | the function templates ordinary or qualified lookup of the name found at the definition | none: closed, each instantiation matches one of them ([temp.friend]/1.3) |
 | one visible `f` with argument-dependent lookup suppressed (a block-scope declaration, a class member), one member found by `this->a(t)` | no set: resolved at the definition, the entry has its entity | |
-| `this->a(t)`, `C::a(t)`, `a(t)` (implicit `this`), `this->mt(t)`, `this->template mt<T>(t)`: members of the current instantiation (`CXXDependentScopeMemberExpr`, or an overloaded member access) | class member lookup in the current instantiation: members of the pattern class and its non-dependent bases | none when the class searched has no dependent base; else `DEPENDENT_BASE`: the instantiation looks the name up again, and a different result is ill-formed ([temp.dep.type]/6; not diagnosed, §18.12.6) |
+| `this->a(t)`, `C::a(t)`, `a(t)` (implicit `this`), `this->mt(t)`, `this->template mt<T>(t)`: members of the current instantiation (`CXXDependentScopeMemberExpr`, or an overloaded member access) | class member lookup in the current instantiation: members of the pattern class and its non-dependent bases | none when the class searched has no dependent base, or declares the name itself (its declaration set is the result, a base's member of the name is hidden, [class.member.lookup]/2; a using-declaration of a non-dependent base's member counts, one of a dependent base's member does not; WP-3450); else `DEPENDENT_BASE`: the instantiation looks the name up again, and a different result is ill-formed ([temp.dep.type]/6; not diagnosed, §18.12.6) |
 | a name a dependent using-declarator introduces (`using B<T>::bm; ... bm(t)`) | the class's lookup result, the `UnresolvedUsingValue` an element | `UNRESOLVED_USING`: what it names exists per specialization only |
 | `T::x`, `B<T>::bm(t)` (a dependent qualifier), `t.m(t)`, `this->bm(t)` naming nothing the class declares in a class with a dependent base (a member of an unknown specialization), `using B<T>::bm;` itself, `typename T::ty`, a dependent nested-name-specifier component | no set (`None`): no lookup runs at the definition; all knowledge is per specialization (§18.9) | |
 | a dependent operator `t + t`, a fold's operator, a `co_await` in a coroutine template (§18.13.6) | the definition-context lookup of `operator@` (`Ast::dependent_oper_candidates`, §8.5; for `co_await`, the unqualified lookup of `operator co_await` re-run at the recording site) | `ADL` |
@@ -4699,7 +4712,10 @@ using-declaration and a using-directive (`found-several`), none
 overload (`found-later-overload`), closed sets and a block-scope
 declaration (`found-closed`), members of the current instantiation
 (`found-this`) and with a dependent base, an unknown specialization and
-a dependent using-declarator (`found-this-base`), function template-ids
+a dependent using-declarator (`found-this-base`), every `this->`,
+qualified and unqualified form in a class with a dependent base, closed
+when the class declares the name, `+base` when a non-dependent base
+does (`this-member-dependent-base`, WP-3450), function template-ids
 and an assumed template name (`found-template-id`), an
 operator-function-id call and an operator expression
 (`found-operator`), and the carriage goldens through a PCH and as text

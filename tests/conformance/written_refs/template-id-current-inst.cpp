@@ -6,10 +6,10 @@
 // unqualified, after the class's own name and after `this->`, with or
 // without `template`, also when a using-declaration brought it in from a
 // base that is not dependent (`found=` the using-shadow). With a
-// dependent base the instantiation looks a `this->` name up again
-// (§18.12.2's rule for members of the current instantiation): it stays
-// dependent with its found set and `+base`; a name the class's own
-// lookup finds unqualified or after the class's name is resolved there.
+// dependent base too: the class declares `mw` itself, which class member
+// lookup finds before any base ([class.member.lookup]/2), so the result
+// is final and `this->template mw<T>` names the template like `mw<T>`
+// and `R::mw<T>` (more forms: `this-member-dependent-base`).
 // A member function template stays an overload set with its found set.
 // A member template of an unknown specialization (`t.template w<T>`,
 // `D<T>::template w<T>`) has no definition-context lookup. A partial

@@ -11,18 +11,18 @@
 27:15-27:17  using-decl  'bm' -> (dependent) q=27:9 in=D::bm@27:15
 27:15-27:17  using-decl  'bm' -> B<int>::bm@13:8 spec=D<int>@17:27
 28:13-28:14  type  'T' -> T@17:17 in=t@28:15
-21:11-21:12  member  'a' -> (dependent) in=D::use@20:8 def=2+base
+21:11-21:12  member  'a' -> (dependent) in=D::use@20:8 def=2
 21:11-21:12  member  'a' def=D::a@18:8
 21:11-21:12  member  'a' def=D::a@19:8
 21:11-21:12  member  'a' -> D<int>::a@18:8 spec=D<int>::use@20:8
 21:13-21:14  expr  't' -> t@20:14 in=D::use@20:8
 22:5-22:6  nns  'D' -> D@17:27 in=D::use@20:8 how=injected
-22:8-22:9  expr  'a' -> (dependent) q=22:5 in=D::use@20:8 def=2+base
+22:8-22:9  expr  'a' -> (dependent) q=22:5 in=D::use@20:8 def=2
 22:8-22:9  expr  'a' def=D::a@18:8
 22:8-22:9  expr  'a' def=D::a@19:8
 22:8-22:9  expr  'a' -> D<int>::a@18:8 spec=D<int>::use@20:8
 22:10-22:11  expr  't' -> t@20:14 in=D::use@20:8
-23:5-23:6  expr  'a' -> (dependent) in=D::use@20:8 def=2+base
+23:5-23:6  expr  'a' -> (dependent) in=D::use@20:8 def=2
 23:5-23:6  expr  'a' def=D::a@18:8
 23:5-23:6  expr  'a' def=D::a@19:8
 23:5-23:6  expr  'a' -> D<int>::a@18:8 spec=D<int>::use@20:8

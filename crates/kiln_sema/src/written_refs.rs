@@ -163,10 +163,12 @@ impl Sema<'_, '_> {
     /// names (`this->mw<T>`, `this->template mw<T>`, an entry shaped as
     /// `r`): class member lookup in the current instantiation found one
     /// variable template at the definition ([temp.dep.type]/6), which only
-    /// its dependent template arguments keep unresolved, in a class
-    /// without a dependent base (§18.12.2: with one, the instantiation
-    /// looks the name up again, and the entry stays dependent with its
-    /// found set). A member function template stays an overload set.
+    /// its dependent template arguments keep unresolved, and the result
+    /// is final: the class searched declares the name itself, which hides
+    /// any base's ([class.member.lookup]/2), or has no dependent base
+    /// (§18.12.2: else a dependent base could supply the name, the
+    /// instantiation looks it up again, and the entry stays dependent with
+    /// its found set). A member function template stays an overload set.
     fn written_member_var_template(&self, r: &WrittenRef, x: ExprId) -> Option<Target> {
         if self.ast.exprs.get(x).kind() != ExprKind::CXXDependentScopeMemberExpr {
             return None;
@@ -174,7 +176,9 @@ impl Sema<'_, '_> {
         let (f, class) = self.written_member_found(r, x)?;
         let [d] = f.decls.as_slice() else { return None };
         let t = self.ast.strip_shadow(*d);
-        if self.kind_of(t) != DeclKind::VarTemplate || self.has_dependent_bases_in(class, 0) {
+        if self.kind_of(t) != DeclKind::VarTemplate
+            || !self.member_lookup_final(class, &f.decls, &f.found)
+        {
             return None;
         }
         let found = f.found.first().copied().filter(|&s| s != t);
@@ -219,7 +223,7 @@ impl Sema<'_, '_> {
             }
             _ => return,
         };
-        if naming.is_some_and(|c| self.has_dependent_bases_in(c, 0)) {
+        if naming.is_some_and(|c| !self.member_lookup_final(c, &decls, &found)) {
             flags |= FOUND_DEPENDENT_BASE;
         }
         let mut elems = Vec::with_capacity(decls.len());
@@ -235,6 +239,29 @@ impl Sema<'_, '_> {
         }
         let s = self.ast.written_refs.intern_found(&elems, how, flags);
         self.ast.written_refs.set_found(id, s);
+    }
+
+    /// True when the class member lookup of a name in `class` that found
+    /// `decls` (through `seen`, parallel: a using-shadow or the
+    /// declaration itself) is final at the definition: `class` has no dependent base, or
+    /// it declares the name itself ([class.member.lookup]/2: the
+    /// declaration set of a class that declares the name is the result,
+    /// whatever its bases, so a dependent base's member is hidden). A
+    /// using-declaration in `class` is a declaration of it, unless it
+    /// names a member of a dependent base (`using B<T>::m;`, an
+    /// `UnresolvedUsingValue`, which only the instantiation resolves).
+    /// Spec/ast.md §18.5, §18.12.2 (WP-3450).
+    fn member_lookup_final(&self, class: DeclId, decls: &[DeclId], seen: &[DeclId]) -> bool {
+        if !self.has_dependent_bases_in(class, 0) {
+            return true;
+        }
+        let key = self.ast.first(class);
+        !decls.is_empty()
+            && decls.iter().enumerate().all(|(i, &d)| {
+                let seen = seen.get(i).copied().unwrap_or(d);
+                self.kind_of(self.ast.strip_shadow(d)) != DeclKind::UnresolvedUsingValue
+                    && self.ast.semantic_parent(seen).is_some_and(|p| self.ast.first(p) == key)
+            })
     }
 
     /// What the class member lookup at the definition found for the

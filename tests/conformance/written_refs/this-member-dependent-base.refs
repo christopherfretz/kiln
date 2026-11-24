@@ -1,0 +1,84 @@
+29:33-29:34  type  'T' -> T@29:17 in=R@29:27
+29:31-29:32  base  'B' -> B@24:27 in=R@29:27
+29:37-29:38  base  'P' -> P@19:8 in=R@29:27
+36:11-36:12  type  'T' -> T@29:17 in=R::bw@36:15
+36:9-36:10  nns  'B' -> B@24:27 in=R::bw@36:15
+36:15-36:17  using-decl  'bw' -> (dependent) q=36:9 in=R::bw@36:15
+36:15-36:17  using-decl  'bw' -> B<int>::bw@26:43 spec=R<int>@29:27
+37:9-37:10  nns  'P' -> P@19:8 in=R::pw@37:12 how=injected
+37:12-37:14  using-decl  'pw' -> P::pw@20:43 q=37:9 in=R::pw@37:12
+41:16-41:17  type  'T' -> T@29:17 in=R::N@41:10
+41:14-41:15  base  'B' -> B@24:27 in=R::N@41:10
+38:29-38:30  type  'T' -> T@29:17 in=R::a@38:7
+38:26-38:28  member  'mw' -> R::mw@30:43 in=R::a@38:7
+38:52-38:53  type  'T' -> T@29:17 in=R::a@38:7
+38:49-38:51  template  'mw' -> R::mw@30:43 in=R::a@38:7
+38:32-38:33  operator  '+' -> (dependent) in=R::a@38:7 def=0+adl
+38:32-38:33  operator  '+' -> (builtin) spec=R<int>::a@38:7 how=builtin
+38:75-38:76  type  'T' -> T@29:17 in=R::a@38:7
+38:72-38:74  template  'bw' -> (dependent) in=R::a@38:7 def=1+base+using
+38:72-38:74  template  'bw' def=R::bw@36:15
+38:72-38:74  template  'bw' -> B<int>::bw@26:43 found=R<int>::bw@36:15 spec=R<int>::a@38:7
+38:55-38:56  operator  '+' -> (dependent) in=R::a@38:7 def=0+adl
+38:55-38:56  operator  '+' -> (builtin) spec=R<int>::a@38:7 how=builtin
+38:89-38:90  type  'T' -> T@29:17 in=R::a@38:7
+38:86-38:88  member  'pw' -> P::pw@20:43 found=R::pw@37:12 in=R::a@38:7
+38:78-38:79  operator  '+' -> (dependent) in=R::a@38:7 def=0+adl
+38:78-38:79  operator  '+' -> (builtin) spec=R<int>::a@38:7 how=builtin
+39:26-39:27  member  'x' -> R::x@34:7 in=R::b@39:7
+39:36-39:37  member  's' -> R::s@35:24 in=R::b@39:7
+39:58-39:59  type  'T' -> T@29:17 in=R::b@39:7
+39:55-39:57  template  'mf' -> (dependent) in=R::b@39:7 def=1
+39:55-39:57  template  'mf' def=R::mf@31:33
+39:55-39:57  template  'mf' -> R<int>::mf<int>@31:33 found=R<int>::mf@31:33 spec=R<int>::b@39:7
+39:38-39:39  operator  '+' -> (dependent) in=R::b@39:7 def=0+adl
+39:38-39:39  operator  '+' -> (builtin) spec=R<int>::b@39:7 how=builtin
+39:71-39:72  member  'g' -> (dependent) in=R::b@39:7 def=2
+39:71-39:72  member  'g' def=R::g@32:14
+39:71-39:72  member  'g' def=R::g@33:14
+39:71-39:72  member  'g' -> R<int>::g@32:14 spec=R<int>::b@39:7
+39:73-39:74  type  'T' -> T@29:17 in=R::b@39:7
+39:63-39:64  operator  '+' -> (dependent) in=R::b@39:7 def=0+adl
+39:63-39:64  operator  '+' -> (builtin) spec=R<int>::b@39:7 how=builtin
+39:86-39:88  member  'pg' -> (dependent) in=R::b@39:7 def=2+base
+39:86-39:88  member  'pg' def=P::pg@21:14
+39:86-39:88  member  'pg' def=P::pg@22:14
+39:86-39:88  member  'pg' -> P::pg@21:14 spec=R<int>::b@39:7
+39:89-39:90  type  'T' -> T@29:17 in=R::b@39:7
+39:78-39:79  operator  '+' -> (dependent) in=R::b@39:7 def=0+adl
+39:78-39:79  operator  '+' -> (builtin) spec=R<int>::b@39:7 how=builtin
+40:20-40:21  expr  'g' -> (dependent) in=R::c@40:7 def=2
+40:20-40:21  expr  'g' def=R::g@32:14
+40:20-40:21  expr  'g' def=R::g@33:14
+40:20-40:21  expr  'g' -> R<int>::g@32:14 spec=R<int>::c@40:7
+40:22-40:23  type  'T' -> T@29:17 in=R::c@40:7
+40:29-40:30  nns  'R' -> R@29:27 in=R::c@40:7 how=injected
+40:32-40:33  expr  'g' -> (dependent) q=40:29 in=R::c@40:7 def=2
+40:32-40:33  expr  'g' def=R::g@32:14
+40:32-40:33  expr  'g' def=R::g@33:14
+40:32-40:33  expr  'g' -> R<int>::g@32:14 spec=R<int>::c@40:7
+40:34-40:35  type  'T' -> T@29:17 in=R::c@40:7
+40:27-40:28  operator  '+' -> (dependent) in=R::c@40:7 def=0+adl
+40:27-40:28  operator  '+' -> (builtin) spec=R<int>::c@40:7 how=builtin
+40:41-40:42  nns  'R' -> R@29:27 in=R::c@40:7 how=injected
+40:56-40:57  type  'T' -> T@29:17 in=R::c@40:7
+40:53-40:55  expr  'mf' -> (dependent) q=40:41 in=R::c@40:7 def=1
+40:53-40:55  expr  'mf' def=R::mf@31:33
+40:53-40:55  expr  'mf' -> R<int>::mf<int>@31:33 found=R<int>::mf@31:33 spec=R<int>::c@40:7
+40:39-40:40  operator  '+' -> (dependent) in=R::c@40:7 def=0+adl
+40:39-40:40  operator  '+' -> (builtin) spec=R<int>::c@40:7 how=builtin
+43:40-43:41  type  'T' -> T@29:17 in=R::N::d@43:9
+43:37-43:39  template  'nw' -> R::N::nw@42:45 in=R::N::d@43:9
+43:54-43:55  type  'T' -> T@29:17 in=R::N::d@43:9
+43:51-43:53  member  'nw' -> R::N::nw@42:45 in=R::N::d@43:9
+43:43-43:44  operator  '+' -> (dependent) in=R::N::d@43:9 def=0+adl
+43:43-43:44  operator  '+' -> (builtin) spec=R<int>::N::d@43:9 how=builtin
+46:9-46:10  template  'R' -> R@29:27 in=z@46:5
+46:18-46:19  member  'a' -> R<int>::a@38:7 in=z@46:5
+46:24-46:25  template  'R' -> R@29:27 in=z@46:5
+46:33-46:34  member  'b' -> R<int>::b@39:7 in=z@46:5
+46:39-46:40  template  'R' -> R@29:27 in=z@46:5
+46:48-46:49  member  'c' -> R<int>::c@40:7 in=z@46:5
+46:54-46:55  nns  'R' -> R@29:27 in=z@46:5
+46:62-46:63  type  'N' -> R<int>::N@41:10 q=46:54 in=z@46:5
+46:66-46:67  member  'd' -> R<int>::N::d@43:9 in=z@46:5

@@ -414,8 +414,9 @@ impl FoundSetId {
 /// [`FoundSet::flags`]: argument-dependent lookup at each instantiation
 /// adds to the set ([temp.dep.candidate]/1).
 pub const FOUND_ADL: u8 = 1;
-/// [`FoundSet::flags`]: the class searched has a dependent base, so the
-/// instantiation's lookup can find more ([temp.dep.type]).
+/// [`FoundSet::flags`]: the class searched has a dependent base and does
+/// not declare the name itself, so the instantiation's lookup can find
+/// more ([temp.dep.type], [class.member.lookup]/2).
 pub const FOUND_DEPENDENT_BASE: u8 = 2;
 /// [`FoundSet::flags`]: an element is a dependent using-declarator,
 /// whose target exists per specialization only.
@@ -448,7 +449,9 @@ impl FoundSet<'_> {
         self.flags & FOUND_ADL != 0
     }
 
-    /// True when the class searched has a dependent base.
+    /// True when the class searched has a dependent base that could
+    /// supply the name: the class does not declare it itself
+    /// (spec/ast.md §18.12.2).
     pub fn dependent_base(&self) -> bool {
         self.flags & FOUND_DEPENDENT_BASE != 0
     }

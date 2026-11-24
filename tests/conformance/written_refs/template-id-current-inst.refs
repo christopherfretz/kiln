@@ -46,9 +46,7 @@
 37:33-37:34  type  'T' -> T@37:17 in=R@37:27
 37:31-37:32  base  'D' -> D@21:27 in=R@37:27
 39:38-39:39  type  'T' -> T@37:17 in=R::a@39:7
-39:35-39:37  template  'mw' -> (dependent) in=R::a@39:7 def=1+base
-39:35-39:37  template  'mw' def=R::mw@38:43
-39:35-39:37  template  'mw' -> R<int>::mw@38:43 found=R<int>::mw@38:43 spec=R<int>::a@39:7
+39:35-39:37  template  'mw' -> R::mw@38:43 in=R::a@39:7
 39:43-39:44  nns  'R' -> R@37:27 in=R::a@39:7 how=injected
 39:58-39:59  type  'T' -> T@37:17 in=R::a@39:7
 39:55-39:57  expr  'mw' -> R::mw@38:43 q=39:43 in=R::a@39:7
