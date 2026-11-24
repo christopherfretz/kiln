@@ -1,0 +1,30 @@
+21:33-21:34  nns  'R' -> R@20:17 in=std::coroutine_traits::promise_type@21:9
+21:36-21:48  type  'promise_type' -> (dependent) q=21:33 in=std::coroutine_traits::promise_type@21:9
+21:36-21:48  type  'promise_type' -> task::promise_type@38:10 spec=std::coroutine_traits<task>@20:39
+24:20-24:36  spec-target  'coroutine_handle' -> std::coroutine_handle@23:34 in=std::coroutine_handle@24:20
+25:10-25:26  type  'coroutine_handle' -> std::coroutine_handle@24:20 in=std::coroutine_handle<>::from_address@25:27 how=injected
+28:46-28:62  base  'coroutine_handle' -> std::coroutine_handle@23:34 in=std::coroutine_handle@28:27 how=injected
+29:10-29:26  type  'coroutine_handle' -> std::coroutine_handle@28:27 in=std::coroutine_handle::from_address@29:27 how=injected
+34:22-34:25  nns  'std' -> std@19:11 in=(anonymous)@34:45
+34:27-34:43  template  'coroutine_handle' -> std::coroutine_handle@23:34 q=34:22 in=(anonymous)@34:45
+39:5-39:9  type  'task' -> task@37:8 in=task::promise_type::get_return_object@39:10 how=injected
+40:5-40:10  type  'Ready' -> Ready@32:8 in=task::promise_type::initial_suspend@40:11
+41:5-41:10  type  'Ready' -> Ready@32:8 in=task::promise_type::final_suspend@41:11
+48:29-48:35  type  'size_t' -> size_t@18:7 in=(anonymous)@48:35
+54:1-54:6  type  'Ready' -> Ready@32:8 in=operator co_await@54:7
+54:25-54:28  type  'Two' -> Two@53:8 in=(anonymous)@54:28
+55:1-55:6  type  'Ready' -> Ready@32:8 in=operator co_await@55:7
+55:31-55:34  type  'Two' -> Two@53:8 in=(anonymous)@55:36
+57:19-57:25  type  'Hidden' -> Hidden@50:7 in=h@57:27
+58:8-58:9  expr  'b' -> b@57:16 in=use@57:6
+58:11-58:18  type  'NoPlace' -> NoPlace@47:8 in=use@57:6
+58:3-58:6  operator  'new' -> (unresolved) in=use@57:6
+59:10-59:11  expr  'b' -> b@57:16 in=use@57:6
+59:5-59:8  operator  'new' -> (unresolved) q=::59:3 in=use@57:6
+60:10-60:11  expr  'h' -> h@57:27 in=use@57:6
+60:3-60:9  operator  'delete' -> (unresolved) in=use@57:6
+61:10-61:24  expr  'undeclared_ptr' -> (unresolved) in=use@57:6
+63:1-63:5  type  'task' -> task@37:8 in=coro@63:6
+64:12-64:15  type  'Two' -> Two@53:8 in=coro@63:6
+64:3-64:11  operator  'co_await' -> (unresolved) in=coro@63:6
+65:12-65:26  expr  'undeclared_ptr' -> (unresolved) in=coro@63:6

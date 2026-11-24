@@ -21,6 +21,7 @@
 35:3-35:6  type  'Rec' -> lib::Rec@13:8 found=app::Rec@27:12 in=app::p@35:8
 35:16-35:19  type  'Rec' -> lib::Rec@13:8 found=app::Rec@27:12 in=app::p@35:8
 35:20-35:21  expr  'k' -> k@33:25 in=app::p@35:8
+35:12-35:15  operator  'new' -> operator new@? in=app::p@35:8 how=qualified
 36:9-36:12  type  'Rec' -> lib::Rec@13:8 found=app::Rec@27:12 in=app::q@36:14
 36:36-36:39  type  'Rec' -> lib::Rec@13:8 found=app::Rec@27:12 in=app::q@36:14
 36:43-36:44  expr  'p' -> app::p@35:8 in=app::q@36:14
@@ -43,6 +44,7 @@
 40:8-40:11  template  'Box' -> lib::Box@20:27 q=40:3 in=app::b@40:17
 40:20-40:21  expr  'e' -> app::e@34:20 in=app::b@40:17
 41:10-41:11  expr  'p' -> app::p@35:8 in=app::sum@33:7
+41:3-41:9  operator  'delete' -> operator delete@? in=app::sum@33:7 how=qualified
 43:11-43:14  nns  'lib' -> lib@12:11 in=app::sum@33:7
 43:16-43:19  type  'Err' -> lib::Err@17:8 q=43:11 in=app::sum@33:7
 44:18-44:21  nns  'lib' -> lib@12:11 in=app::sum@33:7

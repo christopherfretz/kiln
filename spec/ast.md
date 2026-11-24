@@ -2146,7 +2146,7 @@ field `Ast::written_refs`. Built in stages:
 | | the found set of a dependent entry: what lookup found at the template definition (§18.12) | WP-2472 |
 | 6 | operator uses and user-defined-literal suffixes outside dependent contexts: roles `operator` and `ud-suffix`, flags `REWRITTEN` and `REVERSED`, the closing token of `[]` and `()` (§18.13) | WP-2820 |
 | 6b | dependent operators, folds, their found sets and per-specialization rows, `SPEC_BUILTIN` rows, dependent `(` (§18.13.6) | WP-2910 |
-| 6c | stage: `new`, `delete` and `co_await` entries (§18.13.6) | WP-2911 |
+| 6c | `new`, `delete` and `co_await` entries, dependent ones with their rows (§18.13.6) | WP-2911 |
 
 ### 18.1 Contract
 
@@ -2358,7 +2358,7 @@ fills `Operator` and `UdSuffix` (§18.13).
 | `Concept` | `concept` | `template <[C] T>` `[C] auto x` `{ e } -> [C]`; a concept-id as an expression (`static_assert([C]<int>)`, `requires [C]<T>`) from stage 1 | 1, 3 |
 | `Designator` | `designator` | `{ .[field] = 1 }` `{ .[a].[b] = 1 }` `{ [field]: 1 }` `__builtin_offsetof(S, [a].[b])` | 3 |
 | `Redecl` | `redecl` | `void A::[f]() {}` `int C::[x] = 0;` `struct C::[In] {};` `A::[A]() {}` `A::~[A]() {}` | 3 |
-| `Operator` | `operator` | `s [+] s` `a [!=] b` (rewritten) `m[[]1]` `f[(]x)` `p[->]m` `m[,] 4` `[++]m`; `[new] T` `[delete] p` `[co_await] e` (stage 6c) | 6 |
+| `Operator` | `operator` | `s [+] s` `a [!=] b` (rewritten) `m[[]1]` `f[(]x)` `p[->]m` `m[,] 4` `[++]m`; `[new] T` `[delete] p` `[delete[]] p` `::[new] T` `[co_await] e` (stage 6c) | 6 |
 | `UdSuffix` | `ud-suffix` | `12[_k]` `1.5[_f]` `'x'[_c]` `"ab"[_s]` `R"(r)"[_s]` | 6 |
 
 Not in the table: a declaration's own name at its declaration (an
@@ -4052,8 +4052,8 @@ instantiated. The found set is that result.
 | `this->a(t)`, `C::a(t)`, `a(t)` (implicit `this`), `this->mt(t)`, `this->template mt<T>(t)`: members of the current instantiation (`CXXDependentScopeMemberExpr`, or an overloaded member access) | class member lookup in the current instantiation: members of the pattern class and its non-dependent bases | none when the class searched has no dependent base; else `DEPENDENT_BASE`: the instantiation looks the name up again, and a different result is ill-formed ([temp.dep.type]/6; not diagnosed, §18.12.6) |
 | a name a dependent using-declarator introduces (`using B<T>::bm; ... bm(t)`) | the class's lookup result, the `UnresolvedUsingValue` an element | `UNRESOLVED_USING`: what it names exists per specialization only |
 | `T::x`, `B<T>::bm(t)` (a dependent qualifier), `t.m(t)`, `this->bm(t)` naming nothing the class declares in a class with a dependent base (a member of an unknown specialization), `using B<T>::bm;` itself, `typename T::ty`, a dependent nested-name-specifier component | no set (`None`): no lookup runs at the definition; all knowledge is per specialization (§18.9) | |
-| a dependent operator `t + t`, a fold's operator (§18.13.6), `co_await t` (stage: WP-2911; no entry until then) | the definition-context lookup of `operator@` (`Ast::dependent_oper_candidates`, §8.5; the `DependentCoawaitExpr`'s set) | `ADL` |
-| a dependent `t[i]`, `t(x)`, `t->m`, `t = u` (§18.13.6), `new T`, `delete p` (stage: WP-2911) | no set: no definition-context lookup ([over.match.oper]/3.1: member candidates only) | |
+| a dependent operator `t + t`, a fold's operator, a `co_await` in a coroutine template (§18.13.6) | the definition-context lookup of `operator@` (`Ast::dependent_oper_candidates`, §8.5; for `co_await`, the unqualified lookup of `operator co_await` re-run at the recording site) | `ADL` |
+| a dependent `t[i]`, `t(x)`, `t->m`, `t = u`, `new T`, `delete p` (§18.13.6) | no set: no definition-context lookup ([over.match.oper]/3.1: member candidates only; [expr.new]/12, [expr.delete]/9: the class's scope, then the global scope) | |
 
 An unqualified name in a class template with a dependent base: the
 dependent base is not examined, at the definition or at instantiation
@@ -4212,10 +4212,11 @@ using-shadow lookup found it through):
   [over.inc], [over.ass]), role `operator`;
 - the ud-suffix of a user-defined literal ([lex.ext]/2-8,
   [over.literal]), role `ud-suffix`;
-- stage 6c (WP-2911): the `new` and `delete` keywords of a new- or
-  delete-expression ([expr.new]/12, [expr.delete]/9) and the
-  `co_await` keyword where an `operator co_await` applies
-  ([expr.await]/3.3).
+- the `new` and `delete` keywords of a new- or delete-expression
+  ([expr.new]/12, [expr.delete]/9), naming the allocation or
+  deallocation function, and the `co_await` keyword where an
+  `operator co_await` applies ([expr.await]/3.3), role `operator`
+  (stage 6c, WP-2911).
 
 A token whose resolution selects a built-in candidate ([over.built];
 also for class operands converted to a built-in type, `c + 1` with an
@@ -4335,6 +4336,15 @@ class with no `operator->` is `UNRESOLVED` too (clang's recovery
 treats it as `.`). A failed built-in operator (`p + p` on pointers)
 and one with an erroneous operand (`missing + a`) have none.
 
+A new-, delete- or await-expression that failed (diagnosed: no
+matching or an inaccessible allocation or deallocation function, an
+ambiguous `operator co_await`, but also any other error in it, such as
+its initialization or an awaiter's member, which the failed expression
+does not tell apart) has an `UNRESOLVED` entry at its keyword (`::` as
+its lead for `::new` and `::delete`), unless one of its operands
+(placement arguments, initializer, the deleted pointer, the awaited
+operand) contains an error: `delete missing` has none.
+
 #### 18.13.6 Templates and later stages
 
 In a template pattern a non-dependent operator (`s + s` with `s` of a
@@ -4428,17 +4438,64 @@ Measured on `<bits/stdc++.h>` (§18.13.8), the `SPEC_BUILTIN` rows
 and the design's fallback (one entry flag `BUILTIN_IN_SOME_SPEC`) is
 not used.
 
-**Stage 6c (WP-2911).** `new` (range the keyword), `delete` and
-`delete[]` (one entry over its three tokens), `::new` and `::delete`
-(qualifier `GLOBAL`, the `::` as lead), naming the allocation or
-deallocation function the expression selected; a specialization of a
-dependent one selecting no function gets a `SPEC_BUILTIN` row. The
-entry of `delete p` names the deallocation function the lookup in the
-static type's scope selects ([expr.delete]/9-10); under a virtual
-destructor the call may reach another (the one found at the dynamic
-type's destructor). `co_await e` names the `operator co_await`
-applied, if any; the awaiter's and promise's calls have no entry.
-Until stage 6c lands, these have no entry.
+**New and delete (stage 6c, WP-2911).** The `new` keyword of a
+new-expression (range the keyword) names the allocation function it
+selected ([expr.new]/12: looked up in the scope of the allocated class,
+or of an array's element class, then in the global scope; `::new` the
+global scope only), and the `delete` keyword of a delete-expression
+(`delete[]` one entry over its three tokens, `delete [ ]` as written)
+the deallocation function ([expr.delete]/9-11: the usual, sized,
+aligned or destroying form). `how` is `qualified` (a lookup in a named
+scope, not the scope walk); `::new` and `::delete` have qualifier
+`GLOBAL` with the `::` as lead (§18.11.2). The implicitly declared
+global replaceable functions ([basic.stc.dynamic.general]/2) and those
+of `<new>` are functions like any other; an allocation function
+template's specialization (`template <class A> void *operator
+new(size_t, A &)`) has `found=` the template. The entry of `delete p`
+names the deallocation function the lookup in the static type's scope
+selects ([expr.delete]/9-10); under a virtual destructor the call may
+reach another (the one found at the dynamic type's destructor), so a
+client must not read it as "the function called". The deallocation
+function a new-expression calls if the initialization throws
+([expr.new]/27), the destructor a `delete` calls and a deleting
+destructor's own lookup have no token of their own: no entry. Not yet
+(follow-up): a class-scope allocation function found through a
+using-declaration (`using B::operator new;`) has `found` empty, not
+the using-shadow (the new-expression keeps the function only).
+
+A new-expression whose allocated type or an operand is dependent, and
+a delete-expression whose operand is type-dependent ([temp.dep.expr]/3),
+select nothing at the definition: a `DEPENDENT` entry with no found set
+(nothing is looked up at the definition) and the pattern node
+`PatternNode::Oper(e, 0)` of the expression. Each specialization that
+reaches it has a row naming the function selected, `how=qualified`
+(`spec=make<C>` names `C::operator new`, `spec=make<int>` the global
+one). A specialization of a dependent one that selected no function
+would get a `SPEC_BUILTIN` row; every valid specialization selects one
+(the global functions count), so none is expected in practice. A
+non-dependent new- or delete-expression in a template (`new int`) is
+resolved at the definition and has no rows.
+
+**Await-expressions (stage 6c, WP-2911).** The `co_await` keyword of
+`co_await e` names the `operator co_await` applied ([expr.await]/3.3:
+a member, `how=member`; a non-member found by unqualified lookup, or by
+argument-dependent lookup alone, `how=adl`), to the operand or to the
+result of the promise's `await_transform` ([expr.await]/3.2). When none
+applies (the awaitable is its own awaiter) the keyword has no entry.
+The calls of `await_transform`, `await_ready`, `await_suspend`,
+`await_resume` and the promise's other members, `co_yield` (its
+`yield_value` and any `operator co_await` applied to it,
+[expr.yield]/1) and the initial and final suspend points
+([dcl.fct.def.coroutine]/5) have no written token of their own: no
+entry. In a coroutine template every await-expression is a
+`DependentCoawaitExpr` (the promise is known only per specialization):
+a `DEPENDENT` entry whose found set is the unqualified lookup of
+`operator co_await` at the definition, re-run at the recording site
+(flag `ADL`), with the pattern node `PatternNode::Oper(e, 0)`; each
+specialization that reaches it has a row naming the `operator
+co_await` applied, or a `SPEC_BUILTIN` row when none applies. A
+discarded `if constexpr` branch has none, as for any dependent
+operator.
 
 #### 18.13.7 Recording sites, `how` and the operator join
 
@@ -4473,6 +4530,18 @@ Until stage 6c lands, these have no entry.
   the fold expansion (`fold_combine` per application,
   `fold_applied_none` for an expansion applying none), all behind
   `has_pattern_nodes()`.
+- **Stage 6c sites.** `parse_new_expr` and `parse_delete_expr`
+  (`crates/kiln_parse/src/new_delete.rs`) call
+  `Sema::note_written_new_delete` with the expression built, the
+  keyword's range (through the `]` for `delete[]`) and the `::` of
+  `::new` / `::delete`; the `co_await` site of the cast-expression
+  parser calls `Sema::note_written_coawait`. The facts are read from the
+  `CXXNewExpr` (`NewExtra::operator_new`), the `CXXDeleteExpr`
+  (`operator_delete`) and the `CoawaitExpr` (its awaiter, when it is an
+  `operator co_await` call at the keyword); the rows of the dependent
+  ones come from the same `note_written_spec_oper` hook, which reads the
+  rebuilt expressions the same way. Off, each site is one branch on
+  `records_written_refs()`.
 - **`how`.** `member` when the function is a member (a member
   candidate, [over.match.oper]/3.1; `operator[]`, `operator()`,
   `operator->`, a surrogate's conversion function); `adl` when the
@@ -4492,7 +4561,14 @@ Until stage 6c lands, these have no entry.
   parenthesized operand, whose call is at the `(`). Test
   `every_operator_use_joins_its_entries`
   (`crates/kiln_parse/tests/written_refs_accounting.rs`), over the
-  same files as the name join (§18.11.1).
+  same files as the name join (§18.11.1). Stage 6c adds: every
+  new- and delete-expression of the code as written that selected a
+  function has an `operator` entry naming it whose qualified name
+  begins at the expression's location (`qualified_lo`: its `::`, else
+  its keyword); an explicit `co_await`'s `operator co_await` call is a
+  `CXXOperatorCallExpr` at the keyword and joins by the rule above,
+  while the implicit ones (`co_yield`'s, the suspend points') are not
+  at a `co_await` token and are exceptions.
 - **Identifier accounting** (§18.8) is unchanged: operator tokens are
   not identifiers, and a ud-suffix is inside its literal token.
 
@@ -4564,6 +4640,24 @@ pattern nodes, found-set rows and the rows) and 4.0% of total live heap
 (51,658,625 to 53,741,821 bytes). The `SPEC_BUILTIN` rows (5,984) are
 fewer than the new entries (17,691): the rows are kept (§18.13.6).
 
+Stage 6c (WP-2911), measured the same way against its base (WP-2910's
+tip), with debug builds. With the table off nothing new is recorded:
+`note_written_new_delete` and `note_written_coawait` test
+`records_written_refs()` first and the substituter's hook tests
+`has_pattern_nodes()`; the memory report is byte-identical (total live
+heap 43,094,089 bytes); the Oven's counters (everything but wall time)
+are identical on all 29 `bench/oven` programs (234 report lines, 16,583
+evaluations); wall time is within run-to-run noise on a loaded host
+(median 11.41 s before, 11.07 s after, 5 interleaved rounds). With
+the table on, the header adds 151 entries (128 dependent, 23 naming a function; `new` 100, `delete` 23,
+`delete[]` 28; no `co_await`, which the header does not use) and 55 rows
+from its own instantiations (all naming a function, none
+`SPEC_BUILTIN`, none unresolved): `written_refs` 228,772 to 228,923
+items, 14,856 bytes of live table (10,569,108 to 10,583,964) and 0.03%
+of total live heap (53,663,197 to 53,678,053 bytes). Nothing is
+carried that the snapshot and the image did not already carry, so
+neither `FORMAT_VERSION` nor `IMAGE_VERSION` moves.
+
 #### 18.13.9 Tests
 
 `crates/kiln_ast/src/written_refs.rs`
@@ -4604,6 +4698,29 @@ built-in, a template never instantiated and a discarded `if constexpr`
 branch where the form allows), `found-operator.cpp`, and the carriage
 goldens (`Inputs/refs_pch.h`, `Inputs/refs_mod.cppm`: a dependent
 `t + t` and a fold the consumer instantiates).
+
+Stage 6c (WP-2911): `crates/kiln_parse/tests/written_refs.rs`
+(`alloc_entries_through_the_api`: a class's own and the global
+functions, `how=qualified`, the range of `delete[]`, `::new`'s
+`GLOBAL` qualifier and lead, a dependent `::new T`'s row),
+`written_refs_accounting.rs` (the operator join over new- and
+delete-expressions), and `tests/conformance/written_refs/`:
+`operators-new-delete.cpp` (class-scope and global, `new[]` and
+`delete[]`, `::new` and `::delete`, placement, an allocation function
+template, sized, aligned and destroying deallocation, a virtual
+destructor, an unevaluated operand), `operators-new-delete-dependent.cpp`
+(rows for a class's and the global functions, `::new`, placement, a
+value-dependent bound, a class template's members, a template never
+instantiated, a discarded branch), `operators-coawait.cpp` (member and
+non-member `operator co_await`, by ADL, none, through
+`await_transform`, `co_yield`, and a coroutine template's rows with a
+`(builtin)` one), `operators-new-delete-errors.cpp`, and the carriage
+goldens (`Inputs/refs_pch.h`, `Inputs/refs_mod.cppm`: a class's own
+`new` and `delete`, `::new` and `::delete`, and a dependent
+`delete new T` the consumer instantiates, through the snapshot and the
+image). The entries reuse the role, qualifier, lead and pattern-node
+shapes of stages 1 to 6b, so neither carriage changes (no
+`FORMAT_VERSION` or `IMAGE_VERSION` bump).
 
 ## 19. The declaration-extent table (WP-2090)
 

@@ -1,0 +1,72 @@
+19:33-19:34  nns  'R' -> R@18:17 in=std::coroutine_traits::promise_type@19:9
+19:36-19:48  type  'promise_type' -> (dependent) q=19:33 in=std::coroutine_traits::promise_type@19:9
+19:36-19:48  type  'promise_type' -> task::promise_type@52:10 spec=std::coroutine_traits<task, Glob>@18:39
+19:36-19:48  type  'promise_type' -> task::promise_type@52:10 spec=std::coroutine_traits<task, Mem>@18:39
+19:36-19:48  type  'promise_type' -> task::promise_type@52:10 spec=std::coroutine_traits<task, Plain>@18:39
+19:36-19:48  type  'promise_type' -> task::promise_type@52:10 spec=std::coroutine_traits<task, ns::Free>@18:39
+19:36-19:48  type  'promise_type' -> task::promise_type@52:10 spec=std::coroutine_traits<task>@18:39
+19:36-19:48  type  'promise_type' -> ttask::promise_type@62:10 spec=std::coroutine_traits<ttask>@18:39
+22:20-22:36  spec-target  'coroutine_handle' -> std::coroutine_handle@21:34 in=std::coroutine_handle@22:20
+23:10-23:26  type  'coroutine_handle' -> std::coroutine_handle@22:20 in=std::coroutine_handle<>::from_address@23:27 how=injected
+26:46-26:62  base  'coroutine_handle' -> std::coroutine_handle@21:34 in=std::coroutine_handle@26:27 how=injected
+27:10-27:26  type  'coroutine_handle' -> std::coroutine_handle@26:27 in=std::coroutine_handle::from_address@27:27 how=injected
+33:22-33:25  nns  'std' -> std@17:11 in=(anonymous)@33:45
+33:27-33:43  template  'coroutine_handle' -> std::coroutine_handle@21:34 q=33:22 in=(anonymous)@33:45
+38:22-38:25  nns  'std' -> std@17:11 in=(anonymous)@38:45
+38:27-38:43  template  'coroutine_handle' -> std::coroutine_handle@21:34 q=38:22 in=(anonymous)@38:45
+42:3-42:8  type  'Ready' -> Ready@31:8 in=Mem::operator co_await@42:9
+45:1-45:6  type  'Ready' -> Ready@31:8 in=operator co_await@45:7
+45:25-45:29  type  'Glob' -> Glob@44:8 in=(anonymous)@45:29
+48:1-48:6  type  'Ready' -> Ready@31:8 in=ns::operator co_await@48:7
+48:25-48:29  type  'Free' -> ns::Free@47:8 in=(anonymous)@48:29
+53:5-53:9  type  'task' -> task@51:8 in=task::promise_type::get_return_object@53:10 how=injected
+54:5-54:10  type  'Ready' -> Ready@31:8 in=task::promise_type::initial_suspend@54:11
+55:5-55:10  type  'Ready' -> Ready@31:8 in=task::promise_type::final_suspend@55:11
+56:5-56:10  type  'Ready' -> Ready@31:8 in=task::promise_type::yield_value@56:11
+63:5-63:10  type  'ttask' -> ttask@61:8 in=ttask::promise_type::get_return_object@63:11 how=injected
+64:5-64:10  type  'Ready' -> Ready@31:8 in=ttask::promise_type::initial_suspend@64:11
+65:5-65:10  type  'Ready' -> Ready@31:8 in=ttask::promise_type::final_suspend@65:11
+66:5-66:8  type  'Mem' -> Mem@41:8 in=ttask::promise_type::await_transform@66:9
+67:5-67:10  type  'Plain' -> Plain@36:8 in=ttask::promise_type::await_transform@67:11
+73:1-73:5  type  'task' -> task@51:8 in=direct@73:6
+74:12-74:17  type  'Plain' -> Plain@36:8 in=direct@73:6
+75:12-75:15  type  'Mem' -> Mem@41:8 in=direct@73:6
+75:3-75:11  operator  'co_await' -> Mem::operator co_await@42:9 in=direct@73:6 how=member
+76:12-76:16  type  'Glob' -> Glob@44:8 in=direct@73:6
+76:3-76:11  operator  'co_await' -> operator co_await@45:7 in=direct@73:6
+77:12-77:14  nns  'ns' -> ns@46:11 in=direct@73:6
+77:16-77:20  type  'Free' -> ns::Free@47:8 q=77:12 in=direct@73:6
+77:3-77:11  operator  'co_await' -> ns::operator co_await@48:7 in=direct@73:6 how=adl
+80:1-80:6  type  'ttask' -> ttask@61:8 in=transformed@80:7
+81:3-81:11  operator  'co_await' -> Mem::operator co_await@42:9 in=transformed@80:7 how=member
+85:20-85:24  type  'task' -> task@51:8 in=await@85:25
+85:31-85:32  type  'T' -> T@85:17 in=t@85:33
+85:47-85:48  expr  't' -> t@85:33 in=await@85:25
+85:38-85:46  operator  'co_await' -> (dependent) in=await@85:25 def=1+adl
+85:38-85:46  operator  'co_await' def=operator co_await@45:7
+85:38-85:46  operator  'co_await' -> (builtin) spec=await<Plain>@85:25 how=builtin
+85:38-85:46  operator  'co_await' -> Mem::operator co_await@42:9 spec=await<Mem>@85:25 how=member
+85:38-85:46  operator  'co_await' -> ns::operator co_await@48:7 spec=await<ns::Free>@85:25 how=adl
+85:38-85:46  operator  'co_await' -> operator co_await@45:7 spec=await<Glob>@85:25
+86:20-86:24  type  'task' -> task@51:8 in=never@86:25
+86:31-86:32  type  'T' -> T@86:17 in=t@86:33
+86:47-86:48  expr  't' -> t@86:33 in=never@86:25
+86:38-86:46  operator  'co_await' -> (dependent) in=never@86:25 def=1+adl
+86:38-86:46  operator  'co_await' def=operator co_await@45:7
+87:20-87:24  type  'task' -> task@51:8 in=discard@87:25
+87:33-87:34  type  'T' -> T@87:17 in=t@87:35
+88:24-88:25  type  'T' -> T@87:17 in=discard@87:25
+89:14-89:15  expr  't' -> t@87:35 in=discard@87:25
+89:5-89:13  operator  'co_await' -> (dependent) in=discard@87:25 def=1+adl
+89:5-89:13  operator  'co_await' def=operator co_await@45:7
+94:3-94:8  expr  'await' -> await<Mem>@85:25 found=await@85:25 in=use@93:6 how=both adl-ns=:: adl-cls=Mem@41:8
+94:9-94:12  type  'Mem' -> Mem@41:8 in=use@93:6
+95:3-95:8  expr  'await' -> await<Plain>@85:25 found=await@85:25 in=use@93:6 how=both adl-ns=:: adl-cls=Plain@36:8
+95:9-95:14  type  'Plain' -> Plain@36:8 in=use@93:6
+96:3-96:8  expr  'await' -> await<Glob>@85:25 found=await@85:25 in=use@93:6 how=both adl-ns=:: adl-cls=Glob@44:8
+96:9-96:13  type  'Glob' -> Glob@44:8 in=use@93:6
+97:3-97:8  expr  'await' -> await<ns::Free>@85:25 found=await@85:25 in=use@93:6 adl-ns=ns@46:11 adl-cls=ns::Free@47:8
+97:9-97:11  nns  'ns' -> ns@46:11 in=use@93:6
+97:13-97:17  type  'Free' -> ns::Free@47:8 q=97:9 in=use@93:6
+98:3-98:10  expr  'discard' -> discard<Mem>@87:25 found=discard@87:25 in=use@93:6 how=both adl-ns=:: adl-cls=Mem@41:8
+98:11-98:14  type  'Mem' -> Mem@41:8 in=use@93:6

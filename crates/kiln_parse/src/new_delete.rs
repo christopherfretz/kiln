@@ -56,7 +56,7 @@ impl Parser<'_, '_> {
     /// `new` new-placement(opt) new-type-id new-initializer(opt), or
     /// `new` new-placement(opt) `( type-id )` new-initializer(opt).
     fn parse_new_expr(&mut self, global: bool, start: Loc) -> PExpr {
-        self.bump();
+        let kw = self.bump().span;
         let mut placement = None;
         let tid = if self.at(Punct::LParen) {
             let open = self.loc();
@@ -107,7 +107,11 @@ impl Parser<'_, '_> {
         } else {
             NewInit::None
         };
-        Some(self.s.act_on_cxx_new(global, start, placement, tid, init, end))
+        let e = self.s.act_on_cxx_new(global, start, placement, tid, init, end);
+        // spec/ast.md §18.13.6: the `new` keyword names the allocation
+        // function, `::` its lead.
+        self.s.note_written_new_delete(e, kw, global.then_some(start));
+        Some(e)
     }
 
     /// clang `isTypeIdInParens` after `new (`, for the shapes that need
@@ -335,7 +339,7 @@ impl Parser<'_, '_> {
 
     /// `delete` cast-expression or `delete [ ]` cast-expression.
     fn parse_delete_expr(&mut self, global: bool, start: Loc) -> PExpr {
-        self.bump();
+        let mut kw = self.bump().span;
         let mut array = false;
         if self.at(Punct::LSquare) && self.peek_is(1, Punct::RSquare) {
             // [expr.delete]/1: `delete []` is array delete, unless a lambda
@@ -362,15 +366,24 @@ impl Parser<'_, '_> {
                 let lambda = self.parse_lambda_expr()?;
                 let operand = self.parse_postfix_suffix(lambda)?;
                 let cxx26 = self.std >= Std::Cxx26;
-                return Some(self.s.act_on_cxx_delete(global, false, start, operand, cxx26));
+                let e = self.s.act_on_cxx_delete(global, false, start, operand, cxx26);
+                self.s.note_written_new_delete(e, kw, global.then_some(start));
+                return Some(e);
             }
             let open = self.bump().span.lo;
             self.expect_closing(Punct::RSquare, Punct::LSquare, open);
+            // `delete[]` is one entry over its three tokens (as the
+            // operator-function-id `operator delete[]`).
+            kw.hi = self.tok_at(self.pos().saturating_sub(1)).span.hi;
             array = true;
         }
         let operand = self.parse_cast_expr()?;
         let cxx26 = self.std >= Std::Cxx26;
-        Some(self.s.act_on_cxx_delete(global, array, start, operand, cxx26))
+        let e = self.s.act_on_cxx_delete(global, array, start, operand, cxx26);
+        // spec/ast.md §18.13.6: the keyword names the deallocation
+        // function, `::` its lead.
+        self.s.note_written_new_delete(e, kw, global.then_some(start));
+        Some(e)
     }
 }
 

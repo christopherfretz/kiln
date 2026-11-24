@@ -35,3 +35,17 @@ export namespace geo {
 template <class T> T doubled(T t) { return t + t; }
 template <class... T> auto summed(T... t) { return (t + ...); }
 } // namespace geo
+// New- and delete-expressions naming a class's own allocation and
+// deallocation functions, `::new` / `::delete` with the `::` as lead, and
+// a dependent `delete new T` the importer instantiates (WP-2911).
+export namespace geo {
+struct Pool {
+  static void *operator new(decltype(sizeof 0));
+  static void operator delete(void *);
+};
+inline void churn() {
+  delete new Pool;
+  ::delete ::new int;
+}
+template <class T> void cycle() { delete new T; }
+} // namespace geo

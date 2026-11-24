@@ -100,8 +100,8 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   entry over the suffix's own bytes, located through line splices,
   which its literal operator's callee joins. PCH snapshots
   (`FORMAT_VERSION` 164) and module images (`IMAGE_VERSION` 88) carry
-  them. Dependent operators and folds follow (WP-2910, below); `new`,
-  `delete` and `co_await` are staged (WP-2911).
+  them. Dependent operators and folds follow (WP-2910, below), then `new`,
+  `delete` and `co_await` (WP-2911, below).
 - Written references for friends kept as a function type and for
   variable template-ids (WP-3008, WP-3009, spec/ast.md §18.4, §18.5,
   §18.11.2): a friend function template specialization with dependent
@@ -137,6 +137,22 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   `(`; a data member `t.f` called as `t.f(x)` is not covered. PCH
   snapshots (`FORMAT_VERSION` 168) and module images (`IMAGE_VERSION`
   91) carry the operator pattern nodes.
+- The written-reference table records new-, delete- and
+  await-expressions (WP-2911, spec/ast.md §18.13.6, [expr.new]/12,
+  [expr.delete]/9, [expr.await]/3.3): the `new` keyword is an `operator`
+  entry naming the allocation function selected (a class's own or the
+  global one, an allocation function template's specialization with
+  `found=` the template), `delete` (`delete[]` one entry over its three
+  tokens) the deallocation function (sized, aligned and destroying forms;
+  under a virtual destructor, the static type's), `how=qualified`;
+  `::new` / `::delete` have the `::` as lead. `co_await` names the
+  `operator co_await` applied (member, non-member, by ADL, after
+  `await_transform`); none applies, `co_yield` and the suspend points
+  have no entry. Dependent ones (a dependent type or operand, any
+  `co_await` of a coroutine template) are `DEPENDENT` entries (with the
+  definition's `operator co_await` lookup as found set) whose rows name
+  what each specialization selected, `(builtin)` for an await with no
+  `operator co_await`; failed ones are `UNRESOLVED`. No carriage change.
 - A refused evaluation session's diagnostics as data (WP-2827,
   spec/eval-session.md §2, spec/diag.md §10.4):
   `SessionRefused::TuHasErrors` and `Stopped` carry `records`
@@ -1237,6 +1253,12 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   specialization and an out-of-line member of a class template) and the
   `static_assert` declaration (dumped `static_assert@L:C`), not by the
   lexical context.
+- Diagnostics: an ambiguous unary operator says "(operand type 'A')" as
+  clang does, not "(with operand type 'A')"; `new (p) C` for a class `C`
+  whose own `operator new` hides the global placement form says "no
+  matching function for call to 'operator new'" with its candidates, the
+  "include <new>" hint being for a global lookup only (clang
+  `resolveAllocationOverload`) (WP-2911).
 - Using-declarations: a class's record of the shadows its using-declarators
   introduce and of which are hidden ([namespace.udecl]/4, /14;
   `DeclArena::hidden_shadow`, spec/ast.md §4.2) no longer depends on

@@ -1,0 +1,80 @@
+19:26-19:32  type  'size_t' -> size_t@17:7 in=std::align_val_t@19:12
+24:20-24:26  type  'size_t' -> size_t@17:7 in=(anonymous)@24:26
+26:39-26:45  type  'size_t' -> size_t@17:7 in=(anonymous)@26:45
+26:47-26:48  type  'T' -> T@26:17 in=(anonymous)@26:50
+29:29-29:35  type  'size_t' -> size_t@17:7 in=(anonymous)@29:35
+30:31-30:37  type  'size_t' -> size_t@17:7 in=(anonymous)@30:37
+35:32-35:38  type  'size_t' -> size_t@17:7 in=(anonymous)@35:38
+39:29-39:35  type  'size_t' -> size_t@17:7 in=(anonymous)@39:35
+39:37-39:40  nns  'std' -> std@18:11 in=(anonymous)@39:53
+39:42-39:53  type  'align_val_t' -> std::align_val_t@19:12 q=39:37 in=(anonymous)@39:53
+40:39-40:42  nns  'std' -> std@18:11 in=(anonymous)@40:55
+40:44-40:55  type  'align_val_t' -> std::align_val_t@19:12 q=40:39 in=(anonymous)@40:55
+43:24-43:25  type  'D' -> D@42:8 in=(anonymous)@43:27 how=injected
+43:29-43:32  nns  'std' -> std@18:11 in=(anonymous)@43:53
+43:34-43:53  type  'destroying_delete_t' -> std::destroying_delete_t@20:8 q=43:29 in=(anonymous)@43:53
+49:18-49:22  base  'Base' -> Base@45:8 in=Derived@49:8
+54:21-54:25  type  'Base' -> Base@45:8 in=bp@54:27
+54:31-54:36  type  'Arena' -> Arena@25:8 in=a@54:38
+55:12-55:15  operator  'new' -> operator new@? in=i@55:8 how=qualified
+56:10-56:11  expr  'i' -> i@55:8 in=use@54:6
+56:3-56:9  operator  'delete' -> operator delete@? in=use@54:6 how=qualified
+57:13-57:16  operator  'new' -> operator new[]@? in=ia@57:8 how=qualified
+58:12-58:14  expr  'ia' -> ia@57:8 in=use@54:6
+58:3-58:11  operator  'delete[]' -> operator delete[]@? in=use@54:6 how=qualified
+59:3-59:4  type  'C' -> C@28:8 in=c@59:6
+59:14-59:15  type  'C' -> C@28:8 in=c@59:6
+59:10-59:13  operator  'new' -> C::operator new@29:16 in=c@59:6 how=qualified
+60:10-60:11  expr  'c' -> c@59:6 in=use@54:6
+60:3-60:9  operator  'delete' -> C::operator delete@31:15 in=use@54:6 how=qualified
+61:3-61:4  type  'C' -> C@28:8 in=ca@61:6
+61:15-61:16  type  'C' -> C@28:8 in=ca@61:6
+61:11-61:14  operator  'new' -> C::operator new[]@30:16 in=ca@61:6 how=qualified
+62:13-62:15  expr  'ca' -> ca@61:6 in=use@54:6
+62:3-62:12  operator  'delete []' -> C::operator delete[]@32:15 in=use@54:6 how=qualified
+63:3-63:4  type  'C' -> C@28:8 in=g@63:6
+63:16-63:17  type  'C' -> C@28:8 in=g@63:6
+63:12-63:15  operator  'new' -> operator new@? q=::63:10 in=g@63:6
+64:12-64:13  expr  'g' -> g@63:6 in=use@54:6
+64:5-64:11  operator  'delete' -> operator delete@? q=::64:3 in=use@54:6
+65:3-65:4  type  'C' -> C@28:8 in=ga@65:6
+65:17-65:18  type  'C' -> C@28:8 in=ga@65:6
+65:13-65:16  operator  'new' -> operator new[]@? q=::65:11 in=ga@65:6
+66:14-66:16  expr  'ga' -> ga@65:6 in=use@54:6
+66:5-66:13  operator  'delete[]' -> operator delete[]@? q=::66:3 in=use@54:6
+67:17-67:20  expr  'buf' -> buf@54:16 in=p@67:8
+67:12-67:15  operator  'new' -> operator new@24:7 in=p@67:8 how=qualified
+68:3-68:8  type  'Sized' -> Sized@34:8 in=s@68:10
+68:18-68:23  type  'Sized' -> Sized@34:8 in=s@68:10
+68:14-68:17  operator  'new' -> operator new@? in=s@68:10 how=qualified
+69:10-69:11  expr  's' -> s@68:10 in=use@54:6
+69:3-69:9  operator  'delete' -> Sized::operator delete@35:8 in=use@54:6 how=qualified
+70:3-70:7  type  'Over' -> Over@38:20 in=o@70:9
+70:17-70:21  type  'Over' -> Over@38:20 in=o@70:9
+70:13-70:16  operator  'new' -> Over::operator new@39:16 in=o@70:9 how=qualified
+71:10-71:11  expr  'o' -> o@70:9 in=use@54:6
+71:3-71:9  operator  'delete' -> Over::operator delete@40:15 in=use@54:6 how=qualified
+72:3-72:4  type  'D' -> D@42:8 in=d@72:6
+72:14-72:15  type  'D' -> D@42:8 in=d@72:6
+72:10-72:13  operator  'new' -> operator new@? in=d@72:6 how=qualified
+73:10-73:11  expr  'd' -> d@72:6 in=use@54:6
+73:3-73:9  operator  'delete' -> D::operator delete@43:8 in=use@54:6 how=qualified
+74:10-74:12  expr  'bp' -> bp@54:27 in=use@54:6
+74:3-74:9  operator  'delete' -> Base::operator delete@47:8 in=use@54:6 how=qualified
+75:3-75:10  type  'Derived' -> Derived@49:8 in=dp@75:12
+75:21-75:28  type  'Derived' -> Derived@49:8 in=dp@75:12
+75:17-75:20  operator  'new' -> operator new@? in=dp@75:12 how=qualified
+76:10-76:12  expr  'dp' -> dp@75:12 in=use@54:6
+76:3-76:9  operator  'delete' -> Derived::operator delete@51:8 in=use@54:6 how=qualified
+77:17-77:18  expr  'a' -> a@54:38 in=t@77:8
+77:12-77:15  operator  'new' -> operator new<Arena>@26:26 found=operator new@26:26 in=t@77:8 how=qualified
+78:32-78:33  type  'C' -> C@28:8 in=static_assert@78:3
+78:28-78:31  operator  'new' -> C::operator new@29:16 in=static_assert@78:3 how=qualified
+79:17-79:29  expr  'operator new' -> operator new@? q=::79:15 in=raw@79:9
+80:9-80:10  expr  'i' -> i@55:8 in=use@54:6
+80:18-80:19  expr  'p' -> p@67:8 in=use@54:6
+80:27-80:28  expr  't' -> t@77:8 in=use@54:6
+80:36-80:39  expr  'raw' -> raw@79:9 in=use@54:6
+83:37-83:38  type  'T' -> T@83:17 in=(anonymous)@83:38
+85:10-85:13  operator  'new' -> operator new@? in=in_template@83:25 how=qualified
+87:13-87:24  expr  'in_template' -> in_template<int>@83:25 found=in_template@83:25 in=inst@87:6 adl-ns=

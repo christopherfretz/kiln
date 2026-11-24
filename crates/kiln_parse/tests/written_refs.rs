@@ -1125,3 +1125,51 @@ fn a_declarator_group_holds_its_specifier() {
         assert_eq!(t.groups().count(), 4);
     });
 }
+
+const ALLOC_OPS: &str = "using size_t = decltype(sizeof 0);\n\
+                         struct C { static void *operator new(size_t); static void operator delete(void *); };\n\
+                         template <class T> T *make() { return ::new T; }\n\
+                         void use() { C *c = new C; delete c; delete[] new int[2]; delete make<C>(); }\n";
+
+/// spec/ast.md §18.13.6 (stage 6c) through the API: the `new` and
+/// `delete` keywords are `operator` entries naming the allocation and
+/// deallocation functions selected ([expr.new]/12, [expr.delete]/9), the
+/// class's own or the global one, `how=qualified`; `delete[]` one range
+/// over its three tokens; `::new` qualifier GLOBAL with the `::` as its
+/// lead; a dependent `::new T` a DEPENDENT entry with no found set whose
+/// row names what the specialization selected (the global function,
+/// since `::new` skips the class).
+#[test]
+fn alloc_entries_through_the_api() {
+    use kiln_ast::written_refs::{QualLink, REF_DEPENDENT, RefLookup};
+    with_ast(ALLOC_OPS, |ast, sm| {
+        let t = &ast.written_refs;
+        let pos = |d: kiln_ast::DeclId| line_col(sm, ast.decls.get(d).loc());
+        let class_fn = |d: kiln_ast::DeclId| {
+            ast.decls.get(d).ctx().and_then(|c| ast.decls.record(c)).is_some()
+        };
+        let new_c = entry_at(t, sm, (4, 21));
+        let r = t.get(new_c);
+        assert_eq!(r.role, RefRole::Operator);
+        assert_eq!(r.how, RefLookup::Qualified);
+        assert_eq!(pos(r.entity.expect("C::operator new")), (2, 25));
+        let del_c = entry_at(t, sm, (4, 28));
+        assert_eq!(pos(t.get(del_c).entity.expect("C::operator delete")), (2, 59));
+        // `delete[]` over its three tokens, the global `operator delete[]`.
+        let del_arr = entry_at(t, sm, (4, 38));
+        assert_eq!(line_col(sm, t.get(del_arr).range.hi), (4, 46));
+        assert!(!class_fn(t.get(del_arr).entity.expect("the global operator delete[]")));
+        // `::new T`: GLOBAL, `::` the lead, DEPENDENT, no set; its row for
+        // `make<C>` names the global `operator new`, not `C`'s.
+        let gnew = entry_at(t, sm, (3, 41));
+        let g = t.get(gnew);
+        assert_eq!(g.qualifier.link(), QualLink::Global);
+        assert_eq!(t.global_colon(gnew).map(|c| line_col(sm, c)), Some((3, 39)));
+        assert_ne!(g.flags & REF_DEPENDENT, 0);
+        assert!(t.found_at_definition(gnew).is_none());
+        let rows: Vec<_> = t.specs_of(gnew).map(|(_, r)| *r).collect();
+        let [row] = rows.as_slice() else { panic!("one row, make<C>: {rows:?}") };
+        assert!(!class_fn(row.entity.expect("the global operator new")));
+        assert_eq!(row.how, RefLookup::Qualified);
+    });
+}
