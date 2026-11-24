@@ -1,0 +1,42 @@
+15:7-15:8  type  'X' -> lib::X@14:8 in=(anonymous)@15:8
+16:7-16:8  type  'X' -> lib::X@14:8 in=(anonymous)@16:8
+19:27-19:28  type  'T' -> T@19:17 in=t@19:29
+20:33-20:34  expr  'f' -> (dependent) in=gl(type-parameter-0-0)::(lambda)::operator()@20:12 def=0+adl
+20:33-20:34  expr  'f' -> lib::f@15:5 spec=gl<lib::X>@19:24 how=adl adl-ns=lib@13:11 adl-cls=lib::X@14:8
+20:35-20:36  expr  't' -> t@19:29 in=gl(type-parameter-0-0)::(lambda)::operator()@20:12
+20:52-20:53  expr  'y' -> y@20:21 in=gl(type-parameter-0-0)::(lambda)::operator()@20:12
+20:38-20:39  operator  '+' -> (dependent) in=gl(type-parameter-0-0)::(lambda)::operator()@20:12 def=0+adl
+20:38-20:39  operator  '+' -> (builtin) spec=gl<lib::X>@19:24 how=builtin
+21:10-21:11  expr  'l' -> l@20:8 in=gl@19:24
+21:11-21:12  operator  '(' -> (dependent) close=21:13 in=gl@19:24
+21:11-21:12  operator  '(' -> gl(X)::(lambda)::operator()<int>@20:12 found=gl(X)::(lambda)::operator()@20:12 spec=gl<lib::X>@19:24 how=member
+23:9-23:11  expr  'gl' -> gl<lib::X>@19:24 found=gl@19:24 in=b@23:5 adl-ns=lib@13:11 adl-cls=lib::X@14:8
+23:12-23:15  nns  'lib' -> lib@13:11 in=b@23:5
+23:17-23:18  type  'X' -> lib::X@14:8 q=23:12 in=b@23:5
+25:27-25:28  type  'T' -> T@25:17 in=t@25:29
+26:32-26:33  expr  'f' -> (dependent) in=gn(type-parameter-0-0)::(lambda)::operator()@26:12 def=0+adl
+26:32-26:33  expr  'f' -> lib::f@15:5 spec=gn<lib::X>@25:24 how=adl adl-ns=lib@13:11 adl-cls=lib::X@14:8
+26:34-26:35  expr  't' -> t@25:29 in=gn(type-parameter-0-0)::(lambda)::operator()@26:12
+26:39-26:40  expr  'y' -> y@26:20 in=gn(type-parameter-0-0)::(lambda)::operator()@26:12
+26:37-26:38  operator  '+' -> (dependent) in=gn(type-parameter-0-0)::(lambda)::operator()@26:12 def=0+adl
+26:37-26:38  operator  '+' -> (builtin) spec=gn<lib::X>@25:24 how=builtin
+27:10-27:11  expr  'l' -> l@26:8 in=gn@25:24
+27:11-27:12  operator  '(' -> (dependent) close=27:13 in=gn@25:24
+27:11-27:12  operator  '(' -> gn(X)::(lambda)::operator()@26:12 spec=gn<lib::X>@25:24 how=member
+29:9-29:11  expr  'gn' -> gn<lib::X>@25:24 found=gn@25:24 in=c@29:5 adl-ns=lib@13:11 adl-cls=lib::X@14:8
+29:12-29:15  nns  'lib' -> lib@13:11 in=c@29:5
+29:17-29:18  type  'X' -> lib::X@14:8 q=29:12 in=c@29:5
+31:27-31:28  type  'T' -> T@31:17 in=t@31:29
+32:33-32:34  expr  'f' -> (dependent) in=gd(type-parameter-0-0)::(lambda)::operator()@32:12 def=0+adl
+32:33-32:34  expr  'f' -> lib::f@16:5 spec=gd(X)::(lambda)::operator()<long>@32:12 how=adl adl-ns=lib@13:11 adl-cls=lib::X@14:8
+32:35-32:36  expr  't' -> t@31:29 in=gd(type-parameter-0-0)::(lambda)::operator()@32:12
+32:38-32:39  expr  'y' -> y@32:21 in=gd(type-parameter-0-0)::(lambda)::operator()@32:12
+33:38-33:39  expr  'f' -> (dependent) in=gd(type-parameter-0-0)::(lambda)::operator()@33:17 def=0+adl
+33:40-33:41  expr  't' -> t@31:29 in=gd(type-parameter-0-0)::(lambda)::operator()@33:17
+33:43-33:44  expr  'z' -> z@33:26 in=gd(type-parameter-0-0)::(lambda)::operator()@33:17
+34:10-34:11  expr  'l' -> l@32:8 in=gd@31:24
+34:11-34:12  operator  '(' -> (dependent) close=34:14 in=gd@31:24
+34:11-34:12  operator  '(' -> gd(X)::(lambda)::operator()<long>@32:12 found=gd(X)::(lambda)::operator()@32:12 spec=gd<lib::X>@31:24 how=member
+36:9-36:11  expr  'gd' -> gd<lib::X>@31:24 found=gd@31:24 in=d@36:5 adl-ns=lib@13:11 adl-cls=lib::X@14:8
+36:12-36:15  nns  'lib' -> lib@13:11 in=d@36:5
+36:17-36:18  type  'X' -> lib::X@14:8 q=36:12 in=d@36:5

@@ -5996,6 +5996,14 @@ impl Sema<'_, '_> {
         // dependent.
         let args_dep = args.iter().any(|&a| self.expr_is_type_dependent(a))
             || braced.iter().flatten().any(|l| self.init_list_type_dependent(l));
+        // In a context that is itself a pattern, a rebuilt overload set
+        // whose call stays dependent is resolved by the next instantiation
+        // (spec/ast.md §18.9.4).
+        if self.ast.written_refs.has_spec_pending()
+            && (args_dep || self.expr_is_type_dependent(callee))
+        {
+            self.written_spec_call_dependent(callee);
+        }
         // A callee named by a `DeclRefExpr` before the call (clang's
         // non-overloaded name), not resolved by it.
         let direct = self.ast.exprs.get(self.ignore_parens(callee)).kind() == ExprKind::DeclRefExpr;
@@ -6025,6 +6033,9 @@ impl Sema<'_, '_> {
             && !args_dep
             && let Some(dep) = self.dependent_object_member_overload(callee)
         {
+            if self.ast.written_refs.has_spec_pending() {
+                self.written_spec_call_dependent(callee);
+            }
             self.rebuild_parens(callee, dep)
         } else if self.member_overload(callee).is_some() && !args_dep {
             match self.resolve_member_call(callee, args, &braced) {

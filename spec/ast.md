@@ -3783,7 +3783,11 @@ instantiation stack (§8.4) from the innermost frame:
   (`outer(const One &)::(lambda)::operator()<Two>`). The enclosing
   template's instantiation rebuilds the lambda's body with the name
   still dependent; the rebuilt node then stands for the same entry
-  (§18.9.4) and each call operator specialization resolves it;
+  (§18.9.4) and each call operator specialization resolves it. A name
+  the enclosing instantiation resolves (an unqualified call whose
+  arguments depend only on the enclosing template's parameters, `f(t)`,
+  found by argument-dependent lookup) gets its row from that
+  instantiation, keyed as a non-generic lambda's would be;
 - a member template of a class template ([temp.mem]/1): its
   specialization, the innermost (`Box<Small>::convert<Wide>`), for every
   name of its body, dependent on the inner parameters or only on the
@@ -3842,7 +3846,15 @@ building deduction guides, `std::meta::substitute`.
   succeeds forms its specialization ([temp.over]/1), and keeps the rows
   of its signature and its default template arguments whether or not
   overload resolution then chooses it; a candidate whose deduction
-  fails keeps none. What the
+  fails keeps none, and so does one whose deduction never runs: at
+  clang compat 22 a function template candidate named without explicit
+  template arguments is deferred while the set may still have a perfect
+  match (`overload/defer.rs`, spec/sema-overload.md §4.4), and when a
+  non-template candidate is that match the template is never deduced,
+  so no specialization of it is formed and its signature records no row.
+  At compat 19, or when no candidate is a perfect match, the deferred
+  template is deduced and keeps its specialization and rows as above
+  (`written_refs/inst-deferred-candidate.cpp`). What the
   real instantiations nested in the deduction recorded stays (a class
   template specialization instantiated while the signature was
   substituted is instantiated, [temp.inst]/2), as do an alias
@@ -3861,6 +3873,22 @@ building deduction guides, `std::meta::substitute`.
   started and outside a SFINAE context, gets a row with no entity
   (`UNRESOLVED`). A rebuild given up without a diagnostic (a trial
   substitution) records nothing.
+- **A reused alias substitution** records nothing again. An alias
+  template specialization is a substitution, not an instantiation
+  ([temp.alias]/2), and kiln substitutes it once per argument list (the
+  sugared converted list at clang compat 22, the canonical one at 19;
+  spec/sema-templates.md §4.10): its rows are recorded at that first
+  substitution, keyed by the alias template (§18.9.2), and a later use
+  of the same specialization takes the cached type and records none. A
+  substitution that checked access, or whose error a SFINAE context
+  trapped, is not cached and is redone (its rows are kept once,
+  §18.9.1). When a declaration between two uses would change what the
+  substitution finds (a better function for argument-dependent lookup
+  of a dependent call in the aliased type), the program is ill-formed,
+  no diagnostic required ([temp.dep.candidate]/1): kiln keeps the first
+  result and its rows, as GCC does, where clang substitutes again at
+  each use (`written_refs/inst-alias-first-use.cpp`). Default template
+  arguments are not cached: each use substitutes them again.
 - **A name that stays unresolved** at instantiation gets a row with no
   entity: a dependent call no viable function matched (with the
   argument-dependent set its lookup computed, §18.7.4), a member the
@@ -3895,7 +3923,17 @@ building deduction guides, `std::meta::substitute`.
   for an overloaded member call's failure the member call's own); a
   node still dependent (a generic lambda's body, a member template
   substituted with the outer arguments only) becomes a further pattern
-  node of the same entry. A rebuild that fails reports per §18.9.3.
+  node of the same entry. Whether a rebuilt overload set is still
+  dependent is decided by its call, not by the context: in a context
+  that is itself a pattern (a constraint, which satisfaction substitutes
+  with the template as context; a generic lambda's body, which the
+  enclosing instantiation rebuilds) the set is noted as a further node
+  and also awaits resolution (`defer_spec`). A call whose arguments are
+  no longer dependent resolves it, by ordinary or by argument-dependent
+  lookup, which records the row and drops the node
+  (`forget_pattern_node`); a call that stays dependent keeps the node
+  (`act_on_call`, `written_spec_call_dependent`), and so does a set that
+  is not called (WP-3584). A rebuild that fails reports per §18.9.3.
 - **Qualifiers.** After a qualified name's row, the dependent
   components of the entry's qualifier chain are paired from the right
   with the substituted nested-name-specifier's components, and each
@@ -3919,11 +3957,36 @@ building deduction guides, `std::meta::substitute`.
   operator specialization's instantiation, which substitutes the rebuilt
   type at the same anchor (a rebuilt type has no §5.8 locations of its
   own), resolves it and records the row keyed as §18.9.2 says for a
-  generic lambda. A member template's signature and body need no
-  further node: the class's instantiation substitutes its declaration
-  with the outer arguments (still dependent, no row), but the member
-  template specialization substitutes the pattern's (§18.9.2,
-  `Box<A>::conv<B>`).
+  generic lambda.
+- **Further nodes.** A rebuild that leaves a node still dependent adds a
+  further pattern node of the same entry only when the rebuilt node
+  differs from the one substituted. A member template's signature and
+  body therefore add none: the class's instantiation substitutes its
+  declaration with the outer arguments, which gives a name that depends
+  on the member template's own parameters back as the same node (no
+  node, no row; a name that resolves gets the class specialization's
+  row, §18.9.2), and the member template specialization substitutes the
+  pattern's declaration (§18.9.2, `Box<A>::conv<B>`). A generic lambda's
+  body, which the enclosing instantiation rebuilds, adds a further node
+  for each rebuilt node that stays dependent, and records a row for each
+  that resolves, whether by ordinary lookup or by argument-dependent
+  lookup (`f(t)` with `t` of the enclosing template's parameter type).
+  No further node is added for:
+  - a rebuild that resolves: it records a row (an overload set, in any
+    context, once its call resolves it; see "Expressions");
+  - a rebuild that returns the pattern node unchanged (the class's
+    instantiation over a member template);
+  - a rebuild that fails (§18.9.3);
+  - an entry that is not `DEPENDENT` (resolved at the definition);
+  - anything while recording is off or pattern nodes are suspended
+    (`no_nodes`, §18.8);
+  - a type other than through `ty_node`'s `DependentName` and
+    `DependentTemplateSpecialization` branches
+    (`note_spec_still_dependent`, see "Types");
+  - an operator token: `PatternNode::Oper` nodes are noted by the
+    operator sites (§18.13.6), not by this rule;
+  - a node read from a module image: the importer registers it again
+    (`bmi_image/refs.rs`), no rebuild is involved.
 - **Argument-dependent lookup.** A dependent unqualified call's row gets
   §18.7.4's `how` and set from the facts `resolve_unresolved_call`
   reports, as the main table's call entries do.
@@ -4051,7 +4114,8 @@ The 29 `bench/oven` entries' `-fconstexpr-report` counters (all but
 #### 18.9.7 Tests
 
 `crates/kiln_ast/src/written_refs.rs` (the row is 28 bytes, off records
-no pattern node, a row is kept once and an update that duplicates
+no pattern node, a forgotten pattern node is only its own entry's, a
+row is kept once and an update that duplicates
 another merges into it, a SFINAE drop removes one specialization's rows
 only, truncation drops the rows and pattern nodes of the entries it
 drops), `crates/kiln_parse/tests/written_refs.rs` (rename by table:
@@ -4079,7 +4143,15 @@ argument-dependent lookup and both (`inst-udir`), dependent types a
 generic lambda's body rebuilds still dependent (`inst-rebuilt`),
 using-declarations with a dependent qualifier and the names they
 introduce (`inst-using`), names in constraints and requires-expressions,
-with a satisfaction-cache hit (`inst-constraint`), and the
+with a satisfaction-cache hit (`inst-constraint`), an unqualified call
+found by argument-dependent lookup in a requires-clause, a nested
+requirement and a constraint checked with a definition
+(`inst-adl-constraint`) and in a generic lambda, resolved by the
+enclosing instantiation or still dependent (`inst-adl-generic-lambda`),
+a template candidate never deduced beside a perfect non-template match
+and one deduced beside an imperfect one (`inst-deferred-candidate`), an
+alias specialization reused after a better candidate is declared
+(`inst-alias-first-use`, compared with GCC), and the
 order of instantiation swapped (`inst-order-a`, `inst-order-b`, whose
 goldens differ only in the lines of `run`), also with the
 specializations first named through an alias in one and through the

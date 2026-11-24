@@ -3804,8 +3804,26 @@ and the §6.2 tests.
   ([temp.deduct.type]/8): `template<int N> void f(A<N>&)` with `A<N> =
   int[N]` deduces `N` from `int[3]`; the bound may be `bool` or any
   integral type (`tests/conformance/temp.deduct.type/alias-array-bound-deduction-run.cpp`).
-- `alias_cache: (alias, canonical args) → canonical result` makes repeated
-  forms cost one probe.
+- `alias_cache: (alias, converted args) → result` makes repeated forms
+  cost one probe. The key is the sugared converted list at clang compat
+  22 (clang 22 substitutes the arguments as written) and the canonical
+  one at 19. An alias specialization is therefore substituted once per
+  such list, and the written-reference rows of the names in its aliased
+  type are recorded at that first substitution (spec/ast.md §18.9.3); a
+  later use reuses both. A result whose substitution checked access or
+  had an error trapped by a SFINAE context is not cached (below).
+- **Later declarations (WP-3587).** Because of the cache, a function
+  declared after the first use of `R<X>` (`using R = decltype(make(T()))`
+  with a better `make(X)` declared between two uses) is not seen by a
+  later use: kiln keeps the first result, as GCC 16.1 does; clang 19 and
+  22 substitute again at each use. Argument-dependent lookup over all the
+  declarations would find a better match, so the program is ill-formed,
+  no diagnostic required ([temp.dep.candidate]/1; [temp.point]/7 is the
+  rule for differing points of instantiation), and both behaviours
+  conform (`tests/conformance/written_refs/inst-alias-first-use.cpp`,
+  compared with GCC). Default template arguments are not cached: a class
+  or function template's default is substituted again at each use, by
+  kiln, clang and GCC alike.
 - Alias substitution is in the immediate context: a failure inside a
   deduction is SFINAE, including for args the alias does not use
   (CWG1558, the `void_t` idiom).
@@ -11320,7 +11338,7 @@ what a later use needs to re-diagnose it (`fn_spec_failures`, the
 |---|---|---|
 | A class, function or variable specialization (its declaration, chosen pattern and `from_args`) | `TemplateTables` spec list, `find_spec` | (first decl of the template, canonical argument list) |
 | The partial specialization a variable or class specialization is instantiated from | `SpecInfo.from` / `from_args` of that specialization | as above: matched once, when the specialization is created (§4.4, §4.11) |
-| An alias template specialization's type | `InstState.alias_cache` | (alias template, canonical argument list) |
+| An alias template specialization's type | `InstState.alias_cache` | (alias template, converted argument list: sugared at clang compat 22, canonical at 19; §4.10) |
 | Partial ordering of two partial specializations | `TemplState.partial_order` | (row index, row index) |
 | A function specialization's first signature-substitution error | `TemplState.fn_spec_failures` | the (invalid) specialization `DeclId` |
 | Constraint satisfaction of an entity | `ConceptState.sat_cache` | (entity, canonical argument list) |

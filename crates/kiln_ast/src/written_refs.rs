@@ -1474,6 +1474,15 @@ impl WrittenRefs {
         }
     }
 
+    /// The node `n` noted for entry `id` resolved after all (a rebuilt
+    /// overload set whose call turned out not to be dependent): it no
+    /// longer stands for the entry (§18.9.4).
+    pub fn forget_pattern_node(&mut self, n: PatternNode, id: WrittenRefId) {
+        if self.spec_nodes.get(&n) == Some(&id) {
+            self.spec_nodes.remove(&n);
+        }
+    }
+
     /// Stops (`false`) or resumes remembering pattern nodes and their
     /// using-directives, for names parsed for the table alone that no
     /// instantiation rebuilds (§18.8); returns the previous setting.
@@ -2954,6 +2963,22 @@ mod tests {
         assert_eq!(t.pattern_udir(WrittenRefId::from_index(0), DeclId::new(3)), None);
         assert_eq!(t.pattern_entry(PatternNode::Expr(ExprId::new(3))), None);
         assert_eq!(t.spec_mem(), (0, 0));
+    }
+
+    #[test]
+    fn forgotten_pattern_node_is_only_its_entrys() {
+        let mut t = WrittenRefs::default();
+        t.set_on(true);
+        let w = t.push(entry(None)).expect("on");
+        let v = t.push(entry(None)).expect("on");
+        let x = PatternNode::Expr(ExprId::new(7));
+        t.note_pattern_node(x, w);
+        // Another entry's forgetting leaves the node alone.
+        t.forget_pattern_node(x, v);
+        assert_eq!(t.pattern_entry(x), Some(w));
+        t.forget_pattern_node(x, w);
+        assert_eq!(t.pattern_entry(x), None);
+        assert!(!t.has_pattern_nodes());
     }
 
     #[test]

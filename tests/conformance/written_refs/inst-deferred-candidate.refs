@@ -1,0 +1,17 @@
+18:27-18:28  type  'T' -> T@18:17 in=(anonymous)@18:28
+18:48-18:49  nns  'T' -> T@18:17 in=r@18:25
+18:51-18:52  expr  's' -> (dependent) q=18:48 in=r@18:25
+19:7-19:8  nns  'n' -> n@14:11 in=(anonymous)@19:11
+19:10-19:11  type  'S' -> n::S@15:8 q=19:7 in=(anonymous)@19:11
+20:22-20:23  expr  'r' -> r@19:5 in=use_r@20:5 adl-ns=n@14:11 adl-cls=n::S@15:8
+20:24-20:25  nns  'n' -> n@14:11 in=use_r@20:5
+20:27-20:28  type  'S' -> n::S@15:8 q=20:24 in=use_r@20:5
+22:27-22:28  type  'T' -> T@22:17 in=(anonymous)@22:28
+22:48-22:49  nns  'T' -> T@22:17 in=p@22:25
+22:51-22:52  expr  's' -> (dependent) q=22:48 in=p@22:25
+22:51-22:52  expr  's' -> n::S::s@15:23 spec=p<n::S>@22:25
+23:7-23:8  nns  'n' -> n@14:11 in=(anonymous)@23:11
+23:10-23:11  type  'S' -> n::S@15:8 q=23:7 in=(anonymous)@23:11
+24:22-24:23  expr  'p' -> p@23:5 in=use_p@24:5 adl-ns=n@14:11 adl-cls=n::S@15:8
+24:24-24:25  nns  'n' -> n@14:11 in=use_p@24:5
+24:27-24:28  type  'S' -> n::S@15:8 q=24:24 in=use_p@24:5

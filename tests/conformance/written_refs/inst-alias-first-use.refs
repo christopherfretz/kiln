@@ -1,0 +1,12 @@
+19:39-19:43  expr  'make' -> (dependent) in=R@19:26 def=0+adl
+19:39-19:43  expr  'make' -> lib::make@16:5 spec=R@19:26 how=adl adl-ns=lib@14:11 adl-cls=lib::X@15:8
+19:44-19:45  type  'T' -> T@19:17 in=R@19:26
+20:3-20:6  nns  'lib' -> lib@14:11 in=a@20:11
+20:8-20:9  type  'X' -> lib::X@15:8 q=20:3 in=a@20:11
+20:1-20:2  template  'R' -> R@19:26 in=a@20:11
+23:11-23:12  type  'X' -> lib::X@15:8 in=(anonymous)@23:12
+26:3-26:6  nns  'lib' -> lib@14:11 in=b@26:11
+26:8-26:9  type  'X' -> lib::X@15:8 q=26:3 in=b@26:11
+26:1-26:2  template  'R' -> R@19:26 in=b@26:11
+27:22-27:23  expr  'a' -> a@20:11 in=static_assert@27:1
+28:22-28:23  expr  'b' -> b@26:11 in=static_assert@28:1

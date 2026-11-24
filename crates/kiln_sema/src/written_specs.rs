@@ -113,16 +113,22 @@ impl Sema<'_, '_> {
                 self.note_keyed_still_dependent(w, keys.key, node, PatternNode::Expr(x));
                 return;
             }
+            // An overload set awaits its use: the call that resolves it
+            // records the row, whether by ordinary or by argument-dependent
+            // lookup, also in a context that is itself a pattern (a
+            // constraint satisfied with the template as context, a generic
+            // lambda's body). There the set stands for the entry in the
+            // next instantiation until it resolves, and does so for good
+            // when its call stays dependent
+            // ([`Sema::written_spec_call_dependent`]).
             Target::Overloaded(x) => {
                 if self.written_ctx_dependent(keys) {
                     self.ast.written_refs.note_pattern_node(PatternNode::Expr(x), w);
-                } else {
-                    if let Some(spec) = keys.spec {
-                        self.ast.written_refs.defer_spec(x, w, spec);
-                    }
-                    if let Some(k) = keys.key {
-                        self.ast.written_refs.defer_subst(x, w, k);
-                    }
+                } else if let Some(k) = keys.key {
+                    self.ast.written_refs.defer_subst(x, w, k);
+                }
+                if let Some(spec) = keys.spec {
+                    self.ast.written_refs.defer_spec(x, w, spec);
                 }
             }
             Target::Decl(d, f) => {
@@ -301,6 +307,9 @@ impl Sema<'_, '_> {
         let spec = self.ast.written_refs.take_spec_pending(x);
         let key = self.ast.written_refs.take_subst_pending(x);
         let w = spec.map(|p| p.0).or(key.map(|p| p.0))?;
+        // Resolved in a context that is itself a pattern: a row, not a
+        // further node.
+        self.ast.written_refs.forget_pattern_node(PatternNode::Expr(x), w);
         let keys = RowKeys {
             spec: spec.map(|p| p.1),
             key: key.map(|p| p.1).filter(|&k| self.key_scopes.records(k)),
@@ -322,6 +331,17 @@ impl Sema<'_, '_> {
         let _ = self.ast.written_refs.take_spec_pending(x);
         if let Some((_, k)) = self.ast.written_refs.take_subst_pending(x) {
             self.key_scope_poison(k);
+        }
+    }
+
+    /// The call of the rebuilt overload set `callee` (possibly
+    /// parenthesized) stays dependent, in a context that is itself a
+    /// pattern: the set stands for its entry in the next instantiation (a
+    /// further node), and records no row here (§18.9.4).
+    pub(crate) fn written_spec_call_dependent(&mut self, callee: ExprId) {
+        let x = self.ignore_parens(callee);
+        if let Some((w, _)) = self.ast.written_refs.take_spec_pending(x) {
+            self.ast.written_refs.note_pattern_node(PatternNode::Expr(x), w);
         }
     }
 
