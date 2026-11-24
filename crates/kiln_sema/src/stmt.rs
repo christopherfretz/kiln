@@ -588,7 +588,7 @@ impl Sema<'_, '_> {
         for r in rs {
             let Some(i) = self.pending_odr.iter().position(|&x| x == r) else { continue };
             let d = self.ast.exprs.decl(r);
-            if self.usable_in_constant_expressions(d) {
+            if !self.ref_odr_at_build.contains(&r) && self.usable_in_constant_expressions(d) {
                 self.pending_odr.remove(i);
                 let _ = self.ast.exprs.set_non_odr_use(r, kiln_ast::expr::NonOdrUse::Constant);
             }

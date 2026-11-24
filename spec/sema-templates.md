@@ -4348,14 +4348,19 @@ here because the GCC cases reaching them are template tests:
   `tests/conformance/class.temporary/run-template-shared-operand-temporary-destroyed.cpp`.
   The exception is a lifetime-extended temporary (WP-3271, spec/ast.md
   "Lifetime-extended temporaries of instantiations"): in an
-  instantiated variable's initializer and a range-based `for`'s
-  range-initializer (`Substituter::unsharing_temporaries`), a shared
+  instantiated variable's initializer, a range-based `for`'s
+  range-initializer and an expansion statement's expansion-initializer
+  or expansion-init-list (WP-3291; `Substituter::unsharing_temporaries`), a shared
   subtree holding a temporary that is or will be extended is copied up
   to it, so the instantiated variable extends its own. Tests:
   `crates/kiln_parse/tests/instantiated_temporaries.rs`,
   `tests/conformance/class.temporary/run-instantiation-own-extended-temporaries.cpp`,
   `.../instantiation-extended-temporary-names-ir.cpp`,
-  `tests/conformance/stmt.ranged/p2718-template-own-temporaries-run.cpp`.
+  `tests/conformance/stmt.ranged/p2718-template-own-temporaries-run.cpp`,
+  `tests/conformance/stmt.expand/specialization-own-extended-temporaries-run.cpp`,
+  `.../stmt.expand/constexpr-static-range-per-specialization-run.cpp`,
+  `tests/conformance/class.temporary/deep-binding-extended-temporary-run.cpp`
+  (300 levels, WP-3292).
 - **Dependent forms** are resolved:
   - `DependentScopeDeclRefExpr` becomes qualified lookup;
   - `UnresolvedLookupExpr` becomes an overload set plus ADL (§3.5);

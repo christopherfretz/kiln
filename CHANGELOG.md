@@ -1295,6 +1295,26 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- The first use of a reference variable template specialization or of a
+  reference static data member of a class template specialization
+  (`template<class T> const S &vt = S{...}; ... vt<int>.a[0]`) loads
+  through the reference, whose global (`@_Z2vtIiE`) is now emitted, as
+  clang 19 and 22 do; it used to be folded to the lifetime-extended
+  `_ZGR` object with no reference global. Later uses still fold, as in
+  clang (WP-3290, spec/sema.md §5.2).
+- Two specializations of a function template whose `constexpr` expansion
+  statement destructures a non-dependent glvalue designating a temporary
+  (`static_cast<const P &&>(P{1, 2})`) each extend their own temporary:
+  the pattern's was shared, so the second specialization was rejected
+  with "reference to temporary is not a constant expression" (WP-3291,
+  spec/sema-templates.md).
+- A reference bound through more than 256 levels of nested glvalue
+  expressions (a chain of `?:` with xvalue arms) extends the temporary at
+  the bottom; it was destroyed at once and the reference dangled. An
+  instantiated initializer copies the pattern's extended temporaries at
+  any depth, not only down to 256 levels (WP-3292, spec/ast.md). The PCH
+  snapshot format is version 179 (a new transient field of sema).
+
 - A class or variable template specialization whose partial-specialization
   choice is ambiguous is diagnosed at its first use outside a substitution
   also when a SFINAE context or a probe whose diagnostics are dropped (the

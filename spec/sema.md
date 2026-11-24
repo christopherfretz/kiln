@@ -6771,6 +6771,25 @@ Names there are not odr-used.
   - A variable usable in constant expressions that is named there is
     marked `non_odr_use_constant`. So is a reference usable in constant
     expressions.
+  - Except a reference whose initializer the naming itself
+    instantiated (a variable template specialization, or a static data
+    member of a class template specialization, named before its
+    definition was instantiated): it stays an odr-use
+    (`Sema::ref_odr_at_build`, set by `build_decl_ref` when the
+    variable had no initializer before `note_var_referenced` and has
+    one after). clang decides a reference's non-odr-use in
+    `BuildDeclRefExpr`, before `MarkDeclRefReferenced` instantiates the
+    definition, and does not revisit it ("constant references were
+    handled when they were built", `rebuildPotentialResultsAsNonOdrUsed`).
+    So the first naming of `vt<int>` in a TU emits the reference global
+    `@_Z2vtIiE` and loads through it, and later namings fold to its
+    `_ZGR2vtIiE_` temporary; a specialization only ever named as a
+    constant gets no reference global. Only the IR shows the
+    difference: such a variable is never a local, so no capture
+    depends on it (WP-3290; `tests/codegen/var_template_reference_first_use.cpp`,
+    exact against clang 19,
+    `tests/conformance/basic.def.odr/reference-var-template-first-use-run.cpp`).
+    The discarded-value bullet below skips these too.
   - Every other queued variable is marked `used`.
   - Cost: linear in the full-expression. The candidates are sorted
     once (`ConstantCandidates`), and each queued reference is a binary
