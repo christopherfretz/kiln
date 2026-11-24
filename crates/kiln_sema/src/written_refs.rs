@@ -71,6 +71,21 @@ impl Sema<'_, '_> {
         // never overloaded, so the name names it (spec/ast.md §18.5).
         let target = match target {
             Target::Overloaded(x) => self.written_var_template(x).unwrap_or(target),
+            // The same for a member variable template of the current
+            // instantiation named after `this->` (WP-3405).
+            Target::Dependent(x) => {
+                let probe = WrittenRef {
+                    range,
+                    entity: None,
+                    found: None,
+                    enclosing: None,
+                    qualifier: q,
+                    role,
+                    flags: if member { REF_MEMBER } else { 0 },
+                    how: RefLookup::None,
+                };
+                self.written_member_var_template(&probe, x).unwrap_or(target)
+            }
             t => t,
         };
         let role = match target {
@@ -141,6 +156,29 @@ impl Sema<'_, '_> {
         let found = self.ovl.ule_found.get(&x).and_then(|f| f.found.first().copied());
         let found = found.filter(|&f| f != t && self.kind_of(f) == DeclKind::UsingShadow);
         let found = found.or_else(|| (*d != t).then_some(*d));
+        Some(Target::Decl(self.ast.first(t), found))
+    }
+
+    /// The member variable template the dependent member access `x`
+    /// names (`this->mw<T>`, `this->template mw<T>`, an entry shaped as
+    /// `r`): class member lookup in the current instantiation found one
+    /// variable template at the definition ([temp.dep.type]/6), which only
+    /// its dependent template arguments keep unresolved, in a class
+    /// without a dependent base (§18.12.2: with one, the instantiation
+    /// looks the name up again, and the entry stays dependent with its
+    /// found set). A member function template stays an overload set.
+    fn written_member_var_template(&self, r: &WrittenRef, x: ExprId) -> Option<Target> {
+        if self.ast.exprs.get(x).kind() != ExprKind::CXXDependentScopeMemberExpr {
+            return None;
+        }
+        let (f, class) = self.written_member_found(r, x)?;
+        let [d] = f.decls.as_slice() else { return None };
+        let t = self.ast.strip_shadow(*d);
+        if self.kind_of(t) != DeclKind::VarTemplate || self.has_dependent_bases_in(class, 0) {
+            return None;
+        }
+        let found = f.found.first().copied().filter(|&s| s != t);
+        let found = found.filter(|&s| self.kind_of(s) == DeclKind::UsingShadow);
         Some(Target::Decl(self.ast.first(t), found))
     }
 

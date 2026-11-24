@@ -1,0 +1,29 @@
+tid_mod.cppm:5:26-5:27  type  'T' -> T@tid_mod.cppm:5:17 in=(anonymous)@tid_mod.cppm:5:27
+tid_mod.cppm:6:26-6:27  type  'T' -> T@tid_mod.cppm:6:17 in=t@tid_mod.cppm:6:28
+tid_mod.cppm:6:42-6:43  type  'T' -> T@tid_mod.cppm:6:17 in=tm::g@tid_mod.cppm:6:24
+tid_mod.cppm:6:40-6:41  expr  'v' -> tm::v@tid_mod.cppm:3:34 in=tm::g@tid_mod.cppm:6:24
+tid_mod.cppm:6:51-6:52  type  'T' -> T@tid_mod.cppm:6:17 in=tm::g@tid_mod.cppm:6:24
+tid_mod.cppm:6:49-6:50  template  'K' -> tm::K@tid_mod.cppm:4:27 in=tm::g@tid_mod.cppm:6:24
+tid_mod.cppm:6:47-6:48  expr  'v' -> tm::v@tid_mod.cppm:3:34 in=tm::g@tid_mod.cppm:6:24
+tid_mod.cppm:6:45-6:46  operator  '+' -> (dependent) in=tm::g@tid_mod.cppm:6:24 def=0+adl
+tid_mod.cppm:6:45-6:46  operator  '+' -> (builtin) spec=tm::g<int>@tid_mod.cppm:6:24 how=builtin
+tid_mod.cppm:6:59-6:60  type  'T' -> T@tid_mod.cppm:6:17 in=tm::g@tid_mod.cppm:6:24
+tid_mod.cppm:6:57-6:58  expr  'f' -> (dependent) in=tm::g@tid_mod.cppm:6:24 def=1+adl
+tid_mod.cppm:6:57-6:58  expr  'f' def=tm::f@tid_mod.cppm:5:24
+tid_mod.cppm:6:57-6:58  expr  'f' -> tm::f<int>@tid_mod.cppm:5:24 found=tm::f@tid_mod.cppm:5:24 spec=tm::g<int>@tid_mod.cppm:6:24 adl-ns=
+tid_mod.cppm:6:62-6:63  expr  't' -> t@tid_mod.cppm:6:28 in=tm::g@tid_mod.cppm:6:24
+tid_mod.cppm:6:55-6:56  operator  '+' -> (dependent) in=tm::g@tid_mod.cppm:6:24 def=0+adl
+tid_mod.cppm:6:55-6:56  operator  '+' -> (builtin) spec=tm::g<int>@tid_mod.cppm:6:24 how=builtin
+tid_mod.cppm:9:38-9:39  type  'T' -> T@tid_mod.cppm:7:17 in=tm::S::a@tid_mod.cppm:9:7
+tid_mod.cppm:9:35-9:37  template  'mw' -> tm::S::mw@tid_mod.cppm:8:43 in=tm::S::a@tid_mod.cppm:9:7
+tid_mod.cppm:9:45-9:46  type  'T' -> T@tid_mod.cppm:7:17 in=tm::S::a@tid_mod.cppm:9:7
+tid_mod.cppm:9:43-9:44  expr  'v' -> tm::v@tid_mod.cppm:3:34 in=tm::S::a@tid_mod.cppm:9:7
+tid_mod.cppm:9:41-9:42  operator  '+' -> (dependent) in=tm::S::a@tid_mod.cppm:9:7 def=0+adl
+tid_mod.cppm:9:41-9:42  operator  '+' -> (builtin) spec=tm::S<int>::a@tid_mod.cppm:9:7 how=builtin
+11:20-11:22  nns  'tm' -> tm@tid_mod.cppm:2:18 in=run@11:5
+11:24-11:25  expr  'g' -> tm::g<int>@tid_mod.cppm:6:24 found=tm::g@tid_mod.cppm:6:24 q=11:20 in=run@11:5
+11:31-11:33  nns  'tm' -> tm@tid_mod.cppm:2:18 in=run@11:5
+11:35-11:36  template  'S' -> tm::S@tid_mod.cppm:7:27 q=11:31 in=run@11:5
+11:44-11:45  member  'a' -> tm::S<int>::a@tid_mod.cppm:9:7 in=run@11:5
+11:50-11:52  nns  'tm' -> tm@tid_mod.cppm:2:18 in=run@11:5
+11:54-11:55  expr  'v' -> tm::v@tid_mod.cppm:3:34 found=tm::v@tid_mod.cppm:3:34 q=11:50 in=run@11:5

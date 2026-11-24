@@ -2988,6 +2988,39 @@ stage 1.
   matched per specialization. A member template of a dependent class
   (`n::D<T>::template w<U>`, `T::template f<U>`) stays `DEPENDENT` with
   no definition-context lookup.
+  **The rule, every form (WP-3405).** The template name of such a
+  template-id has its one entry at the name token (§18.1: the whole
+  template-id is no second entry; its arguments' names are their own
+  entries, before it), and a rename of the template claims it with the
+  rule a rename already uses: an entry whose `entity` or `found` is the
+  template (the non-dependent `n::v<int>` names the specialization,
+  `found` the template; the dependent `n::v<T>` names the template), and,
+  for a function template-id, an entry of `entries_finding` (§18.12.1).
+  So the entry is the template's in each context: qualified and
+  unqualified, through a using-directive (`udir=`, §18.7.3) or a
+  using-declaration; a type context, a template argument (`n::I<n::v<T>>`),
+  a default template argument, an unevaluated operand, a
+  requires-expression; a concept-id in a requires-clause, a nested
+  requirement, a type-constraint, a constrained placeholder and a
+  return-type-requirement; nested template-ids (`n::v<m::w<T>>`: `w` and
+  `v` each name their template, `w`'s entry first). A member variable
+  template of the current instantiation ([temp.dep.type]/1) follows the
+  rule §18.12.2 gives members of the current instantiation: class member
+  lookup at the definition found it, and in a class without a dependent
+  base that result is final ([temp.dep.type]/6), so `mw<T>`, `S::mw<T>`,
+  `this->mw<T>` and `this->template mw<T>` name the template (the last
+  two with `MEMBER`; a using-declaration's shadow in `found`); in a class
+  with a dependent base a `this->` name stays `DEPENDENT` with its found
+  set and `+base` (the instantiation looks it up again), while a name
+  the class's own unqualified or qualified lookup finds is resolved as
+  before. A member function template stays an overload set
+  (`this->template mf<T>()`: `DEPENDENT`, its found set), and a member
+  template of an unknown specialization (`t.template w<T>` with `t` a
+  `D<T>`) has no definition-context lookup. A partial specialization's
+  member is its own. An entry that names its template has no
+  per-specialization rows (§18.9): each specialization is that template's,
+  and a client that needs the specialization forms it from the
+  template and the arguments.
 - **PCH and modules.** Stage 5 (§18.10) carries both tables in PCH
   snapshots and module images: a TU restored from a snapshot continues
   the prefix's table, and an importer built from an image merges the
@@ -3047,7 +3080,15 @@ template specializations matched, dependent and never instantiated),
 specialization's members), `spec-target-overloads` (an explicit
 specialization and instantiation of the second of two overloaded
 templates), `var-template-id` (variable template-ids with dependent
-arguments); stage 6: the `operators-*` tests and `udl`, §18.13.9).
+arguments); WP-3405: `template-id-dependent-args` (every context and
+form of §18.5's rule, nested ids, function template-ids' found sets,
+`T::template x<int>`), `template-id-current-inst` (members of the current
+instantiation, with and without a dependent base, an unknown
+specialization, a partial specialization's member),
+`template-id-concepts`, and the carriage goldens `template-id-pch`,
+`template-id-pch-include`, `template-id-module-image` and
+`template-id-module-replay`; `crates/kiln_parse/tests/written_refs.rs`
+`rename_claims_dependent_template_ids`; stage 6: the `operators-*` tests and `udl`, §18.13.9).
 
 ### 18.7 Lookup provenance (WP-2130)
 

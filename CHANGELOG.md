@@ -19,6 +19,17 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   `Ast::unresolved_found_pairs(e)`. A parallel cold list
   (`templates.unresolved_found`), only on nodes with a shadow; kept
   through instantiation, PCH snapshots and module images (`COLD_SHADOWS`).
+- Written references for every dependent template-id whose template name
+  is not dependent (WP-3405, spec/ast.md §18.5): a member variable
+  template of the current instantiation named after `this->` (`this->mw<T>`,
+  `this->template mw<T>`) in a class without a dependent base now names
+  the template, as `mw<T>` and `S::mw<T>` already did, so a rename of a
+  template claims every token of its name in a template that uses it
+  with dependent and non-dependent arguments. The rule and its
+  exceptions (function template-ids keep their found set, a dependent
+  base keeps `this->` names dependent, unknown specializations have no
+  definition-context lookup) are written down, with goldens for each
+  form and through PCH snapshots and module images (no format change).
 - Function-name spans for tooling clients (WP-3280, spec/ast.md §24):
   with `-fkiln-fn-names` (or `-fkiln-dump-fn-names`, which prints it), each
   string `__PRETTY_FUNCTION__`, `__FUNCTION__`, `__func__`,

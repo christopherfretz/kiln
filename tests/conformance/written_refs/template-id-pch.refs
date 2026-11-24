@@ -1,0 +1,29 @@
+tid_pch.h:4:26-4:27  type  'T' -> T@tid_pch.h:4:17 in=(anonymous)@tid_pch.h:4:27
+tid_pch.h:5:26-5:27  type  'T' -> T@tid_pch.h:5:17 in=t@tid_pch.h:5:28
+tid_pch.h:5:42-5:43  type  'T' -> T@tid_pch.h:5:17 in=tp::g@tid_pch.h:5:24
+tid_pch.h:5:40-5:41  expr  'v' -> tp::v@tid_pch.h:2:34 in=tp::g@tid_pch.h:5:24
+tid_pch.h:5:51-5:52  type  'T' -> T@tid_pch.h:5:17 in=tp::g@tid_pch.h:5:24
+tid_pch.h:5:49-5:50  template  'K' -> tp::K@tid_pch.h:3:27 in=tp::g@tid_pch.h:5:24
+tid_pch.h:5:47-5:48  expr  'v' -> tp::v@tid_pch.h:2:34 in=tp::g@tid_pch.h:5:24
+tid_pch.h:5:45-5:46  operator  '+' -> (dependent) in=tp::g@tid_pch.h:5:24 def=0+adl
+tid_pch.h:5:45-5:46  operator  '+' -> (builtin) spec=tp::g<int>@tid_pch.h:5:24 how=builtin
+tid_pch.h:5:59-5:60  type  'T' -> T@tid_pch.h:5:17 in=tp::g@tid_pch.h:5:24
+tid_pch.h:5:57-5:58  expr  'f' -> (dependent) in=tp::g@tid_pch.h:5:24 def=1+adl
+tid_pch.h:5:57-5:58  expr  'f' def=tp::f@tid_pch.h:4:24
+tid_pch.h:5:57-5:58  expr  'f' -> tp::f<int>@tid_pch.h:4:24 found=tp::f@tid_pch.h:4:24 spec=tp::g<int>@tid_pch.h:5:24 adl-ns=
+tid_pch.h:5:62-5:63  expr  't' -> t@tid_pch.h:5:28 in=tp::g@tid_pch.h:5:24
+tid_pch.h:5:55-5:56  operator  '+' -> (dependent) in=tp::g@tid_pch.h:5:24 def=0+adl
+tid_pch.h:5:55-5:56  operator  '+' -> (builtin) spec=tp::g<int>@tid_pch.h:5:24 how=builtin
+tid_pch.h:8:38-8:39  type  'T' -> T@tid_pch.h:6:17 in=tp::S::a@tid_pch.h:8:7
+tid_pch.h:8:35-8:37  template  'mw' -> tp::S::mw@tid_pch.h:7:43 in=tp::S::a@tid_pch.h:8:7
+tid_pch.h:8:45-8:46  type  'T' -> T@tid_pch.h:6:17 in=tp::S::a@tid_pch.h:8:7
+tid_pch.h:8:43-8:44  expr  'v' -> tp::v@tid_pch.h:2:34 in=tp::S::a@tid_pch.h:8:7
+tid_pch.h:8:41-8:42  operator  '+' -> (dependent) in=tp::S::a@tid_pch.h:8:7 def=0+adl
+tid_pch.h:8:41-8:42  operator  '+' -> (builtin) spec=tp::S<int>::a@tid_pch.h:8:7 how=builtin
+11:20-11:22  nns  'tp' -> tp@tid_pch.h:1:11 in=run@11:5
+11:24-11:25  expr  'g' -> tp::g<int>@tid_pch.h:5:24 found=tp::g@tid_pch.h:5:24 q=11:20 in=run@11:5
+11:31-11:33  nns  'tp' -> tp@tid_pch.h:1:11 in=run@11:5
+11:35-11:36  template  'S' -> tp::S@tid_pch.h:6:27 q=11:31 in=run@11:5
+11:44-11:45  member  'a' -> tp::S<int>::a@tid_pch.h:8:7 in=run@11:5
+11:50-11:52  nns  'tp' -> tp@tid_pch.h:1:11 in=run@11:5
+11:54-11:55  expr  'v' -> tp::v@tid_pch.h:2:34 found=tp::v@tid_pch.h:2:34 q=11:50 in=run@11:5

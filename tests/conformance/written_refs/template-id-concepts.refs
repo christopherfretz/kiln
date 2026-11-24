@@ -1,0 +1,37 @@
+12:39-12:40  type  'T' -> T@12:17 in=n::C@12:28
+13:54-13:55  type  'T' -> T@13:17 in=n::Same@13:37
+13:57-13:58  type  'U' -> U@13:26 in=n::Same@13:37
+14:38-14:39  expr  'B' -> B@14:16 in=n::b@14:34
+18:12-18:13  nns  'n' -> n@11:11 in=clause@19:5
+18:17-18:18  type  'T' -> T@17:17 in=clause@19:5
+18:15-18:16  concept  'C' -> n::C@12:28 q=18:12 in=clause@19:5
+20:11-20:12  nns  'n' -> n@11:11 in=constraint@20:23
+20:14-20:15  concept  'C' -> n::C@12:28 q=20:11 in=constraint@20:23
+21:36-21:37  type  'T' -> T@21:17 in=t@21:38
+22:3-22:4  nns  'n' -> n@11:11 in=y@22:13
+22:6-22:7  concept  'C' -> n::C@12:28 q=22:3 in=y@22:13
+22:17-22:18  expr  't' -> t@21:38 in=y@22:13
+23:10-23:11  expr  'y' -> y@22:13 in=placeholder@21:24
+25:53-25:54  type  'T' -> T@25:17 in=nested@25:35
+26:12-26:13  nns  'n' -> n@11:11 in=nested@25:35
+26:17-26:18  type  'T' -> T@25:17 in=nested@25:35
+26:15-26:16  concept  'C' -> n::C@12:28 q=26:12 in=nested@25:35
+27:5-27:6  expr  't' -> t@25:55 in=nested@25:35
+27:12-27:13  nns  'n' -> n@11:11 in=nested@25:35
+27:20-27:21  type  'T' -> T@25:17 in=nested@25:35
+27:15-27:19  concept  'Same' -> n::Same@13:37 q=27:12 in=nested@25:35
+29:42-29:43  nns  'n' -> n@11:11 in=expr@29:35
+29:47-29:48  type  'T' -> T@29:17 in=expr@29:35
+29:45-29:46  concept  'C' -> n::C@12:28 q=29:42 in=expr@29:35
+29:53-29:54  nns  'n' -> n@11:11 in=expr@29:35
+29:58-29:59  nns  'n' -> n@11:11 in=expr@29:35
+29:63-29:64  type  'T' -> T@29:17 in=expr@29:35
+29:61-29:62  concept  'C' -> n::C@12:28 q=29:58 in=expr@29:35
+29:56-29:57  expr  'b' -> n::b@14:34 q=29:53 in=expr@29:35
+29:50-29:52  operator  '&&' -> (dependent) in=expr@29:35 def=0+adl
+29:50-29:52  operator  '&&' -> (builtin) spec=expr<int>@29:35 how=builtin
+30:9-30:15  expr  'clause' -> clause<int>@19:5 found=clause@19:5 in=z@30:5 adl-ns=
+30:25-30:35  expr  'constraint' -> constraint<int>@20:23 found=constraint@20:23 in=z@30:5 adl-ns=
+30:45-30:56  expr  'placeholder' -> placeholder<int>@21:24 found=placeholder@21:24 in=z@30:5 adl-ns=
+30:62-30:68  expr  'nested' -> nested@25:35 found=nested@25:35 in=z@30:5
+30:76-30:80  expr  'expr' -> expr@29:35 found=expr@29:35 in=z@30:5

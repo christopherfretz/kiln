@@ -1173,3 +1173,86 @@ fn alloc_entries_through_the_api() {
         assert_eq!(row.how, RefLookup::Qualified);
     });
 }
+
+const TEMPLATE_IDS: &str = "namespace n {\n\
+                            template <class T> constexpr int v = 0;\n\
+                            template <int N> struct I {};\n\
+                            template <class T> int one(T) { return 0; }\n\
+                            }\n\
+                            template <class T> struct S {\n\
+                            \x20 template <class U> static constexpr int mw = 1;\n\
+                            \x20 int a() { return this->mw<T> + this->template mw<T> + mw<int>; }\n\
+                            };\n\
+                            template <class T> int g(T t) {\n\
+                            \x20 n::I<n::v<T>> i;\n\
+                            \x20 return n::v<T> + n::v<int> + n::v<n::I<n::v<T>>> + n::one<T>(t);\n\
+                            }\n\
+                            int h() { return n::v<long> + g(1) + S<int>().a(); }\n";
+
+/// Every column of `needle` in line `line` of `src`, 1-based, plus
+/// `skip` (the offset of the name within the needle).
+fn cols_in(src: &str, line: u32, needle: &str, skip: usize) -> Vec<(u32, u32)> {
+    let text = src.lines().nth(line as usize - 1).expect("the line");
+    text.match_indices(needle)
+        .map(|(i, _)| (line, u32::try_from(i + skip + 1).expect("a short line")))
+        .collect()
+}
+
+/// A rename of a template claims every written token of its name
+/// (spec/ast.md §18.5, [temp.names]/2, [temp.res.general]/1; WP-3405):
+/// `n::v` written with dependent arguments (`n::v<T>`, nested in another
+/// template-id's arguments and in a declaration) names the variable
+/// template, as the non-dependent `n::v<int>` names its specialization
+/// found as the template; a member variable template of the current
+/// instantiation after `this->`, with or without `template`, names it
+/// too. A function template-id with dependent arguments is an overload
+/// set: the rename claims it through its found set (§18.12.1).
+#[test]
+fn rename_claims_dependent_template_ids() {
+    use kiln_ast::written_refs::REF_DEPENDENT;
+    with_ast(TEMPLATE_IDS, |ast, sm| {
+        let t = &ast.written_refs;
+        let pos = |d: kiln_ast::DeclId| line_col(sm, ast.decls.get(d).loc());
+        let claims = |d: kiln_ast::DeclId| {
+            let mut at: Vec<(u32, u32)> = t
+                .iter()
+                .filter(|(_, r)| r.entity == Some(d) || r.found == Some(d))
+                .map(|(_, r)| line_col(sm, r.range.lo))
+                .chain(t.entries_finding(d).map(|id| line_col(sm, t.get(id).range.lo)))
+                .collect();
+            at.sort_unstable();
+            at
+        };
+        // `n::v`, from its non-dependent use in `h`.
+        let r = t.get(entry_at(t, sm, pos_in(TEMPLATE_IDS, 14, "v<")));
+        let v = r.found.expect("found as the template");
+        assert_ne!(r.entity, Some(v), "the specialization");
+        assert_eq!(pos(v), pos_in(TEMPLATE_IDS, 2, "v ="));
+        let mut want = cols_in(TEMPLATE_IDS, 11, "n::v<", 3);
+        want.extend(cols_in(TEMPLATE_IDS, 12, "n::v<", 3));
+        want.extend(cols_in(TEMPLATE_IDS, 14, "n::v<", 3));
+        want.sort_unstable();
+        assert_eq!(want.len(), 6);
+        assert_eq!(claims(v), want);
+        for &at in &want[..5] {
+            let r = t.get(entry_at(t, sm, at));
+            assert_eq!(r.flags & REF_DEPENDENT, 0, "{at:?} is resolved at the definition");
+        }
+        // `S::mw`, from `mw<int>`: in the class pattern a member of the
+        // current instantiation names the member template itself.
+        let r = t.get(entry_at(t, sm, pos_in(TEMPLATE_IDS, 8, "mw<int")));
+        let mw = r.entity.expect("the member template");
+        assert_eq!(ast.decls.get(mw).kind(), kiln_ast::decl::DeclKind::VarTemplate);
+        let want = cols_in(TEMPLATE_IDS, 8, "mw<", 0);
+        assert_eq!(want.len(), 3);
+        assert_eq!(claims(mw), want);
+        // `n::one<T>(t)`: dependent, claimed through its found set.
+        let call = entry_at(t, sm, pos_in(TEMPLATE_IDS, 12, "one<"));
+        assert_ne!(t.get(call).flags & REF_DEPENDENT, 0);
+        let set = t.found_at_definition(call).expect("a found set");
+        let [one] = set.decls else { panic!("one template") };
+        assert!(set.is_closed());
+        assert_eq!(pos(one.decl), pos_in(TEMPLATE_IDS, 4, "one("));
+        assert_eq!(claims(one.decl), [pos_in(TEMPLATE_IDS, 12, "one<")]);
+    });
+}
