@@ -3769,6 +3769,29 @@ depth: a search cut by the depth or count limit below a class records the
 depth it was reached at, and a later visit at that depth or deeper skips it
 (one reached higher is searched again), so a lattice deeper than the depth
 limit is not searched once per path either (WP-414). Results and diagnostics are unchanged.
+A class whose search finds the name is not searched once per path either
+(WP-3404): `class_leaves` searches a virtual base through its first path
+only (spec/sema.md §3, "Class member lookup cost"), so the lookup of
+`f` in `struct Lka : virtual Lpa, virtual Lpb` with `f` declared in L0a
+(the name of a using-declarator, `using LNa::f;`) costs 2N+1 class
+searches, not 2^N; the paths it drops designate the subobject already
+found, and an ambiguity lists one path per subobject, as clang does. The
+access check folds each class once (`class/access.rs`): the best path
+([class.paths]/1, clang `FindBestPath`) keeps, per class, each state of
+the fold some path from it reaches (access so far, instance context
+dropped, ended by a private step; at most 8) with the first such path in
+base-specifier order, so it picks the path the per-path search picked;
+the unprivileged access is a max-of-min over the base graph; the
+[class.protected] friend candidates are the bases derived from the naming
+class, each once; `__builtin_is_virtual_base_of` is `has_virtual_base`.
+None of them gives up after 64 paths, as `base_paths` does: a lattice
+whose only public path comes after the first 64 is accessible (kiln
+rejected it from depth 7 on). clang's `FindBestPath` visits a virtual
+base through its first path only and rejects such a lattice at every depth
+(docs/status/deviations.md). Validation: `tests/stress/using-virtual-lattice-deep.cpp`
+(depth 128), `tests/conformance/class.member.lookup/using-virtual-lattice-depth20.cpp`,
+`tests/conformance/class.paths/`, `crates/kiln_sema/tests/member_lookup_lattice.rs`
+(visit counts), `bench/frontend/using-virtual-lattice.cpp`.
 `ClassVirtuals` is cached per class (`ensure_virtuals`) and computed from
 the class's own subobject graph. Validation:
 `tests/stress/virtual-lattice-deep.cpp` (depth 32),

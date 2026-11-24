@@ -68,7 +68,7 @@ pub(crate) fn same_class(s: &Sema<'_, '_>, a: DeclId, b: DeclId) -> bool {
     a == b || s.ast.first(a) == s.ast.first(b)
 }
 
-const MAX_DEPTH: usize = 1024;
+pub(crate) const MAX_DEPTH: usize = 1024;
 
 /// Every path from `cur` to `base`, appended to `out`. `barren` holds the
 /// classes with no path to `base` (each is walked once, not once per path
@@ -173,6 +173,65 @@ pub(crate) fn base_paths(s: &Sema<'_, '_>, derived: DeclId, base: DeclId) -> Vec
         first_virtual: None,
     };
     walk(s, derived, base, &mut path, &mut out, &mut (FxHashSet::default(), false));
+    out
+}
+
+/// The base-specifiers of class `c` as `(spec id, base-specifier)`, in
+/// declaration order; `None` for a class not (being) defined, which has
+/// no bases yet.
+pub(crate) fn class_bases(
+    s: &Sema<'_, '_>,
+    c: DeclId,
+) -> Option<Vec<(u32, kiln_ast::decl::BaseSpec)>> {
+    let def = defined_class(s, c)?;
+    let rec = s.ast.decls.record(def)?;
+    let idx = s.ast.lists.get(rec.bases);
+    Some(idx.iter().copied().zip(s.ast.decls.bases(def, &s.ast.lists).copied()).collect())
+}
+
+/// The path from `derived` that takes, at each class, the base-specifier
+/// at the given position of its base-clause (positions as
+/// [`class_bases`] lists them).
+pub(crate) fn path_at(s: &Sema<'_, '_>, derived: DeclId, positions: &[usize]) -> BasePath {
+    let mut path = BasePath {
+        specs: Vec::with_capacity(positions.len()),
+        classes: Vec::with_capacity(positions.len()),
+        written: Vec::with_capacity(positions.len()),
+        last_virtual: None,
+        first_virtual: None,
+    };
+    let mut cur = derived;
+    for &k in positions {
+        let Some((i, spec)) = class_bases(s, cur).and_then(|b| b.get(k).copied()) else { break };
+        let Some(c) = s.ast.types.as_record(spec.ty) else { break };
+        path.specs.push(i);
+        path.classes.push(c);
+        path.written.push(spec.ty);
+        if spec.is_virtual {
+            path.last_virtual = Some(c);
+            path.first_virtual = path.first_virtual.or(Some(c));
+        }
+        cur = c;
+    }
+    path
+}
+
+/// Every (direct or indirect) base class of `derived`, each once (by
+/// first declaration), in the order a depth-first walk meets them.
+pub(crate) fn all_bases(s: &Sema<'_, '_>, derived: DeclId) -> Vec<DeclId> {
+    let mut seen: FxHashSet<DeclId> = FxHashSet::default();
+    let mut out = Vec::new();
+    let mut work = vec![derived];
+    while let Some(c) = work.pop() {
+        let Some(bases) = class_bases(s, c) else { continue };
+        for (_, spec) in bases.into_iter().rev() {
+            let Some(b) = s.ast.types.as_record(spec.ty) else { continue };
+            if seen.insert(s.ast.first(b)) {
+                out.push(b);
+                work.push(b);
+            }
+        }
+    }
     out
 }
 

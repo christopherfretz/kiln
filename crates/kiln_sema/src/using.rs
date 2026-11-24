@@ -485,6 +485,12 @@ impl Sema<'_, '_> {
         }
         self.declare_implicit_named(q.ctx, name);
         let found = self.lookup_qualified_dn(q.ctx, name, LookupKind::All);
+        // [class.member.lookup]/7: an ambiguous lookup set is ill-formed,
+        // for a using-declarator's name too (clang
+        // `LookupQualifiedName`, then `DiagnoseAmbiguousLookup`).
+        if self.diagnose_member_ambiguity(&found, name, name_loc) {
+            return None;
+        }
         if found.is_empty() {
             let msg = self
                 .diag(DiagId::sema_no_member, name_loc)

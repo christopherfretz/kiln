@@ -18,7 +18,6 @@ use kiln_source::Loc;
 
 use crate::Sema;
 use crate::class::{Selected, SpecialKind};
-use crate::conv::bases;
 use crate::templ::stack::FrameKind;
 
 /// The recursion bound of the subobject walk.
@@ -95,9 +94,9 @@ impl Sema<'_, '_> {
             self.trait_incomplete(DiagId::sema_incomplete_type_required, rhs_loc, b);
             return false;
         }
-        bases::base_paths(self, derived, base)
-            .iter()
-            .any(|p| p.last_virtual.is_some_and(|v| bases::same_class(self, v, base)))
+        // Some path's last base-specifier is `virtual`: walked once per
+        // class, not once per path (WP-3404).
+        self.has_virtual_base(derived, base)
     }
 
     /// `__builtin_is_implicit_lifetime(T)` ([basic.types.general]/9,

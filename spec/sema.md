@@ -705,6 +705,21 @@ translation unit that fails costs about what it costs clang:
   `module_adl_visible`, `module_redecl_candidate` in
   `kiln_sema::modules`); a TU without module or import directives skips
   it entirely.
+- **Class member lookup cost** ([class.member.lookup]/5, [class.mi]/4;
+  WP-3404). The search of a class (`lookup.rs` `class_leaves`) computes
+  the lookup set of a virtual base once: a virtual base reached again
+  through another `virtual` base-specifier is one subobject, so it is not
+  searched again, and a class whose search found nothing is not searched
+  again at all (WP-400). A lookup therefore searches at most one class per
+  class of the hierarchy plus one per non-virtual base subobject on the
+  way to the classes the name is found in
+  (`Sema::class_member_search_visits` counts them): linear in the classes
+  of a virtual lattice whose 2^N paths all reach the declaring class, as
+  for the name of a using-declarator (`using LNa::f;`). Non-virtual
+  repeated bases stay one subobject per path, so their ambiguities are
+  unchanged; an ambiguity lists one path per subobject, the first in
+  base-specifier order, as clang does. The access check's path searches
+  are linear too (spec/sema-class.md §10, "Virtual lattices").
 - **Unqualified lookup** ([basic.lookup.unqual]) walks the stack
   innermost first:
   - A local scope searches its `locals`.

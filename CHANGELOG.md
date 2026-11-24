@@ -1336,6 +1336,23 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   any depth, not only down to 256 levels (WP-3292, spec/ast.md). The PCH
   snapshot format is version 179 (a new transient field of sema).
 
+- Class member lookup through a lattice of virtual bases is linear in the
+  classes, not exponential in the depth (WP-3404, spec/sema.md §3 "Class
+  member lookup cost"): a virtual base is searched once, however many paths
+  reach it. A using-declaration naming a member of the root of an N-deep
+  virtual lattice (`using LNa::f;`) took 26 s at depth 10 and over 8
+  minutes at depth 12 in a debug build; it is now about 0.1 s at depth 20.
+  The access check's best-path search ([class.paths]/1) folds each class
+  once too, and no longer gives up after 64 paths, so a member reachable
+  through a public path that comes after the first 64 is accessible (kiln
+  rejected it from depth 7 on; clang rejects it at every depth,
+  docs/status/deviations.md). An ambiguous member lists one path per
+  subobject, as clang does (kiln repeated paths through a shared virtual
+  base).
+- A class-scope using-declaration whose name's lookup is ambiguous (a
+  member of two subobjects of the same type, or members of different
+  bases) is diagnosed ([class.member.lookup]/7, [namespace.udecl]/1); kiln
+  introduced the first declaration found.
 - A class or variable template specialization whose partial-specialization
   choice is ambiguous is diagnosed at its first use outside a substitution
   also when a SFINAE context or a probe whose diagnostics are dropped (the

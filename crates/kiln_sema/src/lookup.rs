@@ -116,6 +116,26 @@ pub enum MemberAmbiguity {
 /// bases on that path.
 type Leaf = (Found, BasePath, Vec<DeclId>);
 
+/// The state of one class member search ([`Sema::class_leaves`]).
+#[derive(Default)]
+struct LeafWalk {
+    /// The classes whose search found nothing, with the depth a depth
+    /// limit cut their search at (0: not cut, never searched again).
+    barren: FxHashMap<DeclId, usize>,
+    /// The classes searched as a virtual base, with the depth a depth
+    /// limit cut their search at (0: not cut). A virtual base is one
+    /// subobject however many paths reach it ([class.mi]/4), so its
+    /// lookup set is computed once and merged once
+    /// ([class.member.lookup]/5): a class reached again through another
+    /// `virtual` base-specifier is not searched again (WP-3404).
+    virtuals: FxHashMap<DeclId, usize>,
+    /// The depth limit cut the search below the class being searched.
+    cut: bool,
+    /// Classes searched (their own members looked up), for the
+    /// complexity bound's test ([`Sema::class_member_search_visits`]).
+    visits: usize,
+}
+
 /// One result of the recursive class member search: the declarations
 /// found in some class, and the paths from the searched class to it.
 struct ClassHit {
@@ -1028,7 +1048,7 @@ impl Sema<'_, '_> {
         kind: LookupKind,
         skip_dependent_bases: bool,
     ) -> Option<ClassHit> {
-        let mut st = (FxHashMap::default(), false);
+        let mut st = LeafWalk::default();
         let mut leaves = self.class_leaves(def, name, kind, 0, skip_dependent_bases, &mut st);
         self.remove_dominated(&mut leaves);
         let mut it = leaves.into_iter();
@@ -1069,13 +1089,21 @@ impl Sema<'_, '_> {
 
     /// Every declaration set the search of `def` finds, with the path
     /// from `def` to the class it is found in (in base-specifier order).
-    /// `barren` holds the classes whose search found nothing: a class
+    /// `st.barren` holds the classes whose search found nothing: a class
     /// reached again through another path (a virtual lattice) is not
     /// searched again, so a name declared nowhere costs one walk per class,
     /// not one per path (WP-400). A class whose search the depth limit
     /// cut is recorded with the depth it was searched at, and searched
     /// again only from a shallower one (WP-414: without that, a lattice
     /// deeper than the limit was searched once per path again).
+    /// `st.virtuals` does the same for the classes a name IS found in or
+    /// below: a virtual base is searched through its first path only, as
+    /// clang's `lookupInBases` visits each virtual base once (WP-3404:
+    /// without that, a lattice of virtual bases whose root declares the
+    /// name was searched once per path, 2^N times). The paths it drops
+    /// designate the same subobject as the one kept, so the subobjects,
+    /// the dominance and the ambiguity are unchanged, and an ambiguity
+    /// lists one path per subobject, as clang does.
     fn class_leaves(
         &self,
         def: DeclId,
@@ -1083,15 +1111,16 @@ impl Sema<'_, '_> {
         kind: LookupKind,
         depth: usize,
         skip_dependent_bases: bool,
-        barren: &mut (FxHashMap<DeclId, usize>, bool),
+        st: &mut LeafWalk,
     ) -> Vec<Leaf> {
         if depth > 256 {
-            barren.1 = true;
+            st.cut = true;
             return Vec::new();
         }
-        if barren.0.get(&def).is_some_and(|&d| d <= depth) {
+        if st.barren.get(&def).is_some_and(|&d| d <= depth) {
             return Vec::new();
         }
+        st.visits += 1;
         let mut own = self.filter(self.ast.lookup_local(def, name).iter_ordinary(), kind);
         if own.is_empty()
             && self.ast.decls.get(def).name() == name
@@ -1119,7 +1148,7 @@ impl Sema<'_, '_> {
         let idx: Vec<u32> = self.ast.lists.get(rec.bases).to_vec();
         let specs: Vec<kiln_ast::decl::BaseSpec> =
             self.ast.decls.bases(def, &self.ast.lists).copied().collect();
-        let cut_above = std::mem::replace(&mut barren.1, false);
+        let cut_above = std::mem::replace(&mut st.cut, false);
         let mut out = Vec::new();
         for (&i, spec) in idx.iter().zip(specs) {
             let Some(b) = self.ast.types.as_record(spec.ty) else { continue };
@@ -1127,9 +1156,18 @@ impl Sema<'_, '_> {
                 continue;
             }
             let Some(bdef) = self.ast.definition(b) else { continue };
-            for (f, mut p, mut vs) in
-                self.class_leaves(bdef, name, kind, depth + 1, skip_dependent_bases, barren)
-            {
+            if spec.is_virtual && st.virtuals.get(&bdef).is_some_and(|&d| d <= depth + 1) {
+                // This virtual base subobject was searched already.
+                continue;
+            }
+            let cut_before = std::mem::replace(&mut st.cut, false);
+            let leaves = self.class_leaves(bdef, name, kind, depth + 1, skip_dependent_bases, st);
+            if spec.is_virtual {
+                // Searched for good unless the limit cut it.
+                st.virtuals.insert(bdef, if st.cut { depth + 1 } else { 0 });
+            }
+            st.cut |= cut_before;
+            for (f, mut p, mut vs) in leaves {
                 p.specs.insert(0, i);
                 p.classes.insert(0, b);
                 p.written.insert(0, spec.ty);
@@ -1140,17 +1178,29 @@ impl Sema<'_, '_> {
                 }
                 out.push((f, p, vs));
                 if out.len() > 4096 {
-                    barren.1 |= cut_above;
+                    st.cut |= cut_above;
                     return out;
                 }
             }
         }
         if out.is_empty() {
             // Barren at any depth unless the limit cut it.
-            barren.0.insert(def, if barren.1 { depth } else { 0 });
+            st.barren.insert(def, if st.cut { depth } else { 0 });
         }
-        barren.1 |= cut_above;
+        st.cut |= cut_above;
         out
+    }
+
+    /// The number of classes the class member search of `name` in `c`
+    /// ([`Sema::lookup_in_class`]) searches: at most one per class and
+    /// virtual base subobject of `c`, plus one per non-virtual base
+    /// subobject on the way to the classes the name is found in
+    /// (spec/sema.md, "Class member lookup cost"; WP-3404).
+    pub fn class_member_search_visits(&self, c: DeclId, name: DeclName, kind: LookupKind) -> usize {
+        let def = self.ast.definition(c).unwrap_or(c);
+        let mut st = LeafWalk::default();
+        let _ = self.class_leaves(def, name, kind, 0, false, &mut st);
+        st.visits
     }
 
     /// [class.member.lookup]/6 dominance (clang `lookupInBases`): a
@@ -1172,7 +1222,7 @@ impl Sema<'_, '_> {
     /// True if `class` has `v` as a (direct or indirect) virtual base
     /// (clang `isVirtuallyDerivedFrom`).
     /// Each class is walked once (WP-400).
-    fn has_virtual_base(&self, class: DeclId, v: DeclId) -> bool {
+    pub(crate) fn has_virtual_base(&self, class: DeclId, v: DeclId) -> bool {
         let v = self.ast.first(v);
         let mut work = vec![class];
         let mut walked: FxHashSet<DeclId> = FxHashSet::default();
