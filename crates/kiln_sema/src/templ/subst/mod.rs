@@ -212,6 +212,13 @@ pub struct Substituter<'s, 'a, 'sm> {
     /// WP-1154), with its template arguments when it is a template-id;
     /// `typeof` operands and pack indexes are rebuilt too (WP-1169).
     pub(crate) ci_rebuild: Option<DeclId>,
+    /// `(pattern, from)`: the parameters of pattern function `pattern`
+    /// are substituted with the attributes of the corresponding
+    /// parameters of its redeclaration `from`: a function template
+    /// specialization's are those of the template's latest declaration
+    /// (spec/sema.md §4.5 "Parameter attributes" rule 5, WP-3407). Read
+    /// by [`Substituter::param_infos`] for `pattern` only.
+    pub(crate) param_attrs_from: Option<(DeclId, DeclId)>,
 }
 
 impl std::fmt::Debug for Substituter<'_, '_, '_> {
@@ -266,6 +273,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             outer_used: std::cell::Cell::new(false),
             local_late: None,
             ci_rebuild: None,
+            param_attrs_from: None,
         }
     }
 

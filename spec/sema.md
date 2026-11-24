@@ -4009,6 +4009,40 @@ instantiation unless stated.
      again against the substituted type (clang 22 re-checks
      `align_value`'s subject and `-Wnonnull`s a null argument of an
      instantiated `nonnull` parameter of non-pointer type; not done).
+     *Which declaration's parameters* (WP-3407): a function template
+     specialization's signature is substituted from the template's
+     first declaration, but its parameters take their attributes, names
+     and locations from the corresponding parameters of the template's
+     latest declaration when the specialization is declared
+     (`Sema::param_attrs_source`, `Substituter::param_attrs_from`; clang
+     substitutes the most recent `FunctionTemplateDecl` lookup finds,
+     `FinishTemplateArgumentDeduction` → `SubstDecl`). Those carry their
+     own attributes and the ones rule 2 gave them, so an attribute
+     written only on the definition, or only on a later non-defining
+     declaration, is instantiated; one written on both is one attribute;
+     a non-inherited attribute (`align_value`, `maybe_undef`,
+     `maybe_unused`, `noescape`) of an earlier declaration only is not.
+     The latest declaration is the latest valid one with as many
+     parameters that is not a friend declaration (ordinary lookup does
+     not find a friend). Each checked against clang 19 and 22:
+     - A declaration after the point where the specialization is
+       declared (its implicit instantiation's first use, or an explicit
+       instantiation) does not change it, a definition included: the
+       instantiated definition keeps the specialization's parameters.
+     - A member function of a class template, and a member function
+       template of one, are instantiated from their declaration in the
+       class: an out-of-class definition's parameter attributes do not
+       reach the instantiation (clang instantiates the class's member
+       declarations). A member function template of a class that is not
+       a template, and a namespace member defined with a qualified name,
+       take the definition's.
+     - An explicit specialization has its own parameters and their
+       attributes only.
+     - `pass_object_size` on the definition only declares another
+       template (an overload, rule 2), which overload resolution prefers.
+     Function-level attributes do not have the problem: a
+     specialization's are those of the declarations so far, merged
+     (tests `dcl.attr.param/template-redecl-*`).
   6. *Storage.* `aligned(N)` on a parameter aligns the callee's own
      storage of it (clang `EmitParmDecl`/`EmitFunctionProlog`,
      `getDeclAlign`): a scalar's spill slot, and the memory a class

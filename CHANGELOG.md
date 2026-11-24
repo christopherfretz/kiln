@@ -1327,6 +1327,19 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- A function template specialization's parameter attributes come from
+  the template's latest declaration where the specialization is
+  declared, not from its first ([temp.inst]/3, [dcl.attr.grammar]/5,
+  WP-3407): `nonnull` written only on the definition
+  (`template<class T> void f(T *p); template<class T> void f(T *p
+  __attribute__((nonnull))) {}`) or only on a later declaration now
+  reaches `f<int>` (its AST and its argument's `nonnull` in IR), as do the
+  definition's `align_value`, `annotate`, `maybe_undef` and the
+  parameters' names; a first declaration's non-inherited `align_value` or
+  `maybe_undef` no longer does. Class template members, explicit
+  specializations and declarations after the point of instantiation are
+  unchanged, as in clang 19 and 22.
+
 - A member access's qualifier on a type-dependent object
   (`t.acme::B::f()` in a template) looks its first component up in the
   object's class at instantiation before using what the definition found

@@ -1,0 +1,81 @@
+TranslationUnitDecl
+|-FunctionTemplateDecl f
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-FunctionDecl f 'void (T *)'
+| | `-ParmVarDecl p 'T *'
+| `-Function 'f'
+|-FunctionTemplateDecl f
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-FunctionDecl f 'void (T *)'
+| | |-ParmVarDecl p 'T *'
+| | | `-NonNullAttr
+| | `-CompoundStmt
+| `-Function 'f'
+|-FunctionDecl f 'void (int *)'
+| |-ParmVarDecl p 'int *'
+| | `-NonNullAttr
+| `-CompoundStmt
+|-FunctionTemplateDecl g
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-FunctionDecl g 'void (T *)'
+| | |-ParmVarDecl p 'T *'
+| | `-CompoundStmt
+| `-Function 'g'
+|-FunctionTemplateDecl g
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-FunctionDecl g 'void (T *)'
+| | `-ParmVarDecl p 'T *'
+| |   `-NonNullAttr
+| `-Function 'g'
+|-FunctionDecl g 'void (int *)'
+| |-ParmVarDecl p 'int *'
+| | `-NonNullAttr
+| `-CompoundStmt
+|-FunctionTemplateDecl h
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-FunctionDecl h 'void (T *)'
+| | `-ParmVarDecl p 'T *'
+| |   `-NonNullAttr
+| `-Function 'h'
+|-FunctionTemplateDecl h
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-FunctionDecl h 'void (T *)'
+| | |-ParmVarDecl p 'T *'
+| | | `-NonNullAttr
+| | `-CompoundStmt
+| `-Function 'h'
+|-FunctionDecl h 'void (int *)'
+| |-ParmVarDecl p 'int *'
+| | `-NonNullAttr
+| `-CompoundStmt
+|-FunctionTemplateDecl k
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-FunctionDecl k 'void (T *, T *, T *, T *)'
+| | |-ParmVarDecl a 'T *'
+| | | `-CarriesDependencyAttr
+| | |-ParmVarDecl b 'T *'
+| | | `-NonNullAttr
+| | |-ParmVarDecl c 'T *'
+| | | `-UnusedAttr
+| | `-ParmVarDecl d 'T *'
+| |   `-AlignValueAttr
+| `-Function 'k'
+|-FunctionTemplateDecl k
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-FunctionDecl k 'void (T *, T *, T *, T *)'
+| | |-ParmVarDecl w 'T *'
+| | | `-CarriesDependencyAttr Inherited
+| | |-ParmVarDecl x 'T *'
+| | | `-NonNullAttr Inherited
+| | |-ParmVarDecl y 'T *'
+| | |-ParmVarDecl z 'T *'
+| | `-CompoundStmt
+| `-Function 'k'
+`-FunctionDecl k 'void (int *, int *, int *, int *)'
+  |-ParmVarDecl w 'int *'
+  | `-CarriesDependencyAttr Inherited
+  |-ParmVarDecl x 'int *'
+  | `-NonNullAttr Inherited
+  |-ParmVarDecl y 'int *'
+  |-ParmVarDecl z 'int *'
+  `-CompoundStmt

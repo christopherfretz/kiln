@@ -133,12 +133,16 @@ impl Sema<'_, '_> {
         let wkey = self
             .records_written_refs()
             .then(|| self.ast.written_refs.set_spec_key(Some((depth, spec))));
+        // Its parameters' attributes: the template's latest declaration's
+        // (spec/sema.md §4.5 "Parameter attributes" rule 5).
+        let attrs_from = self.param_attrs_source(tmpl, pattern);
         let r = self.in_inst_context(ctx, |s| {
             s.access_ctx = Some(access);
             let saved = if guide { s.requires_access_replay.replace(false) } else { None };
             let mut sub = Substituter::new(s, &margs);
             sub.entity = Some(spec);
             sub.map_contexts(&pairs);
+            sub.param_attrs_from = attrs_from.map(|d| (pattern, d));
             let r = sub.function_spec_signature(pattern, spec);
             if guide {
                 s.requires_access_replay = saved;
