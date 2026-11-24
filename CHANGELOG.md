@@ -1355,6 +1355,13 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   `RunError::Uncaught`'s `ty` keeps `display_string_of`'s spelling, now
   specified for every shape (spec/eval-session.md §8).
 
+- A module interface with a generic lambda in a template (a function
+  template's body or default argument, a class template's member, a
+  variable template's initializer, nested ones) keeps its declaration
+  image under `-fkiln-bmi-image`: the image's own read-back check
+  rejected the call operator template's depth and the conversion
+  function template, so every importer replayed the interface (WP-3410).
+
 - A member access's qualifier on a type-dependent object
   (`t.acme::B::f()` in a template) looks its first component up in the
   object's class at instantiation before using what the definition found

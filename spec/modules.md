@@ -4930,7 +4930,21 @@ templates, at any depth, and their out-of-line definitions.
 - *Depth.* A template-head declared in a class has the depth of the
   number of class templates and partial specializations enclosing it;
   its parameter records carry that depth. The validator computes the
-  depth from the context chain and checks it.
+  depth from the context chain and checks it. A generic lambda's call
+  operator template (and the conversion function and static invoker
+  templates that share its head) also counts the function and
+  variable templates enclosing its closure (WP-3410,
+  [expr.prim.lambda.closure]/3): `template <class T> auto f(T t) {
+  return [](auto x) { return x; }(t); }` puts the call operator's head
+  at depth 1. The walk goes from the closure to its function; a closure
+  whose context is not its owner (a lambda in a variable template's
+  initializer or in a default argument, whose context is the
+  namespace) continues at its owner (the lambdas section's `owner`
+  word; a parameter word names its function). The conversion and
+  invoker templates and their patterns are declared by sema outside
+  the template scope, so in a dependent closure they are the only
+  members without the dependent-context flag; the validator accepts
+  them there (they are claimed with the call operator's head).
 - *Out-of-line definitions.* `template <class T> template <class U> T
   S<T>::mul(U)` and `template <class T> template <class V> struct
   S<T>::Out { ... }` are preceded by one parameter record per parameter
@@ -4957,7 +4971,9 @@ templates, at any depth, and their out-of-line definitions.
 
 Tests: `image-member-template-run.cpp`, `image-member-template-errors.cpp`
 and `kind2_declaration_image_member_templates` (an error inside an
-imported member template's pattern is reported as after a replay).
+imported member template's pattern is reported as after a replay);
+generic lambdas in templates: `image-generic-lambda-templ-run.cpp` and
+`kind2_declaration_image_generic_lambdas_in_templates` (WP-3410).
 
 **Polymorphic class templates and pack bases (WP-1292).** A class
 template's pattern with virtual functions, overriders, `final`, pure

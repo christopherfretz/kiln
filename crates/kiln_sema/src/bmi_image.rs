@@ -2624,6 +2624,8 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
     let mut claimed = vec![false; nd];
     // WP-1292: per pattern record, its template record.
     let pats = membertempl::template_patterns(img);
+    // WP-3410: per closure with an owner, the owner's record.
+    let cowners = lambdas::closure_owners(img, &owners);
     classtempl::validate_class_specs(img, &qref_at, &mut claimed)?;
     declocs::validate_decl_locs(img)?;
     extents::validate_extents(img)?;
@@ -2848,7 +2850,14 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
             c.flags & DEP != 0 && matches!(c.payload, Payload::Record { .. } | Payload::Enum { .. })
         });
         if dep_class {
-            if d.flags & DEP == 0 || !claimed[owner_class as usize] {
+            // A generic lambda's conversion function and static invoker
+            // templates (and their patterns), which sema declares outside
+            // the template scope, are not dependent themselves in a
+            // dependent closure (WP-1350, WP-3410).
+            let thunk = d.flags & DeclFlags::IMPLICIT.bits() != 0
+                && !lambdas::closure_def(img, i as u32)
+                && lambdas::implicit_ok(img, i as u32);
+            if (d.flags & DEP == 0 && !thunk) || !claimed[owner_class as usize] {
                 return bad("a member of an unclaimed dependent class");
             }
             // A member template's pattern and parameters are its
@@ -2872,7 +2881,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                     Some(Payload::Template { params, .. }) => params.len(),
                     _ => 0,
                 };
-                membertempl::claim_outer_heads(img, &pats, i, own, &mut claimed)?;
+                membertempl::claim_outer_heads(img, &pats, &cowners, i, own, &mut claimed)?;
             }
         } else if (local_tag || lambdas::closure_def(img, i as u32)) && d.flags & DEP != 0 {
             // A closure type or local class of a template's pattern
@@ -3318,7 +3327,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 let p = *pattern as usize;
                 // WP-1284: a concept, at namespace scope, has no pattern.
                 let concept = *kind == constraints::CONCEPT_KIND;
-                let lvl = membertempl::level(img, &pats, friend::head_ctx(d));
+                let lvl = membertempl::level(img, &pats, &cowners, friend::head_ctx(d));
                 let prev_pat = match kind_of(d.prev).map(|x| &x.payload) {
                     _ if d.prev == NONE => Some(NONE),
                     Some(Payload::Template { kind: k, pattern: pp, .. }) if k == kind => Some(*pp),
@@ -3335,7 +3344,12 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 } else {
                     *kind <= 3
                         && lvl == Some(usize::from(*depth))
-                        && (d.flags & DEP != 0) == (*depth > 0)
+                        && ((d.flags & DEP != 0) == (*depth > 0)
+                            // A generic lambda's conversion function or
+                            // invoker template in a template (WP-3410).
+                            || (d.flags & DEP == 0
+                                && d.flags & DeclFlags::IMPLICIT.bits() != 0
+                                && lambdas::implicit_ok(img, i as u32)))
                         && (scope(d.ctx) || in_class)
                         && prev_pat.is_some()
                         && (*kind == 0 || p + 1 == i)
