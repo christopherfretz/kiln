@@ -140,8 +140,10 @@ pub(crate) const MAGIC: [u8; 8] = *b"KILNSNAP";
 /// WP-3276) the lookup log's dropped search directories and module
 /// probes, in the head, whose lookup log the schema hash now covers;
 /// version 175 (WP-3279) the per-use immediate values of defaults;
-/// version 176 (WP-3281) the subst-failed marks of silent failures.
-pub(crate) const FORMAT_VERSION: u32 = 176;
+/// version 176 (WP-3281) the subst-failed marks of silent failures;
+/// version 177 (WP-3272, WP-3274) the guide-scope and undefined-qualifier
+/// diagnostics.
+pub(crate) const FORMAT_VERSION: u32 = 177;
 /// The length of the magic and the format version.
 pub(crate) const HEADER_LEN: usize = 12;
 

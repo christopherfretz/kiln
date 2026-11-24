@@ -1268,6 +1268,26 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- A deduction guide declared outside the scope of its class template is
+  rejected ([temp.deduct.guide]/3, WP-3272, spec/sema-templates.md "A
+  deduction guide's scope and access"). The template's name can be found
+  through a using-directive, a using-declaration, the namespace enclosing
+  an inline namespace or a base class. The error is clang's "deduction
+  guide must be declared in the same scope as template", with the template
+  noted. A guide for a member class template with an access other than the
+  template's is "deduction guide has different access from the
+  corresponding member template", with clang's two notes. Both used to be
+  accepted.
+- A constructor defined out of line through a nested-name-specifier naming
+  a templated class without a definition (`template<> template<class U>
+  A<int>::C<U>::C()` with `A<int>::C` only declared, `G<T>::H::H()`) is
+  clang's "incomplete type 'C' named in nested name specifier" (WP-3274,
+  spec/sema-templates.md). Any other member defined that way is "out-of-line
+  definition of 'f' from class 'G::H' without definition". Either
+  diagnostic replaces the follow-on "out-of-line definition ... does not
+  match any declaration", or "no member named" for a static data member.
+  The PCH snapshot format is version 177 (new diagnostics).
+
 - A coroutine whose promise is not constructible from the parameter copies
   ([dcl.fct.def.coroutine]/5) no longer leaves an invalid trial `__promise`
   variable beside the default-initialized one (WP-3282).

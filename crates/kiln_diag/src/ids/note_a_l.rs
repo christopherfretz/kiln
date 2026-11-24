@@ -75,6 +75,9 @@ note_declared_coroutine_here = Note (1) "function is a coroutine due to use of '
 note_declared_non_template = Note (0) "declared as a non-template here";
 note_declared_nonnull = Note (1) "declared {0:'returns_nonnull'|'nonnull'} here";
 note_deduced_conflicting = Note (4) "candidate template ignored: deduced {0:conflicting types|conflicting values|conflicting templates|packs of different lengths} for parameter '{1}' ({2} vs. {3})";
+// WP-3272: clang note_deduction_guide_access, note_deduction_guide_template_access.
+note_deduction_guide_access = Note (1) "deduction guide declared {0:public|protected|private} by intervening access specifier";
+note_deduction_guide_template_access = Note (1) "member template declared {0:public|protected|private} here";
 note_deduction_incomplete = Note (1) "candidate template ignored: couldn't infer template argument '{0}'";
 note_deduction_incomplete_pack = Note (3) "candidate template ignored: deduced too few arguments for expanded pack '{0}'; no argument for {1} expanded parameter in deduced argument pack {2}";
 note_deduction_non_deduced_mismatch = Note (2) "candidate template ignored: could not match {0} against {1}";

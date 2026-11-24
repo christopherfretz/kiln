@@ -765,6 +765,30 @@ template parameter that cannot be deduced" is reported at the template name
 with a "non-deducible template parameter" note per parameter. The guide
 becomes invalid (`tests/conformance/temp.deduct.guide/non-deducible-parameter.cpp`).
 
+**A deduction guide's scope and access** ([temp.deduct.guide]/3,
+WP-3272): a guide inhabits the scope its class template belongs to.
+`act_on_deduction_guide` compares the two redeclaration scopes
+(`check_guide_scope`: a linkage specification or export declaration is
+skipped, an inline namespace is a scope of its own, reopenings are one
+scope). A guide whose template name was found from another scope (a
+using-directive, a using-declaration, the namespace enclosing an inline
+namespace, a base class) is clang's "deduction guide must be declared in
+the same scope as template 'n::A'" at the guide's name, with "template is
+declared here" at the template. The guide is then invalid, and the
+deducibility and redeclaration checks are skipped. A guide for a member class
+template in the template's own class has the template's access
+(`check_guide_access`, also in a class template's definition). A guide with
+another access is "deduction guide has different access from the
+corresponding member template" at its first token (`explicit` when
+written). It notes "member template declared private here" at the
+template's `template` keyword and "deduction guide declared public by
+intervening access specifier" at the class's last access-specifier so
+far. clang 19 and 22 agree. A guide with an unqualified name that finds no
+template is not a guide (`template<class T> A(T) -> n::A<T>;` at global
+scope is a declaration with a missing type). Tests:
+`tests/conformance/temp.deduct.guide/guide-wrong-scope-errors.cpp`,
+`guide-wrong-access-errors.cpp`, `guide-same-scope-run.cpp`.
+
 **`template`** is needed after `::`, `.` or `->` when the qualifier or
 object is dependent and not the current instantiation, as in
 `x.template f<int>()` and `T::template X<U>`. Without it, `<` is
@@ -2507,6 +2531,29 @@ Out-of-class partial specializations of a member template (WP-150):
   spec/diag.md §7.4.1). Tests: `temp.expl.spec/undefined-member-template-spec-qualifier.cpp`,
   `temp.expl.spec/undefined-spec-member-definition.cpp`,
   `temp.res/undefined-template-qualifier{,-clang19}.cpp`.
+- A non-friend declarator-id qualified by a templated class with no
+  definition is reported before redeclaration matching
+  (`diagnose_undefined_qualifier`, called from `act_on_declarator_impl`;
+  WP-3274; [expr.prim.id.qual]/1, [class.mfct]/1). The class can be a
+  member class template of a specialization (`A<int>::C<U>::`), a member of
+  the current instantiation (`G<T>::H::`), or a primary or partial
+  specialization never defined. A class that is not templated is reported
+  earlier, by `require_complete_nns_ctx`. A constructor name requires the
+  class complete (clang `getConstructorName`): "incomplete type 'C' named
+  in nested name specifier" printing the class's own name, with no note.
+  At compat 22 it is at the start of the specifier, at 19 at its last
+  name (`Declarator::qual_last`, from the parser's `nns_last_loc`). Any
+  other declarator-id (a member function, a destructor, a static data
+  member) is clang's `err_member_def_undefined_record` "out-of-line
+  definition of 'f' from class 'G::H' without definition" at its name.
+  Either way the declaration is dropped, so no "does not match" or "no
+  member named" follows. A complete member template whose member does not
+  match keeps the mismatch error. Not yet: a member class of an implicit
+  specialization whose pattern is undefined (`A<int>::D::D()`), which is
+  clang's "implicit instantiation of undefined member" and still "does not
+  match" in kiln. Tests:
+  `basic.lookup.qual/incomplete-qualifier-constructor{,-clang19}.cpp`,
+  `basic.lookup.qual/member-def-undefined-record.cpp`.
 - A declarator qualifier that names a class template specialization
   matching no partial specialization (`template<class T> void P<T*, int>::f()`)
   is "nested name specifier 'P<T *, int>' for declaration does not refer

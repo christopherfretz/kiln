@@ -3930,6 +3930,7 @@ impl Parser<'_, '_> {
             self.s.set_entering_context(saved);
             let id_lo = self.loc();
             d.id_qual = if self.pos() == q_pos { Loc::INVALID } else { q_lo };
+            d.qual_last = self.nns_last_loc;
             if matches!(qual, Ok(Some(_))) {
                 d.id_link = self.nns_link;
             }

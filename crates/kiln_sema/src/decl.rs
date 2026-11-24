@@ -3998,6 +3998,10 @@ impl Sema<'_, '_> {
             // drops the declaration.
             return None;
         }
+        if !d.dropped && self.diagnose_undefined_qualifier(ds, d) {
+            self.templ.cur = None;
+            return None;
+        }
         let unqualified;
         let mut dropped_local = false;
         let d = match if d.dropped {

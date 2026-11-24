@@ -408,6 +408,8 @@ sema_member_call_without_object = Error (0) "call to non-static member function 
 sema_member_decl_no_match = Error (2) "out-of-line declaration of '{0}' does not match any declaration in {1}";
 sema_member_def_no_match = Error (2) "out-of-line definition of '{0}' does not match any declaration in {1}";
 sema_member_def_ret_type_mismatch = Error (1) "return type of out-of-line definition of '{0}' differs from that in the declaration";
+// WP-3274: clang err_member_def_undefined_record.
+sema_member_def_undefined_record = Error (2) "out-of-line definition of '{0}' from class {1} without definition";
 sema_member_extra_qualification = Error (1) "extra qualification on member '{0}'";
 sema_member_fn_drops_quals = Error (3) "'this' argument to member function '{0}' has type {1}, but function is not marked {2}";
 sema_member_fn_object_address_space = Error (2) "cannot initialize object parameter of type {0} with an expression of type {1}";

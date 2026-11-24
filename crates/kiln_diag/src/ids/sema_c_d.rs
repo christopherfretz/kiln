@@ -371,6 +371,10 @@ sema_deduction_guide_friend = Error (0) "cannot declare a deduction guide as a f
 sema_deduction_guide_not_deducible = Error (1) "deduction guide template contains {0:a template parameter|template parameters} that cannot be deduced";
 // WP-1471: clang err_deduction_guide_redeclared.
 sema_deduction_guide_redeclared = Error (0) "redeclaration of deduction guide";
+// WP-3272: [temp.deduct.guide]/3, clang err_deduction_guide_wrong_access
+// and err_deduction_guide_wrong_scope.
+sema_deduction_guide_wrong_access = Error (0) "deduction guide has different access from the corresponding member template";
+sema_deduction_guide_wrong_scope = Error (1) "deduction guide must be declared in the same scope as template '{0}'";
 sema_deep_exception_specs_differ = Error (1) "exception specifications of {0:return|argument} types differ";
 // [dcl.fct.default]/4, /6 (WP-1470): default arguments added by a
 // redeclaration (clang `err_param_default_argument_template_redecl`,

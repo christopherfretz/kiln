@@ -2,7 +2,7 @@
 //! deduction-guide declarations ([temp.deduct.guide]); spec/sema.md
 //! "Class template argument deduction".
 
-use kiln_ast::decl::{DeclFlags, DeclKind, DefinitionBits, FnSpec, ParamData, TagKind};
+use kiln_ast::decl::{Access, DeclFlags, DeclKind, DefinitionBits, FnSpec, ParamData, TagKind};
 use kiln_ast::expr::BinaryOp;
 use kiln_ast::ids::{ArgListId, TemplateNameId, TemplateParamListId};
 use kiln_ast::names::DeclName;
@@ -301,7 +301,7 @@ impl Sema<'_, '_> {
         let _ = self.ast.types.deduced_template_specialization(placeholder_name, None);
         let sloc = d.special.map_or(d.loc, |(_, l)| l);
         let ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
-        let invalid = ds.invalid || d.invalid || self.is_error_type(ty);
+        let mut invalid = ds.invalid || d.invalid || self.is_error_type(ty);
         let Some(Chunk::Function { params, variadic, .. }) = d.chunks.first() else {
             self.templ.cur = None;
             return None;
@@ -322,6 +322,12 @@ impl Sema<'_, '_> {
         }
         let (ctx, lexical) = self.decl_contexts(d);
         let ctx = self.ast.definition(ctx).unwrap_or(ctx);
+        // Checked on the declaration as written; an instantiated guide
+        // is not checked again (clang's instantiator does not).
+        let written = self.inst.stack.is_empty();
+        if !invalid && written && !self.check_guide_scope(ctx, template, sloc) {
+            invalid = true;
+        }
         let first = self.ast.first(template);
         let name = self.ast.names.deduction_guide(first);
         let (defaults, _) = self.merge_default_args(None, false, &params, true);
@@ -357,10 +363,88 @@ impl Sema<'_, '_> {
                 self.check_guide_deducible(t, f, sloc);
             }
         }
+        if !invalid && written {
+            let begin = ds.explicit.unwrap_or(sloc);
+            self.check_guide_access(f, template, begin);
+        }
         if !invalid {
             self.check_guide_redeclaration(ctx, name, t.unwrap_or(f), sloc);
         }
         Some(f)
+    }
+
+    /// The scope `c` declares into for [temp.deduct.guide]/3 (clang
+    /// `getRedeclContext`): transparent contexts (a linkage
+    /// specification, an export declaration) are skipped, an inline
+    /// namespace is a scope of its own; reopenings are one scope.
+    fn guide_redecl_scope(&self, mut c: DeclId) -> DeclId {
+        while matches!(self.kind_of(c), DeclKind::LinkageSpec | DeclKind::Export) {
+            c = self.ast.decls.get(c).ctx().unwrap_or(self.ast.tu);
+        }
+        self.ast.first(c)
+    }
+
+    /// [temp.deduct.guide]/3: a deduction guide inhabits the scope its
+    /// class template belongs to (clang `err_deduction_guide_wrong_scope`
+    /// at the guide's name, the template noted). A guide found through a
+    /// using-directive, a using-declaration, the enclosing namespace of
+    /// an inline namespace or a derived class is in the wrong scope.
+    /// False after the diagnostic (the guide is invalid).
+    fn check_guide_scope(&mut self, ctx: DeclId, template: DeclId, loc: Loc) -> bool {
+        let Some(tctx) = self.ast.decls.get(template).ctx() else { return true };
+        if self.guide_redecl_scope(ctx) == self.guide_redecl_scope(tctx) {
+            return true;
+        }
+        let note = self.diag(DiagId::note_template_decl_here, self.ast.decls.get(template).loc());
+        let m = self
+            .diag(DiagId::sema_deduction_guide_wrong_scope, loc)
+            .arg(self.qualified_decl_name(template))
+            .with_note(note);
+        self.emit(m);
+        false
+    }
+
+    /// [temp.deduct.guide]/3: a deduction guide for a member class
+    /// template has the template's access (clang
+    /// `err_deduction_guide_wrong_access` at the guide's begin `begin`,
+    /// noting the template's `template` keyword and the last
+    /// access-specifier of the class so far). Only a guide in the
+    /// template's own class is checked; one in another scope was
+    /// diagnosed by [`Self::check_guide_scope`].
+    fn check_guide_access(&mut self, f: DeclId, template: DeclId, begin: Loc) {
+        let Some(ctx) = self.ast.decls.get(f).ctx() else { return };
+        if self.kind_of(ctx) != DeclKind::CXXRecord {
+            return;
+        }
+        let Some(tctx) = self.ast.decls.get(template).ctx() else { return };
+        if self.guide_redecl_scope(ctx) != self.guide_redecl_scope(tctx) {
+            return;
+        }
+        let (ga, ta) =
+            (self.ast.decls.get(f).misc().access(), self.ast.decls.get(template).misc().access());
+        if ga == ta || ga == Access::None || ta == Access::None {
+            return;
+        }
+        let lexical = self.ast.decls.lexical_ctx(f).unwrap_or(ctx);
+        let spec = self
+            .ast
+            .decls
+            .members(lexical)
+            .filter(|&m| self.kind_of(m) == DeclKind::AccessSpec)
+            .last()
+            .map(|m| self.ast.decls.get(m).loc());
+        let sel = |a: Access| (a as u8).saturating_sub(1).to_string();
+        let tloc =
+            self.ast.template_info(template).map_or(self.ast.decls.get(template).loc(), |i| {
+                self.ast.templates.param_list(i.params).template_loc
+            });
+        let mut m = self
+            .diag(DiagId::sema_deduction_guide_wrong_access, begin)
+            .with_note(self.diag(DiagId::note_deduction_guide_template_access, tloc).arg(sel(ta)));
+        if let Some(l) = spec {
+            m = m.with_note(self.diag(DiagId::note_deduction_guide_access, l).arg(sel(ga)));
+        }
+        self.emit(m);
     }
 
     /// [temp.deduct.guide]/3: two deduction guides of a class template
