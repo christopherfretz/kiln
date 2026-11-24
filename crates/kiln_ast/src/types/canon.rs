@@ -259,14 +259,15 @@ impl TypeContext {
 
     // ----- arrays --------------------------------------------------------
 
-    /// `T[N]`; `size_expr` is the bound as written (sugar), kept only when
-    /// it is instantiation-dependent (clang `getConstantArrayType`;
-    /// WP-2720): the node is then instantiation-dependent, so
-    /// substitution checks the bound ([temp.deduct.general]/7), and
-    /// carries an unexpanded pack when the bound does
-    /// ([`Self::note_pack_bound`]). The canonical type has no expression:
-    /// two spellings of one value are one type, as in clang
-    /// (spec/types.md §7.2).
+    /// `T[N]`; `size_expr` is the bound as written (sugar; spec/types.md
+    /// §7.2 "Written bounds", WP-3015). A bound recorded as
+    /// instantiation-dependent ([`Self::note_inst_bound`]; clang
+    /// `getConstantArrayType` keeps only those, WP-2720) makes the node
+    /// instantiation-dependent, so substitution checks the bound
+    /// ([temp.deduct.general]/7), and carries an unexpanded pack when the
+    /// bound does ([`Self::note_pack_bound`]); any other adds no flag.
+    /// The canonical type has no expression: two spellings of one value
+    /// are one type, as in clang (spec/types.md §7.2).
     pub fn constant_array(
         &mut self,
         elem: QualType,
@@ -275,7 +276,9 @@ impl TypeContext {
     ) -> QualType {
         let t: TypeId = {
             let mut flags = self.qflags(elem);
-            if let Some(e) = size_expr {
+            if let Some(e) = size_expr
+                && self.inst_bounds.contains(&e)
+            {
                 flags |= TypeFlags::INSTANTIATION_DEPENDENT;
                 if self.pack_bounds.contains(&e) {
                     flags |= TypeFlags::UNEXPANDED_PACK;

@@ -3778,8 +3778,10 @@ impl Writer<'_, '_, '_> {
             TypeView::Pointer(q) => TyRec::Pointer(self.qref(q)?),
             TypeView::LValueRef(q) => TyRec::LRef(self.qref(q)?),
             TypeView::RValueRef(q) => TyRec::RRef(self.qref(q)?),
-            // A kept bound (WP-2720) is an expression type ([`exprs`]).
-            TypeView::ConstantArray(a) if a.size_expr.is_none() => {
+            // A kept bound (WP-2720) is an expression type ([`exprs`]); a
+            // bound kept only as written is written as its value
+            // (spec/types.md §7.2 "Written bounds", WP-3015).
+            TypeView::ConstantArray(a) if types.inst_bound(&a).is_none() => {
                 TyRec::CArray(self.qref(a.elem)?, a.size)
             }
             TypeView::IncompleteArray(q) => TyRec::IArray(self.qref(q)?),

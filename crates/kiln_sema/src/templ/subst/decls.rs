@@ -948,6 +948,11 @@ impl Substituter<'_, '_, '_> {
         // `InstantiateFunctionDeclaration` keeps it).
         let requires = self.sema.ast.templates.trailing_requires.get(d).copied();
         dr.trailing_requires = requires;
+        let class_scope_spec = friend.is_none() && ctx == DeclaratorContext::Member;
+        if class_scope_spec {
+            dr.spec_id = self.member_explicit_fn_spec_id(d, loc)?;
+        }
+        let class_scope_spec = class_scope_spec && dr.spec_id.is_some();
         let base = match ds.named {
             _ if ds.base == TypeSpecKind::None => QualType::VOID,
             Some(auto) if trailing.is_some() => auto,
@@ -987,6 +992,16 @@ impl Substituter<'_, '_, '_> {
         if self.sema.ast.decls.function(f).is_none() {
             // Recovery declared something else (an invalid redeclaration).
             return Ok(r);
+        }
+        // A class-scope explicit specialization is defined by the pattern
+        // class's (CWG 727; clang's member specialization info of a
+        // function template specialization): its definition is
+        // instantiated from `d`, not from the member template's pattern.
+        if class_scope_spec
+            && let Some((i, info)) = self.sema.ast.spec_info(f).map(|(i, s)| (i, *s))
+            && info.kind == kiln_ast::templates::SpecKind::ExplicitSpecialization
+        {
+            self.sema.ast.templates.update_spec(i, |s| s.from = d);
         }
         // The pattern's attributes (`const`, `pure`, `[[noreturn]]`,
         // `[[nodiscard]]`, ...), as clang `InitFunctionInstantiation` →

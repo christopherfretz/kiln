@@ -456,6 +456,12 @@ impl TypeNames for DiagNames<'_> {
         if self.canonical_args || self.ast.decls.get(decl).kind() != DeclKind::CXXRecord {
             return None;
         }
+        // A partial specialization prints its converted arguments, as
+        // clang's injected class name does (`P<T, 1>`); its written ones
+        // (WP-3016) are for tooling.
+        if self.ast.partial_spec_info(decl).is_some() {
+            return None;
+        }
         self.ast.templates.args_as_written(decl)
     }
 

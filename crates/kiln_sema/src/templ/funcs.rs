@@ -1503,6 +1503,14 @@ impl Sema<'_, '_> {
     ) -> DeclId {
         let lexical = self.ctx;
         let f = self.builder().function_spec_redecl(s, lexical, name_loc, ty, fspec);
+        // The template arguments as written on this declaration (an
+        // instantiation-dependent `sizeof(sizeof(f(T())))` in a class
+        // template stays an expression), beside the converted ones of
+        // its `SpecInfo` (spec/ast.md §8.3, WP-3142).
+        if let Some(sid) = &d.spec_id {
+            let w = self.ast.types.arg_list(&sid.args);
+            self.ast.templates.set_args_as_written(f, w, false);
+        }
         // Its namespace definition is the one it is written in or its
         // qualifier names, not its template's (clang's `DeclContext` of a
         // function template specialization; spec/ast.md §4.2

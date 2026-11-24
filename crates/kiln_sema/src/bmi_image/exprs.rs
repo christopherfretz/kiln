@@ -412,7 +412,7 @@ impl Writer<'_, '_, '_> {
                 ExTy::PackN { pattern: self.qref(pattern)?, n }
             }
             TypeView::ConstantArray(a) => {
-                let Some(s) = a.size_expr else { return Ok(None) };
+                let Some(s) = types.inst_bound(&a) else { return Ok(None) };
                 let elem = self.qref(a.elem)?;
                 ExTy::KeptArray { elem, size: a.size, e: self.texpr(s)? }
             }

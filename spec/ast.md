@@ -1167,6 +1167,42 @@ specializations (keyed by their canonical pattern args; listed per
 template in `partials: DeclId -> ListId`). The template decl's payload
 lists its specializations in creation order (dump order, ast-dump.md §5).
 
+**Arguments as written (WP-3016, WP-3142).** The key, `SpecInfo.args`
+and `PartialSpecInfo.args` hold the converted arguments (a non-type
+argument is its value: `P<T, f(1)>`'s second argument is `1`), which
+matching ([temp.spec.partial.match]), partial ordering and the
+specialization's identity read. The arguments as written are kept
+beside them in one table, `TemplateTables::args_as_written(d)` (clang's
+`getTemplateArgsAsWritten`), an `ArgListId` in which a non-type
+argument is the expression written (`ArgView::Expr`), never its value,
+also when it is instantiation-dependent but not dependent
+(`h<sizeof(sizeof(f(T())))>` in a class template stays the expression,
+not `8`). It has a row for: an explicit specialization or explicit
+instantiation of a class template (the type printer prints these); a
+partial specialization of a class or variable template (`d` its
+declaration; printed with its converted arguments, as clang's injected
+class name); an explicit specialization of a variable template; and
+each declaration of an explicit specialization of a function template
+that writes `<...>` (namespace or class scope, `d` that declaration),
+none for one whose arguments are all deduced. The first declaration's
+row stays, except as the class rule above says (clang 19 resets a
+class's at its definition). A client reads the written expressions of
+any of them with one routine, `TypeContext::written_arg_exprs`
+(spec/types.md §8.4). The PCH snapshot carries the table; a module
+image carries the class rows only (a partial specialization, function
+or variable specialization imported from a module has no row).
+Instantiated partial specializations of member templates have none.
+
+A class-scope explicit specialization of a member function template in a
+class template ([temp.expl.spec]/2, CWG 727) is redeclared in each
+instantiation of the class as a specialization of the member template
+there, its arguments as written substituted (the converted ones when it
+has no row; clang's `VisitCXXMethodDecl`), so a non-type argument no
+parameter deduces (`h<8>()`) still selects it; its `SpecInfo.from` is
+the pattern class's declaration, whose definition it is instantiated
+from (clang's member specialization info), the one exception to "an
+explicit specialization is never instantiated" ([temp.expl.spec]/7).
+
 ### 8.4 Deduction results, substitution, instantiation stack
 - Deduction produces a `DeducedArgs` scratch (a `Vec<TemplateArg>` with
   `Null` for undeduced) owned by sema; the result is interned as an

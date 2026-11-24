@@ -1812,7 +1812,7 @@ impl Sema<'_, '_> {
                                 let l = self.begin_loc(*e);
                                 let msg = self.diag(DiagId::sema_zero_length_array, l);
                                 self.emit(msg.per_instantiation());
-                                let kept = self.kept_array_bound(*e);
+                                let kept = self.written_array_bound(*e, d.site);
                                 self.ast.types.constant_array(ty, 0, kept)
                             }
                             // clang `BuildArrayType`: more than the
@@ -1827,7 +1827,7 @@ impl Sema<'_, '_> {
                                 fail!();
                             }
                             Some(Ok(n)) => {
-                                let kept = self.kept_array_bound(*e);
+                                let kept = self.written_array_bound(*e, d.site);
                                 self.ast.types.constant_array(ty, n, kept)
                             }
                             Some(Err(size)) => {
@@ -2428,7 +2428,7 @@ impl Sema<'_, '_> {
         for _ in 0..256 {
             match t.view(q.ty()) {
                 TypeView::DependentSizedArray { .. } => return true,
-                TypeView::ConstantArray(a) => return a.size_expr.is_some(),
+                TypeView::ConstantArray(a) => return t.inst_bound(&a).is_some(),
                 TypeView::IncompleteArray(_) | TypeView::VariableArray { .. } => return false,
                 _ => {
                     let n = t.desugar_once(q);
@@ -2442,20 +2442,32 @@ impl Sema<'_, '_> {
         false
     }
 
-    /// The bound expression `e` a constant array type keeps as written
-    /// (WP-2720): `e` when it is instantiation-dependent though its value
-    /// is known (`char[sizeof(sizeof(f(T())))]`), as clang's
-    /// `getConstantArrayType` keeps it, so substitution checks it and the
-    /// names in it stay reachable from the type; else `None` (no cost).
+    /// The bound expression `e` a constant array type keeps as an
+    /// instantiation-dependent bound (WP-2720): `e` when it is
+    /// instantiation-dependent though its value is known
+    /// (`char[sizeof(sizeof(f(T())))]`), as clang's `getConstantArrayType`
+    /// keeps it, recorded so that the type is instantiation-dependent
+    /// and substitution checks it; else `None`.
     pub(crate) fn kept_array_bound(&mut self, e: ExprId) -> Option<ExprId> {
         let deps = self.ast.exprs.get(e).deps();
         if !deps.contains(kiln_ast::expr::ExprDeps::INSTANTIATION) {
             return None;
         }
+        self.ast.types.note_inst_bound(e);
         if deps.contains(kiln_ast::expr::ExprDeps::UNEXPANDED_PACK) {
             self.ast.types.note_pack_bound(e);
         }
         Some(e)
+    }
+
+    /// The bound expression a constant array type built from declarator
+    /// bound `e` keeps (spec/types.md §7.2 "Written bounds", WP-3015): a
+    /// kept instantiation-dependent one ([`Self::kept_array_bound`]), or
+    /// else `e` itself, as sugar, when a declarator wrote it, so that a
+    /// walk from the declaration reaches the expression (clang's
+    /// `ArrayTypeLoc`). A bound substitution made is not written: `None`.
+    pub(crate) fn written_array_bound(&mut self, e: ExprId, site: DeclSite) -> Option<ExprId> {
+        self.kept_array_bound(e).or((site != DeclSite::Subst).then_some(e))
     }
 
     /// The decl-specifiers and declarator-id a function parameter cannot

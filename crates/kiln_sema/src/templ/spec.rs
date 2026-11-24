@@ -636,6 +636,11 @@ impl Sema<'_, '_> {
         }
         let tag = Self::tag_kind_of(keyword);
         let p = self.builder().class_partial_spec(h, tmpl, head, conv.sugared, tag);
+        // The arguments as written (`f(1)`, not its value), beside the
+        // converted ones matching and ordering use (spec/ast.md §8.3,
+        // WP-3016).
+        let w = self.ast.types.arg_list(args);
+        self.ast.templates.set_args_as_written(p, w, false);
         // [basic.link]/14: what its head names (WP-1855).
         self.module_check_head_exposure(p, head);
         if self.kind_of(self.ctx) == DeclKind::CXXRecord {

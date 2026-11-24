@@ -565,6 +565,10 @@ impl Sema<'_, '_> {
         };
         self.templ.cur = None;
         let v = r.ok()?;
+        // The arguments as written, beside the converted ones the
+        // specialization is keyed by (spec/ast.md §8.3, WP-3016).
+        let w = self.ast.types.arg_list(&sid.args);
+        self.ast.templates.set_args_as_written(v, w, false);
         if ds.invalid || d.invalid {
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
         }

@@ -16,7 +16,7 @@
 //! | `intern` | rebuilt | from `store` in id order; the absent ids are written |
 //! | `names`, `nns` | state + rebuilt | [`KeyedTable`]: entries as data, its intern table rebuilt |
 //! | `name_decls` | state | as data |
-//! | `dependent_templates`, `first_dtst_names`, `exc_protos`, `arg_origins`, `expr_origins`, `alias_converted`, `pack_bounds` | state | maps, as entries |
+//! | `dependent_templates`, `first_dtst_names`, `exc_protos`, `arg_origins`, `expr_origins`, `alias_converted`, `pack_bounds`, `inst_bounds` | state | maps, as entries |
 //! | `dtst_first_spelling` | state | as data (set from `-fclang-compat`; the consumer's configuration check covers it) |
 //! | `args` | state + rebuilt | [`ArgTable`]: arguments and lists as data, its intern table rebuilt |
 //! | `profiles` | state + rebuilt | [`ProfileTable`]: words and entries as data, its intern table rebuilt |
@@ -277,6 +277,7 @@ impl Snap for TypeContext {
             expr_origins,
             alias_converted,
             pack_bounds,
+            inst_bounds,
             nns,
             args,
             profiles,
@@ -299,6 +300,7 @@ impl Snap for TypeContext {
         expr_origins.put(w);
         alias_converted.put(w);
         pack_bounds.put(w);
+        inst_bounds.put(w);
         nns.put(w);
         args.put(w);
         profiles.put(w);
@@ -337,6 +339,7 @@ impl Snap for TypeContext {
         let expr_origins = crate::ast::timed(r, "TypeContext.expr_origins")?;
         let alias_converted = crate::ast::timed(r, "TypeContext.alias_converted")?;
         let pack_bounds = crate::ast::timed(r, "TypeContext.pack_bounds")?;
+        let inst_bounds = crate::ast::timed(r, "TypeContext.inst_bounds")?;
         let nns = crate::ast::timed(r, "TypeContext.nns")?;
         let args = crate::ast::timed(r, "TypeContext.args")?;
         let profiles = crate::ast::timed(r, "TypeContext.profiles")?;
@@ -367,6 +370,7 @@ impl Snap for TypeContext {
             expr_origins,
             alias_converted,
             pack_bounds,
+            inst_bounds,
             nns,
             args,
             profiles,
@@ -393,6 +397,7 @@ impl Snap for TypeContext {
         .field::<FxHashMap<TypeId, ExprId>>("expr_origins")
         .field::<FxHashMap<TypeId, ArgListId>>("alias_converted")
         .field::<FxHashSet<ExprId>>("pack_bounds")
+        .field::<FxHashSet<ExprId>>("inst_bounds")
         .field::<KeyedTable>("nns")
         .field::<ArgTable>("args")
         .field::<ProfileTable>("profiles")
@@ -419,6 +424,7 @@ impl Snap for TypeContext {
             .field::<FxHashMap<TypeId, ExprId>>("expr_origins")
             .field::<FxHashMap<TypeId, ArgListId>>("alias_converted")
             .field::<FxHashSet<ExprId>>("pack_bounds")
+            .field::<FxHashSet<ExprId>>("inst_bounds")
             .field::<KeyedTable>("nns")
             .field::<ArgTable>("args")
             .field::<ProfileTable>("profiles")

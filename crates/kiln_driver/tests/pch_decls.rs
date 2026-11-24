@@ -349,6 +349,60 @@ int main() {
     assert!(o.stderr.contains("5 errors generated"), "{}", o.stderr);
 }
 
+/// Written array bounds and written template arguments (spec/types.md
+/// §7.2 "Written bounds", spec/ast.md §8.3 "Arguments as written";
+/// WP-3015, WP-3016, WP-3142) cross the snapshot: a restored consumer
+/// matches the specializations by value as replay does ([dcl.array]/1,
+/// [temp.spec.partial.match], [temp.expl.spec]), re-substitutes an
+/// instantiation-dependent bound (its failure for `T = int` is diagnosed;
+/// [temp.dep.constexpr]) and diagnoses as replay does.
+#[test]
+fn written_bounds_and_arguments_are_carried() {
+    let d = scratch("written");
+    let header = "\
+constexpr int f(int x) { return x; }
+int g(...);
+extern int arr[f(2)];
+template <class T> struct TA { T a[f(5)]; };
+template <class T> struct D { char a[sizeof(sizeof(T::x))]; };
+template <class T, int N> struct P { static constexpr int k = 0; };
+template <class T> struct P<T, f(1)> { static constexpr int k = 1; };
+template <> struct P<int, f(2)> { static constexpr int k = 2; };
+template <class T, int N> constexpr int v = 0;
+template <class T> constexpr int v<T, f(3)> = 3;
+template <> constexpr int v<int, f(4)> = 4;
+template <int N> int fh() { return 0; }
+template <> inline int fh<f(6)>() { return 6; }
+template <class T> struct S {
+  template <unsigned long N> int h() { return 0; }
+  template <> int h<sizeof(sizeof(g(T())))>() { return 1; }
+};
+";
+    let note = produce(&d, "w", header);
+    assert!(note.contains("': snapshot written"), "{note}");
+    let tu = "\
+int arr[2];
+struct X { int x; };
+int main() {
+  TA<int> ta{}; D<X> dx{}; S<int> s;
+  static_assert(sizeof(ta.a) == 5 * sizeof(int) && sizeof(dx.a) == sizeof(sizeof(0)));
+  static_assert(P<char, 1>::k == 1 && P<int, 2>::k == 2 && P<int, 3>::k == 0);
+  static_assert(v<char, 3> == 3 && v<int, 4> == 4 && v<int, 5> == 0);
+  return fh<6>() + s.h<sizeof(sizeof(0))>() + arr[1];
+}
+";
+    std::fs::write(d.join("w.cpp"), tu).unwrap();
+    assert!(path_note(&d, "w.pch", "w.cpp").contains("': snapshot matches; restoring it"));
+    same(&d, "w.pch", &["-S", "-emit-llvm", "-O0"], "w.cpp");
+    let check = ["-fkiln-pch-snapshot=check", "-include-pch", "w.pch", "-S", "-emit-llvm"];
+    assert_eq!(ok(&d, &[&check[..], &["w.cpp", "-o", "-"]].concat()).stderr, "");
+    std::fs::write(d.join("e.cpp"), "D<int> di;\nint n = P<int, 2>::nope;\n").unwrap();
+    let o = same(&d, "w.pch", &["-fsyntax-only"], "e.cpp");
+    assert!(o.stderr.contains("D<int>"), "{}", o.stderr);
+    assert!(o.stderr.contains("no member named 'nope'"), "{}", o.stderr);
+    assert!(o.stderr.contains("2 errors generated"), "{}", o.stderr);
+}
+
 /// Sema state the consumer depends on (a pending `#pragma weak` naming a
 /// function the unit defines) crosses the PCH: `f` is weak (the retired
 /// declaration image could not carry it and made `f` strong).

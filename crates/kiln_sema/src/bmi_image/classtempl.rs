@@ -232,9 +232,9 @@ impl Writer<'_, '_, '_> {
                 return Err("an explicit specialization or instantiation");
             }
             let template = self.template_rec(si.template, tkind)?;
-            // A variable's arguments as written are not kept: the
-            // printed ones (the converted, less trailing defaults) stand
-            // for them, which convert and print the same.
+            // A variable's arguments as written (WP-3016) are not
+            // carried: the printed ones (the converted, less trailing
+            // defaults) stand for them, which convert and print the same.
             let written = if var {
                 si.print_args
             } else {

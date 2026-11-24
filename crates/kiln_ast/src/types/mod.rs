@@ -36,6 +36,7 @@ mod profile_expr;
 #[cfg(test)]
 mod query_tests;
 mod snap;
+mod written_exprs;
 pub use intern::take_rebuild_time;
 pub use profile_expr::EquivScratch;
 

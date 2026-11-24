@@ -1416,21 +1416,18 @@ impl Sema<'_, '_> {
             | TypeView::ExtQual { base: x, .. }
             | TypeView::Attributed { modified: x, .. }
             | TypeView::Vector { elem: x, .. }
-            | TypeView::Decayed { original: x, .. }
-            | TypeView::ConstantArray(kiln_ast::types::ConstArray {
-                elem: x,
-                size_expr: None,
-                ..
-            }) => {
+            | TypeView::Decayed { original: x, .. } => {
                 self.type_packs(x, out, depth + 1);
             }
-            // A kept bound (`char[sizeof(sizeof(Ts))]`, WP-2720).
-            TypeView::VariableArray { elem, size }
-            | TypeView::ConstantArray(kiln_ast::types::ConstArray {
-                elem,
-                size_expr: Some(size),
-                ..
-            }) => {
+            // A kept bound (`char[sizeof(sizeof(Ts))]`, WP-2720); a bound
+            // kept only as written names no pack (WP-3015).
+            TypeView::ConstantArray(a) => {
+                self.type_packs(a.elem, out, depth + 1);
+                if let Some(size) = self.ast.types.inst_bound(&a) {
+                    self.expr_packs(size, out, depth + 1);
+                }
+            }
+            TypeView::VariableArray { elem, size } => {
                 self.type_packs(elem, out, depth + 1);
                 self.expr_packs(size, out, depth + 1);
             }

@@ -482,12 +482,7 @@ impl Sema<'_, '_> {
             | TypeView::SubstTemplateTypeParm { replacement: x, .. }
             | TypeView::UnaryTransform { base: x, .. }
             | TypeView::InjectedClassName { injected: x, .. }
-            | TypeView::Decayed { original: x, .. }
-            | TypeView::ConstantArray(kiln_ast::types::ConstArray {
-                elem: x,
-                size_expr: None,
-                ..
-            }) => self.used_in_type(x, u, d),
+            | TypeView::Decayed { original: x, .. } => self.used_in_type(x, u, d),
             TypeView::QualifiedArray { base, .. } => {
                 self.used_in_type(QualType::unqual(base), u, d)
             }
@@ -505,13 +500,16 @@ impl Sema<'_, '_> {
                 self.used_in_type(QualType::unqual(class), u, d)?;
                 self.used_in_type(pointee, u, d)
             }
-            // A kept bound (WP-2720) like a variable one.
-            TypeView::VariableArray { elem, size }
-            | TypeView::ConstantArray(kiln_ast::types::ConstArray {
-                elem,
-                size_expr: Some(size),
-                ..
-            }) => {
+            // A kept bound (WP-2720) like a variable one; a bound kept
+            // only as written uses no parameter (WP-3015).
+            TypeView::ConstantArray(a) => {
+                self.used_in_type(a.elem, u, d)?;
+                match self.ast.types.inst_bound(&a) {
+                    Some(size) => self.used_in_expr(size, u, d),
+                    None => Some(()),
+                }
+            }
+            TypeView::VariableArray { elem, size } => {
                 self.used_in_type(elem, u, d)?;
                 self.used_in_expr(size, u, d)
             }

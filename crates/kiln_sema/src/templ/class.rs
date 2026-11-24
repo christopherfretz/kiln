@@ -1641,7 +1641,14 @@ impl Sema<'_, '_> {
             .spec_info(f)
             .map(|(_, i)| i.kind)
             .or_else(|| self.ast.member_spec_info(f).map(|(_, m)| m.kind));
-        if explicit == Some(SpecKind::ExplicitSpecialization) {
+        // A class-scope explicit specialization redeclared in an
+        // instantiated class ([temp.expl.spec]/2, CWG 727) is the
+        // exception: its definition is the pattern class's, instantiated
+        // with the class's arguments (clang `VisitCXXMethodDecl`).
+        let class_scope = self.ast.instantiated_from(f).is_some_and(|p| {
+            self.ast.spec_info(p).is_some_and(|(_, i)| i.kind == SpecKind::ExplicitSpecialization)
+        });
+        if explicit == Some(SpecKind::ExplicitSpecialization) && !class_scope {
             return;
         }
         // A use inside a ctor-initializer (`B<int>(3)` calling a

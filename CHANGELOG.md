@@ -10,6 +10,23 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- Written constant array bounds for tooling clients (WP-3015,
+  spec/types.md §7.2 "Written bounds", §8.4): a constant bound keeps its
+  written expression as type sugar after it folds, on a variable, a
+  member, a parameter of reference-to-array type, a `sizeof` or cast
+  operand and every bound of a `new` after the first, and in a class
+  template's pattern and its instantiations; the canonical type is the
+  value's (`int[f(2)]` is `int[2]`). `TypeContext::written_exprs(ty)`
+  and `written_arg_exprs(args)` give the expressions written in a type
+  or an argument list, so a walk from a declaration reaches every call
+  written there. The PCH snapshot format is version 173.
+- The arguments as written of a class-scope explicit specialization of a
+  member function template (WP-3142, spec/ast.md §8.3 "Arguments as
+  written"), and of every explicit specialization of a function or
+  variable template: `TemplateTables::args_as_written`, where an
+  instantiation-dependent argument (`h<sizeof(sizeof(g(T())))>`) stays
+  an expression.
+
 - A friend's written form on the `Ast` (WP-3164, spec/ast.md §23): each
   friend written with a qualified declarator-id, a template-id, a
   special member name, or a qualified class name with a template-head of
@@ -1199,6 +1216,19 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- A class-scope explicit specialization of a member function template in
+  a class template ([temp.expl.spec]/2, CWG 727) is a specialization in
+  every instantiation of the class (WP-3142, spec/ast.md §8.3): one with
+  a non-type argument no parameter deduces (`template <> int h<8>()`)
+  was dropped, and calls reached the primary template; one with deduced
+  arguments was redeclared as a plain member function. Its definition is
+  the one written in the class, instantiated with the class's arguments.
+
+- A partial specialization of a class or variable template keeps its
+  arguments as written (WP-3016, spec/ast.md §8.3): a non-type argument
+  written as a call (`P<T, f(1)>`) is an expression in
+  `TemplateTables::args_as_written`, where it was lost to its value;
+  matching, ordering and printing still use the converted arguments.
 - The written-reference table's `enclosing` of the names in an
   alias-declaration, an enumerator, a template-head (default template
   arguments, parameter types, the requires-clause) and a `static_assert`
