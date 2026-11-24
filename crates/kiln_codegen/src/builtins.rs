@@ -2129,7 +2129,8 @@ impl Cg<'_> {
         let mut q = q;
         loop {
             if let kiln_ast::types::TypeView::Typedef { decl, .. } = ast.types.view(q.ty()) {
-                let aligned = ast.redecls_of(decl).any(|r| {
+                // The named declaration and those before it (WP-2830).
+                let aligned = ast.self_and_prev(decl).any(|r| {
                     ast.decls.cold.alignment.get(r).is_some()
                         || ast
                             .lists

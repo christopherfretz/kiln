@@ -919,7 +919,8 @@ needed later). Values of non-constant-context folding (`try_fold`) are
   operator or a local class's member function included, never by a
   block-scope variable; a local class's default member initializer
   belongs to its field); the parameter, for one in its default argument
-  or type; the alias (`using A = ...` / an alias template); the variable
+  or type (a lambda's parameter too, in a function body or not, nested
+  lambdas' innermost; WP-2627); the alias (`using A = ...` / an alias template); the variable
   or field, for one in its initializer or type (a default member
   initializer included); the concept, for one in its
   constraint-expression; else the lexical context (a class, a namespace
@@ -2311,6 +2312,14 @@ stage 1.
   change. What lookup found at the definition, before any
   specialization, is the entry's found set (§18.12). Default arguments
   and default member initializers are entries once, at the written site.
+  The pack's name in a pack-indexing expression (`ts...[0]`,
+  [expr.prim.pack.index]) names the pack (`ts@`), as it does in the
+  expansion `ts...` and as the pack-index-specifier `Ts...[0]` names
+  `Ts`: only the indexing is dependent (WP-2721; clang's
+  `PackIndexingExpr` holds a `DeclRefExpr` to the pack). A member
+  variable template's specialization (`d.twice<7>`) has the template as
+  its found set and keeps its template arguments (the member access's
+  `member_extra`) outside a template as inside one (WP-2724).
 - **PCH and modules.** Stage 5 (§18.10) carries both tables in PCH
   snapshots and module images: a TU restored from a snapshot continues
   the prefix's table, and an importer built from an image merges the
@@ -3486,6 +3495,14 @@ instantiated. The found set is that result.
 
 #### 18.12.1 Contract
 
+- **Names in array bounds.** A dependent name in an array bound whose
+  value is known but whose expression is instantiation-dependent
+  (`char (*)[sizeof(sizeof(f(T())))]`) is an entry like any other: the
+  constant array type keeps the expression (spec/types.md §7.2 "Kept
+  bounds"; WP-2720), so the entry's set is reachable from the
+  declaration's written type, and each specialization substitutes the
+  bound and records its row (§18.9).
+
 - **Definition.** The found set of a `DEPENDENT` entry is the result of
   the name lookup the standard performs for its name in the template
   definition: unqualified lookup from the name's position
@@ -4225,6 +4242,18 @@ This section is the promise kiln makes, and where it makes none.
   `B::s<1>`); an array `new`'s parenthesized aggregate initialization
   keeps its `(`; and `&this->sf<int>`, resolved to the specialization,
   keeps the template-id's `>`.
+- WP-2721..WP-2724, in the same maps and in one aux bit the node kind
+  already has (no node or image change; the PCH snapshot schema names
+  one more transient sema field, `direct_list_entity`, so
+  `FORMAT_VERSION` is 184): `Ast::begin_loc`
+  begins a qualified member access through an implicit `this`
+  (`Q::f(2)` calling a non-static member of an overload set,
+  `Q::t<int>(4)`) at the qualifier, as the client view already did; a
+  constructor called for a braced list ends at its `}`; the copy a
+  list's single element of the class makes ([dcl.init.list]/3.2) is
+  that list's construction (`ExprArena::set_construct_list_braces`);
+  and a member variable template's template arguments are recorded
+  outside a template too, so `d.twice<7>` ends at its `>` from them.
 
 ### 21.2 Decisions
 
@@ -4277,6 +4306,18 @@ This section is the promise kiln makes, and where it makes none.
   end (the `)`; a C-style cast's operand); an array `new`'s
   (`new int[2](1, 2)`, `new int[](1, 2, 3)`, `new R[2][2]({R(4)})`) from
   its `(`. One whose begin was not recorded is `None`.
+- **List construction** (WP-2723, clang's `CXXConstructExpr ... list`):
+  a constructor called for a braced list (`N m{1}`, `h({1})`, the copy
+  `{x}` of `g({x})` for a parameter of `x`'s class or a base of it)
+  begins at a direct-list-initialized variable's name or, for a
+  copy-list-initialization and an argument, at the `{`, and ends at
+  the `}`; in a `T{x}` temporary the copy begins at `T`, as clang's
+  `CXXTemporaryObjectExpr`. A `T{...}` keeps its own end. Not yet
+  clang's: a reference bound directly to a list's single element
+  (`f({x})` for `const O&`) and a prvalue element of the class
+  (`g({O{x}})`), where clang keeps a transparent `InitListExpr` around
+  the element and kiln has the element only, so the argument is `x`
+  (resp. `O{x}`), not `{x}`.
 - **Substituted template arguments**: a `SubstNonTypeTemplateParmExpr`
   (the value of a non-type template argument in an instantiated
   member's initializer) is the one token of the parameter's name it
@@ -4391,3 +4432,86 @@ macro cases: an argument, a whole invocation, a part of a body, a
 pasted token) and `cargo xtask extents` (stage 1 in `ci`); the xtask
 test `the_none_table_is_the_baselines_kinds` holds the table of 21.3 to
 exactly the kinds of the baseline.
+
+## 22. Builtin-macro literals (WP-2821)
+
+A tooling client that compares or rewrites literals must not treat the
+value of `__LINE__` or `__FILE__` as one written in the source: moving
+the file or inserting a line above changes it. The builtin-macro literal
+table says which builtin macro a literal came from
+(`kiln_ast::builtin_literals`).
+
+### 22.1 What is recorded
+
+`BuiltinMacro` names the builtins whose result is one literal token
+whose value is a property of the place, order, time or target of the
+expansion ([cpp.predefined], clang's extensions): `__LINE__`,
+`__FILE__`, `__FILE_NAME__`, `__BASE_FILE__`, `__COUNTER__`,
+`__INCLUDE_LEVEL__`, `__DATE__`, `__TIME__`, `__TIMESTAMP__` and
+`__FLT_EVAL_METHOD__`. The feature queries (`__has_include`,
+`__has_builtin`, `__has_cpp_attribute`, `__is_target_*`,
+`__building_module`, ...) are not: their value is a function of their
+written operand and the configuration, and they live almost only in
+`#if` (the preprocessing record keeps their values, spec/pp.md
+"Preprocessing record"). `_Pragma` makes no literal.
+
+A literal is marked when one of its tokens is
+
+- a recorded builtin's result: written directly, reached through a user
+  macro (`#define L __LINE__`), or substituted for a macro parameter
+  after pre-expansion (`F(__LINE__)`, at any depth);
+- made by `##` ([cpp.concat]) from operands one of which is marked
+  (`CAT(1, __LINE__)` through an expanding indirection gives `125`), or
+  by `#` ([cpp.stringize]) from an operand that holds a marked token
+  (`STR(__LINE__)` through an indirection gives `"24"`): the token takes
+  the first marked operand's builtin.
+
+A string literal of several pieces ([lex.string.concat]) is marked when
+any piece is, with the first marked piece's builtin. `STR2(__LINE__)`
+without the indirection stringizes the name, `"__LINE__"`, and is not
+marked; nor is a pasted `CAT(4, 2)`.
+
+### 22.2 How it is kept
+
+Off by default. With `PpOptions::builtin_literals` (the driver's
+`-fkiln-builtin-literals`, `FrontEndOptions::builtin_literals`) the
+preprocessor keeps a map from the macro location of each token it made
+for a recorded builtin, a paste or a stringizing of a marked operand
+(each such token has an expansion entry of its own) to the builtin;
+`Preprocessor::builtin_literal_of(loc)` follows a token's
+immediate-spelling chain through argument relocations to it. The map is
+keyed by those locations, not by the scratch spelling, which is shared
+between equal texts. The parser asks it for the tokens of each integer,
+floating, character and string literal (and so of a user-defined
+literal's) and enters the literal in `Ast::builtin_literals`, keyed by
+the literal's own location (its first token), which an instantiated copy
+keeps. Off, nothing is allocated and each literal costs one branch.
+
+### 22.3 Reading it
+
+`Ast::literal_builtin(e)` gives the builtin of an `IntegerLiteral`,
+`FloatingLiteral`, `CharacterLiteral`, `StringLiteral` or
+`UserDefinedLiteral`, `None` for any other expression, a written
+literal, and every literal of a unit compiled without the option.
+`BuiltinMacro::name` spells the macro; `BuiltinLiterals::iter` lists the
+table.
+
+### 22.4 Snapshots, modules
+
+The table is the unit's own: a snapshot (PCH) writes neither the AST's
+table nor the preprocessor's map (both are restored empty, the
+consumer's options deciding whether its own literals are recorded), and
+a module file carries none, so a literal from a precompiled header or an
+imported module's image is not marked. `-fkiln-builtin-literals` is
+outside the PCH identity and off in a module built in process.
+
+### 22.5 The dump
+
+`-fdump-ast` appends ` from <name>` to a marked literal's line
+(`IntegerLiteral 'int' 17 from __LINE__`); without the table nothing
+changes. Tests: `crates/kiln_parse/tests/builtin_literals.rs` (every
+builtin directly; `__LINE__`, `__FILE__` and `__COUNTER__` through a user
+macro and as arguments; pasted into an integer, a suffixed and a
+floating literal; stringized; a middle and a last string piece; written
+literals; off by default), and
+`tests/conformance/cpp.predefined/builtin-literal-provenance.cpp`.

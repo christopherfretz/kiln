@@ -36,7 +36,7 @@ pub use diag::{Diag, Diagnostic, FixIt, Label, Level, NoteMsg};
 pub use engine::{CaptureMark, DiagEngine, DiagSink, MemorySink, SharedBuffer};
 pub use groups::Group;
 pub use ids::{DiagClass, DiagId, DiagKind};
-pub use json::{JsonSink, escape_json};
+pub use json::{DiagRecord, JsonSink, RecordLocation, diag_records, escape_json};
 pub use layout::SCRATCH_BUFFER_NAME;
 pub use options::{DEFAULT_TABSTOP, DiagOptions, Format, OptionDiag};
 pub use policy::Severity;

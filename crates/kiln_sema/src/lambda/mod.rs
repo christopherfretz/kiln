@@ -868,6 +868,19 @@ impl Sema<'_, '_> {
     fn lambda_numbering_context(&self, closure: DeclId) -> Option<(DeclId, Option<DeclId>)> {
         let ctx = self.ast.decls.get(closure).ctx()?;
         let kind = self.kind_of(ctx);
+        if self.in_lambda_declarator() {
+            // In an enclosing lambda's parameter-declaration-clause or
+            // template head (a parameter's type or default argument), before
+            // its body: clang numbers it with no context declaration (its
+            // `Normal` kind), so no enclosing variable, data member or
+            // default argument numbers it (`inline auto f = [](int x = []
+            // { return 1; }()) {...};` is `$_0`): only an inline or templated
+            // enclosing function does (clang 19 and 22).
+            let templated =
+                self.inst.stack.depth() > 0 || self.lambdas.last().is_some_and(|t| t.heads > 0);
+            return (is_function(kind) && (templated || self.in_inline_function(ctx)))
+                .then_some((ctx, None));
+        }
         if is_function(kind)
             && let Some(p) = self.lambda_mangle.default_arg
             && self.ast.decls.get(p).ctx() == Some(ctx)
@@ -941,6 +954,14 @@ impl Sema<'_, '_> {
                 i.kind != kiln_ast::templates::SpecKind::ExplicitSpecialization
             });
         (inline || templated).then_some((v, Some(v)))
+    }
+
+    /// Whether the innermost lambda (the one being numbered) is written in
+    /// the *lambda-declarator* or template head of the lambda enclosing it,
+    /// before that lambda's body opened.
+    fn in_lambda_declarator(&self) -> bool {
+        let n = self.lambdas.len();
+        n >= 2 && self.lambdas.get(n - 2).is_some_and(|l| !l.body_open)
     }
 
     /// clang `isInLineFunction`: `dc` or a lexically enclosing function

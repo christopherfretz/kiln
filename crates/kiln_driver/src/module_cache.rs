@@ -428,6 +428,9 @@ impl StdCache {
         a.dump_expr_extents = false;
         a.pp_record = false;
         a.dump_pp_record = false;
+        // A module file carries no builtin-macro literal table (spec/ast.md
+        // §22.4).
+        a.builtin_literals = false;
         a.cfg_stats = false;
         a.memory_report = false;
         // The importer's profile and report cover its own translation

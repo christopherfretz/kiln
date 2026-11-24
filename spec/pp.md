@@ -1646,6 +1646,23 @@ dump goldens under `tests/conformance/cpp.replace/record`,
   `__DATE__`, `__TIME__` and `__TIMESTAMP__` can be fixed through
   `reproducible_time` and `timestamp`.
 
+  **Builtin-macro literal table (WP-2821).** With
+  `PpOptions::builtin_literals` the preprocessor records which builtin
+  made each token that is the result of `__LINE__`, `__FILE__`,
+  `__FILE_NAME__`, `__BASE_FILE__`, `__COUNTER__`, `__INCLUDE_LEVEL__`,
+  `__DATE__`, `__TIME__`, `__TIMESTAMP__` or `__FLT_EVAL_METHOD__` (not
+  the feature queries, not `_Pragma`), keyed by the token's macro
+  location (each result has its own expansion entry; the scratch
+  spelling is shared between equal texts, so it is not the key). A token
+  `##` or `#` makes from operands one of which is recorded is recorded
+  with the first such operand's builtin. `Preprocessor::builtin_literal_of(loc)`
+  answers for a token as delivered, following its immediate-spelling
+  chain (a result substituted for a parameter has a macro-argument
+  location whose spelling is the result's). Off: nothing is kept, and
+  paste and `#` pay one branch. The parser turns it into the AST's
+  table (spec/ast.md §22). Not carried in snapshots (`snap.rs`
+  classifies the field as configuration + transient).
+
   **`__TIMESTAMP__` (WP-2331).** Without a fixed `timestamp` it is the
   modification time of the file being lexed (the innermost file frame,
   so a macro defined in a header that expands `__TIMESTAMP__` gives the

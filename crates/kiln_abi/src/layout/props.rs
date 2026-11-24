@@ -69,8 +69,12 @@ fn const_int(ast: &Ast, v: ConstValueId) -> Option<u128> {
 }
 
 /// The largest alignment, in bits, requested for `d` by `alignas` /
-/// `__attribute__((aligned))` on any of its declarations (clang
-/// `Decl::getMaxAlignment`); 0 if none. Encoding (spec/abi.md §3.1):
+/// `__attribute__((aligned))` on `d` or a declaration before it (clang
+/// `Decl::getMaxAlignment` of `d`, whose merged attributes are its own
+/// and the strictest earlier one; a later redeclaration's never reach
+/// it, so a layout cannot depend on when it is first computed); 0 if
+/// none. A record or enumeration is asked for its definition, a typedef
+/// for the declaration its sugar names. Encoding (spec/abi.md §3.1):
 /// an `ALIGNED` attribute's `a` is the argument `ExprId` (0 = no
 /// argument: the target's biggest alignment) and `b` a raw `QualType` for
 /// `alignas(type-id)`; `DeclArena::cold.alignment` holds further
@@ -82,7 +86,7 @@ pub(crate) fn max_align_attr(
     type_align_bits: &mut dyn FnMut(QualType) -> u64,
 ) -> u64 {
     let mut best = 0u64;
-    for r in redecls(ast, d) {
+    for r in ast.self_and_prev(d) {
         for a in attrs(ast, r) {
             if a.kind != AttrKind::ALIGNED {
                 continue;

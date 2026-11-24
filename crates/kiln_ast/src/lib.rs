@@ -15,6 +15,7 @@ pub mod annot;
 pub mod ast;
 pub mod attr;
 pub mod builder;
+pub mod builtin_literals;
 pub mod class;
 pub mod consteval_only;
 pub mod consts;

@@ -23,6 +23,7 @@
 //! | `written_refs` | own section | not in this encoding: `Sema`'s root writes it right after, as one length-prefixed section ([`Ast::put_written_refs`], spec/ast.md §18.10.1); read back empty and off here |
 //! | `decl_extents` | state | as data, then checked against the decl arena (spec/ast.md §19.6); the consumer sets recording from its own options, which the PCH identity makes the producer's |
 //! | `split_greaters` | state | as data (spec/ast.md §21.2) |
+//! | `builtin_literals` | transient | not written; read back empty: a consumer's table holds its own literals only (spec/ast.md §22.4) |
 
 use std::sync::Arc;
 
@@ -178,6 +179,7 @@ impl Snap for Ast {
             written_refs: _,
             decl_extents,
             split_greaters,
+            builtin_literals: _,
             symbols,
             inst,
         } = self;
@@ -268,6 +270,7 @@ impl Snap for Ast {
             written_refs: crate::written_refs::WrittenRefs::default(),
             decl_extents,
             split_greaters,
+            builtin_literals: crate::builtin_literals::BuiltinLiterals::default(),
             symbols,
             inst,
         };

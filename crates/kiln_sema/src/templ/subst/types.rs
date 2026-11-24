@@ -409,7 +409,13 @@ impl Substituter<'_, '_, '_> {
                 let e = self.ty(a.elem, loc)?;
                 // The written innermost `[` ([`Self::chunk_loc`]).
                 let at = self.chunk_loc.take().unwrap_or(loc);
+                // An instantiation-dependent bound kept on the type
+                // (WP-2720): substituted and checked again, so an
+                // ill-formed bound is a deduction failure
+                // ([temp.deduct.general]/7) or an error in an
+                // instantiation; its value is the original's.
                 if let Some(s) = a.size_expr {
+                    let s = self.expr(s)?;
                     return self.chunk(e, Chunk::Array { size: Some(s), loc: at }, loc);
                 }
                 // [temp.deduct]/11.1: the element checks of a bound
@@ -990,6 +996,13 @@ impl Substituter<'_, '_, '_> {
             TypeView::Paren(inner) => {
                 let i = self.ty(inner, loc)?;
                 Ok(self.sema.ast.types.paren_type(i))
+            }
+            // clang `TransformDecayedType`: the declared array type is
+            // substituted (its bound checked), then adjusted again
+            // (WP-2720).
+            TypeView::Decayed { original, .. } => {
+                let o = self.ty(original, loc)?;
+                Ok(self.sema.adjust_param_type(o))
             }
             TypeView::Attributed { kind, modified, equivalent } => {
                 let at = self.sema.nullability_loc(q, loc);

@@ -319,7 +319,23 @@ is substituted in the function's own context with
 numbered per parameter (`d_` in the local name) when the function is a
 member defined in its class, and otherwise has no number and mangles as
 the function's local `$_N` (`_ZZ4dfltIiEiPFivEEN3$_0clEv`; WP-203,
-`tests/codegen/lambda_default_arg_template.cpp`).
+`tests/codegen/lambda_default_arg_template.cpp`). A default argument
+substituted when its function is (a lambda's call operator, whose
+parameters the enclosing lambda's substitution rebuilds; a local class's
+member function; `Substituter::default_args`) is numbered the same way:
+the instantiated call operator is a member defined in its class, so the
+closure takes `d_` (`_ZZNK2vtIiEMUliE_clEiEd_NKUlvE_clEv`, a generic
+lambda's specialization `…clIiEEDaS_iEd_NKUlvE_clEv`; WP-2627).
+A lambda-expression written in another lambda's *lambda-declarator* or
+template head (a parameter's type or default argument), before that
+lambda's body, is numbered with no context declaration (clang's
+`Normal` kind; clang 19 and 22): in the enclosing function when it is
+inline or templated, else not at all. No enclosing variable, data member
+or class default argument numbers it, so `inline auto f = [](int x = []
+{ return 1; }()) {…};`'s inner closure is `$_0`, as are those of a static
+inline member's and a default member initializer's lambda
+(`Sema::in_lambda_declarator`; WP-2627,
+`tests/mangle/lambda_in_lambda_default_argument.cpp`).
 A default template argument ([temp.param]/10) is substituted at each use
 with `ManglingState.template_default` set (`templ/args.rs`
 `default_template_arg_in`; `templ/member.rs` when a class template
@@ -328,7 +344,15 @@ at namespace or class scope is a new type at each use and is numbered
 per <lambda-sig> in that scope, with no context declaration (clang 19
 and 22: `f() + f()` calls `f<UlvE_>` and `f<UlvE0_>`; WP-1062,
 `tests/conformance/temp.param/lambda-default-arg-mangling-two-units-run.cpp`).
-The closure parsed in the default itself gets no number.
+The closure parsed in the default itself gets no number (it takes
+none of the scope's: clang numbers `S::g<>` and `S::h<>`'s closures
+`NS_UlvE_E` and `NS_UlvE0_E`), so the parser sets no
+`template_default`. A local template's default (a generic lambda's
+template head; a local class has no member templates) is substituted in
+the template's class, the closure type: the closure is numbered there at
+each use (`[]<auto F = [] {}>() {}` calls `…clIXtlNS_UlvE_EEEEEDav`;
+WP-2628, `tests/mangle/lambda_template_parameter_default.cpp`); abi.md
+§8.9 gives its name.
 A function template specialization's signature is substituted with
 `ManglingState.signature` set to (pattern, the template's semantic
 context) (`Sema::begin_signature_mangling`, around `deduce_spec`'s steps
@@ -449,7 +473,9 @@ is set for every closure. `kiln_sema::lambda::owner`:
   closures too: a declaration whose text was parsed before its `DeclId`
   existed takes each closure created since the mark whose owner existed
   at the mark (`claimable`), unless that owner is a function whose body
-  holds the closure. Template parameters (`claim_template_param`), a
+  holds the closure and the claimer is no parameter: a parameter (of a
+  lambda, or of a block-scope function declaration, in that body) owns
+  the closures of its type and default argument (WP-2627). Template parameters (`claim_template_param`), a
   template head (`claim_template_head`, its requires-clause: the
   templated declaration whose template has the head's parameter list)
   and alias declarations (`claim_alias_closures`) claim closures only. A

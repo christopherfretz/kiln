@@ -1223,6 +1223,12 @@ pub struct Sema<'a, 'sm> {
     /// the reference a list-initialized temporary binds to (`'const E &'`,
     /// clang's entity type). Set around that construction only.
     pub(crate) ctor_diag_ty: Option<QualType>,
+    /// The `{` of the braced list a variable is direct-list-initialized
+    /// from and the variable's name (or the type of a `T{...}`
+    /// temporary): the copy a single element of an aggregate class makes
+    /// begins there ([dcl.init.list]/3.2, clang's construction range;
+    /// spec/ast.md §21.2). Set around that initialization only.
+    pub(crate) direct_list_entity: Option<(Loc, Loc)>,
     /// The "passing argument to parameter here" note of a non-aggregate
     /// class parameter list-initialized from a braced argument (`f({1})`):
     /// taken by the outermost list constructor call, whose explicit or
@@ -1837,6 +1843,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             undefined_used_seen: kiln_source::fx::FxHashSet::default(),
             ctor_entity: None,
             ctor_diag_ty: None,
+            direct_list_entity: None,
             list_param_note: None,
             list_ctor_active: Vec::new(),
             ref_temp_note: std::cell::Cell::new(None),

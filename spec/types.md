@@ -493,7 +493,7 @@ libstdc++ 14's `<complex>` uses them where `_Float128` is not
 | `LValueRef` | I | C | data = referee QualType | reference collapsing ([dcl.ref]/7) is done by the constructor: the referee is never a reference |
 | `RValueRef` | I | C | data = referee QualType | |
 | `MemberPointer` | I | C | pairs [pointee QualType, class TypeId] | class stays sugared in sugar nodes |
-| `ConstantArray` | I | C | data = arrays index | `size_expr` (`int[N]` as written in a template) is sugar: canonical has `None` |
+| `ConstantArray` | I | C | data = arrays index | `size_expr` is sugar: canonical has `None`; set only for an instantiation-dependent bound whose value is known (§7.2 "Kept bounds") |
 | `IncompleteArray` | I | C | data = element QualType | `int[]` |
 | `VariableArray` | O | C | pairs [element, size ExprId] | GNU VLA; never equal to another type (as clang) |
 | `DependentSizedArray` dep | I | S/C | pairs [element, size ExprId] / [element, ProfileId] | §7.2 |
@@ -515,7 +515,8 @@ libstdc++ 14's `<complex>` uses them where `_Float128` is not
 | `Elaborated` | I | S | aux = keyword (none/struct/class/union/enum/typename), pairs [NnsId or 0, named QualType] | created **only** when a keyword or a qualifier was written (§15 R4) |
 | `QualifiedArray` | I | S | aux = Quals, data = base TypeId | §2.1 |
 | `Paren` | I | S | data = inner QualType | declarator grouping parentheses (clang's `ParenType`, WP-191; `paren_type`), created only around a pointer, reference or member-pointer declarator (`int (*p)`, `int ((&r))`): never around the outermost type or a function or array type, which clang's printer shows no differently. Prints as `(inner)` in the declarator position; `PrintOptions::no_parens` prints the inner type instead (the `aka` check, clang's `desugarForDiagnostic` looking through it) |
-| `Decayed`, `Adjusted` | — | — | — | **not represented** (§15 R6): parameter types are stored adjusted; `ParmVar` keeps the written type if it differs |
+| `Decayed` | I | S | pairs [original QualType, adjusted QualType] | clang's `DecayedType` (WP-2720; `decayed`), built only by sema's `adjust_param_type` for an array parameter whose outermost bound, as written, is an instantiation-dependent expression (a `DependentSizedArray`, or a `ConstantArray` with `size_expr`): the adjusted pointer lost that bound, which substitution must still check (§7.2 "Kept bounds"). Canonical = canonical(adjusted); flags = adjusted's, plus `INSTANTIATION_DEPENDENT` (not `DEPENDENT`) and `UNEXPANDED_PACK` from `original`. Prints as the adjusted type (clang `printAdjustedBefore`). Appended last to `TypeKind` |
+| `Adjusted` | — | — | — | **not represented** (§15 R6): other parameter types are stored adjusted; `ParmVar` keeps the written type if it differs |
 | `TemplateTypeParm` | D | S | data = `TemplateTypeParm` `DeclId` | the name a template uses; canonical = the canonical parm below |
 | `CanonTemplateTypeParm` dep | I | C | aux = depth (15 bits) \| pack bit, data = index | prints `type-parameter-D-I`; makes `template<class T> f(T)` and `template<class U> f(U)` the same type |
 
@@ -826,6 +827,33 @@ canonical form of a dependent type must identify *equivalent* types:
 - After substitution in an instantiation, the same constructors run on
   the substituted operands and produce non-dependent canonical types; no
   separate "dependent to concrete" mapping exists.
+- **Kept bounds (WP-2720).** An array bound whose value is known but
+  whose expression is instantiation-dependent (`char[sizeof(sizeof(f(T())))]`:
+  not value-dependent, but it names `T`) builds a `ConstantArray` that
+  keeps the expression in `size_expr` (sema `kept_array_bound`, as
+  clang's `getConstantArrayType` keeps a `SizeExpr` only when it is
+  instantiation-dependent; any other bound builds `None`, at no cost).
+  The node is `INSTANTIATION_DEPENDENT` (and `UNEXPANDED_PACK` when the
+  bound names an unexpanded pack, recorded by `note_pack_bound`, so
+  `char[sizeof(sizeof(Ts))]...` is a pack expansion), so substitution
+  visits it: the expression is substituted and the array rebuilt, so an
+  ill-formed bound is a deduction failure ([temp.deduct.general]/7) or,
+  in an instantiation, a diagnosed error; its value is the original's.
+  The expression, and through it the names and found sets recorded in
+  it (spec/ast.md §18.12), stay reachable from the type.
+  The canonical type is the plain `ConstantArray` of the value, without
+  the expression, as in clang: two declarations whose bounds differ
+  only in such an expression, or that write the value itself
+  (`char(*)[8]`), declare the same template. [temp.over.link]/5 makes
+  the expressions' equivalence decide, and two that are functionally
+  equivalent but not equivalent are ill-formed, no diagnostic required
+  ([temp.over.link]/7); kiln, like clang 19 and 22, does not diagnose
+  them. Deviation: kiln substitutes the first declaration's bound,
+  clang the latest one's (the declaration lookup found). A
+  *value-dependent* bound stays a `DependentSizedArray` profiled as
+  above, so `char[sizeof(f(T()))]` and `char[sizeof(g(T()))]` are two
+  templates. An array parameter adjusted to a pointer keeps a
+  kept or value-dependent outermost bound in `Decayed` sugar (§5.3).
 
 **Landed (WP-116).** The profiler is `kiln_ast::types::profile_expr`
 (`crates/kiln_ast/src/types/profile_expr.rs`), modelled on clang's
@@ -1343,8 +1371,9 @@ stores ids.
   ~20 ns on the hottest path of template instantiation. `TypeContext`
   takes `&mut self` for construction and is `Send` but not shared.
 - **R6 `TypeLoc` (clang's per-occurrence source-location tree),
-  `Decayed`, `Adjusted` nodes** (`Paren` is represented since WP-191, for
-  AST dump parity). TypeLoc roughly doubles type-related
+  `Adjusted` nodes** (`Paren` is represented since WP-191, for
+  AST dump parity; `Decayed` since WP-2720, only over an
+  instantiation-dependent array bound, §7.2). TypeLoc roughly doubles type-related
   memory for declarations and exists for tooling (rewriters, IDE ranges)
   that kiln does not have. Diagnostics point at the declarator's
   location stored in the declaration. Parameter types are stored

@@ -108,6 +108,11 @@ pub struct Ast {
     /// `token_end`, as clang measures it. Always recorded; written into
     /// snapshots and carried in module images.
     pub split_greaters: kiln_source::fx::FxHashSet<kiln_source::Loc>,
+    /// The builtin-macro literal table (§22, WP-2821): which builtin
+    /// macro each literal came from, filled by the parser only when the
+    /// preprocessor keeps its table (`PpOptions::builtin_literals`);
+    /// read with [`Ast::literal_builtin`]. Transient in snapshots.
+    pub builtin_literals: crate::builtin_literals::BuiltinLiterals,
     symbols: Arc<Interner>,
     inst: InstantiationMeter,
 }
@@ -428,9 +433,36 @@ impl Ast {
             _ => false,
         };
         let kid = if first { self.exprs.first_child(e, &self.lists) } else { None };
+        // A member access through an implicit `this` (`Q::f` in a member
+        // function) begins at its qualifier's recorded begin, not at the
+        // `this` (made at the member's name): clang's `MemberExpr::
+        // getBeginLoc` of an implicit access (WP-2722, spec/ast.md §21.2).
+        if n.kind() == ExprKind::MemberExpr
+            && let Some(&b) = self.templates.expr_begin.get(e)
+            && kid.is_some_and(|k| self.is_implicit_this(k))
+        {
+            return Err(b);
+        }
         match kid {
             Some(k) => Ok(k),
             None => Err(self.templates.expr_begin.get(e).copied().unwrap_or(n.loc())),
+        }
+    }
+
+    /// Whether `e` is an implicit `this` (under implicit conversions):
+    /// the object of a member access written without one.
+    pub(crate) fn is_implicit_this(&self, mut e: ExprId) -> bool {
+        loop {
+            match self.exprs.get(e).kind() {
+                ExprKind::ImplicitCastExpr | ExprKind::MaterializeTemporaryExpr => {
+                    match self.exprs.first_child(e, &self.lists) {
+                        Some(x) => e = x,
+                        None => return false,
+                    }
+                }
+                ExprKind::CXXThisExpr => return self.exprs.this_is_implicit(e),
+                _ => return false,
+            }
         }
     }
 
@@ -477,6 +509,7 @@ impl Ast {
             written_refs: crate::written_refs::WrittenRefs::default(),
             decl_extents: crate::decl_extents::DeclExtents::default(),
             split_greaters: kiln_source::fx::FxHashSet::default(),
+            builtin_literals: crate::builtin_literals::BuiltinLiterals::default(),
             symbols,
             inst: InstantiationMeter::default(),
         }
@@ -959,6 +992,15 @@ impl Ast {
     /// All declarations of `d`'s entity, latest first.
     pub fn redecls_of(&self, d: DeclId) -> impl Iterator<Item = DeclId> + '_ {
         std::iter::successors(Some(self.latest(d)), move |&x| self.prev(x))
+    }
+
+    /// `d` and the declarations of its entity before it, `d` first: the
+    /// declarations whose alignment attributes `d` carries (clang
+    /// `mergeAlignedAttrs` gives each redeclaration the strictest earlier
+    /// request, so `Decl::getMaxAlignment` of `d` never sees a later
+    /// declaration's; spec/abi.md §3.1, WP-2830).
+    pub fn self_and_prev(&self, d: DeclId) -> impl Iterator<Item = DeclId> + '_ {
+        std::iter::successors(Some(d), move |&x| self.prev(x))
     }
 
     /// Records `d` as the definition of its entity (once).
@@ -1703,6 +1745,9 @@ impl Ast {
             r.push(row);
         }
         if let Some(row) = self.decl_extents.mem_row() {
+            r.push(row);
+        }
+        if let Some(row) = self.builtin_literals.mem_row() {
             r.push(row);
         }
         r.push(MemRow::new(

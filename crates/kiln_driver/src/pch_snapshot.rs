@@ -133,7 +133,7 @@ pub(crate) const MAGIC: [u8; 8] = *b"KILNSNAP";
 /// driver warning id; version 7 (WP-1433) a new AST cold map
 /// (`offsetof_layout`); version 8 (WP-1426) the SME diagnostic ids and
 /// attribute kinds and the 32-bit `FuncInfo`.
-pub(crate) const FORMAT_VERSION: u32 = 158;
+pub(crate) const FORMAT_VERSION: u32 = 160;
 /// The length of the magic and the format version.
 pub(crate) const HEADER_LEN: usize = 12;
 
@@ -182,6 +182,9 @@ fn excluded(args: &Args) -> Args {
         pp_record: d.pp_record,
         dump_pp_record: d.dump_pp_record,
         dump_pp_record_source_order: d.dump_pp_record_source_order,
+        // The builtin-macro literal table is the consumer's own: a
+        // snapshot carries none (spec/ast.md §22.4).
+        builtin_literals: d.builtin_literals,
         cfg_stats: d.cfg_stats,
         memory_report: d.memory_report,
         time_trace: d.time_trace,

@@ -103,7 +103,7 @@ pub(crate) use locs::Locs;
 use locs::{FileRec, LocTable, SlocRec};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 85;
+pub(crate) const IMAGE_VERSION: u32 = 86;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -3763,7 +3763,10 @@ impl Writer<'_, '_, '_> {
             TypeView::Pointer(q) => TyRec::Pointer(self.qref(q)?),
             TypeView::LValueRef(q) => TyRec::LRef(self.qref(q)?),
             TypeView::RValueRef(q) => TyRec::RRef(self.qref(q)?),
-            TypeView::ConstantArray(a) => TyRec::CArray(self.qref(a.elem)?, a.size),
+            // A kept bound (WP-2720) is an expression type ([`exprs`]).
+            TypeView::ConstantArray(a) if a.size_expr.is_none() => {
+                TyRec::CArray(self.qref(a.elem)?, a.size)
+            }
             TypeView::IncompleteArray(q) => TyRec::IArray(self.qref(q)?),
             TypeView::Complex(q) => TyRec::Complex(self.qref(q)?),
             TypeView::CanonTemplateTypeParm { depth, index, pack } => {

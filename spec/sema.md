@@ -4016,7 +4016,10 @@ instantiation unless stated.
   attribute a handler drops, e.g. an `alloc_size` on a non-pointer
   return, is not reported again). Not when the definition or a
   declaration before it has one of the same clang class (`maybe_unused`
-  is `unused`). In C the definition is one with an initializer (a
+  is `unused`). A GNU `aligned` kept that way on a class or enumeration
+  redeclaration kiln folds into the complete definition is not attached
+  (the layout reads the definition only; spec/abi.md §3.1 "Which
+  declarations", WP-2830). In C the definition is one with an initializer (a
   tentative definition is not). An explicit or partial specialization of
   a class template merges nothing and is not checked. Exempt: the
   attributes with rules of their own after a definition (`alias`,

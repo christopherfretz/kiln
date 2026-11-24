@@ -63,8 +63,14 @@ impl Ast {
                 return false;
             }
             match self.types.view(x.ty()) {
+                // The declaration the sugar names carries the attributes
+                // of the declarations before it (`typedef int R
+                // __attribute__((aligned(8))); typedef int R;` names an
+                // 8-aligned `R`), never a later one's (WP-2830).
                 TypeView::Typedef { decl, .. }
-                    if self.decls.get(decl).has(DeclFlags::HAS_ATTRS) =>
+                    if self
+                        .self_and_prev(decl)
+                        .any(|r| self.decls.get(r).has(DeclFlags::HAS_ATTRS)) =>
                 {
                     return true;
                 }

@@ -351,6 +351,8 @@ KILN DEVELOPMENT:
                           [kiln] The same, each condition's reads in source
                           order
   -fkiln-pp-record        [kiln] Keep the preprocessing record (for measuring)
+  -fkiln-builtin-literals [kiln] Record which builtin macro made each literal
+                          (shown by -fdump-ast)
   -fkiln-cfg-stats        [kiln] With -fsyntax-only: control-flow graph sizes
   -fkiln-cfg-max-elems=<n>
                           [kiln] Control-flow graph element limit per body

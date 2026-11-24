@@ -3111,6 +3111,7 @@ impl Parser<'_, '_> {
 
     fn parse_number(&mut self) -> ExprId {
         let t = self.bump();
+        self.note_builtin_literal(t.span.lo, [t.span.lo]);
         let sp = self.spelling_of(&t);
         let n = classify_number_in(&sp, self.std, self.lex_opts.c);
         self.literal_diags(&t, &sp, &n.diags, None);
@@ -3142,6 +3143,7 @@ impl Parser<'_, '_> {
 
     fn parse_char(&mut self) -> ExprId {
         let t = self.bump();
+        self.note_builtin_literal(t.span.lo, [t.span.lo]);
         let sp = self.spelling_of(&t);
         let invalid = invalid_utf8(self.sm, &t, &sp, &self.lex_opts);
         let c = decode_char_from_source(&sp, self.lit_opts, &invalid);
@@ -3178,6 +3180,7 @@ impl Parser<'_, '_> {
             self.error_here(DiagId::parse_expected_expression);
             return None;
         }
+        self.note_builtin_literal(toks[0].span.lo, toks.iter().map(|t| t.span.lo));
         let mut pieces: Vec<(StringLiteral<'_>, Loc)> = Vec::new();
         let mut error = false;
         // clang's `hadError`: a "soft" escape error in an unevaluated

@@ -504,6 +504,23 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         p
     }
 
+    /// The builtin-macro literal table (spec/ast.md §22, WP-2821): enters
+    /// the literal whose first token is at `key` when one of its tokens
+    /// (at `locs`) is a builtin macro's result, or was pasted or
+    /// stringized from one. One branch when the preprocessor keeps no
+    /// table.
+    pub(crate) fn note_builtin_literal(&mut self, key: Loc, locs: impl IntoIterator<Item = Loc>) {
+        let pp = self.src.get_mut().preprocessor();
+        if !pp.builtin_literals_on() {
+            return;
+        }
+        if let Some(b) = locs.into_iter().find_map(|l| pp.builtin_literal_of(l))
+            && let Some(m) = builtin_macro(b)
+        {
+            self.s.ast.builtin_literals.insert(key, m);
+        }
+    }
+
     /// Finishes parsing (handling the events after the last token),
     /// returning the semantic state and the token source.
     pub fn finish(mut self) -> (Sema<'a, 'sm>, TokenSource<'a, 'sm>) {
@@ -2518,4 +2535,24 @@ fn close_angles(stack: &mut Vec<Punct>, p: Option<Punct>, from: usize) -> Option
 /// `'p'` as clang quotes a token in "expected" diagnostics.
 pub(crate) fn quote(p: Punct) -> String {
     format!("'{}'", p.as_str())
+}
+
+/// The AST's name of builtin `b`, for the ones the preprocessor's
+/// builtin-macro literal table records (spec/ast.md §22.1).
+fn builtin_macro(b: kiln_pp::Builtin) -> Option<kiln_ast::builtin_literals::BuiltinMacro> {
+    use kiln_ast::builtin_literals::BuiltinMacro as M;
+    use kiln_pp::Builtin as B;
+    Some(match b {
+        B::Line => M::Line,
+        B::File => M::File,
+        B::FileName => M::FileName,
+        B::BaseFile => M::BaseFile,
+        B::Counter => M::Counter,
+        B::IncludeLevel => M::IncludeLevel,
+        B::Date => M::Date,
+        B::Time => M::Time,
+        B::Timestamp => M::Timestamp,
+        B::FltEvalMethod => M::FltEvalMethod,
+        _ => return None,
+    })
 }

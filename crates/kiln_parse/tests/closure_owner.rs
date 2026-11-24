@@ -79,13 +79,13 @@ fn describe(ast: &Ast, d: DeclId) -> String {
 
 /// Each closure's line and owner, in creation order.
 fn owners() -> Vec<(u32, String)> {
-    owners_with(|ast| ast)
+    owners_with(SRC, |ast| ast)
 }
 
-/// [`owners`] of the AST `f` gives for the parsed one.
-fn owners_with(f: impl FnOnce(Ast) -> Ast) -> Vec<(u32, String)> {
+/// [`owners`] of source `src`, in the AST `f` gives for the parsed one.
+fn owners_with(src: &str, f: impl FnOnce(Ast) -> Ast) -> Vec<(u32, String)> {
     let sm = SourceManager::new();
-    let file = sm.add_virtual("t.cpp", SRC.to_owned()).expect("location space");
+    let file = sm.add_virtual("t.cpp", src.to_owned()).expect("location space");
     let interner = Arc::new(Interner::new());
     let sink = MemorySink::new();
     let engine = DiagEngine::new(&sm, &DiagOptions::default(), sink.clone());
@@ -178,6 +178,65 @@ fn closure_owners_expr_prim_lambda_closure_2() {
     assert_eq!(got, want);
 }
 
+/// Lambdas in the default arguments of a lambda's parameters (one case
+/// per line): the parameter owns the closure, as for a function's
+/// parameter ([dcl.fct.default]/3, [expr.prim.lambda.general]/3).
+const LAMBDA_DEFAULTS: &str = "auto f = [](int x = [] { return 1; }()) { return x; };\n\
+inline int fn() {\n\
+  auto l = [](int y = [] { return 2; }()) { return y; };\n\
+  auto gl = [](auto a, int z = [] { return 3; }()) { return a + z; };\n\
+  auto nn = [](int p = [](int q = [] { return 4; }()) { return q; }()) { return p; };\n\
+  struct L { int m(int r = [] { return 5; }()) { return r; } };\n\
+  struct M { int k = [](int w = [] { return 6; }()) { return w; }(); };\n\
+  struct N { int n() { auto o = [](int v = [] { return 8; }()) { return v; }; return o(); } };\n\
+  return l() + gl(1) + nn() + L().m() + M().k + N().n();\n\
+}\n\
+template <class T> int tf() {\n\
+  auto t = [](T u = [] { return T(7); }()) { return u; };\n\
+  return t();\n\
+}\n\
+int use() { return f() + fn() + tf<int>(); }\n";
+
+/// Each closure of [`LAMBDA_DEFAULTS`] is owned by the parameter whose
+/// default argument holds it, nested and generic lambdas, a local class's
+/// member function and an instantiation included (spec/ast.md §5.9).
+#[test]
+fn closure_owners_lambda_param_default_dcl_fct_default_3() {
+    let got = owners_with(LAMBDA_DEFAULTS, |ast| ast);
+    let got: Vec<(u32, &str)> = got.iter().map(|(l, d)| (*l, d.as_str())).collect();
+    let want: &[(u32, &str)] = &[
+        // At namespace scope: the variable, then the parameter.
+        (1, "Var f"),
+        (1, "ParmVar x"),
+        // In a function body: the function owns the lambda, its parameter
+        // the closure of the default argument (nested: the innermost
+        // parameter); a generic lambda's parameter too.
+        (3, "Function fn"),
+        (3, "ParmVar y"),
+        (4, "Function fn"),
+        (4, "ParmVar z"),
+        (5, "Function fn"),
+        (5, "ParmVar p"),
+        (5, "ParmVar q"),
+        // A local class's member function, default member initializer and
+        // member function body.
+        (6, "ParmVar r"),
+        (7, "Field k"),
+        (7, "ParmVar w"),
+        (8, "CXXMethod n"),
+        (8, "ParmVar v"),
+        // The generic lambda's default argument, instantiated for its
+        // specialization's parameter at the call `gl(1)`.
+        (4, "ParmVar z spec"),
+        // A function template: the pattern's, then the specialization's.
+        (12, "Function tf"),
+        (12, "ParmVar u"),
+        (12, "Function tf spec"),
+        (12, "ParmVar u spec"),
+    ];
+    assert_eq!(got, want);
+}
+
 /// A module interface whose closures have owners other than their
 /// contexts (each on its own line). A lambda in a type (`decltype([] {})`)
 /// is not carried by the image (a replay fallback), so none is here.
@@ -193,7 +252,7 @@ export inline int uc() { return ft(1); }\n";
 /// answers as the parsed one.
 #[test]
 fn closure_owners_survive_the_pch_snapshot() {
-    let restored = owners_with(|ast| {
+    let restored = owners_with(SRC, |ast| {
         let bytes = kiln_snap::to_bytes(&ast);
         kiln_snap::from_bytes::<Ast>(&bytes).expect("the snapshot decodes")
     });

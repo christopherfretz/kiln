@@ -1110,6 +1110,14 @@ impl Sema<'_, '_> {
                 ExprKind::ImplicitCastExpr | ExprKind::ConstantExpr | ExprKind::ParenExpr => {
                     e = exprs.operand(e);
                 }
+                // `ts...[0]` names the pack its id-expression names, as
+                // `ts...` does (clang's `PackIndexingExpr` holds a
+                // `DeclRefExpr` to it): only the indexing is dependent
+                // (WP-2721, spec/ast.md §18.5).
+                ExprKind::PackIndexingExpr => match ExprId::try_new(n.a()) {
+                    Some(p) => e = p,
+                    None => return Target::Unresolved,
+                },
                 // An overloaded member access is a `MemberExpr` of the
                 // overload type with its set on the side (`member_overload`).
                 ExprKind::MemberExpr

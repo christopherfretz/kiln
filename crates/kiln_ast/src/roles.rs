@@ -442,6 +442,7 @@ pub static TYPE_ROLES: [TypeRoles; TypeKind::COUNT] = {
         ty(K::UnresolvedUsing, B, D, &[]),
         ty(K::Paren, Z, T, &[]),
         ty(K::DependentAddrSpace, Role::Bits(&[PROFILE_BIT]), PAIR, &[T, PROFILED]),
+        ty(K::Decayed, Z, PAIR, &[T, T]),
     ]
 };
 

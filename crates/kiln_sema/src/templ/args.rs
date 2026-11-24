@@ -2249,12 +2249,25 @@ impl Sema<'_, '_> {
             // ([temp.param]/12; clang's `ContextRAII` in
             // `SubstDefaultTemplateArgument` pushes an undelayed state).
             let delayed = std::mem::take(&mut self.delayed_access_depth);
+            // A local template's class (a generic lambda's closure type, a
+            // local class): the closure type is created and numbered there
+            // (clang's `ContextRAII(Template->getDeclContext())`: `[]<auto F
+            // = [] {}>() {}` calls `...clIXtlNS_UlvE_EEEEEDav`).
+            let class =
+                self.ast.decls.get(tmpl).ctx().filter(|&c| {
+                    self.kind_of(c) == DeclKind::CXXRecord && self.decl_in_local_scope(c)
+                });
             let r = self
                 .in_template_context(tmpl, |s| {
+                    let outer = class.map(|c| std::mem::replace(&mut s.ctx, c));
                     let mut sub = Substituter::new(s, &args);
                     sub.declarator_name = name;
                     sub.chunk_loc = chunk;
-                    sub.template_arg(def, at)
+                    let r = sub.template_arg(def, at);
+                    if let Some(c) = outer {
+                        s.ctx = c;
+                    }
+                    r
                 })
                 .map_err(|_| ());
             self.delayed_access_depth = delayed;

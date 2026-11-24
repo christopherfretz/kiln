@@ -19,10 +19,12 @@
 //!   parameter, an alias, a template head's requires-clause) claims the
 //!   closures created since its start whose owner existed then
 //!   ([`Sema::claim_closures`]), so the innermost claimer wins. A
-//!   function whose body holds the closure is never narrowed: a closure
-//!   in a function body belongs to that function, not to a block-scope
-//!   declaration. Instantiation claims too: a substituted class member
-//!   and a function template specialization's signature.
+//!   function whose body holds the closure is narrowed only by a
+//!   parameter: a closure in a function body belongs to that function,
+//!   not to a block-scope variable, but one in the type or default
+//!   argument of a parameter of a lambda there belongs to that parameter.
+//!   Instantiation claims too: a substituted class member and a function
+//!   template specialization's signature.
 //!
 //! A claim by a template is a claim by its templated declaration.
 
@@ -181,6 +183,10 @@ impl Sema<'_, '_> {
         };
         let d = templated(d);
         let pattern = pattern.map(templated);
+        // A parameter's text is its type and default argument, never a
+        // block: it narrows a closure of the function whose body is open
+        // too (a parameter of a lambda in that body, [dcl.fct.default]/3).
+        let param = self.kind_of(d) == DeclKind::ParmVar;
         let mut i = self.ast.exprs.lambdas.len();
         while i > 0 {
             let id = LambdaId::new(u32::try_from(i).unwrap_or(u32::MAX));
@@ -189,7 +195,7 @@ impl Sema<'_, '_> {
                 break;
             }
             i -= 1;
-            if !self.claimable(c, after) {
+            if !self.claimable(c, after, param) {
                 continue;
             }
             let ok = match pattern {
@@ -268,20 +274,25 @@ impl Sema<'_, '_> {
             .rev()
             .map(|i| lambdas.get(LambdaId::new(u32::try_from(i).unwrap_or(u32::MAX))).closure)
             .take_while(|c| c.index() > after)
-            .any(|c| self.claimable(c, after) && self.subst_closures.binary_search(&c).is_err())
+            .any(|c| {
+                self.claimable(c, after, false) && self.subst_closures.binary_search(&c).is_err()
+            })
     }
 
     /// Whether a claim from the declaration count `after` may narrow the
     /// owner of closure `c`: one that existed then, unless it is a
     /// function whose body holds `c` (a block-scope declaration never
     /// owns a closure; a function's own signature closure, whose context
-    /// is outside it, may be claimed by its specialization).
-    fn claimable(&self, c: DeclId, after: u32) -> bool {
+    /// is outside it, may be claimed by its specialization). A claim by a
+    /// parameter (`param`) narrows that function too: the parameter of a
+    /// lambda or of a block-scope function declaration in its body owns
+    /// the closures of its type and default argument.
+    fn claimable(&self, c: DeclId, after: u32, param: bool) -> bool {
         let Some(o) = self.ast.closure_owner(c) else { return false };
         if o.index() > after {
             return false;
         }
-        if !self.kind_of(o).is_function() {
+        if param || !self.kind_of(o).is_function() {
             return true;
         }
         self.ast.decls.get(c).ctx().is_none_or(|x| !self.within(x, o))

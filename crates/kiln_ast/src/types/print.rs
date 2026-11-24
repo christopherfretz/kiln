@@ -995,6 +995,7 @@ fn should_aka(ctx: &TypeContext, q: QualType, depth: u32) -> bool {
             TypeView::Elaborated { .. }
             | TypeView::Using { .. }
             | TypeView::Paren(_)
+            | TypeView::Decayed { .. }
             | TypeView::SubstTemplateTypeParm { .. }
             | TypeView::Attributed { .. }
             | TypeView::Auto { deduced: Some(_), .. } => {
@@ -1167,7 +1168,10 @@ fn desugar_top_written(
         match view {
             TypeView::Typedef { decl, .. } => canonical = names.implicit_typedef(decl),
             TypeView::Elaborated { .. } => canonical = false,
-            TypeView::Paren(_) | TypeView::Attributed { .. } | TypeView::QualifiedArray { .. } => {}
+            TypeView::Paren(_)
+            | TypeView::Decayed { .. }
+            | TypeView::Attributed { .. }
+            | TypeView::QualifiedArray { .. } => {}
             _ => canonical = true,
         }
         q = n;
@@ -1415,6 +1419,7 @@ impl Printer<'_> {
                 | TypeView::VariableArray { elem: e, .. }
                 | TypeView::DependentSizedArray { elem: e, .. } => t = e.ty(),
                 TypeView::PackIndexing { pattern, .. } => t = pattern.ty(),
+                TypeView::Decayed { adjusted, .. } => t = adjusted.ty(),
                 v => {
                     return !matches!(
                         v,
@@ -1658,6 +1663,8 @@ impl Printer<'_> {
                     self.push("(");
                 }
             }
+            // clang's printAdjustedBefore: the adjusted type.
+            TypeView::Decayed { adjusted, .. } => self.before(adjusted),
             TypeView::Complex(e) => {
                 self.push("_Complex ");
                 self.before(e);
@@ -1983,6 +1990,7 @@ impl Printer<'_> {
                 }
                 self.after(inner);
             }
+            TypeView::Decayed { adjusted, .. } => self.after(adjusted),
             TypeView::Complex(e) => self.after(e),
             TypeView::Vector { elem, count, kind } => {
                 self.after(elem);

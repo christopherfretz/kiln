@@ -10,6 +10,28 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- A refused evaluation session's diagnostics as data (WP-2827,
+  spec/eval-session.md §2, spec/diag.md §10.4):
+  `SessionRefused::TuHasErrors` and `Stopped` carry `records`
+  (`kiln_diag::DiagRecord`: id, severity, message, group, option, caret
+  location as buffer and offset plus presumed file, line and column, and
+  the notes), which outlive the call (`SessionRefused::records()`,
+  `kiln_diag::diag_records`, `SessionFrontEnd::records`); `Stopped`
+  carries `stack_exhausted`, the phase when the native-stack guard
+  stopped the unit (`SessionRefused::stack_exhausted()`,
+  `StackPhase::of_record`), so a client no longer reads the rendered
+  line to recognise a stack trip.
+- Builtin-macro literal provenance (WP-2821, spec/ast.md §22, spec/pp.md
+  "Builtin macros"): with `-fkiln-builtin-literals`
+  (`FrontEndOptions::builtin_literals`, `PpOptions::builtin_literals`)
+  a tooling client reads which builtin macro a literal came from with
+  `Ast::literal_builtin`: `__LINE__`, `__FILE__`, `__FILE_NAME__`,
+  `__BASE_FILE__`, `__COUNTER__`, `__INCLUDE_LEVEL__`, `__DATE__`,
+  `__TIME__`, `__TIMESTAMP__` and `__FLT_EVAL_METHOD__`, written
+  directly, through a user macro, as a macro argument, or pasted and
+  stringized into the literal, any piece of a concatenated string
+  included. `-fdump-ast` appends ` from <name>` to such a literal. Off
+  by default and free when off.
 - `Ast::exception_spec_computed` (WP-2505, spec/ast.md §4.2): a tooling
   client tells an explicitly defaulted function's written exception
   specification (`S() noexcept(false) = default;`) from one computed
@@ -997,6 +1019,69 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   packagers").
 
 ### Fixed
+
+- An array bound whose value is known but whose expression is
+  instantiation-dependent (`char (*)[sizeof(sizeof(f(T())))]`) keeps its
+  expression on the constant array type (WP-2720, spec/types.md §7.2
+  "Kept bounds"), as clang does: substitution checks it, so a bound
+  that is ill-formed for the deduced arguments is a substitution
+  failure and overload resolution picks another candidate
+  ([temp.deduct.general]/7), an ill-formed bound in an instantiated
+  function template or class template member is diagnosed, a pack in
+  such a bound expands (`char[sizeof(sizeof(Ts))]...`), and a tooling
+  client finds the bound's names and their found sets through the type
+  (the specializations' rows are recorded). An array parameter adjusted
+  to a pointer keeps a kept or value-dependent bound in new `Decayed`
+  sugar (clang's `DecayedType`), so `void (*)(int[sizeof(f(T()))])` and
+  `template <int N> void v(int a[N])` with `v<-1>` are substitution
+  failures too. The canonical type is unchanged (the value), so
+  redeclarations still match as in clang. PCH snapshots and module
+  images (`IMAGE_VERSION` 86) carry both.
+- The pack's name in a pack-indexing expression (`ts...[0]`) is a
+  written reference to the pack, as in `ts...`, not a dependent name
+  (WP-2721).
+- `Ast::begin_loc` begins a qualified call of a non-static member
+  through an implicit `this` (`Q::f(2)`, `Q::t<int>(4)`, the name
+  rebuilt from an overload set) at its qualifier, where it began at the
+  member's name; diagnostics anchored there move with it (WP-2722).
+- A constructor called for a braced list ends at the `}` (`N m{1}`,
+  `h({1})`), and the copy that a list's single element of the class
+  makes (`g({x})`, `O v{x}`, [dcl.init.list]/3.2) is that list's
+  construction, braces included, as in clang's tree (WP-2723; PCH
+  `FORMAT_VERSION` 160, a transient sema field).
+- A member variable template's specialization (`d.twice<7>`) records its
+  template arguments and its found set outside a template too
+  (WP-2724).
+- A closure in the default argument (or type) of a lambda's parameter
+  is owned by that parameter (`Ast::closure_owner`, spec/ast.md §5.9),
+  in a function body too, nested lambdas' innermost; its instantiation
+  by the instantiated parameter (WP-2627).
+- Closures in a lambda's parameter-declaration-clause take clang 19's and
+  22's names: numbered in the enclosing function only when it is inline
+  or templated, never in an enclosing variable's, data member's or
+  default argument's context (`inline auto f = [](int x = [] {...}())`'s
+  inner closure is `$_0`); one in a substituted lambda's default argument
+  (a variable or function template, a generic lambda's specialization) is
+  numbered per the instantiated parameter (`...clEiEd_NKUlvE_clEv`)
+  (WP-2627).
+- A lambda in a generic lambda's default template argument is numbered
+  in that lambda's closure type at each use, and a closure type whose
+  context is a class inside a function mangles as a nested name, as in
+  clang 19 and 22 (`_Z2tkIN2a3UlTyvE_UlvE_EEiv`) (WP-2628).
+- An `aligned` attribute on a later redeclaration no longer makes a
+  layout depend on when it is first computed (WP-2830, spec/abi.md
+  §3.1): a declaration's alignment is read from it and the declarations
+  before it (clang `mergeAlignedAttrs`), never a later one's. `struct
+  __attribute__((aligned(16))) C;` after an `aligned(8)` definition
+  leaves `alignof(C)` 8 and a containing class's size unchanged (it was
+  32 instead of 16 when first laid out after the redeclaration); a field
+  typed with a typedef keeps that typedef declaration's alignment after
+  the typedef is redeclared with another; `typedef int R
+  __attribute__((aligned(8))); typedef int R;` gives `alignof(R)` 8 (was
+  4); an enumeration is laid out from its definition; a global's
+  definition keeps its own alignment (`align 8` after `extern int v
+  __attribute__((aligned(16)));`, as clang), and `__alignof__(v)` before
+  that redeclaration is 8.
 
 - The lookup log records every lookup of an absolute name, found or not
   (`#include`, `#import`, `#include_next`, `__has_include`,

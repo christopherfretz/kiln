@@ -1,0 +1,13 @@
+9:26-9:27  type  'T' -> T@9:17 in=(anonymous)@9:27
+9:52-9:53  expr  'f' -> (dependent) in=(anonymous)@9:36 def=1+adl
+9:52-9:53  expr  'f' def=f@8:15
+9:52-9:53  expr  'f' -> f@8:15 spec=g<int>@9:24 adl-ns=
+9:54-9:55  type  'T' -> T@9:17 in=(anonymous)@9:36
+10:26-10:27  type  'T' -> T@10:17 in=t@10:28
+10:54-10:55  expr  'f' -> (dependent) in=a@10:38 def=1+adl
+10:54-10:55  expr  'f' def=f@8:15
+10:54-10:55  expr  'f' -> f@8:15 spec=k<int>@10:24 adl-ns=
+10:56-10:57  expr  't' -> t@10:28 in=a@10:38
+10:77-10:78  expr  'a' -> a@10:38 in=k@10:24
+11:9-11:10  expr  'g' -> g<int>@9:24 found=g@9:24 in=u@11:5 adl-ns=
+11:25-11:26  expr  'k' -> k<int>@10:24 found=k@10:24 in=u@11:5 adl-ns=

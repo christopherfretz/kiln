@@ -496,23 +496,6 @@ impl WrittenExtents<'_> {
         d.kind() == DeclKind::Var && d.has(crate::decl::DeclFlags::IMPLICIT)
     }
 
-    /// Whether `e` is an implicit `this` (under implicit wrappers).
-    fn is_implicit_this(&self, mut e: ExprId) -> bool {
-        for _ in 0..MAX_STEPS {
-            match self.exprs.get(e).kind() {
-                ExprKind::ImplicitCastExpr | ExprKind::MaterializeTemporaryExpr => {
-                    match self.exprs.first_child(e, &self.lists) {
-                        Some(x) => e = x,
-                        None => return false,
-                    }
-                }
-                ExprKind::CXXThisExpr => return self.exprs.this_is_implicit(e),
-                _ => return false,
-            }
-        }
-        false
-    }
-
     /// The first token of an elided list: that of its first written
     /// initializer (`None` when nothing in it is written).
     fn elided_list_first(&self, e: ExprId) -> Option<Loc> {

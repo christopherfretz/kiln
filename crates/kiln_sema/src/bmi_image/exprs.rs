@@ -82,6 +82,13 @@ pub(super) enum ExTy {
     /// [`NONE`], `ty` the operand), as `__typeof(f) g;` declares a
     /// function.
     TypeOf { e: u32, ty: QRef, unqual: bool },
+    /// `T[e]` of an instantiation-dependent bound `e` of value `size`
+    /// (WP-2720): the constant array type keeps it.
+    KeptArray { elem: QRef, size: u64, e: u32 },
+    /// A parameter type `adjusted` adjusted from `original`, an array
+    /// type whose bound is an instantiation-dependent expression
+    /// (WP-2720).
+    Decayed { original: QRef, adjusted: QRef },
 }
 
 pub(super) fn encode_ex(w: &mut Wr, x: &ExTy) {
@@ -121,6 +128,17 @@ pub(super) fn encode_ex(w: &mut Wr, x: &ExTy) {
             w.q(*pointee);
             w.u32(*e);
             w.u8(u8::from(*canon));
+        }
+        ExTy::KeptArray { elem, size, e } => {
+            w.u8(6);
+            w.q(*elem);
+            w.u64(*size);
+            w.u32(*e);
+        }
+        ExTy::Decayed { original, adjusted } => {
+            w.u8(7);
+            w.q(*original);
+            w.q(*adjusted);
         }
     }
 }
@@ -166,6 +184,8 @@ pub(super) fn decode_ex(r: &mut Rd<'_>) -> Res<ExTy> {
                 _ => return bad("bad dependent address space type"),
             }
         }
+        6 => ExTy::KeptArray { elem: r.q()?, size: r.u64()?, e: r.u32()? },
+        7 => ExTy::Decayed { original: r.q()?, adjusted: r.q()? },
         _ => return bad("bad expression type"),
     })
 }
@@ -176,7 +196,9 @@ pub(super) fn ex_refs(x: &ExTy) -> Vec<QRef> {
         ExTy::Decltype { under, .. } => vec![*under],
         ExTy::DepArray { elem, .. }
         | ExTy::DepVector { elem, .. }
-        | ExTy::DepSpace { pointee: elem, .. } => vec![*elem],
+        | ExTy::DepSpace { pointee: elem, .. }
+        | ExTy::KeptArray { elem, .. } => vec![*elem],
+        ExTy::Decayed { original, adjusted } => vec![*original, *adjusted],
         ExTy::PackN { pattern, .. } => vec![*pattern],
         ExTy::TypeOf { ty, .. } => vec![*ty],
     }
@@ -264,7 +286,8 @@ fn ty_texprs(t: &TyRec) -> Vec<u32> {
             ExTy::Decltype { e, .. }
             | ExTy::DepArray { e, .. }
             | ExTy::DepVector { e, .. }
-            | ExTy::DepSpace { e, .. },
+            | ExTy::DepSpace { e, .. }
+            | ExTy::KeptArray { e, .. },
         ) => out.push(*e),
         TyRec::Func { exc, nx, .. } if *exc >= NX_FALSE => out.push(*nx),
         TyRec::Ex(ExTy::TypeOf { e, .. }) if *e != NONE => out.push(*e),
@@ -387,6 +410,15 @@ impl Writer<'_, '_, '_> {
             }
             TypeView::PackExpansion { pattern, num_expansions: Some(n) } => {
                 ExTy::PackN { pattern: self.qref(pattern)?, n }
+            }
+            TypeView::ConstantArray(a) => {
+                let Some(s) = a.size_expr else { return Ok(None) };
+                let elem = self.qref(a.elem)?;
+                ExTy::KeptArray { elem, size: a.size, e: self.texpr(s)? }
+            }
+            TypeView::Decayed { original, adjusted } => {
+                let original = self.qref(original)?;
+                ExTy::Decayed { original, adjusted: self.qref(adjusted)? }
             }
             // WP-1369: a dependent one (a profile) is not carried.
             TypeView::TypeOf { operand: TypeOfOperand::Expr(e), underlying: Some(u), unqual } => {
@@ -664,6 +696,17 @@ impl Sema<'_, '_> {
                 let Some(e) = self.image_texpr(e) else { return QualType::ERROR };
                 self.ast.types.typeof_expr(e, ty, unqual, None)
             }
+            ExTy::KeptArray { elem, size, e } => {
+                let elem = qt(self, elem);
+                let Some(e) = self.image_texpr(e) else { return QualType::ERROR };
+                let kept = self.kept_array_bound(e);
+                self.ast.types.constant_array(elem, size, kept)
+            }
+            ExTy::Decayed { original, adjusted } => {
+                let original = qt(self, original);
+                let adjusted = qt(self, adjusted);
+                self.ast.types.decayed(original, adjusted)
+            }
         }
     }
 }
@@ -707,6 +750,8 @@ mod tests {
             ExTy::TypeOf { e: 5, ty: q, unqual: false },
             ExTy::TypeOf { e: NONE, ty: q, unqual: true },
             ExTy::DepSpace { pointee: q, e: 6, canon: true },
+            ExTy::KeptArray { elem: q, size: 8, e: 7 },
+            ExTy::Decayed { original: q, adjusted: QRef { ty: 9, quals: 0 } },
         ] {
             assert_eq!(round(&x), x);
         }

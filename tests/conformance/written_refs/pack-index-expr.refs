@@ -1,0 +1,15 @@
+8:34-8:36  type  'Ts' -> Ts@8:20 in=ts@8:40
+8:53-8:55  expr  'ts' -> ts@8:40 in=first@8:28
+9:33-9:35  type  'Ts' -> Ts@9:20 in=ts@9:39
+9:52-9:53  expr  'g' -> (dependent) in=both@9:28 def=1+adl
+9:52-9:53  expr  'g' def=g@7:5
+9:52-9:53  expr  'g' -> g@7:5 spec=both<int, int>@9:28 adl-ns=
+9:54-9:56  expr  'ts' -> ts@9:39 in=both@9:28
+9:63-9:65  expr  'ts' -> ts@9:39 in=both@9:28
+10:34-10:36  type  'Ts' -> Ts@10:20 in=ts@10:40
+11:3-11:5  type  'Ts' -> Ts@10:20 in=x@11:12
+11:16-11:18  expr  'ts' -> ts@10:40 in=x@11:12
+12:10-12:11  expr  'x' -> x@11:12 in=typed@10:28
+14:20-14:25  expr  'first' -> first<int, int>@8:28 found=first@8:28 in=use@14:5 adl-ns=
+14:34-14:38  expr  'both' -> both<int, int>@9:28 found=both@9:28 in=use@14:5 adl-ns=
+14:47-14:52  expr  'typed' -> typed<int>@10:28 found=typed@10:28 in=use@14:5 adl-ns=

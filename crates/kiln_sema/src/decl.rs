@@ -1812,7 +1812,8 @@ impl Sema<'_, '_> {
                                 let l = self.begin_loc(*e);
                                 let msg = self.diag(DiagId::sema_zero_length_array, l);
                                 self.emit(msg.per_instantiation());
-                                self.ast.types.constant_array(ty, 0, None)
+                                let kept = self.kept_array_bound(*e);
+                                self.ast.types.constant_array(ty, 0, kept)
                             }
                             // clang `BuildArrayType`: more than the
                             // maximum object size, before anything is laid
@@ -1825,7 +1826,10 @@ impl Sema<'_, '_> {
                                 self.emit(msg);
                                 fail!();
                             }
-                            Some(Ok(n)) => self.ast.types.constant_array(ty, n, None),
+                            Some(Ok(n)) => {
+                                let kept = self.kept_array_bound(*e);
+                                self.ast.types.constant_array(ty, n, kept)
+                            }
                             Some(Err(size)) => {
                                 self.note_vla_type(*loc);
                                 self.ast.types.variable_array(ty, size)
@@ -2384,6 +2388,11 @@ impl Sema<'_, '_> {
     /// A nullability qualifier on the array (`int a[_Nonnull]`, or a
     /// decl-specifier one) moves to the pointer (clang keeps
     /// `int * _Nonnull`).
+    ///
+    /// An array whose outermost bound is an instantiation-dependent
+    /// expression keeps its declared type as `Decayed` sugar (clang's
+    /// `DecayedType`, WP-2720): the pointer lost the bound, which
+    /// substitution must still check ([temp.deduct.general]/7).
     pub(crate) fn adjust_param_type(&mut self, ty: QualType) -> QualType {
         if let TypeView::Attributed { kind, modified, .. } = self.ast.types.view(ty.ty())
             && crate::nullability::is_nullability(kind)
@@ -2394,12 +2403,59 @@ impl Sema<'_, '_> {
         }
         if self.ast.types.is_array(ty) {
             let elem = self.ast.types.element(ty).unwrap_or(QualType::ERROR);
-            self.ast.types.pointer_to(elem)
+            let p = self.ast.types.pointer_to(elem);
+            if self.has_dependent_outer_bound(ty) {
+                return self.ast.types.decayed(ty, p);
+            }
+            p
         } else if self.ast.types.is_function(ty) {
             self.ast.types.pointer_to(ty)
         } else {
             ty
         }
+    }
+
+    /// True if the outermost bound of the array type `ty`, as written, is
+    /// an instantiation-dependent expression: a value-dependent one, or
+    /// one a constant array type keeps (WP-2720). Adjusting `ty` to a
+    /// pointer would lose it.
+    fn has_dependent_outer_bound(&self, ty: QualType) -> bool {
+        let t = &self.ast.types;
+        if !t.flags(ty.ty()).intersects(TypeFlags::DEPENDENT_INSTANTIATION) {
+            return false;
+        }
+        let mut q = ty;
+        for _ in 0..256 {
+            match t.view(q.ty()) {
+                TypeView::DependentSizedArray { .. } => return true,
+                TypeView::ConstantArray(a) => return a.size_expr.is_some(),
+                TypeView::IncompleteArray(_) | TypeView::VariableArray { .. } => return false,
+                _ => {
+                    let n = t.desugar_once(q);
+                    if n == q {
+                        return false;
+                    }
+                    q = n;
+                }
+            }
+        }
+        false
+    }
+
+    /// The bound expression `e` a constant array type keeps as written
+    /// (WP-2720): `e` when it is instantiation-dependent though its value
+    /// is known (`char[sizeof(sizeof(f(T())))]`), as clang's
+    /// `getConstantArrayType` keeps it, so substitution checks it and the
+    /// names in it stay reachable from the type; else `None` (no cost).
+    pub(crate) fn kept_array_bound(&mut self, e: ExprId) -> Option<ExprId> {
+        let deps = self.ast.exprs.get(e).deps();
+        if !deps.contains(kiln_ast::expr::ExprDeps::INSTANTIATION) {
+            return None;
+        }
+        if deps.contains(kiln_ast::expr::ExprDeps::UNEXPANDED_PACK) {
+            self.ast.types.note_pack_bound(e);
+        }
+        Some(e)
     }
 
     /// The decl-specifiers and declarator-id a function parameter cannot
@@ -2528,7 +2584,14 @@ impl Sema<'_, '_> {
                 // ...a[Ns]`) expands unadjusted; each element decays when
                 // the pack is substituted, as in clang. So does a function
                 // type (`T... x(int)`, mangled `DpFT_iE`).
-                let base = if self.has_unexpanded_pack(ty) && !self.ast.types.is_function(declared)
+                // A `Decayed` adjustment carries the bound's pack in its
+                // original; only the pointer counts here (WP-2720).
+                let adjusted = match self.ast.types.view(ty.ty()) {
+                    TypeView::Decayed { adjusted, .. } => adjusted,
+                    _ => ty,
+                };
+                let base = if self.has_unexpanded_pack(adjusted)
+                    && !self.ast.types.is_function(declared)
                 {
                     ty
                 } else {
@@ -15297,9 +15360,30 @@ impl Sema<'_, '_> {
         } else if matches!(use_, TagUse::Declaration | TagUse::Definition) {
             self.merge_aligned_redecl(d, &mut attrs, use_ == TagUse::Definition);
         }
+        if use_ == TagUse::Declaration && self.folds_into_complete_def(d) {
+            // `struct __attribute__((aligned(16))) C;` after C's definition
+            // (which has an `aligned` of its own, so the attribute is kept
+            // above): clang keeps it on the redeclaration, which layout
+            // never reads (`getTypeInfo` and `ASTRecordLayout` read the
+            // definition). kiln folds the redeclaration into the definition
+            // itself, so attaching it would change the layout from then on
+            // and make the answer depend on whether the class was laid out
+            // before (WP-2830).
+            attrs.retain(|&a| self.ast.attrs.get(a).kind != AttrKind::ALIGNED);
+        }
         if !attrs.is_empty() {
             let _ = self.builder().attach_attrs(d, &attrs);
         }
+    }
+
+    /// Whether a class-head or enum-head declaration naming `d` is a
+    /// redeclaration kiln folds into `d`, `d` being its entity's complete
+    /// definition (a class's member specification is finished).
+    fn folds_into_complete_def(&self, d: DeclId) -> bool {
+        matches!(self.kind_of(d), DeclKind::CXXRecord | DeclKind::Enum)
+            && self.ast.spec_info(d).is_none()
+            && self.ast.definition(d) == Some(d)
+            && self.ast.decls.record(d).is_none_or(|r| r.defn.contains(DefinitionBits::COMPLETE))
     }
 
     /// The GNU attributes after the closing brace of class `r`'s

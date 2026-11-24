@@ -274,6 +274,17 @@ fn constrained_friend_class(ast: &Ast, d: DeclId) -> Option<DeclId> {
         .then_some(lex)
 }
 
+/// True if `d` is a closure type whose context is a class inside a
+/// function (a local class, or the closure type of a lambda in the
+/// function): clang (from its 19 ABI on; `-fclang-abi-compat=18` keeps the
+/// <local-name>) mangles it as a <nested-name> whose prefix holds the
+/// function as a plain <unqualified-name> (`_Z2tkIN1r1LUlvE_EEiv`; a
+/// generic lambda's default template argument, `N2ilUlTnDavE_UlvE_E`).
+fn in_local_class_closure(ast: &Ast, d: DeclId) -> bool {
+    ast.closure_lambda(d).is_some()
+        && effective_ctx(ast, d).is_some_and(|c| !is_function_kind(ast.decls.get(c).kind()))
+}
+
 /// The parameter whose default argument created closure type `d`.
 fn closure_param_ctx(ast: &Ast, d: DeclId) -> Option<DeclId> {
     let l = ast.closure_lambda(d)?;
@@ -2093,7 +2104,9 @@ impl<'a, 'b> Mangler<'a, 'b> {
     /// <name> of an entity.
     fn name(&mut self, d: DeclId, v: Structor) {
         let ast = self.ast;
-        if let Some(f) = enclosing_function(ast, d) {
+        if let Some(f) = enclosing_function(ast, d)
+            && !in_local_class_closure(ast, d)
+        {
             // <local-name> := Z <function encoding> E <entity name>
             self.out.push('Z');
             let (used, emitted) = (self.used_tags.len(), self.emitted_tags.len());

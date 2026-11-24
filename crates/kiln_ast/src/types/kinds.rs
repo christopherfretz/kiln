@@ -377,11 +377,17 @@ pub enum TypeKind {
     /// `DependentAddressSpaceType`, WP-1811). Last, so the discriminants
     /// before it (hashed by the ODR definition hash) keep their values.
     DependentAddrSpace,
+    /// A parameter type adjusted from an array type whose bound is an
+    /// instantiation-dependent expression (clang's `DecayedType`,
+    /// WP-2720): sugar over the adjusted pointer type that keeps the
+    /// declared array type, so substitution still checks its bound
+    /// ([temp.deduct.general]/7). Appended last for the same reason.
+    Decayed,
 }
 
 impl TypeKind {
     /// Number of kinds.
-    pub const COUNT: usize = TypeKind::DependentAddrSpace as usize + 1;
+    pub const COUNT: usize = TypeKind::Decayed as usize + 1;
 
     const ALL: [TypeKind; TypeKind::COUNT] = [
         TypeKind::Invalid,
@@ -429,6 +435,7 @@ impl TypeKind {
         TypeKind::UnresolvedUsing,
         TypeKind::Paren,
         TypeKind::DependentAddrSpace,
+        TypeKind::Decayed,
     ];
 
     /// The kind with discriminant `v` (`Invalid` for out-of-range values).

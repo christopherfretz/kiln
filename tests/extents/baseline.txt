@@ -988,6 +988,7 @@ unit tests/conformance/dcl.init.list/narrowing-const-reference-ctor-wno.cpp d719
 unit tests/conformance/dcl.init.list/narrowing-const-reference-parent.cpp 96f8f4e8f10b165b
 unit tests/conformance/dcl.init.list/narrowing-const-reference-wno.cpp 0f8f1557236e4911
 unit tests/conformance/dcl.init.list/nested-list-ctor-run.cpp bf6526e01ed70b10 CXXConstructExpr=3/9
+unit tests/conformance/dcl.init.list/single-element-argument-extents.cpp 26cc65cf63910676 CXXDefaultInitExpr=2/2
 unit tests/conformance/dcl.init.list/single-element-explicit-ctor.cpp 6966c3d6ecce1e40 CXXThisExpr=1/1
 unit tests/conformance/dcl.init.ref/converting-ctor-temporary-destroyed.cpp 94adb69764dfb37d
 unit tests/conformance/dcl.init.ref/cwg2352-similar-pointer-binds-directly.cpp 91b560dcfab8b1ab CXXConstructExpr=1/1 CXXThisExpr=1/1
@@ -1415,6 +1416,7 @@ unit tests/conformance/expr.prim.id.qual/decltype-nns-ast.cpp 0eeb84838f7142ad C
 unit tests/conformance/expr.prim.id.qual/decltype-nns-dependent.cpp 1f299e7454affd92 CXXConstructExpr=2/4
 unit tests/conformance/expr.prim.id.qual/decltype-nns.cpp 1900d2504317d4fb CXXConstructExpr=1/1
 unit tests/conformance/expr.prim.id.qual/global-qualified-builtin.cpp 88f18f335f6ac217 ImplicitValueInitExpr=1/1
+unit tests/conformance/expr.prim.id.qual/overload-set-qualified-extents.cpp 99b38d790c05a57a CXXThisExpr=8/13 ImplicitCastExpr=2/9
 unit tests/conformance/expr.prim.id.qual/qualified-operator-ast.cpp a9756a043013354a CXXThisExpr=7/9 DeclRefExpr=1/60 ImplicitCastExpr=1/72
 unit tests/conformance/expr.prim.id.qual/unused-value-qualified-name-column.cpp d14bcb4bd9c24203
 unit tests/conformance/expr.prim.lambda.capture/capture-default-local-ok.cpp 111c22c603e0e088 CXXConstructExpr=1/1 CXXThisExpr=2/2 DeclRefExpr=13/20 ImplicitCastExpr=12/27
@@ -1506,6 +1508,7 @@ unit tests/conformance/expr.prim.lambda/unevaluated-operand-accepted-before-cxx2
 unit tests/conformance/expr.prim.lambda/unevaluated-operand-accepted-cxx11.cpp c477cbb38751267a DeclRefExpr=1/2 ImplicitCastExpr=1/6 MemberExpr=1/1
 unit tests/conformance/expr.prim.lambda/unevaluated.cpp 55b7ed193886c65d
 unit tests/conformance/expr.prim.lambda/unique-closure-type.cpp 599bbaefaf8f4133
+unit tests/conformance/expr.prim.pack.index/pack-index-extents.cpp 718825150e5c1ea2
 unit tests/conformance/expr.prim.req.general/address-of-overload-requirement.cpp 596b95a49b4a5ce8
 unit tests/conformance/expr.prim.req.general/bound-member-function-substitution-failure.cpp 89d9a97794705bd5
 unit tests/conformance/expr.prim.req.general/compound-type-constraint-pack-expansion.cpp 7f52e6b8fd48d76a ConceptSpecializationExpr=2/7
@@ -2306,6 +2309,7 @@ unit tests/conformance/temp.names/greater-equal-sizeof-dependent.cpp d7b14f2d216
 unit tests/conformance/temp.names/greater-in-nested-brackets.cpp 66771e4f9ba14559
 unit tests/conformance/temp.names/libstdcxx-this-member-template.cpp 0399512b090c1992
 unit tests/conformance/temp.names/member-access-variable-template-run.cpp e7b258d7ecc10c67 CXXConstructExpr=1/2
+unit tests/conformance/temp.names/member-variable-template-extents.cpp 20103833406d44d8
 unit tests/conformance/temp.names/missing-template-arg-list-after-template-kw-warning.cpp 812f68d504f158db
 unit tests/conformance/temp.names/missing-template-arg-list-after-template-kw-wno.cpp a64d7707b6aea612
 unit tests/conformance/temp.names/n1757-functional-cast-argument.cpp 17fd3ff67addc51d
@@ -2840,6 +2844,7 @@ unit tests/conformance/written_refs/mem-inits.cpp 6e4579407569af2c ImplicitValue
 unit tests/conformance/written_refs/member-names.cpp fe7dd8fec650942f CXXThisExpr=3/3
 unit tests/conformance/written_refs/offsetof.cpp 6761c52442f79b51
 unit tests/conformance/written_refs/overloads.cpp abeb163ed60d6987 DeclRefExpr=1/23 ImplicitCastExpr=1/17
+unit tests/conformance/written_refs/pack-index-expr.cpp f887eba2a3b16dd2
 unit tests/conformance/written_refs/provenance-adl.cpp e7328d461a324079 CXXThisExpr=1/1 DeclRefExpr=1/28 ImplicitCastExpr=1/24
 unit tests/conformance/written_refs/provenance-how.cpp 8a55332856323c1d CXXConstructExpr=1/4 CXXThisExpr=3/3 DeclRefExpr=2/11 ImplicitCastExpr=4/19
 unit tests/conformance/written_refs/provenance-udir.cpp 2013e969f7ffc492

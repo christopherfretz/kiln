@@ -189,6 +189,12 @@ pub struct PpOptions {
     /// spec/pp.md "Preprocessing record"). Default: off. Changes no token,
     /// diagnostic or location.
     pub pp_record: bool,
+    /// Keep the builtin-macro literal table
+    /// ([`crate::Preprocessor::builtin_literal_of`], spec/pp.md "Builtin
+    /// macros", WP-2821): which builtin macro made each token that is a
+    /// builtin's result, or was pasted or stringized from one. Default:
+    /// off (nothing is stored). Changes no token, diagnostic or location.
+    pub builtin_literals: bool,
 }
 
 impl PpOptions {
@@ -223,6 +229,7 @@ impl PpOptions {
             asm: false,
             digraphs: true,
             pp_record: false,
+            builtin_literals: false,
         }
     }
 

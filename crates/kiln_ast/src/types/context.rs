@@ -216,6 +216,14 @@ pub enum TypeView {
         operand: ExprOperand,
         designated: Option<QualType>,
     },
+    /// A parameter type adjusted from `original`, an array type whose
+    /// bound is an instantiation-dependent expression, to `adjusted`
+    /// (clang's `DecayedType`, WP-2720): sugar for `adjusted`. Last, so
+    /// the descriptor's earlier variants keep their positions.
+    Decayed {
+        original: QualType,
+        adjusted: QualType,
+    },
 }
 
 /// `aux` bit marking the canonical, profile-keyed form of kinds whose
@@ -270,6 +278,11 @@ pub struct TypeContext {
     /// or array type that canonicalized to it
     /// ([`TypeContext::expr_origin`]).
     pub(crate) expr_origins: kiln_source::fx::FxHashMap<TypeId, ExprId>,
+    /// The instantiation-dependent constant array bounds that contain an
+    /// unexpanded parameter pack (`char[sizeof(sizeof(Ts))]...`):
+    /// [`TypeContext::constant_array`] gives their types
+    /// `UNEXPANDED_PACK` (WP-2720).
+    pub(crate) pack_bounds: kiln_source::fx::FxHashSet<ExprId>,
     /// For each non-dependent alias template specialization type whose
     /// written arguments differ from its converted ones (a non-type
     /// argument written as an expression, a defaulted argument, a pack):
@@ -351,6 +364,7 @@ impl TypeContext {
             exc_protos: kiln_source::fx::FxHashMap::default(),
             arg_origins: kiln_source::fx::FxHashMap::default(),
             expr_origins: kiln_source::fx::FxHashMap::default(),
+            pack_bounds: kiln_source::fx::FxHashSet::default(),
             alias_converted: kiln_source::fx::FxHashMap::default(),
             nns: KeyedTable::new(),
             args: ArgTable::new(),
@@ -958,6 +972,10 @@ impl TypeContext {
             K::Enum => TypeView::Enum(d(n.data)),
             K::UnresolvedUsing => TypeView::UnresolvedUsing(d(n.data)),
             K::Paren => TypeView::Paren(q(n.data)),
+            K::Decayed => {
+                let [a, b] = s.pair(n.data);
+                TypeView::Decayed { original: q(a), adjusted: q(b) }
+            }
             K::Complex => TypeView::Complex(q(n.data)),
             K::Atomic => TypeView::Atomic(q(n.data)),
             K::Vector => {
@@ -1378,7 +1396,9 @@ impl TypeContext {
             TypeView::Typedef { underlying, .. } | TypeView::Using { underlying, .. } => {
                 add(underlying)
             }
-            TypeView::Elaborated { named, .. } | TypeView::Paren(named) => add(named),
+            TypeView::Elaborated { named, .. }
+            | TypeView::Paren(named)
+            | TypeView::Decayed { adjusted: named, .. } => add(named),
             TypeView::QualifiedArray { .. } => self.canonical(q),
             TypeView::SubstTemplateTypeParm { replacement, .. } => add(replacement),
             TypeView::TemplateSpecialization { underlying: Some(u), .. } => add(u),
@@ -1506,6 +1526,13 @@ impl TypeContext {
         self.expr_origins.entry(c).or_insert(e);
     }
 
+    /// Records that the instantiation-dependent constant array bound `e`
+    /// contains an unexpanded parameter pack, before its type is built
+    /// ([`TypeContext::constant_array`]; WP-2720).
+    pub fn note_pack_bound(&mut self, e: ExprId) {
+        self.pack_bounds.insert(e);
+    }
+
     fn has_expr_arg(&self, l: ArgListId) -> bool {
         self.args(l).iter().any(|a| match a.view() {
             ArgView::Expr { profile: Some(_), .. } => true,
@@ -1560,6 +1587,7 @@ impl TypeContext {
         r.push(MemRow::of_map("exc_protos", &self.exc_protos));
         r.push(MemRow::of_map("arg_origins", &self.arg_origins));
         r.push(MemRow::of_map("expr_origins", &self.expr_origins));
+        r.push(MemRow::of_set("pack_bounds", &self.pack_bounds));
         r.push(MemRow::of_map("alias_converted", &self.alias_converted));
         self.nns.memory("nns", &mut r);
         self.args.memory(&mut r);
