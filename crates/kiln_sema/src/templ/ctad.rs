@@ -90,42 +90,85 @@ struct GuideShape<'p> {
     implicit: bool,
 }
 
-/// The signature of the guide of a constructor template whose template
-/// parameter list is `fl` ([`Sema::ctor_template_guide`]): the new
-/// template parameters (indices from `offset`) and the constructor's
-/// parameter types, substituted.
+/// The new template parameters of the guide of a constructor template
+/// whose template parameter list is `fl` ([`Sema::ctor_template_guide`]),
+/// indices from `offset`.
 fn ctad_guide_head(
     s: &mut Substituter<'_, '_, '_>,
     ctx: DeclId,
     fl: kiln_ast::templates::TemplateParamList,
     offset: u16,
-    cparams: &[DeclId],
-    loc: Loc,
-) -> SubstResult<(Vec<DeclId>, Vec<QualType>)> {
+) -> SubstResult<Vec<DeclId>> {
     let old: Vec<DeclId> = s.sema.ast.lists.iter::<DeclId>(fl.params).collect();
     let mut new = Vec::with_capacity(old.len());
     for p in old {
         new.push(ctad_redepth_param(s, ctx, p, offset)?);
     }
-    let mut ptys = Vec::with_capacity(cparams.len());
-    for &p in cparams {
-        let t = s.sema.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
-        let t = if let TypeView::PackExpansion { pattern, .. } = s.sema.ast.types.view(t.ty()) {
-            // A function parameter pack stays one (its pack is the
-            // re-depthed template parameter pack, or for a member
-            // template's constructor, the member's own pack mapped to
-            // a one-element expansion of its new pack).
-            match s.expand_pattern(|s| s.ty(pattern, loc))? {
-                Expansion::Unexpanded(x) => s.sema.ast.types.pack_expansion(x, None),
-                Expansion::Elements(es) if es.len() == 1 => s.sema.strip_expansion_ty(es[0]),
-                Expansion::Elements(_) => return Err(SubstFail),
-            }
-        } else {
-            s.ty(t, loc)?
-        };
-        ptys.push(t);
+    Ok(new)
+}
+
+/// The type of a guide parameter: constructor parameter type `t`
+/// substituted. A function parameter pack stays one (its pack is the
+/// re-depthed template parameter pack, or for a member template's
+/// constructor, the member's own pack mapped to a one-element expansion
+/// of its new pack).
+fn ctad_guide_param_ty(
+    s: &mut Substituter<'_, '_, '_>,
+    t: QualType,
+    loc: Loc,
+) -> SubstResult<QualType> {
+    if let TypeView::PackExpansion { pattern, .. } = s.sema.ast.types.view(t.ty()) {
+        match s.expand_pattern(|s| s.ty(pattern, loc))? {
+            Expansion::Unexpanded(x) => Ok(s.sema.ast.types.pack_expansion(x, None)),
+            Expansion::Elements(es) if es.len() == 1 => Ok(s.sema.strip_expansion_ty(es[0])),
+            Expansion::Elements(_) => Err(SubstFail),
+        }
+    } else {
+        s.ty(t, loc)
     }
-    Ok((new, ptys))
+}
+
+/// The guide `[explicit] C(params) -> g.ret` of a constructor or
+/// constructor template whose parameters are `g.cparams`, `g.ptys` their
+/// types as the constructor declares them ([over.match.class.deduct]/1.1).
+/// Each type is substituted by `s` only after the constructor's earlier
+/// parameters are mapped to the guide's (as instantiated locals), so a
+/// type that names an earlier parameter (`C(T t, Arr<sizeof(t.g(1))>*)`,
+/// `decltype(t.g(1))`) names the guide's parameter rather than the
+/// constructor's, which deduction would look up as a member of the
+/// deduced specialization (clang's `ConvertConstructorToDeductionGuideTransform`,
+/// `transformFunctionTypeParam`). The mapping stays in `s.locals` for the
+/// trailing requires-clause.
+fn ctad_ctor_guide_function(
+    s: &mut Substituter<'_, '_, '_>,
+    ctx: DeclId,
+    name: DeclName,
+    loc: Loc,
+    g: &GuideShape<'_>,
+) -> SubstResult<DeclId> {
+    // The guide's declared type is the substituted one, set below; until
+    // then it is the constructor's.
+    let f = s.sema.guide_decl(ctx, name, loc, g);
+    let saved = s.sema.ast.templates.dependent_depth;
+    s.sema.ast.templates.dependent_depth = u32::from(g.depth);
+    let params = (|| {
+        let mut ids = Vec::with_capacity(g.ptys.len());
+        let mut ptys = Vec::with_capacity(g.ptys.len());
+        for (i, (&p, &t)) in g.cparams.iter().zip(g.ptys).enumerate() {
+            let ty = ctad_guide_param_ty(s, t, loc)?;
+            let np = s.sema.guide_param(f, i, ty, Some(p), loc);
+            s.locals.insert(p, DeclOrPack::Decl(np));
+            ids.push(np);
+            ptys.push(ty);
+        }
+        Ok::<_, SubstFail>((ids, ptys))
+    })();
+    s.sema.ast.templates.dependent_depth = saved;
+    let (ids, ptys) = params?;
+    let fty = s.sema.guide_fn_type(g.ret, &ptys, g.variadic);
+    s.sema.ast.decls.set_ty(f, fty);
+    let _ = s.sema.builder().set_params(f, &ids);
+    Ok(f)
 }
 
 /// The constraints `requires` (the constructor template's head and
@@ -770,49 +813,7 @@ impl Sema<'_, '_> {
                 _ => continue,
             }
             any_ctor = true;
-            let Some(fd) = self.ast.decls.function(m) else { continue };
-            let cparams: Vec<DeclId> = self.ast.lists.iter::<DeclId>(fd.params).collect();
-            let explicit = fd.spec.is_explicit();
-            let cty = n.ty().unwrap_or(QualType::ERROR);
-            let variadic = self.ast.types.proto(cty).is_some_and(FuncProto::variadic);
-            let loc = n.loc();
-            let ptys = (|| {
-                let mut s = Substituter::new(self, &levels);
-                let mut ptys = Vec::with_capacity(cparams.len());
-                for &p in &cparams {
-                    let t = s.sema.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
-                    let t = if let TypeView::PackExpansion { pattern, .. } =
-                        s.sema.ast.types.view(t.ty())
-                    {
-                        match s.expand_pattern(|s| s.ty(pattern, loc))? {
-                            Expansion::Unexpanded(x) => s.sema.ast.types.pack_expansion(x, None),
-                            Expansion::Elements(es) if es.len() == 1 => {
-                                s.sema.strip_expansion_ty(es[0])
-                            }
-                            Expansion::Elements(_) => return Err(SubstFail),
-                        }
-                    } else {
-                        s.ty(t, loc)?
-                    };
-                    ptys.push(t);
-                }
-                Ok::<_, SubstFail>(ptys)
-            })();
-            let Ok(ptys) = ptys else { continue };
-            let shape = GuideShape {
-                ret,
-                cparams: &cparams,
-                ptys: &ptys,
-                variadic,
-                explicit,
-                depth: pl.depth + 1,
-                implicit: true,
-            };
-            let f = self.guide_function(ctx, name, loc, &shape);
-            let g = self.builder().detached_template_decl(DeclKind::FunctionTemplate, f, params);
-            let _ = self.templ.ctad_origin.insert(g, GuideOrigin::Ctor);
-            self.note_class_params(g, None);
-            out.push(g);
+            out.extend(self.ctor_guide(ctx, name, ret, params, Some(m), &levels, n.loc()));
         }
         self.ast.templates.dependent_depth = saved;
         (out, any_ctor)
@@ -830,6 +831,29 @@ impl Sema<'_, '_> {
         ctor: Option<DeclId>,
         loc: Loc,
     ) -> Option<DeclId> {
+        // Every level is kept: only the constructor's parameters are
+        // mapped to the guide's.
+        self.ctor_guide(ctx, name, ret, params, ctor, &MultiLevelArgs::new(), loc)
+    }
+
+    /// [`Sema::implicit_guide`] with `levels` substituted into the
+    /// constructor's parameter types and trailing requires-clause (for a
+    /// constructor of the original member template a member template of a
+    /// class template specialization is instantiated from,
+    /// [`Sema::member_ctor_guides`]). A parameter type or the
+    /// requires-clause may name an earlier parameter: it names the guide's
+    /// ([`ctad_ctor_guide_function`]).
+    #[allow(clippy::too_many_arguments, reason = "the guide's head, as implicit_guide's")]
+    fn ctor_guide(
+        &mut self,
+        ctx: DeclId,
+        name: DeclName,
+        ret: QualType,
+        params: TemplateParamListId,
+        ctor: Option<DeclId>,
+        levels: &MultiLevelArgs,
+        loc: Loc,
+    ) -> Option<DeclId> {
         let (cparams, variadic, explicit) = match ctor {
             Some(c) => {
                 let fd = self.ast.decls.function(c)?;
@@ -844,6 +868,7 @@ impl Sema<'_, '_> {
             .iter()
             .map(|&p| self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR))
             .collect();
+        let trailing = ctor.and_then(|c| self.ast.templates.trailing_requires.get(c).copied());
         let depth = self.ast.templates.param_list(params).depth + 1;
         let shape = GuideShape {
             ret,
@@ -854,8 +879,17 @@ impl Sema<'_, '_> {
             depth,
             implicit: true,
         };
-        let f = self.guide_function(ctx, name, loc, &shape);
-        if let Some(r) = ctor.and_then(|c| self.ast.templates.trailing_requires.get(c).copied()) {
+        let saved = self.ast.templates.dependent_depth;
+        self.ast.templates.dependent_depth = u32::from(depth);
+        let built = (|| {
+            let mut s = Substituter::new(self, levels);
+            let f = ctad_ctor_guide_function(&mut s, ctx, name, loc, &shape)?;
+            let req = ctad_guide_requires(&mut s, [None, trailing], loc)?;
+            Ok::<_, SubstFail>((f, req))
+        })();
+        self.ast.templates.dependent_depth = saved;
+        let (f, requires) = built.ok()?;
+        if let Some(r) = requires {
             let _ = self.ast.templates.trailing_requires.insert(f, r);
         }
         let g = self.builder().detached_template_decl(DeclKind::FunctionTemplate, f, params);
@@ -944,12 +978,16 @@ impl Sema<'_, '_> {
         let variadic = self.ast.types.proto(cty).is_some_and(FuncProto::variadic);
         let explicit = fd.spec.is_explicit();
         let loc = self.ast.decls.get(ft).loc();
+        let ptys: Vec<QualType> = cparams
+            .iter()
+            .map(|&p| self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR))
+            .collect();
         let trailing = self.ast.templates.trailing_requires.get(ctor).copied();
         let saved = self.ast.templates.dependent_depth;
         self.ast.templates.dependent_depth = u32::from(cl.depth) + 1;
         let built = (|| {
             let mut s = Substituter::new(self, &levels);
-            let (new_ps, ptys) = ctad_guide_head(&mut s, ctx, fl, n, &cparams, loc)?;
+            let new_ps = ctad_guide_head(&mut s, ctx, fl, n)?;
             let mut all = class_ps;
             all.extend(new_ps);
             let list = s.sema.builder().template_param_list(
@@ -969,18 +1007,9 @@ impl Sema<'_, '_> {
                 depth: cl.depth + 1,
                 implicit: true,
             };
-            let f = s.sema.guide_function(ctx, name, loc, &shape);
-            // The trailing requires-clause may name the parameters.
-            let gps: Vec<DeclId> = s
-                .sema
-                .ast
-                .decls
-                .function(f)
-                .map(|x| s.sema.ast.lists.iter::<DeclId>(x.params).collect())
-                .unwrap_or_default();
-            for (&o, nw) in cparams.iter().zip(gps) {
-                s.locals.insert(o, DeclOrPack::Decl(nw));
-            }
+            // The constructor's parameters map to the guide's, for the
+            // later parameter types and the trailing requires-clause.
+            let f = ctad_ctor_guide_function(&mut s, ctx, name, loc, &shape)?;
             let req = ctad_guide_requires(&mut s, [fl.requires, trailing], loc)?;
             Ok::<_, SubstFail>((list, f, req))
         })();
@@ -1005,8 +1034,29 @@ impl Sema<'_, '_> {
         loc: Loc,
         g: &GuideShape<'_>,
     ) -> DeclId {
-        let info = FuncInfo::new().with_trailing_return(true).with_variadic(g.variadic);
-        let fty = self.ast.types.function(g.ret, g.ptys, info, ExcSpec::None);
+        let f = self.guide_decl(ctx, name, loc, g);
+        let saved = self.ast.templates.dependent_depth;
+        self.ast.templates.dependent_depth = u32::from(g.depth);
+        let ids: Vec<DeclId> = g
+            .ptys
+            .iter()
+            .enumerate()
+            .map(|(i, &ty)| self.guide_param(f, i, ty, g.cparams.get(i).copied(), loc))
+            .collect();
+        let _ = self.builder().set_params(f, &ids);
+        self.ast.templates.dependent_depth = saved;
+        f
+    }
+
+    /// The function type `ret(ptys...)` of an implicit guide.
+    fn guide_fn_type(&mut self, ret: QualType, ptys: &[QualType], variadic: bool) -> QualType {
+        let info = FuncInfo::new().with_trailing_return(true).with_variadic(variadic);
+        self.ast.types.function(ret, ptys, info, ExcSpec::None)
+    }
+
+    /// The implicit `CXXDeductionGuide` of shape `g`, without parameters.
+    fn guide_decl(&mut self, ctx: DeclId, name: DeclName, loc: Loc, g: &GuideShape<'_>) -> DeclId {
+        let fty = self.guide_fn_type(g.ret, g.ptys, g.variadic);
         let mut h = DeclHead::new(ctx, name, loc);
         if g.implicit {
             h.flags = DeclFlags::IMPLICIT;
@@ -1016,43 +1066,52 @@ impl Sema<'_, '_> {
         self.ast.templates.dependent_depth = u32::from(g.depth);
         self.ast.templates.pattern_next = true;
         let f = self.builder().deduction_guide(h, fty, spec);
-        let mut ids = Vec::with_capacity(g.ptys.len());
-        for (i, &ty) in g.ptys.iter().enumerate() {
-            // The aggregate deduction candidate has no constructor
-            // parameters to copy: its parameters are unnamed.
-            let (pname, ploc, data) = match g.cparams.get(i) {
-                Some(&p) => {
-                    let pn = *self.ast.decls.get(p);
-                    (pn.name(), pn.loc(), self.ast.decls.param(p).copied())
-                }
-                None => (DeclName::EMPTY, loc, None),
-            };
-            let flags = match data {
-                Some(d) => d.flags & !ParamData::DEFAULT_ARG_PENDING,
-                None if matches!(self.ast.types.view(ty.ty()), TypeView::PackExpansion { .. }) => {
-                    ParamData::PACK
-                }
-                None => 0,
-            };
-            let idx = u16::try_from(i).unwrap_or(u16::MAX);
-            let np = self.builder().param(f, pname, ploc, ty, idx, flags);
-            // A constructor parameter's default argument makes the guide's
-            // parameter have one too, but its value is never used by
-            // deduction: the guide gets a placeholder of the parameter's
-            // type, not the constructor's expression (which names the
-            // constructor's, not the guide's, template parameters; clang's
-            // `transformFunctionTypeParam` builds the same `OpaqueValueExpr`).
-            if let Some(d) = data
-                && (d.default_arg.is_some() || d.flags & ParamData::DEFAULT_ARG_PENDING != 0)
-            {
-                let ph = self.guide_default_placeholder(ty, ploc);
-                let _ = self.ast.decls.set_default_arg(np, ph);
-            }
-            ids.push(np);
-        }
-        let _ = self.builder().set_params(f, &ids);
         self.ast.templates.dependent_depth = saved;
         f
+    }
+
+    /// Parameter `i` of guide `f`, of type `ty`, copied from constructor
+    /// parameter `cparam` (its name and whether it has a default
+    /// argument), or unnamed.
+    fn guide_param(
+        &mut self,
+        f: DeclId,
+        i: usize,
+        ty: QualType,
+        cparam: Option<DeclId>,
+        loc: Loc,
+    ) -> DeclId {
+        // The aggregate deduction candidate has no constructor
+        // parameters to copy: its parameters are unnamed.
+        let (pname, ploc, data) = match cparam {
+            Some(p) => {
+                let pn = *self.ast.decls.get(p);
+                (pn.name(), pn.loc(), self.ast.decls.param(p).copied())
+            }
+            None => (DeclName::EMPTY, loc, None),
+        };
+        let flags = match data {
+            Some(d) => d.flags & !ParamData::DEFAULT_ARG_PENDING,
+            None if matches!(self.ast.types.view(ty.ty()), TypeView::PackExpansion { .. }) => {
+                ParamData::PACK
+            }
+            None => 0,
+        };
+        let idx = u16::try_from(i).unwrap_or(u16::MAX);
+        let np = self.builder().param(f, pname, ploc, ty, idx, flags);
+        // A constructor parameter's default argument makes the guide's
+        // parameter have one too, but its value is never used by
+        // deduction: the guide gets a placeholder of the parameter's
+        // type, not the constructor's expression (which names the
+        // constructor's, not the guide's, template parameters; clang's
+        // `transformFunctionTypeParam` builds the same `OpaqueValueExpr`).
+        if let Some(d) = data
+            && (d.default_arg.is_some() || d.flags & ParamData::DEFAULT_ARG_PENDING != 0)
+        {
+            let ph = self.guide_default_placeholder(ty, ploc);
+            let _ = self.ast.decls.set_default_arg(np, ph);
+        }
+        np
     }
 
     /// The default argument of a guide parameter of type `ty`: a

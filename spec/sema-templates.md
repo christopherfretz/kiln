@@ -6473,6 +6473,19 @@ When a non-list argument has already been diagnosed (a `RecoveryExpr` or
 an error type, such as a variable whose own deduction failed), nothing is
 deduced and no further error is emitted. clang likewise deduces nothing
 from an initializer that contains errors (WP-192).
+An implicit guide's parameters are made one at a time, in order: each
+constructor parameter's type is substituted (every level kept, or for a
+member template of a specialization its levels, or for a constructor
+template its re-depthed level) and then the constructor parameter is
+mapped to the new guide parameter as an instantiated local, before the
+next type and the trailing requires-clause are substituted. So a type or
+constraint that names an earlier parameter (`C(T t, Arr<sizeof(t.g(1))>*
+= nullptr)`, `decltype(t.g(1))`, `requires (sizeof(t) > 0)`) names the
+guide's parameter, and deduction substitutes it like a function
+template's; without the mapping it would be looked up as a member of the
+deduced specialization (clang's `ConvertConstructorToDeductionGuideTransform`,
+`transformFunctionTypeParam`; `ctad_ctor_guide_function`, WP-3590,
+`over.match.class.deduct/p1-guide-param-names-earlier-param-*.cpp`).
 An implicit guide's parameter types may name member typedefs of the class
 template (libc++ `vector(initializer_list<value_type>)`). Substituting
 the guide's arguments into such a typedef substitutes its underlying type
