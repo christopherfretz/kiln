@@ -215,6 +215,11 @@ impl Substituter<'_, '_, '_> {
                         .arg(at_least)
                         .arg(other);
                     self.sema.emit(d);
+                } else {
+                    // Deduction may yet extend it to the other's length:
+                    // clang retains the expansion, partially substituted
+                    // (§7.2), rather than failing.
+                    self.pack.partial = true;
                 }
                 return Err(SubstFail);
             }
@@ -363,6 +368,13 @@ impl Substituter<'_, '_, '_> {
             // the pattern (`[] { return sizeof(T); }()...`).
             (_, Some((0, name))) => self.sweep_empty(ellipsis, rewrap_ok, name, &mut f),
             (_, Some((n, name))) => {
+                // The explicitly given pack deduction may still extend
+                // ([`Substituter::partial_pack`]): its elements are each
+                // substituted (and so checked), but the expansion is
+                // retained, partially substituted, as clang retains it,
+                // so `X<Ts...>` is not formed with the given elements
+                // alone (WP-3380).
+                let retain = name.partial;
                 self.pack.expanding = Some((n, name));
                 let mut out = Vec::with_capacity(n as usize);
                 let mut res = Ok(());
@@ -384,7 +396,7 @@ impl Substituter<'_, '_, '_> {
                     }
                 }
                 self.sema.templ.pack_elements += u64::from(n);
-                if res.is_err() && self.pack.partial {
+                if (res.is_err() && self.pack.partial) || (res.is_ok() && retain) {
                     // A partially substituted expansion (§7.2): the
                     // pattern rebuilt once, still an expansion.
                     self.pack = PackState { ellipsis, keep: true, ..PackState::default() };

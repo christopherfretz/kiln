@@ -514,6 +514,15 @@ impl Sema<'_, '_> {
             for (j, &t) in tys.iter().enumerate() {
                 let Some(pat) = crate::templ::pack::type_pattern(sub.sema, t) else {
                     if names_partial(sub.sema, t) {
+                        // Kept for deduction, but checked with the
+                        // explicit arguments, the given pack retained:
+                        // `tup<Ts..., L<Us, typename T::type>...>` fails
+                        // with `T = int` even when `Us` deduces empty
+                        // (WP-3380).
+                        sub.partial_pack = partial;
+                        let r = sub.ty(t, loc);
+                        sub.partial_pack = None;
+                        r?;
                         v.push(t);
                         continue;
                     }
@@ -522,6 +531,19 @@ impl Sema<'_, '_> {
                     continue;
                 };
                 if j + 1 == tys.len() {
+                    // The trailing pack keeps its pattern for deduction,
+                    // but the explicit arguments are substituted into it
+                    // all the same ([temp.deduct.general]/2-3): with
+                    // `T = int`, `L<Ts, typename T::type>...` fails here
+                    // whatever `Ts` turns out to be, also empty, where
+                    // the final substitution never forms the pattern
+                    // (§7.2's sweep; WP-3380). The explicitly given pack
+                    // is a lower bound ([temp.arg.explicit]/9), so the
+                    // expansion is retained, not a length conflict.
+                    sub.partial_pack = partial;
+                    let r = sub.expand_pattern_at(None, |sub| sub.ty(pat, loc));
+                    sub.partial_pack = None;
+                    r?;
                     v.push(t);
                     continue;
                 }

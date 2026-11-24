@@ -5576,6 +5576,31 @@ type is kept.
      explicit args stay parameters.
    - A trailing pack that was given explicitly can be *extended* by
      deduction (/9).
+   - (WP-3380) The trailing function parameter pack keeps its written
+     pattern for deduction, but the explicit arguments are substituted
+     into that pattern too, to check it ([temp.deduct.general]/2-3): with
+     `T = int`, `h(L<Ts, typename T::type>...)` fails here, even though
+     `Ts` is still open and later deduces empty. The final substitution
+     with `Ts` empty never forms the pattern (§7.2's sweep), so this is
+     the only place the failure can be found. A parameter that is no
+     expansion but names the explicitly given pack (kept for deduction,
+     above) is checked the same way: `tup<Ts..., L<Us, typename
+     T::type>...>` fails with `T = int`. The check substitutes with the
+     explicitly given pack as the partially substituted pack
+     (`Substituter::partial_pack`): an expansion over it substitutes each
+     given element, so a nested `typename Us::type...` over `Us = {int}`
+     fails, and is then retained, rebuilt partially substituted (§7.2), as
+     clang retains it, so `X<Ts...>` is never formed with the given
+     elements alone. A pack of another length is no conflict unless the
+     given pack is longer: deduction may extend it (`pack_reached`). A `T`
+     *deduced* with an empty pack never forms the pattern, as clang and
+     GCC agree. GCC 16 differs on three of these, and the standard sides
+     with clang: it accepts the nested `Us::type...`, and rejects both the
+     explicit pack extended to an outer pack's length and `X<Ts...>` with
+     the given elements alone. Tests:
+     `temp.deduct.general/explicit-args-trailing-pack-pattern-{fails,funcaddr,valid}.cpp`,
+     `-sfinae-run.cpp`, `explicit-args-nested-pack-pattern-fails.cpp`,
+     `explicit-args-partial-pack-param-pattern-fails.cpp`.
    - (WP-804) For a call, a return type written before the parameters
      is substituted too, first and only to check it (clang
      `SubstituteExplicitTemplateArguments`): with every argument given,
@@ -7444,10 +7469,14 @@ function parameter pack swept inside a generic lambda's fold (libc++ 22
 `<mdspan>`'s rank-0 `operator()`) leaves the fold empty, its init value,
 instead of a retained expansion the Oven cannot evaluate (WP-980,
 `tests/conformance/temp.variadic/p7-empty-function-parameter-pack-in-generic-lambda-fold.cpp`).
-A sweep that fails for another reason (a lambda body, a pack it cannot keep)
-leaves the expansion empty, as before
+A sweep that fails for another reason (a lambda body, a pack it cannot keep,
+an invalid type such as `typename T::type` with `T = int`) leaves the
+expansion empty, as before
 (`tests/conformance/temp.variadic/expansion-empty-first-pack-checks-other-packs-run.cpp`,
-`p7-empty-first-pack-length-mismatch.cpp`).
+`p7-empty-first-pack-length-mismatch.cpp`): clang never forms the pattern
+of an empty expansion, so such a failure is no substitution failure
+here. A deduction checks a pattern whose pack is still open while it
+substitutes the explicit arguments instead (§6.1 step 1, WP-3380).
 An empty non-type pack the sweep keeps has the parameter's type
 substituted; a placeholder parameter (`auto... Vs`) has no element to
 deduce it from, so the kept expression's type is the dependent `auto`

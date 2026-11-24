@@ -1338,6 +1338,13 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- The explicitly specified template arguments are substituted into the
+  pattern of a trailing function parameter pack too ([temp.deduct.general]/2-3,
+  /8, WP-3380): `h<int>()` of `template<class T, class... Ts> void
+  h(L<Ts, typename T::type>...)` is a deduction failure, not accepted
+  with `Ts` empty, and such a candidate leaves the overload set instead of
+  winning the call; the same for a nested expansion over an explicitly
+  given pack and for taking the address of `h<int>`.
 - A function template specialization's parameter attributes come from
   the template's latest declaration where the specialization is
   declared, not from its first ([temp.inst]/3, [dcl.attr.grammar]/5,
