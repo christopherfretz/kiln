@@ -20,8 +20,12 @@
 25:14-25:15  expr  't' -> t@19:37 in=use@19:24
 25:25-25:28  template  'get' -> (dependent) in=use@19:24
 25:25-25:28  template  'get' -> Alloc::get<0>@15:24 found=Alloc::get@15:24 spec=use<Alloc>@19:24
+25:12-25:13  operator  '+' -> (dependent) in=use@19:24 def=0+adl
+25:12-25:13  operator  '+' -> (builtin) spec=use<Alloc>@19:24 how=builtin
 25:36-25:37  nns  'T' -> T@19:17 in=use@19:24
 25:48-25:52  expr  'make' -> (dependent) q=25:36 in=use@19:24
 25:48-25:52  expr  'make' -> Alloc::make<int>@16:31 found=Alloc::make@16:31 spec=use<Alloc>@19:24
+25:34-25:35  operator  '+' -> (dependent) in=use@19:24 def=0+adl
+25:34-25:35  operator  '+' -> (builtin) spec=use<Alloc>@19:24 how=builtin
 28:20-28:23  expr  'use' -> use<Alloc>@19:24 found=use@19:24 in=run@28:5 how=both adl-ns=:: adl-cls=Alloc@9:8
 28:24-28:29  type  'Alloc' -> Alloc@9:8 in=run@28:5

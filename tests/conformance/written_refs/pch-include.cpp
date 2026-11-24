@@ -11,3 +11,4 @@ pch_ns::Box<int> boxed{1};
 int after_pch(int v) {
   return v + pch_ns::from_pch + pch_ns::measure(pch_ns::Pt{v}) + outer::twice({v}) + boxed.get();
 }
+int doubled_pt(pch_ns::Pt p) { return pch_ns::doubled(p).x + pch_ns::summed(p, p, p).x; }

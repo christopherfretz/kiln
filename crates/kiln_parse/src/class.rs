@@ -1055,7 +1055,41 @@ impl Parser<'_, '_> {
             return (None, false);
         };
         let pack_expansion = self.eat(Punct::Ellipsis).is_some();
-        (Some(MemInitInfo { id: MemInitId::Type(ty), loc, init, pack_expansion }), true)
+        (
+            Some(MemInitInfo {
+                id: MemInitId::Type(ty),
+                loc,
+                end: self.prev_lo(),
+                init,
+                pack_expansion,
+            }),
+            true,
+        )
+    }
+
+    /// `decltype(e) (args)` as a mem-initializer, at `decltype` (`loc`).
+    fn parse_decltype_mem_initializer(&mut self, loc: Loc) -> (Option<MemInitInfo>, bool) {
+        let (kind, ty) = self.parse_decltype_specifier();
+        let Some(init) = self.parse_mem_init_args() else {
+            return (None, false);
+        };
+        let pack_expansion = self.eat(Punct::Ellipsis).is_some();
+        if kind == TypeSpecKind::DecltypeAuto {
+            self.s.error(DiagId::parse_decltype_auto_invalid, loc);
+        }
+        // After an error the initializer is still counted, as failed
+        // (no implicit base or member initializers are added).
+        let ty = ty.filter(|_| kind != TypeSpecKind::DecltypeAuto).unwrap_or(QualType::ERROR);
+        (
+            Some(MemInitInfo {
+                id: MemInitId::Type(ty),
+                loc,
+                end: self.prev_lo(),
+                init,
+                pack_expansion,
+            }),
+            true,
+        )
     }
 
     fn parse_mem_initializer(&mut self) -> (Option<MemInitInfo>, bool) {
@@ -1071,7 +1105,13 @@ impl Parser<'_, '_> {
             };
             let pack_expansion = self.eat(Punct::Ellipsis).is_some();
             return (
-                Some(MemInitInfo { id: MemInitId::Type(ty), loc, init, pack_expansion }),
+                Some(MemInitInfo {
+                    id: MemInitId::Type(ty),
+                    loc,
+                    end: self.prev_lo(),
+                    init,
+                    pack_expansion,
+                }),
                 true,
             );
         }
@@ -1084,21 +1124,7 @@ impl Parser<'_, '_> {
         // class-or-decltype ([class.base.init]/1): `decltype(e)` names
         // the base by type (a dependent one is resolved at instantiation).
         if qual.is_none() && self.at_kw(Kw::Decltype) {
-            let (kind, ty) = self.parse_decltype_specifier();
-            let Some(init) = self.parse_mem_init_args() else {
-                return (None, false);
-            };
-            let pack_expansion = self.eat(Punct::Ellipsis).is_some();
-            if kind == TypeSpecKind::DecltypeAuto {
-                self.s.error(DiagId::parse_decltype_auto_invalid, loc);
-            }
-            // After an error the initializer is still counted, as failed
-            // (no implicit base or member initializers are added).
-            let ty = ty.filter(|_| kind != TypeSpecKind::DecltypeAuto).unwrap_or(QualType::ERROR);
-            return (
-                Some(MemInitInfo { id: MemInitId::Type(ty), loc, init, pack_expansion }),
-                true,
-            );
+            return self.parse_decltype_mem_initializer(loc);
         }
         let Some(name) = self.ident() else {
             self.error_here(DiagId::parse_expected_member_or_base_name);
@@ -1117,6 +1143,7 @@ impl Parser<'_, '_> {
             return (None, false);
         };
         let pack_expansion = self.eat(Punct::Ellipsis).is_some();
+        let end = self.prev_lo();
         // [class.access]/4: a mem-initializer-id naming a type (a base,
         // through a typedef or its injected-class-name) is access-checked.
         if let NameClass::Type(_, d) = self.s.classify_name(name, q) {
@@ -1180,7 +1207,7 @@ impl Parser<'_, '_> {
         // (clang: the `ElaboratedTypeLoc`'s begin, where the initializer
         // and its construction start).
         let loc = if q.is_some() { qloc } else { loc };
-        (Some(MemInitInfo { id, loc, init, pack_expansion }), true)
+        (Some(MemInitInfo { id, loc, end, init, pack_expansion }), true)
     }
 
     /// The `( expression-list )` or braced-init-list of a mem-initializer.
@@ -2769,7 +2796,7 @@ impl Parser<'_, '_> {
                     d.invalid = true;
                 }
                 if let Some(u) = lit.ud_suffix {
-                    ud.get_or_insert_with(|| self.s.intern(u));
+                    ud.get_or_insert_with(|| self.s.intern(&kiln_lex::literal::ud_suffix_name(u)));
                 }
             }
             if !empty && !d.invalid {

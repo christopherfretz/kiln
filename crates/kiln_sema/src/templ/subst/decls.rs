@@ -2150,7 +2150,13 @@ impl Substituter<'_, '_, '_> {
                 .map(|&a| self.template_arg(a, loc))
                 .collect::<SubstResult<Vec<_>>>()?;
             let record = self.sema.current_class().map(|c| c.record).ok_or(SubstFail)?;
-            return Ok(self.sema.instantiate_friend_spec(record, &fs, ty, &args));
+            let errors = self.sema.written_spec_errors();
+            let r = self.sema.instantiate_friend_spec(record, &fs, ty, &args);
+            // Its written name's row (spec/ast.md §18.9.4).
+            if let Some(e) = errors {
+                self.sema.note_written_spec_friend(d, r, e);
+            }
+            return Ok(r);
         }
         if let Some(mf) = self.sema.member_friends.by_friend.get(&d).cloned()
             && let FriendTarget::Type { ty, .. } = self.sema.ast.decls.friend_target(d)

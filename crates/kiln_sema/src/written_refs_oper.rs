@@ -1,0 +1,771 @@
+//! Stage 6 of the written-reference table (spec/ast.md §18.13, WP-2820):
+//! the operator token of an operator expression whose overload resolution
+//! selected a function, and the ud-suffix of a user-defined literal. The
+//! parser calls these with the expression it just built at the token; the
+//! facts are read from that expression (no sema side state), and no entry
+//! is made during instantiation or when recording is off (one branch).
+//!
+//! Stage 6b (WP-2910): a dependent operator in a template pattern gets a
+//! `DEPENDENT` entry with its definition-context found set, and each
+//! instantiation that reaches the token a per-specialization row read off
+//! the rebuilt expression (`note_written_spec_oper`, and per application
+//! of a fold-expression's expansion, `note_written_spec_fold`).
+
+use kiln_ast::decl::DeclKind;
+use kiln_ast::expr::{BinaryOp, CastKind, ExprFlags, ExprKind, UnaryOp};
+use kiln_ast::ids::RawId;
+use kiln_ast::names::OverloadedOperator as OO;
+use kiln_ast::written_refs::{
+    FOUND_ADL, FoundDecl, PatternNode, REF_DEPENDENT, REF_REVERSED, REF_REWRITTEN, REF_UNRESOLVED,
+    RefLookup, RefQualifier, RefRole, SPEC_BUILTIN, WrittenRefId,
+};
+use kiln_ast::{DeclId, ExprId};
+use kiln_source::{Loc, Span};
+
+use crate::Sema;
+
+/// What one dependent operator token selected in one specialization
+/// (spec/ast.md §18.13.6): the rows it gets.
+#[derive(Clone, Copy, Debug)]
+enum OperSel {
+    /// A function (`found` when it differs), with the row's flags
+    /// (`REWRITTEN`, `REVERSED`) and the `how` its call says.
+    Fn((DeclId, Option<DeclId>), u8, Option<RefLookup>),
+    /// A built-in candidate or no operator function at all.
+    Builtin,
+    /// Overload resolution failed (diagnosed).
+    Unresolved,
+    /// Still dependent (a generic lambda's body rebuilt by the enclosing
+    /// template's instantiation): the rebuilt node stands for the entry.
+    Dependent,
+}
+
+impl Sema<'_, '_> {
+    /// Records the operator token `tok` of the operator expression `e`
+    /// the parser just built (spec/ast.md §18.13): `at` is the location
+    /// sema built the operator call at (the token's own, except for the
+    /// comma of a C-style cast's parenthesized operand, built at the `(`
+    /// as clang does), `close` the `]` or `)` of a subscript or call
+    /// (`Loc::INVALID` otherwise), `operands` the operands as written (the
+    /// callee object first for a call). An overloaded operator gets an
+    /// `operator` entry naming the selected function (two for a
+    /// comparison rewritten through `operator<=>` whose comparison with
+    /// zero is overloaded); a built-in one none; a failed resolution with
+    /// a class or enumeration operand an `UNRESOLVED` entry. A dependent
+    /// operator in a template pattern that could select a function gets a
+    /// `DEPENDENT` entry, its rows made by each instantiation (§18.13.6).
+    pub fn note_written_operator(
+        &mut self,
+        e: ExprId,
+        tok: Span,
+        at: Loc,
+        close: Loc,
+        operands: &[ExprId],
+    ) {
+        if !self.records_written_refs() || !self.inst.stack.is_empty() {
+            return;
+        }
+        let x = self.written_oper_peel(e);
+        let n = *self.ast.exprs.get(x);
+        if n.is_type_dependent() && !self.is_err_expr(x) {
+            if self.written_oper_may_select(x, close, operands) {
+                self.push_written_dependent_oper(x, 0, tok, close);
+            }
+            return;
+        }
+        match n.kind() {
+            ExprKind::CXXOperatorCallExpr if n.loc() == at => {
+                self.push_written_oper_call(x, tok, close, 0);
+            }
+            ExprKind::CXXRewrittenBinaryOperator if n.loc() == at => {
+                self.note_written_rewritten(x, tok);
+            }
+            ExprKind::CallExpr => {
+                // A surrogate call function ([over.call.object]/2): the
+                // callee is the object implicitly converted to a pointer
+                // to function.
+                if let Some(conv) = self.written_surrogate(self.ast.exprs.callee(x)) {
+                    self.push_written_oper(tok, conv, close, 0);
+                }
+            }
+            _ if self.is_err_expr(x) => self.note_written_oper_failure(tok, close, operands),
+            _ => {}
+        }
+    }
+
+    /// Records the `->` at `tok` of the class member access `e` whose
+    /// object expression was `base`: one entry per `operator->` the
+    /// chain applied, in application order ([over.ref]/1, spec/ast.md
+    /// §18.13); `UNRESOLVED` when `base` has class type and no
+    /// `operator->` was applied (diagnosed); nothing for a built-in `->`.
+    /// A `base` of a dependent type that could be a class gets a
+    /// `DEPENDENT` entry, with no found set ([over.ref]: member
+    /// candidates only) and a row per `operator->` each instantiation
+    /// applies (§18.13.6).
+    pub fn note_written_arrow(&mut self, e: ExprId, base: ExprId, tok: Span) {
+        if !self.records_written_refs() || !self.inst.stack.is_empty() {
+            return;
+        }
+        if self.ast.exprs.get(base).is_type_dependent() {
+            let x = self.written_oper_peel(e);
+            if !self.contains_errors(base)
+                && !self.is_err_expr(x)
+                && self.is_dependent_overloadable(self.ety(base))
+            {
+                self.push_written_dependent_oper(x, 0, tok, Loc::INVALID);
+            }
+            return;
+        }
+        if self.ast.types.as_record(self.ety(base)).is_none() || self.contains_errors(base) {
+            return;
+        }
+        // The outermost `operator->` call at the token: the member
+        // access's object, or within a failed access's recovery.
+        let mut chain = Vec::new();
+        let mut cur = self.written_arrow_outermost(e, tok.lo);
+        while let Some(c) = cur.map(|c| self.written_oper_peel(c))
+            && self.ast.exprs.get(c).kind() == ExprKind::CXXOperatorCallExpr
+            && self.ast.exprs.operator_call_op(c) == OO::Arrow
+            && self.ast.exprs.get(c).loc() == tok.lo
+        {
+            chain.push(c);
+            cur = self.ast.lists.iter::<ExprId>(self.ast.exprs.call_args(c)).next();
+        }
+        if chain.is_empty() {
+            self.push_written_oper_unresolved(tok, Loc::INVALID);
+            return;
+        }
+        // The outermost call is the last applied.
+        for &c in chain.iter().rev() {
+            self.push_written_oper_call(c, tok, Loc::INVALID, 0);
+        }
+    }
+
+    /// The first `operator->` call at `at` in a breadth-first walk of
+    /// `e` (bounded: a member access's object is its first child).
+    fn written_arrow_outermost(&self, e: ExprId, at: Loc) -> Option<ExprId> {
+        let ex = &self.ast.exprs;
+        let mut queue = std::collections::VecDeque::from([e]);
+        let mut kids = Vec::new();
+        for _ in 0..64 {
+            let c = queue.pop_front()?;
+            let n = ex.get(c);
+            if n.kind() == ExprKind::CXXOperatorCallExpr
+                && n.loc() == at
+                && ex.operator_call_op(c) == OO::Arrow
+            {
+                return Some(c);
+            }
+            kids.clear();
+            ex.children_into(c, &self.ast.lists, &mut kids);
+            queue.extend(kids.iter().copied());
+        }
+        None
+    }
+
+    /// Records the ud-suffixes `suffixes` (each the suffix within its
+    /// literal token, one per suffixed piece of a string concatenation)
+    /// of the user-defined literal `e` the parser just built: role
+    /// `ud-suffix`, the literal operator (a literal operator template's
+    /// specialization, `found` the template) or `UNRESOLVED` when none
+    /// matched (spec/ast.md §18.13.4).
+    pub fn note_written_udl(&mut self, e: ExprId, suffixes: &[Span]) {
+        if !self.records_written_refs() || !self.inst.stack.is_empty() {
+            return;
+        }
+        let x = self.written_oper_peel(e);
+        let target = if self.ast.is_udl_call(x) {
+            self.written_callee(self.ast.exprs.callee(x))
+        } else {
+            None
+        };
+        let (entity, found, flags) = match target {
+            Some((d, f)) => (Some(d), f, 0),
+            None => (None, None, REF_UNRESOLVED),
+        };
+        for &range in suffixes {
+            let r = self.push_written_ref(
+                range,
+                entity,
+                found,
+                RefRole::UdSuffix,
+                RefQualifier::NONE,
+                flags,
+            );
+            debug_assert!(r.is_some(), "recording is on");
+        }
+    }
+
+    /// Records the operator tokens `toks` (one for a unary fold, two for a
+    /// binary one) of the fold-expression `e` the parser just built
+    /// ([expr.prim.fold]): each a `DEPENDENT` entry with the fold's
+    /// definition-context found set, the rows made per application of
+    /// each expansion (spec/ast.md §18.13.6). Nothing when no operand
+    /// could have class or enumeration type (a fold over a pack of
+    /// `int` template parameters is built-in in every expansion).
+    pub fn note_written_fold(&mut self, e: ExprId, toks: &[Span]) {
+        if !self.records_written_refs() || !self.inst.stack.is_empty() {
+            return;
+        }
+        let n = *self.ast.exprs.get(e);
+        if n.kind() != ExprKind::CXXFoldExpr {
+            return;
+        }
+        let ops = [ExprId::from_raw(n.a()), ExprId::from_raw(n.b())];
+        if ops.iter().flatten().any(|&o| self.contains_errors(o))
+            || !ops.iter().flatten().any(|&o| self.written_could_overload(o))
+        {
+            return;
+        }
+        for (slot, &tok) in (0u8..).zip(toks.iter().take(2)) {
+            self.push_written_dependent_oper(e, slot, tok, Loc::INVALID);
+        }
+    }
+
+    /// True when operand `o` has a class or enumeration type, or a
+    /// dependent type that may be one (not a pointer, array, function or
+    /// pointer to member): overload resolution may run on it
+    /// ([over.match.oper]/1).
+    fn written_could_overload(&self, o: ExprId) -> bool {
+        self.overloadable_operand(o) || self.is_dependent_overloadable(self.ety(o))
+    }
+
+    /// Whether the type-dependent operator expression `x` built from
+    /// `operands` (the callee or object first for `()` and `[]`, which
+    /// have a `close`) may select a function in some specialization
+    /// (spec/ast.md §18.13.6): an operand that may have class or
+    /// enumeration type; for `[]`, `()` and `=`, whose candidates are
+    /// members only ([over.sub], [over.call], [over.ass]), the object; a
+    /// call only when its callee is not a function name (D12: the name
+    /// has its own entry) and may be an object of class type.
+    fn written_oper_may_select(&self, x: ExprId, close: Loc, operands: &[ExprId]) -> bool {
+        if operands.iter().any(|&o| self.contains_errors(o)) {
+            return false;
+        }
+        let ex = &self.ast.exprs;
+        let n = ex.get(x);
+        let assign = n.kind() == ExprKind::BinaryOperator && ex.binary_op(x) == BinaryOp::Assign;
+        match operands {
+            [] => false,
+            [callee, ..] if close.is_valid() && n.kind() == ExprKind::CallExpr => {
+                !self.written_names_function(*callee) && self.written_could_overload(*callee)
+            }
+            [obj, ..] if close.is_valid() || assign => self.written_could_overload(*obj),
+            ops => ops.iter().any(|&o| self.written_could_overload(o)),
+        }
+    }
+
+    /// True when the callee `c` of a call is a function name (D12 of
+    /// spec/ast.md §18.13.6): an unresolved or dependent name, or a name
+    /// or member access naming a function or an overload set.
+    fn written_names_function(&self, c: ExprId) -> bool {
+        let c = self.written_oper_peel(self.ignore_parens(c));
+        let ex = &self.ast.exprs;
+        match ex.get(c).kind() {
+            ExprKind::UnresolvedLookupExpr
+            | ExprKind::DependentScopeDeclRefExpr
+            | ExprKind::CXXDependentScopeMemberExpr => true,
+            ExprKind::DeclRefExpr | ExprKind::MemberExpr => {
+                let d = ex.decl(c);
+                self.member_overload(c).is_some()
+                    || self.ast.decls.function(d).is_some()
+                    || self.kind_of(d) == DeclKind::FunctionTemplate
+            }
+            _ => false,
+        }
+    }
+
+    /// A `DEPENDENT` `operator` entry at `tok` for token `slot` of the
+    /// dependent expression `x`: its pattern node, its `close`, its found
+    /// set and the using-directives its elements were found through.
+    fn push_written_dependent_oper(&mut self, x: ExprId, slot: u8, tok: Span, close: Loc) {
+        let Some(id) = self.push_written_ref(
+            tok,
+            None,
+            None,
+            RefRole::Operator,
+            RefQualifier::NONE,
+            REF_DEPENDENT,
+        ) else {
+            return;
+        };
+        if close.is_valid() {
+            self.ast.written_refs.set_close(id, close);
+        }
+        self.ast.written_refs.note_pattern_node(PatternNode::Oper(x, slot), id);
+        self.note_written_oper_found(id, x);
+    }
+
+    /// The found set of the dependent operator entry `id` made from `x`
+    /// (spec/ast.md §18.12.2): the non-member operator functions the
+    /// unqualified lookup at the definition found
+    /// (`Ast::dependent_oper_candidates`, §8.5, with the rewritten forms'
+    /// names), open to argument-dependent lookup (`ADL`); none for an
+    /// operator with member candidates only (`=`, `[]`, `()`, `->`).
+    fn note_written_oper_found(&mut self, id: WrittenRefId, x: ExprId) {
+        let Some(cands) = self.ast.dependent_oper_candidates(x) else { return };
+        let cands = cands.to_vec();
+        let elems: Vec<FoundDecl> = cands
+            .iter()
+            .map(|c| {
+                let target = self.ast.strip_shadow(c.decl);
+                let decl = self.ast.first(target);
+                let found = if c.found != c.decl && c.found != target { c.found } else { decl };
+                FoundDecl { decl, found }
+            })
+            .collect();
+        let s = self.ast.written_refs.intern_found(&elems, RefLookup::Unqualified, FOUND_ADL);
+        self.ast.written_refs.set_found(id, s);
+        // The using-directive each namespace-scope element was found
+        // through, for the rows that select it (§18.9.1): the scope walk
+        // with the element's name, believed only when it finds it.
+        if cands.is_empty() || !self.any_using_directive() {
+            return;
+        }
+        let r = *self.ast.written_refs.get(id);
+        for c in &cands {
+            let target = self.ast.strip_shadow(c.decl);
+            if !self.in_namespace_scope(target) {
+                continue;
+            }
+            let name = self.ast.decls.get(target).name();
+            let Some((found, p)) = self.written_walk(&r, name, crate::lookup::LookupKind::Ordinary)
+            else {
+                continue;
+            };
+            let key = self.ast.first(target);
+            if !found.decls.iter().any(|&f| self.ast.first(self.ast.strip_shadow(f)) == key) {
+                continue;
+            }
+            if let Some(u) = self.written_udir_of(key, name, &p) {
+                self.ast.written_refs.note_pattern_udir(id, key, u);
+            }
+        }
+    }
+
+    /// The dependent operator entries made from the pattern node `p`
+    /// (a binary fold has two).
+    fn written_oper_entries(&self, p: ExprId) -> [Option<WrittenRefId>; 2] {
+        let t = &self.ast.written_refs;
+        let first = t.pattern_entry(PatternNode::Oper(p, 0));
+        [first, first.and_then(|_| t.pattern_entry(PatternNode::Oper(p, 1)))]
+    }
+
+    /// The substituter rebuilt the pattern expression `pattern` as
+    /// `rebuilt`: when `pattern` is a dependent operator's node, what its
+    /// token selected in the current specialization is that entry's row
+    /// (spec/ast.md §18.13.6). A fold-expression's rows are made per
+    /// application ([`Self::note_written_spec_fold`]). Callers test
+    /// `WrittenRefs::has_pattern_nodes` first.
+    pub(crate) fn note_written_spec_oper(&mut self, pattern: ExprId, rebuilt: ExprId) {
+        if rebuilt == pattern {
+            return;
+        }
+        let kind = self.ast.exprs.get(pattern).kind();
+        let arrow = match kind {
+            ExprKind::BinaryOperator
+            | ExprKind::CompoundAssignOperator
+            | ExprKind::UnaryOperator
+            | ExprKind::ArraySubscriptExpr
+            | ExprKind::CallExpr
+            | ExprKind::CXXOperatorCallExpr => false,
+            ExprKind::CXXDependentScopeMemberExpr | ExprKind::MemberExpr => true,
+            _ => return,
+        };
+        let ws = self.written_oper_entries(pattern);
+        let Some(w) = ws[0] else { return };
+        let Some(spec) = self.written_spec_key() else { return };
+        let picks = if arrow {
+            let at = self.ast.written_refs.get(w).range.lo;
+            self.written_arrow_sels(rebuilt, at)
+        } else {
+            self.written_oper_sels(rebuilt)
+        };
+        for (slot, w) in (0u8..).zip(ws) {
+            if let Some(w) = w {
+                self.push_written_oper_rows(w, slot, spec, rebuilt, &picks);
+            }
+        }
+    }
+
+    /// One application `r` of the expansion of the fold-expression
+    /// `pattern` (or the fold it was rebuilt as, still over a pack): a
+    /// row of each of the fold's operator entries, one per distinct
+    /// resolution (rows are kept once, §18.9.1).
+    pub(crate) fn note_written_spec_fold(&mut self, pattern: ExprId, r: ExprId) {
+        let ws = self.written_oper_entries(pattern);
+        if ws[0].is_none() {
+            return;
+        }
+        let Some(spec) = self.written_spec_key() else { return };
+        let picks = if self.ast.exprs.get(r).kind() == ExprKind::CXXFoldExpr {
+            vec![OperSel::Dependent]
+        } else {
+            self.written_oper_sels(r)
+        };
+        for (slot, w) in (0u8..).zip(ws) {
+            if let Some(w) = w {
+                self.push_written_oper_rows(w, slot, spec, r, &picks);
+            }
+        }
+    }
+
+    /// The expansion of the fold-expression `pattern` applied no operator
+    /// ([temp.variadic]/13: an empty pack's `&&`, `||`, `,`, a single
+    /// element, an init alone): the token was reached and selected
+    /// nothing, a `SPEC_BUILTIN` row.
+    pub(crate) fn note_written_spec_fold_none(&mut self, pattern: ExprId) {
+        let ws = self.written_oper_entries(pattern);
+        if ws[0].is_none() {
+            return;
+        }
+        let Some(spec) = self.written_spec_key() else { return };
+        for (slot, w) in (0u8..).zip(ws) {
+            if let Some(w) = w {
+                self.push_written_oper_rows(w, slot, spec, pattern, &[OperSel::Builtin]);
+            }
+        }
+    }
+
+    /// The rows of entry `w` (token `slot` of its node) for `picks` in
+    /// `spec`; a still-dependent `rebuilt` becomes a further pattern node
+    /// of the entry (§18.9.4), and a failure inside a SFINAE context
+    /// records nothing (§18.9.3).
+    fn push_written_oper_rows(
+        &mut self,
+        w: WrittenRefId,
+        slot: u8,
+        spec: DeclId,
+        rebuilt: ExprId,
+        picks: &[OperSel],
+    ) {
+        for &sel in picks {
+            match sel {
+                OperSel::Fn((d, f), flags, how) => {
+                    self.push_written_spec_with(w, spec, Some(d), f, flags, how);
+                }
+                OperSel::Builtin => {
+                    self.push_written_spec_with(w, spec, None, None, SPEC_BUILTIN, None);
+                }
+                OperSel::Unresolved if self.inst.stack.is_sfinae() => {}
+                OperSel::Unresolved => {
+                    self.push_written_spec_with(w, spec, None, None, 0, None);
+                }
+                OperSel::Dependent => {
+                    self.ast.written_refs.note_pattern_node(PatternNode::Oper(rebuilt, slot), w);
+                }
+            }
+        }
+    }
+
+    /// What the rebuilt operator expression `r` selected
+    /// (spec/ast.md §18.13.6): the function of its operator call, the
+    /// candidates of a rewritten comparison (§18.13.3), a surrogate call's
+    /// conversion function; a built-in operator, or a call of a function
+    /// pointer, selects nothing.
+    fn written_oper_sels(&self, r: ExprId) -> Vec<OperSel> {
+        let ex = &self.ast.exprs;
+        let x = self.written_oper_peel(r);
+        let n = *ex.get(x);
+        if self.is_err_expr(x) {
+            return vec![OperSel::Unresolved];
+        }
+        if n.is_type_dependent() {
+            return vec![OperSel::Dependent];
+        }
+        match n.kind() {
+            ExprKind::CXXOperatorCallExpr => vec![self.written_call_sel(x, 0)],
+            ExprKind::CXXRewrittenBinaryOperator => {
+                match self.written_rewritten_calls(x, n.loc()) {
+                    Some((first, second, reversed)) => {
+                        let flags = REF_REWRITTEN | if reversed { REF_REVERSED } else { 0 };
+                        let mut v = vec![self.written_call_sel(first, flags)];
+                        if let Some(c) = second {
+                            v.push(self.written_call_sel(c, REF_REWRITTEN));
+                        }
+                        v
+                    }
+                    None => vec![OperSel::Builtin],
+                }
+            }
+            ExprKind::CallExpr => match self.written_surrogate(ex.callee(x)) {
+                Some(conv) => vec![OperSel::Fn(conv, 0, Some(RefLookup::Member))],
+                None => vec![OperSel::Builtin],
+            },
+            _ => vec![OperSel::Builtin],
+        }
+    }
+
+    /// The selection of the resolved operator call `c`, with `flags`.
+    fn written_call_sel(&self, c: ExprId, flags: u8) -> OperSel {
+        let n = *self.ast.exprs.get(c);
+        match self.written_callee(self.ast.exprs.callee(c)) {
+            Some(t) => {
+                let how =
+                    if matches!(self.kind_of(t.0), DeclKind::CXXMethod | DeclKind::CXXConversion) {
+                        Some(RefLookup::Member)
+                    } else if n.has(ExprFlags::ADL) {
+                        Some(RefLookup::Adl)
+                    } else {
+                        None
+                    };
+                OperSel::Fn(t, flags, how)
+            }
+            None => OperSel::Unresolved,
+        }
+    }
+
+    /// What the `->` at `at` of the rebuilt member access `r` applied:
+    /// each `operator->` in application order ([over.ref]/1); a built-in
+    /// `->` (a pointer) nothing; a class object with no `operator->`
+    /// (diagnosed) a failure.
+    fn written_arrow_sels(&self, r: ExprId, at: Loc) -> Vec<OperSel> {
+        let ex = &self.ast.exprs;
+        let x = self.written_oper_peel(r);
+        let mut chain = Vec::new();
+        let mut cur = self.written_arrow_outermost(x, at);
+        while let Some(c) = cur.map(|c| self.written_oper_peel(c))
+            && ex.get(c).kind() == ExprKind::CXXOperatorCallExpr
+            && ex.operator_call_op(c) == OO::Arrow
+            && ex.get(c).loc() == at
+        {
+            chain.push(c);
+            cur = self.ast.lists.iter::<ExprId>(ex.call_args(c)).next();
+        }
+        if !chain.is_empty() {
+            return chain.iter().rev().map(|&c| self.written_call_sel(c, 0)).collect();
+        }
+        if self.is_err_expr(x) {
+            // The member access failed: whether its `->` was built in is
+            // not known.
+            return Vec::new();
+        }
+        if ex.get(x).is_type_dependent()
+            && matches!(ex.get(x).kind(), ExprKind::CXXDependentScopeMemberExpr)
+        {
+            return vec![OperSel::Dependent];
+        }
+        let mut kids = Vec::new();
+        ex.children_into(x, &self.ast.lists, &mut kids);
+        match kids.first() {
+            Some(&b) if self.ast.types.as_record(self.ety(b)).is_some() => {
+                vec![OperSel::Unresolved]
+            }
+            _ => vec![OperSel::Builtin],
+        }
+    }
+
+    /// `e` without the implicit nodes sema puts around an operator call
+    /// or a user-defined literal's call (a temporary's binding and
+    /// materialization, an immediate invocation's `ConstantExpr`,
+    /// conversions, cleanups).
+    pub(crate) fn written_oper_peel(&self, mut e: ExprId) -> ExprId {
+        let ex = &self.ast.exprs;
+        for _ in 0..64 {
+            match ex.get(e).kind() {
+                ExprKind::ImplicitCastExpr
+                | ExprKind::MaterializeTemporaryExpr
+                | ExprKind::CXXBindTemporaryExpr
+                | ExprKind::ConstantExpr
+                | ExprKind::ExprWithCleanups => e = ex.operand(e),
+                _ => return e,
+            }
+        }
+        e
+    }
+
+    /// The function a resolved callee `callee` names and what lookup
+    /// found when it differs (the using-shadow, or the template of a
+    /// specialization); `None` for an unresolved or dependent callee.
+    fn written_callee(&self, callee: ExprId) -> Option<(DeclId, Option<DeclId>)> {
+        let c = self.written_oper_peel(callee);
+        if !matches!(self.ast.exprs.get(c).kind(), ExprKind::DeclRefExpr | ExprKind::MemberExpr) {
+            return None;
+        }
+        let d = self.ast.exprs.decl(c);
+        let found = self
+            .ast
+            .exprs
+            .decl_ref_extra(c)
+            .and_then(|x| x.found_decl)
+            .or_else(|| self.ast.spec_info(d).map(|(_, i)| i.template))
+            .filter(|&f| f != d);
+        Some((d, found))
+    }
+
+    /// The conversion function of a surrogate call whose callee is
+    /// `callee`: the object under a user-defined conversion (an implicit
+    /// cast, so not a written `c.operator FP()(x)`) by its `operator FP()`;
+    /// `None` for any other call.
+    fn written_surrogate(&self, callee: ExprId) -> Option<(DeclId, Option<DeclId>)> {
+        let ex = &self.ast.exprs;
+        let mut c = callee;
+        while ex.get(c).kind() == ExprKind::ImplicitCastExpr
+            && ex.cast_kind(c) != CastKind::UserDefinedConversion
+        {
+            c = ex.operand(c);
+        }
+        if ex.get(c).kind() != ExprKind::ImplicitCastExpr {
+            return None;
+        }
+        let call = self.written_oper_peel(ex.operand(c));
+        if ex.get(call).kind() != ExprKind::CXXMemberCallExpr {
+            return None;
+        }
+        let m = self.written_oper_peel(ex.callee(call));
+        if ex.get(m).kind() != ExprKind::MemberExpr {
+            return None;
+        }
+        let d = ex.decl(m);
+        (self.kind_of(d) == DeclKind::CXXConversion).then(|| self.written_callee(m)).flatten()
+    }
+
+    /// The entry of the resolved operator call `call` at `tok`.
+    fn push_written_oper_call(&mut self, call: ExprId, tok: Span, close: Loc, flags: u8) {
+        let n = *self.ast.exprs.get(call);
+        // A dependent operator (an unresolved callee) is stage 6b's.
+        if n.is_type_dependent() {
+            return;
+        }
+        let Some(target) = self.written_callee(self.ast.exprs.callee(call)) else { return };
+        let adl = n.has(ExprFlags::ADL);
+        let id = self.push_written_oper(tok, target, close, flags);
+        if adl && let Some(id) = id {
+            // Found only by argument-dependent lookup (clang's
+            // `IsADLCandidate`): no using-directive applies.
+            self.ast.written_refs.set_how(id, RefLookup::Adl);
+            self.ast.written_refs.set_using_directive(id, None);
+        }
+    }
+
+    /// An `operator` entry at `tok` naming `entity` (found as `found`):
+    /// `how` is `member` for a member function (a member candidate,
+    /// [over.match.oper]/3.1, a call operator, `operator->`, a surrogate's
+    /// conversion function), else as the scope walk says (§18.7).
+    fn push_written_oper(
+        &mut self,
+        tok: Span,
+        (entity, found): (DeclId, Option<DeclId>),
+        close: Loc,
+        flags: u8,
+    ) -> Option<WrittenRefId> {
+        let id = self.push_written_ref(
+            tok,
+            Some(entity),
+            found,
+            RefRole::Operator,
+            RefQualifier::NONE,
+            flags,
+        )?;
+        if matches!(self.kind_of(entity), DeclKind::CXXMethod | DeclKind::CXXConversion) {
+            self.ast.written_refs.set_how(id, RefLookup::Member);
+            self.ast.written_refs.set_using_directive(id, None);
+        }
+        if close.is_valid() {
+            self.ast.written_refs.set_close(id, close);
+        }
+        Some(id)
+    }
+
+    /// An `UNRESOLVED` `operator` entry at `tok`.
+    fn push_written_oper_unresolved(&mut self, tok: Span, close: Loc) {
+        let id = self.push_written_ref(
+            tok,
+            None,
+            None,
+            RefRole::Operator,
+            RefQualifier::NONE,
+            REF_UNRESOLVED,
+        );
+        if let Some(id) = id
+            && close.is_valid()
+        {
+            self.ast.written_refs.set_close(id, close);
+        }
+    }
+
+    /// An operator expression that failed: `UNRESOLVED` when overload
+    /// resolution ran on it, i.e. an operand of class or enumeration type
+    /// ([over.match.oper]/1; for `[]` and `()`, the object), none of
+    /// them erroneous or dependent.
+    fn note_written_oper_failure(&mut self, tok: Span, close: Loc, operands: &[ExprId]) {
+        let mut overloadable = false;
+        for (i, &o) in operands.iter().enumerate() {
+            if self.ast.exprs.get(o).is_type_dependent() || self.contains_errors(o) {
+                return;
+            }
+            // `[]` and `()` resolve only on a class object ([over.sub],
+            // [over.call]): their arguments do not decide.
+            if i == 0 || !close.is_valid() {
+                overloadable |= self.overloadable_operand(o);
+            }
+        }
+        if overloadable {
+            self.push_written_oper_unresolved(tok, close);
+        }
+    }
+
+    /// The entries of the rewritten comparison `x` at `tok`
+    /// ([over.match.oper]/3.4, /8, /9): the selected `operator==` or
+    /// `operator<=>` (`rewritten`, and `reversed` for the reversed
+    /// synthesized candidate), then, when the comparison of a `<=>`
+    /// result with zero is itself an overloaded operator, that function
+    /// (`rewritten`), in application order (spec/ast.md §18.13.3).
+    fn note_written_rewritten(&mut self, x: ExprId, tok: Span) {
+        let Some((first, second, reversed)) = self.written_rewritten_calls(x, tok.lo) else {
+            return;
+        };
+        let flags = REF_REWRITTEN | if reversed { REF_REVERSED } else { 0 };
+        self.push_written_oper_call(first, tok, Loc::INVALID, flags);
+        if let Some(c) = second {
+            self.push_written_oper_call(c, tok, Loc::INVALID, REF_REWRITTEN);
+        }
+    }
+
+    /// The operator calls of the rewritten comparison `x` whose operator
+    /// is at `at`: the selected `operator==` or `operator<=>`, the
+    /// overloaded comparison of a `<=>` result with zero if any, and
+    /// whether the first is the reversed synthesized candidate.
+    fn written_rewritten_calls(
+        &self,
+        x: ExprId,
+        at: Loc,
+    ) -> Option<(ExprId, Option<ExprId>, bool)> {
+        let ex = &self.ast.exprs;
+        let (_, list) = ex.rewritten_written(x);
+        let written: Vec<ExprId> = self.ast.lists.iter::<ExprId>(list).collect();
+        let mut s = self.written_oper_peel(ex.rewritten_semantic(x));
+        // `x != y` is `!(x == y)`, its `!` built-in (the `==` returns
+        // `bool`, [over.match.oper]/9).
+        if ex.get(s).kind() == ExprKind::UnaryOperator && ex.unary_op(s) == UnaryOp::LNot {
+            s = self.written_oper_peel(ex.operand(s));
+        }
+        // The `<=>` call at the token among the operands of `s` (the
+        // comparison with zero), else `s` itself.
+        let mut kids = Vec::new();
+        ex.children_into(s, &self.ast.lists, &mut kids);
+        let inner = kids.into_iter().map(|k| self.written_oper_peel(k)).find(|&k| {
+            let n = ex.get(k);
+            n.kind() == ExprKind::CXXOperatorCallExpr
+                && n.loc() == at
+                && ex.operator_call_op(k) == OO::Spaceship
+        });
+        let (first, second) = match inner {
+            Some(i) if ex.get(s).kind() == ExprKind::CXXOperatorCallExpr => (i, Some(s)),
+            Some(i) => (i, None),
+            None if ex.get(s).kind() == ExprKind::CXXOperatorCallExpr => (s, None),
+            None => return None,
+        };
+        // Reversed: the selected function's first argument is the written
+        // right operand.
+        let arg0 = self.ast.lists.iter::<ExprId>(ex.call_args(first)).next();
+        let reversed = match (arg0, written.as_slice()) {
+            (Some(a), [l, r]) => {
+                let (a, l, r) = (self.begin_loc(a), self.begin_loc(*l), self.begin_loc(*r));
+                a == r && a != l
+            }
+            _ => false,
+        };
+        Some((first, second, reversed))
+    }
+}

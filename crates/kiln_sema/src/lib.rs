@@ -167,6 +167,7 @@ mod visibility;
 mod vla;
 mod weak_import;
 mod written_refs;
+mod written_refs_oper;
 mod written_specs;
 mod x86_interrupt;
 

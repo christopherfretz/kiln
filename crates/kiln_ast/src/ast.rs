@@ -1639,6 +1639,14 @@ impl Ast {
         self.decls.ctor_inits(ctor, &self.lists)
     }
 
+    /// The ctor-initializer of constructor definition `ctor` in a
+    /// template (the pattern), as written (spec/ast.md §8.6, WP-3026):
+    /// `None` for a constructor that is no pattern (its resolved list is
+    /// [`Ast::ctor_inits`]) and for a pattern without mem-initializers.
+    pub fn pattern_mem_inits(&self, ctor: DeclId) -> Option<&crate::templates::PatternMemInits> {
+        self.templates.pattern_mem_inits.get(ctor)
+    }
+
     // -- instantiation accounting (§13 Q6) -----------------------------
 
     /// Starts an instantiation. Nested calls nest; the outermost
@@ -1757,5 +1765,28 @@ impl Ast {
             self.inst.retained,
         ));
         r
+    }
+}
+
+impl Ast {
+    /// The maker of the string object that the frozen pointer `v` points
+    /// into, with the object's origin (spec/ast.md §5.8.1): `None` when `v`
+    /// is no pointer into a string object, or into one the source spells
+    /// (a `StringLiteral` of the program, or a predefined `__func__`).
+    ///
+    /// Every pointer to a string kiln makes leads to one maker: a
+    /// source-location use of one role evaluated in one declaration, a
+    /// reflection, or a contract site.
+    pub fn string_maker_of(
+        &self,
+        v: crate::ConstValueId,
+    ) -> Option<(crate::expr::StringMaker, ExprId)> {
+        match self.consts.scalar(v)? {
+            crate::consts::Scalar::Pointer {
+                base: crate::consts::PtrBase::StringLit { origin, .. },
+                ..
+            } => self.exprs.string_maker(origin).map(|m| (m, origin)),
+            _ => None,
+        }
     }
 }

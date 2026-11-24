@@ -1202,10 +1202,20 @@ mod tests {
         (0..8).for_each(&one);
         let (fds, threads) = fds_and_threads();
         (0..RUNS).for_each(&one);
-        let (fds_after, threads_after) = fds_and_threads();
-        // A run's reader thread or pipe may still be closing when the
-        // first count is taken (the warm-up's timeout run): the counts may
-        // drop, and a leak is a count that grew.
+        // A joined reader thread can still be listed in /proc/self/task for
+        // a moment while the kernel reaps it, and a run's reader thread or
+        // pipe may still be closing when the first count is taken (the
+        // warm-up's timeout run): wait (bounded) for the counts to settle at
+        // or below the first ones. A leak is a count that grew and stays.
+        let mut after = fds_and_threads();
+        for _ in 0..100 {
+            if after.0 <= fds && after.1 <= threads {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+            after = fds_and_threads();
+        }
+        let (fds_after, threads_after) = after;
         assert!(fds_after <= fds, "descriptors before {fds} and after {RUNS} runs {fds_after}");
         assert!(
             threads_after <= threads,

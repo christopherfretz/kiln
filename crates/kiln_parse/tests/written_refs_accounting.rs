@@ -804,10 +804,13 @@ fn every_identifier_is_accounted_for_in_the_standard_library() {
 /// (`kiln_ast::dump::for_each_written_expr`) whose declaration has a name
 /// must have exactly one entry whose `name_lo` is the expression's
 /// `loc()`, of role `expr`, `member`, `template` or `concept`, with the
-/// expression's declaration as its entity. `None`: the file has errors.
-/// Each mismatch is `(line:col, what)`.
-fn join(name: &str, src: &str) -> Option<(usize, Vec<(String, String)>)> {
-    use kiln_ast::expr::ExprKind;
+/// expression's declaration as its entity; a user-defined literal's
+/// literal operator joins its `ud-suffix` entry instead (§18.13.4). With
+/// it, the operator join (§18.13.7): every resolved operator call at a
+/// token spelling its operator (or within a rewritten comparison) has an
+/// `operator` entry at that token naming its function. `None`: the file
+/// has errors. Each mismatch is `(line:col, what)`.
+fn join(name: &str, src: &str) -> Option<JoinReport> {
     use kiln_ast::written_refs::RefRole;
     let sm = SourceManager::new();
     let main = sm.add_virtual(name, src.to_owned()).expect("location space");
@@ -827,24 +830,8 @@ fn join(name: &str, src: &str) -> Option<(usize, Vec<(String, String)>)> {
     for (id, _) in ast.written_refs.iter() {
         at.entry(ast.written_refs.name_lo(id)).or_default().push(id);
     }
-    let dopts = kiln_ast::dump::DumpOptions {
-        sources: Some(&sm),
-        main_file: Some(main),
-        ..Default::default()
-    };
-    let mut names = Vec::new();
-    let mut parent = std::collections::HashMap::new();
-    kiln_ast::dump::for_each_written_expr(ast, &dopts, |e, up| {
-        if let Some(p) = up {
-            parent.entry(e).or_insert(p);
-        }
-        let k = ast.exprs.get(e).kind();
-        if matches!(k, ExprKind::DeclRefExpr | ExprKind::MemberExpr) {
-            names.push(e);
-        }
-    });
-    names.sort_unstable();
-    names.dedup();
+    let walk = written_exprs(ast, &sm, main);
+    let (names, opers, rewritten, parent) = (walk.names, walk.opers, walk.rewritten, walk.parent);
     let name_of = |d| {
         let mut s = String::new();
         kiln_ast::types::TypeNames::write_decl_name(ast, d, true, &mut s);
@@ -857,7 +844,9 @@ fn join(name: &str, src: &str) -> Option<(usize, Vec<(String, String)>)> {
         let d = ast.exprs.decl(e);
         let loc = n.loc();
         let Some(a) = spelled(&sm, Scope::Main(main), loc) else { continue };
-        if implicit_name(ast, &parent, e, src, a.1) {
+        let udl = user_parent(ast, &parent, e)
+            .is_some_and(|(c, p)| ast.is_udl_call(p) && ast.exprs.callee(p) == c);
+        if !udl && implicit_name(ast, &parent, e, src, a.1) {
             continue;
         }
         checked += 1;
@@ -866,6 +855,9 @@ fn join(name: &str, src: &str) -> Option<(usize, Vec<(String, String)>)> {
             .iter()
             .map(|&id| ast.written_refs.get(id))
             .filter(|r| {
+                if udl {
+                    return r.role == RefRole::UdSuffix;
+                }
                 matches!(
                     r.role,
                     RefRole::Expr | RefRole::Member | RefRole::Template | RefRole::Concept
@@ -904,7 +896,163 @@ fn join(name: &str, src: &str) -> Option<(usize, Vec<(String, String)>)> {
         };
         bad.push((line_col(&sm, Scope::Main(main), a), what));
     }
-    Some((checked, bad))
+    let (opers, oper_bad) = join_operators(ast, &sm, main, src, &at, &rewritten, &opers);
+    Some(JoinReport { names: checked, bad, opers, oper_bad })
+}
+
+/// The expressions of the code as written that [`join`] checks.
+struct WrittenExprs {
+    /// `DeclRefExpr`s and `MemberExpr`s.
+    names: Vec<kiln_ast::ExprId>,
+    /// `CXXOperatorCallExpr`s.
+    opers: Vec<kiln_ast::ExprId>,
+    /// The locations of the rewritten comparisons.
+    rewritten: HashSet<Loc>,
+    /// Each expression's parent as written.
+    parent: std::collections::HashMap<kiln_ast::ExprId, kiln_ast::ExprId>,
+}
+
+/// Walks the code as written (`kiln_ast::dump::for_each_written_expr`).
+fn written_exprs(ast: &kiln_ast::Ast, sm: &SourceManager, main: FileId) -> WrittenExprs {
+    use kiln_ast::expr::ExprKind;
+    let dopts = kiln_ast::dump::DumpOptions {
+        sources: Some(sm),
+        main_file: Some(main),
+        ..Default::default()
+    };
+    let mut found = WrittenExprs {
+        names: Vec::new(),
+        opers: Vec::new(),
+        rewritten: HashSet::new(),
+        parent: std::collections::HashMap::new(),
+    };
+    kiln_ast::dump::for_each_written_expr(ast, &dopts, |e, up| {
+        if let Some(p) = up {
+            found.parent.entry(e).or_insert(p);
+        }
+        match ast.exprs.get(e).kind() {
+            ExprKind::DeclRefExpr | ExprKind::MemberExpr => found.names.push(e),
+            ExprKind::CXXOperatorCallExpr => found.opers.push(e),
+            ExprKind::CXXRewrittenBinaryOperator => {
+                found.rewritten.insert(ast.exprs.get(e).loc());
+            }
+            _ => {}
+        }
+    });
+    for v in [&mut found.names, &mut found.opers] {
+        v.sort_unstable();
+        v.dedup();
+    }
+    found
+}
+
+/// The operator half of [`join`] (§18.13.7): each resolved operator call
+/// in `opers` at a token spelling its operator (or within a rewritten
+/// comparison, `rewritten`) has an `operator` entry at that token naming
+/// its function. The number checked and the mismatches.
+fn join_operators(
+    ast: &kiln_ast::Ast,
+    sm: &SourceManager,
+    main: FileId,
+    src: &str,
+    at: &std::collections::HashMap<Loc, Vec<kiln_ast::written_refs::WrittenRefId>>,
+    rewritten: &HashSet<Loc>,
+    opers: &[kiln_ast::ExprId],
+) -> (usize, Vec<(String, String)>) {
+    use kiln_ast::expr::ExprKind;
+    use kiln_ast::names::OverloadedOperator as OO;
+    use kiln_ast::written_refs::RefRole;
+    let name_of = |d| {
+        let mut s = String::new();
+        kiln_ast::types::TypeNames::write_decl_name(ast, d, true, &mut s);
+        s
+    };
+    let (mut oper_checked, mut oper_bad) = (0, Vec::new());
+    for &e in opers {
+        let n = ast.exprs.get(e);
+        let loc = n.loc();
+        if n.is_type_dependent() {
+            continue;
+        }
+        let Some(a) = spelled(sm, Scope::Main(main), loc) else { continue };
+        let mut callee = ast.exprs.callee(e);
+        while ast.exprs.get(callee).kind() == ExprKind::ImplicitCastExpr {
+            callee = ast.exprs.operand(callee);
+        }
+        if ast.exprs.get(callee).kind() != ExprKind::DeclRefExpr {
+            continue;
+        }
+        let d = ast.exprs.decl(callee);
+        // A call with no token of its own (a range-for's, a defaulted
+        // comparison's, the comma operator of a cast's parenthesized
+        // operand, built at the `(`) is the exception (§18.13.7).
+        let op = ast.exprs.operator_call_op(e);
+        let text = src.get(a.1 as usize..).unwrap_or("");
+        let sp = op.spelling();
+        let spelled_here = match op {
+            OO::Subscript | OO::Call => text.starts_with(&sp[..1]),
+            _ => text.starts_with(sp),
+        };
+        if !spelled_here && !rewritten.contains(&loc) {
+            continue;
+        }
+        oper_checked += 1;
+        let ids = at.get(&loc).map_or(&[][..], Vec::as_slice);
+        let hit = ids
+            .iter()
+            .map(|&id| ast.written_refs.get(id))
+            .any(|r| r.role == RefRole::Operator && r.entity == Some(d));
+        if !hit {
+            let what = format!(
+                "operator call {:?} to '{}': no operator entry ({} entries there)",
+                op,
+                name_of(d),
+                ids.len()
+            );
+            oper_bad.push((line_col(sm, Scope::Main(main), a), what));
+        }
+    }
+    (oper_checked, oper_bad)
+}
+
+/// What [`join`] checked of one file: name expressions and operator
+/// calls, with their mismatches as `(line:col, what)`.
+struct JoinReport {
+    names: usize,
+    bad: Vec<(String, String)>,
+    opers: usize,
+    oper_bad: Vec<(String, String)>,
+}
+
+/// The first ancestor of `e` that is not an implicit wrapper, with the
+/// child of it on the way up.
+fn user_parent(
+    ast: &kiln_ast::Ast,
+    parent: &std::collections::HashMap<kiln_ast::ExprId, kiln_ast::ExprId>,
+    e: kiln_ast::ExprId,
+) -> Option<(kiln_ast::ExprId, kiln_ast::ExprId)> {
+    use kiln_ast::expr::ExprKind;
+    let wrapper = |x| {
+        matches!(
+            ast.exprs.get(x).kind(),
+            ExprKind::ImplicitCastExpr
+                | ExprKind::CXXConstructExpr
+                | ExprKind::MaterializeTemporaryExpr
+                | ExprKind::CXXBindTemporaryExpr
+                | ExprKind::ExprWithCleanups
+                | ExprKind::ConstantExpr
+                | ExprKind::OpaqueValueExpr
+                | ExprKind::ArrayInitLoopExpr
+        )
+    };
+    let (mut child, mut up) = (e, parent.get(&e).copied());
+    while let Some(p) = up
+        && wrapper(p)
+    {
+        child = p;
+        up = parent.get(&p).copied();
+    }
+    up.map(|p| (child, p))
 }
 
 /// True when name expression `e` (spelled at offset `off` of `src`) has
@@ -913,9 +1061,10 @@ fn join(name: &str, src: &str) -> Option<(usize, Vec<(String, String)>)> {
 /// declaration without a name or an implicit one (an anonymous union
 /// member, a structured binding's variable and the member access on it,
 /// a range-for's `__begin`), a condition variable's value, a reference
-/// at a token that does not spell its name (a user-defined literal's
-/// literal operator, an implicit conversion function, a structured
-/// binding's `get`, a coroutine's implicit calls), an operator use's
+/// at a token that does not spell its name (an implicit conversion
+/// function, a structured binding's `get`, a coroutine's implicit calls;
+/// a user-defined literal's literal operator joins its `ud-suffix` entry
+/// instead, which [`join`] checks), an operator use's
 /// callee (`a + b`, `f(x)` calling `operator()`, `a = b`), and an
 /// implicit capture's initializer (a capture-default's).
 fn implicit_name(
@@ -951,8 +1100,8 @@ fn implicit_name(
         }
     }
     // No token spelling the name at the location: sema built the
-    // reference at another token (a user-defined literal's literal
-    // operator, a conversion function an implicit conversion calls, a
+    // reference at another token (a conversion function an implicit
+    // conversion calls, a
     // structured binding's `get`, a coroutine's `await_ready` at its
     // `co_await`).
     let text = src.get(off as usize..).unwrap_or("");
@@ -966,29 +1115,7 @@ fn implicit_name(
     if !named {
         return true;
     }
-    // The first ancestor that is not an implicit wrapper, and the child
-    // of it on the way up.
-    let wrapper = |x| {
-        matches!(
-            ast.exprs.get(x).kind(),
-            ExprKind::ImplicitCastExpr
-                | ExprKind::CXXConstructExpr
-                | ExprKind::MaterializeTemporaryExpr
-                | ExprKind::CXXBindTemporaryExpr
-                | ExprKind::ExprWithCleanups
-                | ExprKind::ConstantExpr
-                | ExprKind::OpaqueValueExpr
-                | ExprKind::ArrayInitLoopExpr
-        )
-    };
-    let (mut child, mut up) = (e, parent.get(&e).copied());
-    while let Some(p) = up
-        && wrapper(p)
-    {
-        child = p;
-        up = parent.get(&p).copied();
-    }
-    let Some(p) = up else { return false };
+    let Some((child, p)) = user_parent(ast, parent, e) else { return false };
     match ast.exprs.get(p).kind() {
         ExprKind::CXXOperatorCallExpr => ast.exprs.callee(p) == child,
         ExprKind::LambdaExpr => {
@@ -1003,8 +1130,9 @@ fn implicit_name(
 }
 
 /// [`join`] over every `.cpp` file of `dir`: `(files, names, mismatches
-/// as (file, line:col, what))`.
-fn run_join(dir: &Path) -> (usize, usize, Vec<(String, String, String)>) {
+/// as (file, line:col, what))`, of the name join or, with `opers`, of the
+/// operator join.
+fn run_join(dir: &Path, opers: bool) -> (usize, usize, Vec<(String, String, String)>) {
     let files = cpp_files(dir);
     let base = dir.to_path_buf();
     let worker = std::thread::Builder::new().stack_size(1 << 30).spawn(move || {
@@ -1018,7 +1146,8 @@ fn run_join(dir: &Path) -> (usize, usize, Vec<(String, String, String)>) {
                 bad.push((shown, String::new(), "panic".into()));
                 continue;
             };
-            let Some((n, b)) = r else { continue };
+            let Some(r) = r else { continue };
+            let (n, b) = if opers { (r.opers, r.oper_bad) } else { (r.names, r.bad) };
             counted += 1;
             names += n;
             bad.extend(b.into_iter().map(|(at, w)| (shown.clone(), at, w)));
@@ -1035,7 +1164,7 @@ fn every_name_expression_joins_its_entry() {
     dirs.extend_from_slice(PINNED);
     let (mut files, mut names, mut bad) = (0, 0, Vec::new());
     for d in dirs {
-        let (c, n, b) = run_join(&conformance().join(d));
+        let (c, n, b) = run_join(&conformance().join(d), false);
         files += c;
         names += n;
         bad.extend(b.into_iter().map(|(f, at, w)| format!("{d}/{f}:{at}: {w}")));
@@ -1050,7 +1179,7 @@ fn every_name_expression_joins_its_entry() {
 #[ignore = "set KILN_REFS_DIR to a directory of sources"]
 fn every_name_expression_joins_its_entry_in_a_directory() {
     let Ok(dir) = std::env::var("KILN_REFS_DIR") else { return };
-    let (files, names, bad) = run_join(Path::new(&dir));
+    let (files, names, bad) = run_join(Path::new(&dir), false);
     eprintln!("join: {files} files, {names} name expressions, {} mismatches", bad.len());
     for (f, at, w) in &bad {
         eprintln!("{f}:{at}: {w}");
@@ -1058,6 +1187,24 @@ fn every_name_expression_joins_its_entry_in_a_directory() {
     if std::env::var_os("KILN_REFS_STRICT").is_some() {
         assert!(bad.is_empty(), "{} mismatches", bad.len());
     }
+}
+
+/// The operator join (spec/ast.md §18.13.7) over the written-reference
+/// corpus and the pinned directories.
+#[test]
+fn every_operator_use_joins_its_entries() {
+    let mut dirs = vec!["written_refs"];
+    dirs.extend_from_slice(PINNED);
+    let (mut files, mut opers, mut bad) = (0, 0, Vec::new());
+    for d in dirs {
+        let (c, n, b) = run_join(&conformance().join(d), true);
+        files += c;
+        opers += n;
+        bad.extend(b.into_iter().map(|(f, at, w)| format!("{d}/{f}:{at}: {w}")));
+    }
+    eprintln!("operator join: {files} files, {opers} operator calls, {} mismatches", bad.len());
+    assert!(opers > 100, "the corpus has operator calls ({opers})");
+    assert!(bad.is_empty(), "{} mismatches:\n{}", bad.len(), bad.join("\n"));
 }
 
 // ---------------------------------------------------------------------
@@ -1073,7 +1220,7 @@ type SetReport = (usize, usize, Vec<(String, String)>);
 /// member of a closure type and a file with errors (`None`) are the
 /// documented exceptions.
 fn definition_sets(name: &str, src: &str) -> Option<SetReport> {
-    use kiln_ast::written_refs::{REF_UNRESOLVED, RefLookup};
+    use kiln_ast::written_refs::{REF_UNRESOLVED, RefLookup, RefRole, SPEC_BUILTIN};
     let sm = SourceManager::new();
     let main = sm.add_virtual(name, src.to_owned()).expect("location space");
     let interner = Arc::new(Interner::new());
@@ -1098,6 +1245,16 @@ fn definition_sets(name: &str, src: &str) -> Option<SetReport> {
     for (_, r) in refs.specs() {
         let Some(set) = refs.found_at_definition(r.entry) else { continue };
         if set.dependent_base() || set.unresolved_using() || r.flags & REF_UNRESOLVED != 0 {
+            continue;
+        }
+        // A built-in operator selects no declaration, and an operator
+        // function or conversion function chosen as a member is looked up
+        // in the operand's class at instantiation ([over.match.oper]/3.1,
+        // [over.call.object]/2), never in the definition's set (§18.12.4's
+        // exceptions).
+        if r.flags & SPEC_BUILTIN != 0
+            || (r.how == RefLookup::Member && refs.get(r.entry).role == RefRole::Operator)
+        {
             continue;
         }
         checked += 1;

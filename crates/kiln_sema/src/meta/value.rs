@@ -71,7 +71,7 @@ impl Sema<'_, '_> {
                     .and_then(|b| String::from_utf8(b).ok())
                     .unwrap_or_default();
                 let u8 = v == ValueOp::ExcCvtToUtf8;
-                let Some(cv) = self.frozen_string(&s, u8) else {
+                let Some(cv) = self.reflection_string(&s, u8) else {
                     return fail(loc, "kiln: message too large for a constant");
                 };
                 MetaOut::Str(cv, s.len() as u64)

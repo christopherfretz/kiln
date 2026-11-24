@@ -1,0 +1,41 @@
+15:3-15:4  type  'S' -> S@11:8 in=P::operator->@15:6
+18:3-18:4  type  'P' -> P@14:8 in=Q::operator->@18:5
+21:28-21:29  type  'T' -> T@21:17 in=t@21:30
+21:42-21:43  expr  't' -> t@21:30 in=get@21:24
+21:45-21:46  member  'v' -> (dependent) in=get@21:24
+21:45-21:46  member  'v' -> S::v@12:7 spec=get<P>@21:24
+21:45-21:46  member  'v' -> S::v@12:7 spec=get<Q>@21:24
+21:45-21:46  member  'v' -> S::v@12:7 spec=get<S *>@21:24
+21:43-21:45  operator  '->' -> (dependent) in=get@21:24
+21:43-21:45  operator  '->' -> (builtin) spec=get<S *>@21:24 how=builtin
+21:43-21:45  operator  '->' -> P::operator->@15:6 spec=get<P>@21:24 how=member
+21:43-21:45  operator  '->' -> P::operator->@15:6 spec=get<Q>@21:24 how=member
+21:43-21:45  operator  '->' -> Q::operator->@18:5 spec=get<Q>@21:24 how=member
+22:30-22:31  type  'T' -> T@22:17 in=t@22:32
+22:44-22:45  expr  't' -> t@22:32 in=never@22:24
+22:47-22:48  member  'v' -> (dependent) in=never@22:24
+22:45-22:47  operator  '->' -> (dependent) in=never@22:24
+23:32-23:33  type  'T' -> T@23:17 in=t@23:34
+24:24-24:25  type  'T' -> T@23:17 in=discard@23:24
+25:12-25:13  expr  't' -> t@23:34 in=discard@23:24
+25:15-25:16  member  'v' -> (dependent) in=discard@23:24
+25:13-25:15  operator  '->' -> (dependent) in=discard@23:24
+29:29-29:30  type  'T' -> T@29:17 in=t@29:31
+29:43-29:44  expr  't' -> t@29:31 in=call@29:24
+29:45-29:55  member  'operator->' -> (dependent) in=call@29:24
+29:45-29:55  member  'operator->' -> Q::operator->@18:5 spec=call<Q>@29:24
+29:59-29:60  member  'v' -> (dependent) in=call@29:24
+29:59-29:60  member  'v' -> S::v@12:7 spec=call<Q>@29:24
+29:57-29:59  operator  '->' -> (dependent) in=call@29:24
+29:57-29:59  operator  '->' -> P::operator->@15:6 spec=call<Q>@29:24 how=member
+32:3-32:4  type  'S' -> S@11:8 in=s@32:5
+33:10-33:13  expr  'get' -> get<Q>@21:24 found=get@21:24 in=run@31:5 how=both adl-ns=:: adl-cls=Q@17:8
+33:14-33:15  type  'Q' -> Q@17:8 in=run@31:5
+33:21-33:24  expr  'get' -> get<P>@21:24 found=get@21:24 in=run@31:5 how=both adl-ns=:: adl-cls=P@14:8
+33:25-33:26  type  'P' -> P@14:8 in=run@31:5
+33:32-33:35  expr  'get' -> get<S *>@21:24 found=get@21:24 in=run@31:5 how=both adl-ns=:: adl-cls=S@11:8
+33:37-33:38  expr  's' -> s@32:5 in=run@31:5
+33:42-33:49  expr  'discard' -> discard<S *>@23:24 found=discard@23:24 in=run@31:5 how=both adl-ns=:: adl-cls=S@11:8
+33:51-33:52  expr  's' -> s@32:5 in=run@31:5
+33:56-33:60  expr  'call' -> call<Q>@29:24 found=call@29:24 in=run@31:5 how=both adl-ns=:: adl-cls=Q@17:8
+33:61-33:62  type  'Q' -> Q@17:8 in=run@31:5

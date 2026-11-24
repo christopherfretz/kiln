@@ -221,9 +221,11 @@ impl Sema<'_, '_> {
         };
         let comment = text.and_then(|t| predicate_text(sm, t)).unwrap_or_default().to_owned();
         let (_, pretty) = self.predefined_function_names(ctx);
-        let (Some(file), Some(function), Some(comment)) =
-            (self.srcloc_string(&file), self.srcloc_string(&pretty), self.srcloc_string(&comment))
-        else {
+        let (Some(file), Some(function), Some(comment)) = (
+            self.contract_string(&file),
+            self.contract_string(&pretty),
+            self.contract_string(&comment),
+        ) else {
             return;
         };
         let site = kiln_ast::stmt::ContractSite { file, function, comment, line, column };

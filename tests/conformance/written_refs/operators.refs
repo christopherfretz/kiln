@@ -1,0 +1,67 @@
+13:3-13:4  type  'V' -> lib::V@10:8 in=lib::V::operator++@13:6 how=injected
+14:3-14:4  type  'V' -> lib::V@10:8 in=lib::V::operator++@14:5 how=injected
+15:3-15:4  type  'V' -> lib::V@10:8 in=lib::V::operator=@15:6 how=injected
+16:3-16:4  type  'V' -> lib::V@10:8 in=lib::V::operator+=@16:6 how=injected
+16:23-16:24  type  'V' -> lib::V@10:8 in=(anonymous)@16:26 how=injected
+20:1-20:2  type  'V' -> lib::V@10:8 in=lib::operator-@20:3
+20:19-20:20  type  'V' -> lib::V@10:8 in=(anonymous)@20:22
+21:1-21:2  type  'V' -> lib::V@10:8 in=lib::operator*@21:3
+21:19-21:20  type  'V' -> lib::V@10:8 in=(anonymous)@21:22
+21:30-21:31  type  'V' -> lib::V@10:8 in=(anonymous)@21:33
+22:1-22:2  type  'V' -> lib::V@10:8 in=lib::operator<<@22:3
+22:20-22:21  type  'V' -> lib::V@10:8 in=(anonymous)@22:23
+26:1-26:2  type  'W' -> W@25:8 in=operator+@26:3
+26:13-26:14  type  'W' -> W@25:8 in=(anonymous)@26:14
+26:16-26:17  type  'W' -> W@25:8 in=(anonymous)@26:17
+27:1-27:2  type  'W' -> W@25:8 in=operator~@27:3
+27:13-27:14  type  'W' -> W@25:8 in=(anonymous)@27:14
+28:1-28:2  type  'W' -> W@25:8 in=operator--@28:4
+28:15-28:16  type  'W' -> W@25:8 in=(anonymous)@28:18
+30:10-30:13  nns  'lib' -> lib@9:11 in=v@30:17
+30:15-30:16  type  'V' -> lib::V@10:8 q=30:10 in=v@30:17
+30:20-30:23  nns  'lib' -> lib@9:11 in=u@30:27
+30:25-30:26  type  'V' -> lib::V@10:8 q=30:20 in=u@30:27
+30:30-30:31  type  'W' -> W@25:8 in=w@30:32
+31:3-31:4  expr  'v' -> v@30:17 in=use@30:6
+31:4-31:5  operator  '[' -> lib::V::operator[]@11:8 close=31:6 in=use@30:6 how=member
+32:3-32:4  expr  'v' -> v@30:17 in=use@30:6
+32:4-32:5  operator  '(' -> lib::V::operator()@12:7 close=32:9 in=use@30:6 how=member
+33:5-33:6  expr  'v' -> v@30:17 in=use@30:6
+33:3-33:5  operator  '++' -> lib::V::operator++@13:6 in=use@30:6 how=member
+34:3-34:4  expr  'v' -> v@30:17 in=use@30:6
+34:4-34:6  operator  '++' -> lib::V::operator++@14:5 in=use@30:6 how=member
+35:3-35:4  expr  'v' -> v@30:17 in=use@30:6
+35:5-35:6  operator  '=' -> lib::V::operator=@15:6 in=use@30:6 how=member
+36:3-36:4  expr  'v' -> v@30:17 in=use@30:6
+36:8-36:9  expr  'u' -> u@30:27 in=use@30:6
+36:5-36:7  operator  '+=' -> lib::V::operator+=@16:6 in=use@30:6 how=member
+37:4-37:5  expr  'v' -> v@30:17 in=use@30:6
+37:3-37:4  operator  '!' -> lib::V::operator!@17:8 in=use@30:6 how=member
+38:4-38:5  expr  'v' -> v@30:17 in=use@30:6
+38:3-38:4  operator  '-' -> lib::operator-@20:3 in=use@30:6 how=adl
+39:3-39:4  expr  'v' -> v@30:17 in=use@30:6
+39:7-39:8  expr  'u' -> u@30:27 in=use@30:6
+39:5-39:6  operator  '*' -> lib::operator*@21:3 in=use@30:6 how=adl
+40:3-40:4  expr  'v' -> v@30:17 in=use@30:6
+40:5-40:7  operator  '<<' -> lib::operator<<@22:3 in=use@30:6 how=adl
+41:3-41:4  expr  'w' -> w@30:32 in=use@30:6
+41:7-41:8  expr  'w' -> w@30:32 in=use@30:6
+41:5-41:6  operator  '+' -> operator+@26:3 in=use@30:6
+42:4-42:5  expr  'w' -> w@30:32 in=use@30:6
+42:3-42:4  operator  '~' -> operator~@27:3 in=use@30:6
+43:5-43:6  expr  'w' -> w@30:32 in=use@30:6
+43:3-43:5  operator  '--' -> operator--@28:4 in=use@30:6
+44:3-44:4  expr  'v' -> v@30:17 in=use@30:6
+45:3-45:4  expr  'p' -> p@30:40 in=use@30:6
+46:4-46:5  expr  'p' -> p@30:40 in=use@30:6
+47:31-47:32  expr  'x' -> x@47:19 in=use(V, V, W, int *)::(lambda)::operator()@47:12
+48:3-48:4  expr  'l' -> l@47:8 in=use@30:6
+48:4-48:5  operator  '(' -> use(V, V, W, int *)::(lambda)::operator()@47:12 close=48:6 in=use@30:6 how=member
+49:9-49:12  nns  'lib' -> lib@9:11 in=operator-@49:14
+49:14-49:23  using-decl  'operator-' -> lib::operator-@20:3 q=49:9 in=operator-@49:14
+50:4-50:5  expr  'u' -> u@30:27 in=use@30:6
+50:3-50:4  operator  '-' -> lib::operator-@20:3 found=operator-@49:14 in=use@30:6
+51:3-51:4  expr  'v' -> v@30:17 in=use@30:6
+51:5-51:6  expr  'v' -> v@30:17 in=use@30:6
+51:6-51:7  operator  '(' -> lib::V::operator()@12:7 close=51:11 in=use@30:6 how=member
+51:4-51:5  operator  '[' -> lib::V::operator[]@11:8 close=51:12 in=use@30:6 how=member

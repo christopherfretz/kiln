@@ -39,6 +39,8 @@
 44:44-44:45  expr  't' -> t@44:30 in=twice@44:22
 44:46-44:47  member  'n' -> (dependent) in=twice@44:22
 44:46-44:47  member  'n' -> lib::Rec::n@13:7 spec=twice<lib::Rec>@44:22
+44:48-44:49  operator  '*' -> (dependent) in=twice@44:22 def=0+adl
+44:48-44:49  operator  '*' -> (builtin) spec=twice<lib::Rec>@44:22 how=builtin
 45:20-45:25  expr  'twice' -> twice<Rec>@44:22 found=twice@44:22 in=instantiated@45:5 adl-ns=lib@11:11 adl-cls=lib::Rec@12:8
 45:26-45:29  type  'Rec' -> lib::Rec@12:8 found=Rec@24:12 in=instantiated@45:5
 45:34-45:35  member  'n' -> lib::Rec::n@13:7 in=instantiated@45:5
@@ -69,5 +71,7 @@
 50:55-50:56  member  'v' -> lib::Box<>::v@17:5 spec=HasN@50:9
 50:57-50:58  member  'n' -> (dependent) in=HasN@50:9
 50:57-50:58  member  'n' -> lib::Rec::n@13:7 spec=HasN@50:9
+50:51-50:52  operator  '+' -> (dependent) in=HasN@50:9 def=0+adl
+50:51-50:52  operator  '+' -> (builtin) spec=HasN@50:9 how=builtin
 51:20-51:23  type  'Rec' -> lib::Rec@12:8 found=Rec@24:12 in=(tu)
 51:15-51:19  concept  'HasN' -> HasN@50:9 in=(tu)

@@ -6,12 +6,12 @@
 //! remember only while recording is on, so with the switch off every site
 //! is one branch on an empty map.
 
-use kiln_ast::decl::{DeclFlags, DeclKind};
+use kiln_ast::decl::{DeclFlags, DeclKind, FriendTarget};
 use kiln_ast::expr::ExprKind;
 use kiln_ast::types::Nns;
 use kiln_ast::written_refs::{
-    PatternNode, QualLink, REF_DEPENDENT, REF_MEMBER, REF_UNRESOLVED, RefLookup, SpecRef,
-    SpecRefId, WrittenRefId,
+    PatternNode, QualLink, REF_DEPENDENT, REF_MEMBER, REF_UNRESOLVED, RefLookup, SPEC_BUILTIN,
+    SpecRef, SpecRefId, WrittenRefId,
 };
 use kiln_ast::{DeclId, ExprId, NnsId, QualType};
 use kiln_source::Loc;
@@ -229,6 +229,35 @@ impl Sema<'_, '_> {
         self.note_written_spec_qualifiers(w, spec, scope.map(|s| s.0));
     }
 
+    /// The friend function template specialization `pattern` of a class
+    /// template pattern (a `FriendDecl` whose entry is `DEPENDENT`,
+    /// §18.4) was instantiated as `inst`, `errors` having been reported
+    /// before: its entry's row for the class template specialization
+    /// names the specialization befriended, found as its template
+    /// (§18.9.4). `None` matched no template: unresolved when an error
+    /// was reported since (§18.9.3).
+    pub(crate) fn note_written_spec_friend(
+        &mut self,
+        pattern: DeclId,
+        inst: Option<DeclId>,
+        errors: u32,
+    ) {
+        let Some(w) = self.ast.written_refs.pattern_entry(PatternNode::Decl(pattern)) else {
+            return;
+        };
+        let (entity, found) = match inst.map(|f| self.ast.decls.friend_target(f)) {
+            Some(FriendTarget::Decl(s)) => {
+                let t = self.ast.spec_info(s).map(|(_, i)| self.ast.first(i.template));
+                (Some(s), t)
+            }
+            Some(FriendTarget::Type { .. }) => return,
+            None if self.inst.stack.is_sfinae() || self.diags.error_count() <= errors => return,
+            None => (None, None),
+        };
+        let Some(spec) = self.written_spec_key() else { return };
+        self.push_written_spec(w, spec, entity, found);
+    }
+
     /// Overload resolution chose `d` (found as `found`; `None`: it failed)
     /// for the rebuilt overload set `x` of an instantiation: its
     /// per-specialization entry (§18.9.4).
@@ -309,8 +338,30 @@ impl Sema<'_, '_> {
         entity: Option<DeclId>,
         found: Option<DeclId>,
     ) -> SpecRefId {
+        self.push_written_spec_with(w, spec, entity, found, 0, None)
+    }
+
+    /// [`Self::push_written_spec`] with a dependent operator's facts
+    /// (spec/ast.md §18.13.6): `flags` (`REWRITTEN`, `REVERSED`,
+    /// `SPEC_BUILTIN`, which makes the row entity-less and `how`
+    /// `Builtin`) and the `how` its call's facts give (`Member` for a
+    /// member function, `Adl` for a candidate argument-dependent lookup
+    /// alone found; `None`: as for a name).
+    pub(crate) fn push_written_spec_with(
+        &mut self,
+        w: WrittenRefId,
+        spec: DeclId,
+        entity: Option<DeclId>,
+        found: Option<DeclId>,
+        flags: u8,
+        how: Option<RefLookup>,
+    ) -> SpecRefId {
         let r = *self.ast.written_refs.get(w);
-        let flags = (r.flags & REF_MEMBER) | if entity.is_none() { REF_UNRESOLVED } else { 0 };
+        let builtin = flags & SPEC_BUILTIN != 0;
+        let (entity, found) = if builtin { (None, None) } else { (entity, found) };
+        let flags = (r.flags & REF_MEMBER)
+            | flags
+            | if entity.is_none() && !builtin { REF_UNRESOLVED } else { 0 };
         let mut row = SpecRef {
             entry: w,
             spec,
@@ -321,7 +372,12 @@ impl Sema<'_, '_> {
             flags,
             how: RefLookup::None,
         };
-        row.how = row.default_how(&r);
+        row.how = if builtin { RefLookup::Builtin } else { row.default_how(&r) };
+        if let Some(h) = how
+            && entity.is_some()
+        {
+            row.how = h;
+        }
         if let Some(e) = entity
             && self.ast.decls.builtin_id(e).is_some()
             && matches!(row.how, RefLookup::Unqualified | RefLookup::Qualified)

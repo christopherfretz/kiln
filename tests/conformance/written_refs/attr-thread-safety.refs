@@ -8,6 +8,7 @@
 25:17-25:22  type  'Mutex' -> Mutex@13:32 in=m@25:24
 25:50-25:51  expr  'm' -> m@25:24 in=with_param@25:6 exp=25:27
 26:36-26:45  expr  'global_mu' -> global_mu@20:7 in=negative@26:6 exp=26:17
+26:35-26:36  operator  '!' -> Mutex::operator!@18:16 in=negative@26:6 exp=26:17 how=member
 27:1-27:6  type  'Mutex' -> Mutex@13:32 in=get_mu@27:8
 27:34-27:43  expr  'global_mu' -> global_mu@20:7 in=get_mu@27:8 exp=27:17
 31:17-31:24  type  'Account' -> Account@28:8 in=to@31:26 how=injected

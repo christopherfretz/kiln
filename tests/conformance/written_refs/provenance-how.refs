@@ -24,6 +24,8 @@
 35:22-35:25  member  'own' -> Derived::own@16:7 in=r@35:7
 35:28-35:29  expr  'c' -> c@34:38 in=r@35:7
 35:31-35:34  member  'own' -> Derived::own@16:7 in=r@35:7
+35:29-35:31  operator  '->' -> Chain::operator->@29:9 in=r@35:7 how=member
+35:29-35:31  operator  '->' -> Arrow::operator->@26:12 in=r@35:7 how=member
 35:37-35:38  expr  'd' -> d@34:17 in=r@35:7
 35:39-35:41  member  'bm' -> ns::Base::bm@10:7 in=r@35:7
 35:44-35:45  expr  'd' -> d@34:17 in=r@35:7

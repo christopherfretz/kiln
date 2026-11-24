@@ -610,15 +610,6 @@ pub struct InstState {
     /// The template-id whose arguments `check_template_args` converts:
     /// its template name, the point of a `PriorArgSubstitution` frame.
     pub(crate) template_id_loc: Option<Loc>,
-    /// The mem-initializers of constructor definitions in a template, as
-    /// parsed, and their `:` (clang keeps the pattern's unresolved
-    /// `CXXCtorInitializer`s for `InstantiateMemInitializers`).
-    pub(crate) pattern_mem_inits:
-        kiln_source::fx::FxHashMap<DeclId, (Vec<crate::class::MemInitInfo>, Loc)>,
-    /// The constructor definitions in a template one of whose
-    /// mem-initializers failed its definition-time check (diagnosed):
-    /// their instantiations add no implicit initializers.
-    pub(crate) failed_mem_inits: kiln_source::fx::FxHashSet<DeclId>,
     /// The location of the innermost running constant evaluation: the
     /// point of instantiation of a definition `ensure_body` instantiates
     /// (§4.11).

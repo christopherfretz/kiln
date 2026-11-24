@@ -1085,12 +1085,22 @@ impl Sema<'_, '_> {
             // `CheckFunctionTemplateSpecialization` at the definition):
             // when no template matches it is an error now, and the
             // friend is dropped (`friend void A::f<0>(int);`).
-            if !self.friend_spec_dependent(d, ty, &sid.args) {
+            let matched = if self.friend_spec_dependent(d, ty, &sid.args) {
+                None
+            } else {
                 let explicit = Some(self.ast.types.arg_list(&sid.args));
-                self.match_function_spec_in(&templates, explicit, name, ty, false, loc)?;
-            }
+                Some(self.match_function_spec_in(&templates, explicit, name, ty, false, loc)?)
+            };
             let target = FriendTarget::Type { ty, owned_tag: None };
             let fd = self.builder().friend(record, loc, target);
+            // Its written name: the template matched, else the
+            // candidates, decided per specialization (spec/ast.md §18.4).
+            if let Some(id) = d.id_ref {
+                match matched {
+                    Some(m) => self.note_written_spec_template(id, m.template),
+                    None => self.note_written_friend_spec(id, fd, &templates, d.qualifier),
+                }
+            }
             let args = sid.args.clone();
             let late_exc = d.late_noexcept.is_some();
             self.friend_specs.insert(fd, FriendSpec { name, ty, args, templates, loc, late_exc });
@@ -1098,6 +1108,9 @@ impl Sema<'_, '_> {
         }
         let explicit = Some(self.ast.types.arg_list(&sid.args));
         let m = self.match_function_spec_in(&templates, explicit, name, ty, false, loc)?;
+        if let Some(id) = d.id_ref {
+            self.note_written_spec_template(id, m.template);
+        }
         // A noexcept-specifier delayed to the end of the class is not
         // compared (clang's delayed equivalence check is a follow-up).
         let fix_at = crate::except::missing_exc_spec_fixit_loc(d);

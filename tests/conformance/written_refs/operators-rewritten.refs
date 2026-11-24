@@ -1,0 +1,34 @@
+12:25-12:28  type  'Ord' -> Ord@11:8 in=(anonymous)@12:30 how=injected
+13:25-13:28  type  'Ord' -> Ord@11:8 in=(anonymous)@13:30 how=injected
+20:1-20:2  type  'R' -> R@16:8 in=operator<=>@20:3
+20:21-20:22  type  'Q' -> Q@17:8 in=(anonymous)@20:24
+21:16-21:17  type  'R' -> R@16:8 in=(anonymous)@21:17
+22:21-22:22  type  'R' -> R@16:8 in=(anonymous)@22:22
+23:23-23:24  type  'Q' -> Q@17:8 in=(anonymous)@23:26
+25:10-25:13  type  'Ord' -> Ord@11:8 in=a@25:14
+25:17-25:20  type  'Ord' -> Ord@11:8 in=b@25:21
+25:24-25:25  type  'Q' -> Q@17:8 in=q@25:26
+26:3-26:4  expr  'a' -> a@25:14 in=use@25:6
+26:7-26:8  expr  'b' -> b@25:21 in=use@25:6
+26:5-26:6  operator  '<' -> Ord::operator<=>@12:7 in=use@25:6 rewritten how=member
+27:3-27:4  expr  'a' -> a@25:14 in=use@25:6
+27:8-27:9  expr  'b' -> b@25:21 in=use@25:6
+27:5-27:7  operator  '!=' -> Ord::operator==@13:8 in=use@25:6 rewritten how=member
+28:3-28:4  expr  'a' -> a@25:14 in=use@25:6
+28:8-28:9  expr  'b' -> b@25:21 in=use@25:6
+28:5-28:7  operator  '==' -> Ord::operator==@13:8 in=use@25:6 how=member
+29:3-29:4  expr  'a' -> a@25:14 in=use@25:6
+29:9-29:10  expr  'b' -> b@25:21 in=use@25:6
+29:5-29:8  operator  '<=>' -> Ord::operator<=>@12:7 in=use@25:6 how=member
+30:3-30:4  expr  'q' -> q@25:26 in=use@25:6
+30:5-30:6  operator  '<' -> operator<=>@20:3 in=use@25:6 rewritten
+30:5-30:6  operator  '<' -> operator<@21:6 in=use@25:6 rewritten
+31:7-31:8  expr  'q' -> q@25:26 in=use@25:6
+31:5-31:6  operator  '<' -> operator<=>@20:3 in=use@25:6 rewritten reversed
+31:5-31:6  operator  '<' -> operator<@22:6 in=use@25:6 rewritten
+32:3-32:4  expr  'q' -> q@25:26 in=use@25:6
+32:5-32:7  operator  '!=' -> operator==@23:6 in=use@25:6 rewritten
+33:8-33:9  expr  'q' -> q@25:26 in=use@25:6
+33:5-33:7  operator  '==' -> operator==@23:6 in=use@25:6 rewritten reversed
+34:3-34:4  expr  'q' -> q@25:26 in=use@25:6
+34:5-34:8  operator  '<=>' -> operator<=>@20:3 in=use@25:6

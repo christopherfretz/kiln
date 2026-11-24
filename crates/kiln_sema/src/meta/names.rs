@@ -155,7 +155,7 @@ impl Sema<'_, '_> {
             },
             Text::Display => self.display_string(r),
         };
-        let Some(cv) = self.frozen_string(&s, u8) else {
+        let Some(cv) = self.reflection_string(&s, u8) else {
             return fail(loc, "kiln: name too large for a constant");
         };
         let v = (cv, s.len() as u64);

@@ -12,7 +12,7 @@
 //! | `entries`, `pending`, `extra`, `adl_sets`, `udir_cache`, `designators` | state: the main table, its pending patches and provenance |
 //! | `specs` (dropped rows included, so `SpecRefId`s stay), `spec_nodes`, `spec_udirs` | state: the per-specialization table, its pattern nodes and their using-directives |
 //! | `unrecorded` | state |
-//! | `leads` | state: the leading `::` and `~` tokens (WP-2326) |
+//! | `leads` | state: the leading `::` and `~` tokens (WP-2326), the closing `]`/`)` of an `operator` entry (WP-2820) and a friend specialization's `<` and `>` (WP-3008) |
 //! | `found_rows`, `found_sets`, `found_decls` | state: the found sets of the dependent entries (§18.12, WP-2472) |
 //! | `adl_index`, `spec_seen`, `found_index` | rebuilt from `adl_sets`, the live rows of `specs` and `found_sets` |
 //! | `inst_target`, `spec_pending`, `spec_last`, `spec_key`, `colons` | transient: scratch of one declaration or one instantiation, empty at rest |
@@ -25,7 +25,8 @@ use kiln_source::Loc;
 
 use super::{
     AdlSet, AdlSetId, FoundDecl, FoundKey, FoundSetId, FoundSetRec, PatternNode, QualLink,
-    RefExtra, RefLead, SPEC_DEAD, SpecRef, Unrecorded, WrittenRef, WrittenRefId, WrittenRefs,
+    RefExtra, RefLead, RefRole, SPEC_DEAD, SpecRef, Unrecorded, WrittenRef, WrittenRefId,
+    WrittenRefs,
 };
 use crate::Ast;
 use crate::ids::{DeclId, ExprId};
@@ -96,13 +97,18 @@ impl WrittenRefs {
             }
         }
         // Leads: by entry, once each, a `::` only on a global qualifier,
-        // a specifier's first token only on a specifier qualifier.
+        // a specifier's first token only on a specifier qualifier, a
+        // closing token only on an `operator` entry, a template argument
+        // list's `<` with its `>`.
         let leads_ok = s.leads.windows(2).all(|w| w[0].entry < w[1].entry)
             && s.leads.iter().all(|l| {
                 entry_ok(l.entry) && {
-                    let link = s.entries[l.entry.index()].qualifier.link();
+                    let e = &s.entries[l.entry.index()];
+                    let link = e.qualifier.link();
                     (!l.colon.is_valid() || link == QualLink::Global)
                         && (!l.spec.is_valid() || link == QualLink::Specifier)
+                        && (!l.close.is_valid() || e.role == RefRole::Operator)
+                        && l.langle.is_valid() == l.rangle.is_valid()
                 }
             });
         if !leads_ok {
@@ -374,10 +380,119 @@ mod tests {
         let mut bad = new_ast();
         bad.written_refs.set_on(true);
         let ec = bad.written_refs.push(entry(RefQualifier::NONE)).unwrap();
-        bad.written_refs.set_lead(ec, Some(Loc::from_raw(3)), None);
+        bad.written_refs.set_lead(ec, Some(Loc::from_raw(3)), None, None);
         let bytes = put(&bad);
         let mut rd = Reader::new(&bytes);
         assert!(new_ast().get_written_refs(&mut rd, true, 0).is_err());
+    }
+
+    /// Stage 6 (WP-2820): an `operator` entry's closing token and its
+    /// rewritten flags round trip; a closing token on an entry of another
+    /// role is rejected.
+    #[test]
+    fn operator_closes_round_trip_and_a_close_off_an_operator_is_rejected() {
+        use crate::written_refs::{REF_REVERSED, REF_REWRITTEN};
+        let mut ast = new_ast();
+        ast.written_refs.set_on(true);
+        let flags = REF_REWRITTEN | REF_REVERSED;
+        let op = WrittenRef { role: RefRole::Operator, flags, ..entry(RefQualifier::NONE) };
+        let eo = ast.written_refs.push(op).unwrap();
+        ast.written_refs.set_close(eo, Loc::from_raw(7));
+        let ud = WrittenRef { role: RefRole::UdSuffix, ..entry(RefQualifier::NONE) };
+        let eu = ast.written_refs.push(ud).unwrap();
+        let bytes = put(&ast);
+        let mut back = new_ast();
+        let mut rd = Reader::new(&bytes);
+        back.get_written_refs(&mut rd, true, 0).expect("read");
+        assert_eq!(back.written_refs.close(eo), Some(Loc::from_raw(7)));
+        assert_eq!(back.written_refs.get(eo).flags, flags);
+        assert_eq!(back.written_refs.get(eu).role, RefRole::UdSuffix);
+        let mut bad = new_ast();
+        bad.written_refs.set_on(true);
+        let ec = bad.written_refs.push(entry(RefQualifier::NONE)).unwrap();
+        bad.written_refs.set_close(ec, Loc::from_raw(3));
+        let bytes = put(&bad);
+        let mut rd = Reader::new(&bytes);
+        assert!(new_ast().get_written_refs(&mut rd, true, 0).is_err());
+    }
+
+    /// WP-3008: a friend specialization's written `<` and `>` round trip
+    /// beside the entry.
+    #[test]
+    fn template_args_leads_round_trip() {
+        let mut ast = new_ast();
+        ast.written_refs.set_on(true);
+        let ef = ast.written_refs.push(entry(RefQualifier::NONE)).unwrap();
+        let eg = ast.written_refs.push(entry(RefQualifier::NONE)).unwrap();
+        ast.written_refs.set_args(ef, Loc::from_raw(5), Loc::from_raw(6));
+        assert_eq!(ast.written_refs.template_args(eg), None);
+        let bytes = put(&ast);
+        let mut back = new_ast();
+        let mut rd = Reader::new(&bytes);
+        back.get_written_refs(&mut rd, true, 0).expect("read");
+        assert_eq!(back.written_refs.leads(), ast.written_refs.leads());
+        let args = Some((Loc::from_raw(5), Loc::from_raw(6)));
+        assert_eq!(back.written_refs.template_args(ef), args);
+        assert_eq!(back.written_refs.template_args(eg), None);
+    }
+
+    /// spec/ast.md §18.13.6: a dependent operator's pattern nodes (both
+    /// slots of a binary fold, apart from the expression's own node) and a
+    /// specialization's built-in row round trip.
+    #[test]
+    fn operator_pattern_nodes_and_builtin_rows_round_trip() {
+        use crate::expr::{ExprDeps, ExprFlags, ExprKind, ExprNode, ObjectKind, ValueCategory};
+        use crate::written_refs::{PatternNode, REF_DEPENDENT, SPEC_BUILTIN, SpecRef};
+        // An AST with the pattern expression the nodes name (ids are
+        // range-checked against the reading AST).
+        let with_expr = || {
+            let mut ast = new_ast();
+            let x = ast.exprs.push(ExprNode::new(
+                ExprKind::IntegerLiteral,
+                ValueCategory::PRValue,
+                ObjectKind::Ordinary,
+                ExprFlags::NONE,
+                ExprDeps::NONE,
+                0,
+                crate::ids::QualType::unqual(crate::ids::TypeId::new(1)),
+                Loc::INVALID,
+                0,
+                0,
+            ));
+            (ast, x)
+        };
+        let (mut ast, x) = with_expr();
+        ast.written_refs.set_on(true);
+        let op = WrittenRef {
+            role: RefRole::Operator,
+            flags: REF_DEPENDENT,
+            ..entry(RefQualifier::NONE)
+        };
+        let first = ast.written_refs.push(op).unwrap();
+        let second = ast.written_refs.push(op).unwrap();
+        ast.written_refs.note_pattern_node(PatternNode::Oper(x, 0), first);
+        ast.written_refs.note_pattern_node(PatternNode::Oper(x, 1), second);
+        let row = SpecRef {
+            entry: first,
+            spec: DeclId::new(ast_tu_index()),
+            entity: None,
+            found: None,
+            adl: None,
+            udir: None,
+            flags: SPEC_BUILTIN,
+            how: RefLookup::Builtin,
+        };
+        ast.written_refs.push_spec(row);
+        let bytes = put(&ast);
+        let (mut back, _) = with_expr();
+        let mut rd = Reader::new(&bytes);
+        back.get_written_refs(&mut rd, true, 0).expect("read");
+        let t = &back.written_refs;
+        assert_eq!(t.pattern_entry(PatternNode::Oper(x, 0)), Some(first));
+        assert_eq!(t.pattern_entry(PatternNode::Oper(x, 1)), Some(second));
+        assert_eq!(t.pattern_entry(PatternNode::Expr(x)), None);
+        let rows: Vec<_> = t.specs_of(first).map(|(_, r)| *r).collect();
+        assert_eq!(rows, [row]);
     }
 
     /// WP-2828: `decltype(s)::m`, the specifier's first token round

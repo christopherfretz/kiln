@@ -10,6 +10,27 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- The mem-initializers of a constructor defined in a template on the
+  `Ast` (WP-3026, spec/ast.md §8.6): `Ast::pattern_mem_inits(ctor)` gives
+  the `:`, a `failed` flag and, per mem-initializer in written order, the
+  member, base or delegated-to type the definition resolved (or the
+  identifier when it names nothing), the written range, the pack
+  expansion and the initializer's expressions (a braced list as a
+  type-`void` `InitListExpr`). It is the one record instantiation reads,
+  and PCH snapshots (format 166) and module images (version 89) carry
+  it. A pack expansion `m(args)...` whose name is neither a member nor a
+  type is now reported at the definition, as clang does.
+- An inventory of the Sema tables that hold a template's parsed syntax
+  off the `Ast` (WP-3027, spec/ast.md §8.7), each reachable from the
+  `Ast` or with its follow-up row (WP-3120..WP-3124).
+- The maker of a string kiln makes itself (WP-3000, spec/ast.md §5.8.1):
+  `ExprArena::string_maker(origin)` and `Ast::string_maker_of(value)`
+  lead a pointer to a source-location, reflection or contract-site
+  string held in a constant to its maker, `StringMaker::SourceLoc {
+  role, decl }` (the use's role and the declaration it is evaluated in;
+  a default argument counts as its caller's use), `Reflection` or
+  `ContractSite`, for tooling clients.
+
 - The unit's tokens as a table (WP-2825, spec/parse.md §2.6): with
   `FrontEndOptions::token_table` (`ParseOptions::token_table`) a tooling
   client reads `FrontEnd::token_table` (`ParsedTu::token_table`): every
@@ -20,6 +41,60 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   and `token_at(file, offset)` answer per file in O(log n), with no
   second lex (a skipped group starts no token). Off by default, one
   branch per token when off.
+- The written-reference table records operator uses and user-defined
+  literals (WP-2820, spec/ast.md §18.13): the operator token of an
+  operator expression whose overload resolution selected a function is
+  an entry of the new role `operator` naming it (unary, binary,
+  compound-assignment, increment, `=`, `,`, `[]` and `()` with their
+  closing token in `WrittenRefs::close`, one entry per `operator->` of
+  an `->` chain, surrogate calls, implicitly declared and defaulted
+  operators), with `how` `member` or `adl` where it applies; a rewritten
+  or reversed comparison is flagged `REWRITTEN` / `REVERSED`, with a
+  second entry when the comparison of a `<=>` result with zero is itself
+  overloaded; a failed resolution on a class or enumeration operand is
+  `UNRESOLVED`. The ud-suffix of every user-defined literal (integer,
+  floating, character, string of any prefix, raw, literal operator
+  templates, each suffixed piece of a concatenation) is a `ud-suffix`
+  entry over the suffix's own bytes, located through line splices,
+  which its literal operator's callee joins. PCH snapshots
+  (`FORMAT_VERSION` 164) and module images (`IMAGE_VERSION` 88) carry
+  them. Dependent operators and folds follow (WP-2910, below); `new`,
+  `delete` and `co_await` are staged (WP-2911).
+- Written references for friends kept as a function type and for
+  variable template-ids (WP-3008, WP-3009, spec/ast.md §18.4, §18.5,
+  §18.11.2): a friend function template specialization with dependent
+  arguments (`friend void f<>(T);` in a class template) has a dependent
+  `elaborated` entry whose found set is the templates lookup found, a
+  row per instantiation naming the specialization befriended, and the
+  `<` and `>` of its template argument list (`WrittenRefs::template_args`,
+  dump `args=`); a [temp.friend]/5 friend (`template <class T> friend
+  void n::S<T>::f();`) names the member of the class pattern its
+  qualifier names (the primary's, or a partial specialization's own);
+  `n::v<T>` names the variable template instead of being dependent.
+  The `spec-target` and `elaborated` entries of a template-id
+  declarator-id name the template the declaration matched, not the
+  first of several overloads lookup found. PCH `FORMAT_VERSION` 167,
+  `IMAGE_VERSION` 90.
+- The written-reference table records dependent operators (WP-2910,
+  spec/ast.md §18.13.6, [temp.dep.candidate]/1): an operator with a
+  type-dependent operand that could select an operator function is a
+  `DEPENDENT` `operator` entry at its token with the found set of its
+  definition (the non-member candidates of `operator@` and the `ADL`
+  flag; none for `=`, `[]`, `()` and `->`), and each specialization that
+  reached it has rows: the operator function selected (`how` `member`,
+  `adl`, `udir=`), `REWRITTEN` / `REVERSED` for a rewritten or reversed
+  candidate, a row per `operator->` of a dependent `->` chain in
+  application order, and a new `SPEC_BUILTIN` row (dumped `(builtin)`,
+  `how=builtin`) for a built-in candidate or a call through a pointer
+  to function, so a specialization that reached the token is told from
+  one that never did (a discarded `if constexpr` branch). Each operator
+  token of a fold-expression is an entry with one row per distinct
+  resolution of the expansion (an expansion applying no operator gets a
+  `(builtin)` row). A call whose callee is not a function name and which
+  is type-dependent (`lt(a, b)` with a function object) is an entry at
+  `(`; a data member `t.f` called as `t.f(x)` is not covered. PCH
+  snapshots (`FORMAT_VERSION` 168) and module images (`IMAGE_VERSION`
+  91) carry the operator pattern nodes.
 - A refused evaluation session's diagnostics as data (WP-2827,
   spec/eval-session.md §2, spec/diag.md §10.4):
   `SessionRefused::TuHasErrors` and `Stopped` carry `records`
@@ -917,6 +992,15 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Changed
 
+- String identity (WP-3000, spec/ast.md §5.8.1): a source-location
+  string is one object per (content, role, declaration the use is
+  evaluated in), and reflection's and contract sites' strings are
+  objects of their own, so each object has one maker. Objects with
+  equal contents keep one address at run time (one `.str` per content,
+  as clang) and to the Oven's pointer comparison and subtraction
+  (`f(1) == f(1L)` for two overloads' `__builtin_FUNCTION()` stays a
+  constant `true`, as in clang 19, 22 and GCC 16.1).
+
 - `kiln_ast::dump::AstNames::for_keys` / `type_key` print a type as a
   key: unlike the diagnostic text, two different types never print alike
   (a typed null pointer argument keeps its type, a local class its
@@ -1091,6 +1175,10 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   once more after a pause, a second such failure is the new status HOST
   instead of the test's FAIL or ERROR, the summary counts both, and the
   module-file lanes no longer drop a test they could not read.
+- A universal-character-name in a literal's ud-suffix (`1_\u00e9`) or in
+  the suffix of a literal operator's declarator (`operator""_\u00e9`) names
+  the character it designates, as in any other identifier, so it matches the
+  suffix spelled with that character ([lex.ext]/1; WP-2820).
 - An array bound whose value is known but whose expression is
   instantiation-dependent (`char (*)[sizeof(sizeof(f(T())))]`) keeps its
   expression on the constant array type (WP-2720, spec/types.md §7.2

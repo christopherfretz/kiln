@@ -690,6 +690,10 @@ impl Substituter<'_, '_, '_> {
         let mut acc = init;
         // A fold-expression prints its own parentheses.
         let mut folded = false;
+        // Whether an operator was applied (or a slice kept as a fold): a
+        // specialization whose expansion applies none still reached the
+        // fold's operator tokens (spec/ast.md §18.13.6).
+        let mut applied = false;
         if acc.is_none() {
             match it.next() {
                 Some((x, false)) => acc = Some(x),
@@ -697,12 +701,16 @@ impl Substituter<'_, '_, '_> {
                     let (l, r) = if right { (Some(x), None) } else { (None, Some(x)) };
                     acc = Some(self.fold_combine(e, |s| s.act_fold(l, op, r, loc, ellipsis, end)));
                     folded = true;
+                    applied = true;
                 }
                 None => {}
             }
         }
         let Some(mut acc) = acc else {
             use kiln_ast::expr::BinaryOp;
+            if matches!(op, BinaryOp::LAnd | BinaryOp::LOr | BinaryOp::Comma) {
+                self.fold_applied_none(e);
+            }
             return match op {
                 BinaryOp::LAnd => Ok(self.sema.act_on_bool_literal(true, ellipsis)),
                 BinaryOp::LOr => Ok(self.sema.act_on_bool_literal(false, ellipsis)),
@@ -719,6 +727,7 @@ impl Substituter<'_, '_, '_> {
         for (x, slice) in it {
             self.check_stack(|_| loc)?;
             folded = slice;
+            applied = true;
             acc = self.fold_combine(e, |s| match (slice, right) {
                 (true, true) => s.act_fold(Some(x), op, Some(acc), loc, ellipsis, end),
                 (true, false) => s.act_fold(Some(acc), op, Some(x), loc, ellipsis, end),
@@ -728,6 +737,11 @@ impl Substituter<'_, '_, '_> {
             if self.sema.is_err_expr(acc) {
                 return Err(SubstFail);
             }
+        }
+        if !applied {
+            // One element and no init: the element itself
+            // ([temp.variadic]/13).
+            self.fold_applied_none(e);
         }
         if folded {
             return Ok(acc);
@@ -739,11 +753,26 @@ impl Substituter<'_, '_, '_> {
     /// `e` of the pattern, with the operator candidates `e`'s definition
     /// recorded (`act_fold`, spec/ast.md §8.5) as the override an
     /// operator expression rebuilt by a substitution uses.
+    /// The combination's resolution is a per-specialization row of the
+    /// fold's operator entries (spec/ast.md §18.13.6).
     fn fold_combine(&mut self, e: ExprId, f: impl FnOnce(&mut Sema) -> ExprId) -> ExprId {
         self.sema.oper_override = self.sema.oper_rebuild_set(e);
         let r = f(self.sema);
         self.sema.oper_override = None;
+        if self.sema.ast.written_refs.has_pattern_nodes() {
+            self.sema.note_written_spec_fold(e, r);
+        }
         r
+    }
+
+    /// The expansion of fold-expression `e` applied no operator (an empty
+    /// pack's `&&`, `||` or `,`, one element without an init, an init
+    /// alone): its operator entries get a `SPEC_BUILTIN` row
+    /// (spec/ast.md §18.13.6).
+    fn fold_applied_none(&mut self, e: ExprId) {
+        if self.sema.ast.written_refs.has_pattern_nodes() {
+            self.sema.note_written_spec_fold_none(e);
+        }
     }
 
     /// `pack...[index]` ([expr.prim.pack.index]): the selected element.

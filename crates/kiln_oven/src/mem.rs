@@ -334,6 +334,12 @@ pub(crate) mod flags {
     /// carried such bits. Its bit-field reads and writes consult the
     /// table (WP-1573).
     pub const INDET_BITS: u16 = 1024;
+    /// A string object kiln made itself (its origin has a
+    /// `kiln_ast::expr::StringMaker`: a source-location, reflection or
+    /// contract-site string): such objects with equal contents are one
+    /// object for pointer comparison and subtraction
+    /// (`Oven::made_twin`, spec/oven.md "Kiln-made strings", WP-3000).
+    pub const MADE_STR: u16 = 2048;
 }
 
 /// How a heap object was allocated, and how one is deallocated (clang's

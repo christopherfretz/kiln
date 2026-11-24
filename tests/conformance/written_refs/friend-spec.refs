@@ -1,0 +1,37 @@
+15:27-15:28  type  'T' -> T@15:17 in=(anonymous)@15:28
+16:27-16:28  type  'T' -> T@16:17 in=(anonymous)@16:28
+19:15-19:16  elaborated  'f' -> (dependent) args=19:16-19:17 in=n::A::@19:15 def=2
+19:15-19:16  elaborated  'f' def=n::f@15:25
+19:15-19:16  elaborated  'f' def=n::f@16:25
+19:15-19:16  elaborated  'f' -> n::f<char>@15:25 found=n::f@15:25 spec=n::A<char>@18:26
+19:15-19:16  elaborated  'f' -> n::f<int>@15:25 found=n::f@15:25 spec=n::A<int>@18:26
+19:19-19:20  type  'T' -> T@18:17 in=(anonymous)@19:20
+20:15-20:16  elaborated  'f' -> (dependent) args=20:16-20:17 in=n::A::@20:15 def=2
+20:15-20:16  elaborated  'f' def=n::f@15:25
+20:15-20:16  elaborated  'f' def=n::f@16:25
+20:15-20:16  elaborated  'f' -> n::f<char>@16:25 found=n::f@16:25 spec=n::A<char>@18:26
+20:15-20:16  elaborated  'f' -> n::f<int>@16:25 found=n::f@16:25 spec=n::A<int>@18:26
+20:19-20:20  type  'T' -> T@18:17 in=(anonymous)@20:20
+23:15-23:16  elaborated  'f' -> n::f@16:25 args=23:16-23:20 in=n::B::@23:15
+24:15-24:16  nns  'n' -> n@14:11 in=n::B::@24:18
+24:20-24:21  type  'T' -> T@22:17 in=n::B::@24:18
+24:18-24:19  elaborated  'f' -> (dependent) q=24:15 args=24:19-24:21 in=n::B::@24:18 def=2
+24:18-24:19  elaborated  'f' def=n::f@15:25
+24:18-24:19  elaborated  'f' def=n::f@16:25
+24:18-24:19  elaborated  'f' -> n::f<short>@15:25 found=n::f@15:25 spec=n::B<short>@22:26
+24:23-24:24  type  'T' -> T@22:17 in=(anonymous)@24:24
+27:17-27:18  type  'T' -> T@26:17 in=n::Never::@27:15
+27:15-27:16  elaborated  'f' -> (dependent) args=27:16-27:18 in=n::Never::@27:15 def=2
+27:15-27:16  elaborated  'f' def=n::f@15:25
+27:15-27:16  elaborated  'f' def=n::f@16:25
+27:20-27:21  type  'T' -> T@26:17 in=(anonymous)@27:21
+32:15-32:16  nns  'n' -> n@14:11 in=Q::@32:18
+32:18-32:19  elaborated  'f' -> n::f@16:25 q=32:15 args=32:19-32:20 in=Q::@32:18
+33:15-33:16  nns  'n' -> n@14:11 in=Q::@33:18
+33:18-33:19  elaborated  'f' -> n::f@15:25 q=33:15 args=33:19-33:24 in=Q::@33:18
+37:3-37:4  nns  'n' -> n@14:11 in=a@37:13
+37:6-37:7  template  'A' -> n::A@18:26 q=37:3 in=a@37:13
+38:3-38:4  nns  'n' -> n@14:11 in=c@38:14
+38:6-38:7  template  'A' -> n::A@18:26 q=38:3 in=c@38:14
+39:3-39:4  nns  'n' -> n@14:11 in=b@39:15
+39:6-39:7  template  'B' -> n::B@22:26 q=39:3 in=b@39:15

@@ -1,0 +1,26 @@
+12:3-12:4  type  'S' -> S@7:8 in=P1::operator->@12:6
+15:3-15:5  type  'P1' -> P1@11:8 in=P2::operator->@15:6
+18:3-18:5  type  'P2' -> P2@14:8 in=P3::operator->@18:6
+21:9-21:11  type  'P1' -> P1@11:8 in=a@21:12
+21:15-21:17  type  'P3' -> P3@17:8 in=c@21:18
+21:21-21:22  type  'S' -> S@7:8 in=s@21:24
+22:3-22:4  expr  'a' -> a@21:12 in=use@21:5
+22:6-22:7  member  'm' -> S::m@8:7 in=use@21:5
+22:4-22:6  operator  '->' -> P1::operator->@12:6 in=use@21:5 how=member
+23:3-23:4  expr  'c' -> c@21:18 in=use@21:5
+23:6-23:7  member  'm' -> S::m@8:7 in=use@21:5
+23:4-23:6  operator  '->' -> P3::operator->@18:6 in=use@21:5 how=member
+23:4-23:6  operator  '->' -> P2::operator->@15:6 in=use@21:5 how=member
+23:4-23:6  operator  '->' -> P1::operator->@12:6 in=use@21:5 how=member
+24:3-24:4  expr  'c' -> c@21:18 in=use@21:5
+24:6-24:7  member  'f' -> S::f@9:7 in=use@21:5
+24:4-24:6  operator  '->' -> P3::operator->@18:6 in=use@21:5 how=member
+24:4-24:6  operator  '->' -> P2::operator->@15:6 in=use@21:5 how=member
+24:4-24:6  operator  '->' -> P1::operator->@12:6 in=use@21:5 how=member
+25:3-25:4  expr  's' -> s@21:24 in=use@21:5
+25:6-25:7  member  'm' -> S::m@8:7 in=use@21:5
+26:12-26:13  expr  's' -> s@21:24 in=use@21:5
+26:15-26:16  member  'm' -> S::m@8:7 in=use@21:5
+26:19-26:20  expr  'a' -> a@21:12 in=use@21:5
+26:21-26:31  member  'operator->' -> P1::operator->@12:6 in=use@21:5
+26:35-26:36  member  'm' -> S::m@8:7 in=use@21:5

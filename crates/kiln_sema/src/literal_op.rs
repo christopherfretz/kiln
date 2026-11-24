@@ -372,7 +372,7 @@ impl Sema<'_, '_> {
         let Some(sfx_str) = lit.ud_suffix else {
             return self.act_on_integer_literal(lit, loc, ud_loc);
         };
-        let sfx = self.intern(sfx_str);
+        let sfx = self.intern(&kiln_lex::literal::ud_suffix_name(sfx_str));
         let forms = self.literal_op_forms(sfx);
         if forms.iter().any(|f| f.1 == LitOpForm::One(QualType::ULONGLONG)) {
             let Some(v) = lit.value().and_then(|v| u64::try_from(v).ok()) else {
@@ -402,7 +402,7 @@ impl Sema<'_, '_> {
         let Some(sfx_str) = lit.ud_suffix else {
             return self.act_on_float_literal(lit, loc, ud_loc);
         };
-        let sfx = self.intern(sfx_str);
+        let sfx = self.intern(&kiln_lex::literal::ud_suffix_name(sfx_str));
         let forms = self.literal_op_forms(sfx);
         if forms.iter().any(|f| f.1 == LitOpForm::One(QualType::LONGDOUBLE)) {
             let cooked = FloatLiteral {
@@ -480,7 +480,7 @@ impl Sema<'_, '_> {
             return e;
         }
         let ty = self.ast.types.canonical(self.ety(e)).without_quals();
-        let sfx = self.intern(sfx_str);
+        let sfx = self.intern(&kiln_lex::literal::ud_suffix_name(sfx_str));
         let forms = self.literal_op_forms(sfx);
         if forms.iter().any(|f| f.1 == LitOpForm::One(ty)) {
             return self.udl_call(sfx, &[e], loc, ud_loc);
@@ -502,7 +502,7 @@ impl Sema<'_, '_> {
         if self.is_err_expr(e) || self.ast.exprs.get(e).kind() != ExprKind::StringLiteral {
             return e;
         }
-        let sfx = self.intern(sfx_str);
+        let sfx = self.intern(&kiln_lex::literal::ud_suffix_name(sfx_str));
         let forms = self.literal_op_forms(sfx);
         let templates = Self::templates_of(&forms, TemplForm::ClassNttp);
         if !templates.is_empty() {

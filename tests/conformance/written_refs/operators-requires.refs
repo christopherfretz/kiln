@@ -1,0 +1,24 @@
+9:3-9:4  type  'N' -> N@8:8 in=N::operator*@9:5 how=injected
+9:15-9:16  type  'N' -> N@8:8 in=(anonymous)@9:16 how=injected
+10:18-10:19  type  'N' -> N@8:8 in=(anonymous)@10:19 how=injected
+12:1-12:2  type  'N' -> N@8:8 in=operator-@12:3
+12:13-12:14  type  'N' -> N@8:8 in=(anonymous)@12:14
+15:30-15:31  type  'N' -> N@8:8 in=ok@15:16
+15:35-15:36  type  'N' -> N@8:8 in=ok@15:16
+16:3-16:4  expr  'a' -> a@15:32 in=ok@15:16
+16:7-16:8  expr  'b' -> b@15:37 in=ok@15:16
+16:5-16:6  operator  '*' -> N::operator*@9:5 in=ok@15:16 how=member
+17:5-17:6  expr  'a' -> a@15:32 in=ok@15:16
+17:9-17:10  expr  'b' -> b@15:37 in=ok@15:16
+17:7-17:8  operator  '<' -> N::operator<@10:8 in=ok@15:16 how=member
+18:4-18:5  expr  'a' -> a@15:32 in=ok@15:16
+18:3-18:4  operator  '-' -> operator-@12:3 in=ok@15:16
+19:4-19:6  ud-suffix  '_u' -> operator""_u@13:5 in=ok@15:16
+21:20-21:21  type  'N' -> N@8:8 in=(tu)
+21:26-21:27  type  'N' -> N@8:8 in=(tu)
+21:24-21:25  operator  '*' -> N::operator*@9:5 in=(tu) how=member
+22:28-22:29  type  'N' -> N@8:8 in=n@22:16
+22:27-22:28  operator  '-' -> operator-@12:3 in=n@22:16
+23:29-23:30  type  'N' -> N@8:8 in=k@23:16
+23:35-23:36  type  'N' -> N@8:8 in=k@23:16
+23:33-23:34  operator  '<' -> N::operator<@10:8 in=k@23:16 how=member

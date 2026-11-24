@@ -327,6 +327,20 @@ fault counts and trap ids unchanged.
   object ([lex.string]/9: distinct evaluations need not share), so
   `"a" == "a"` is unspecified and diagnosed as clang does. Thawed literal
   pointers are keyed by contents (see Open questions).
+- **Kiln-made strings** (WP-3000): the strings kiln makes itself (a
+  source-location builtin's, reflection's, a contract site's; spec/ast.md
+  §5.8.1) are one `StringLiteral` origin per (content, maker), and a
+  thawed one is a static object of its own, marked `flags::MADE_STR`
+  (its origin has a `StringMaker`), so a frozen pointer keeps its maker.
+  Two such objects with equal contents and encoding are one object to
+  comparison and subtraction (`Oven::made_twin` moves the second pointer
+  onto the first's object before `ptr_cmp` and `ptr_sub`): the address
+  is the same at run time, and clang 19 and 22 keep one `StringLiteral`
+  per content, so `__builtin_FUNCTION()` of `f(int)` equals that of
+  `f(long)` and a file name `"f"` equals a function name `"f"`, as in
+  clang and GCC 16.1. One against a literal the source spells is still
+  the literal comparison above. Test:
+  `tests/conformance/support.srcloc/string-identity.cpp`.
 
 ### Diagnostics — normative for M2
 **Read diagnostics by object state** (WP-1494; clang 22's choice

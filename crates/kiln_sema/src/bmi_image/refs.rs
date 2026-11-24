@@ -41,7 +41,7 @@ const ENTRY_BYTES: usize = 8 * 4 + 3;
 const SPEC_BYTES: usize = 6 * 4 + 2;
 const UDIR_BYTES: usize = 3 * 4;
 const NODE_BYTES: usize = 1 + 2 * 4;
-const LEAD_BYTES: usize = 4 * 4;
+const LEAD_BYTES: usize = 7 * 4;
 const FOUND_SET_BYTES: usize = 2 + 4;
 const FOUND_ROW_BYTES: usize = 2 * 4;
 
@@ -85,14 +85,22 @@ pub(super) enum NodeRec {
         entry: u32,
         decl: u32,
     },
+    /// A dependent operator's token in a body expression
+    /// (`PatternNode::Oper`, spec/ast.md §18.13.6).
+    Oper {
+        entry: u32,
+        expr: u32,
+        slot: u8,
+    },
 }
 
 /// A recorded table: argument-dependent sets (namespace and class
 /// counts, then the declaration words), entries, rows, nodes, and the
 /// using-directives of the dependent entries' ordinary lookups (`entry,
-/// declaration, directive`), the entries' leading `::`, `~` and
-/// specifier tokens (`entry, colon, tilde, spec`, locations or [`NONE`];
-/// WP-2326, WP-2828), the
+/// declaration, directive`), the entries' leading `::`, `~`, specifier
+/// and closing tokens and a friend specialization's `<` and `>` (`entry,
+/// colon, tilde, spec, close, langle, rangle`, locations or [`NONE`];
+/// WP-2326, WP-2828, WP-2820, WP-3008), the
 /// found sets (`how`, flags, `decl, found` word pairs) and the dependent
 /// entries' rows (`entry, set`; WP-2472).
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
@@ -102,7 +110,7 @@ pub(super) struct RefsRec {
     specs: Vec<SpecRec>,
     nodes: Vec<NodeRec>,
     udirs: Vec<[u32; 3]>,
-    leads: Vec<[u32; 4]>,
+    leads: Vec<[u32; 7]>,
     found_sets: Vec<FoundRec>,
     found_rows: Vec<[u32; 2]>,
 }
@@ -256,7 +264,9 @@ impl Writer<'_, '_, '_> {
             let entry = map[l.entry.index()];
             if entry != NONE {
                 let (colon, tilde) = (self.ref_loc(l.colon)?, self.ref_loc(l.tilde)?);
-                out.leads.push([entry, colon, tilde, self.ref_loc(l.spec)?]);
+                let (spec, close) = (self.ref_loc(l.spec)?, self.ref_loc(l.close)?);
+                let (langle, rangle) = (self.ref_loc(l.langle)?, self.ref_loc(l.rangle)?);
+                out.leads.push([entry, colon, tilde, spec, close, langle, rangle]);
             }
         }
         self.img.refs = Refs::Table(out);
@@ -326,6 +336,13 @@ impl Writer<'_, '_, '_> {
                 PatternNode::Decl(d) => {
                     NodeRec::Decl { entry, decl: self.ref_word(d).ok_or(UNCARRIED)? }
                 }
+                PatternNode::Oper(e, slot) => NodeRec::Oper {
+                    entry,
+                    expr: self
+                        .expr_word(e)
+                        .map_err(|_| "a dependent written operator outside the image's bodies")?,
+                    slot,
+                },
             });
         }
         let mut udirs: Vec<((WrittenRefId, DeclId), DeclId)> = t.pattern_udirs().collect();
@@ -393,6 +410,12 @@ pub(super) fn encode_refs(w: &mut Wr, s: &Refs) {
                 b.u8(2);
                 b.u32(entry);
                 b.u32(decl);
+            }
+            NodeRec::Oper { entry, expr, slot } => {
+                b.u8(3);
+                b.u32(entry);
+                b.u32(expr);
+                b.u8(slot);
             }
         }
     }
@@ -470,6 +493,7 @@ pub(super) fn decode_refs(r: &mut Rd, want: bool) -> Res<Refs> {
             0 => NodeRec::Expr { entry: r.u32()?, expr: r.u32()? },
             1 => NodeRec::Type { entry: r.u32()?, ty: r.q()?, loc: r.u32()? },
             2 => NodeRec::Decl { entry: r.u32()?, decl: r.u32()? },
+            3 => NodeRec::Oper { entry: r.u32()?, expr: r.u32()?, slot: r.u8()? },
             _ => return bad("bad written-reference pattern node"),
         });
     }
@@ -477,7 +501,7 @@ pub(super) fn decode_refs(r: &mut Rd, want: bool) -> Res<Refs> {
         t.udirs.push([r.u32()?, r.u32()?, r.u32()?]);
     }
     for _ in 0..r.count(LEAD_BYTES)? {
-        t.leads.push([r.u32()?, r.u32()?, r.u32()?, r.u32()?]);
+        t.leads.push([r.u32()?, r.u32()?, r.u32()?, r.u32()?, r.u32()?, r.u32()?, r.u32()?]);
     }
     for _ in 0..r.count(FOUND_SET_BYTES)? {
         let (how, flags) = (r.u8()?, r.u8()?);
@@ -540,15 +564,21 @@ pub(super) fn validate_refs(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Res<
         NodeRec::Expr { entry, expr } => entry < ne && expr < nx,
         NodeRec::Type { entry, ty, .. } => entry < ne && qref_ok(ty),
         NodeRec::Decl { entry, decl } => entry < ne && word_ok(decl),
+        NodeRec::Oper { entry, expr, slot } => entry < ne && expr < nx && slot < 2,
     });
     let ok_udirs = t.udirs.iter().all(|&[entry, d, u]| entry < ne && word_ok(d) && word_ok(u));
     // By entry, once each; a `::` only on an entry after a leading `::`,
-    // a specifier's token only on an entry after a specifier.
+    // a specifier's token only on an entry after a specifier, a closing
+    // token only on an `operator` entry.
     let ok_leads = t.leads.windows(2).all(|w| w[0][0] < w[1][0])
-        && t.leads.iter().all(|&[entry, colon, _, spec]| {
+        && t.leads.iter().all(|&[entry, colon, _, spec, close, langle, rangle]| {
             entry < ne && {
-                let qual = t.entries[entry as usize].words[5];
-                (colon == NONE || qual == Q_GLOBAL) && (spec == NONE || qual == Q_SPEC)
+                let e = &t.entries[entry as usize];
+                let qual = e.words[5];
+                (colon == NONE || qual == Q_GLOBAL)
+                    && (spec == NONE || qual == Q_SPEC)
+                    && (close == NONE || e.role == RefRole::Operator as u8)
+                    && (langle == NONE) == (rangle == NONE)
             }
         });
     // Found sets of known kinds over records; rows by entry, once each.
@@ -579,7 +609,7 @@ pub(super) fn refs_offsets(img: &Image, offs: &mut Vec<u32>) {
         }
     }
     for l in &t.leads {
-        offs.extend([l[1], l[2], l[3]].into_iter().filter(|&o| o != NONE));
+        offs.extend(l[1..].iter().copied().filter(|&o| o != NONE));
     }
 }
 
@@ -683,6 +713,9 @@ impl Sema<'_, '_> {
                     Some(d) => (entry, PatternNode::Decl(d)),
                     None => continue,
                 },
+                NodeRec::Oper { entry, expr, slot } => {
+                    (entry, PatternNode::Oper(cx.built.expr(expr), slot))
+                }
             };
             self.ast.written_refs.note_pattern_node(node, pushed[entry as usize]);
         }
@@ -698,14 +731,17 @@ impl Sema<'_, '_> {
 
     /// The tokens of the unit's entries outside their ranges (spec/ast.md
     /// §18.11.2): a leading `::`, a destructor's `~`, a specifier's first
-    /// token.
+    /// token, the `]` or `)` closing an `operator` entry (§18.13).
     fn image_leads(&mut self, t: &RefsRec, pushed: &[WrittenRefId], loc: &dyn Fn(u32) -> Loc) {
-        for &[entry, colon, tilde, spec] in &t.leads {
+        for &[entry, colon, tilde, spec, close, langle, rangle] in &t.leads {
             let some = |o: u32| (o != NONE).then(|| loc(o));
             let id = pushed[entry as usize];
-            self.ast.written_refs.set_lead(id, some(colon), some(tilde));
+            self.ast.written_refs.set_lead(id, some(colon), some(tilde), some(close));
             if let Some(s) = some(spec) {
                 self.ast.written_refs.set_specifier_lo(id, s);
+            }
+            if let (Some(l), Some(r)) = (some(langle), some(rangle)) {
+                self.ast.written_refs.set_args(id, l, r);
             }
         }
     }
@@ -750,7 +786,8 @@ mod tests {
     /// `sample` with a table: entry 0 names record 1 (with a type pattern
     /// node), entry 1 the first parameter, qualified by entry 0, with a
     /// set naming record 0, a row for record 7, a using-declarator node
-    /// (record 1) and a using-directive (record 0) for record 1.
+    /// (record 1), an operator token node and a using-directive (record 0)
+    /// for record 1.
     fn with_table() -> Image {
         let mut img = sample();
         let int = QRef { ty: kiln_ast::types::BuiltinType::Int as u32, quals: 0 };
@@ -768,9 +805,11 @@ mod tests {
                 NodeRec::Expr { entry: 1, expr: 0 },
                 NodeRec::Type { entry: 0, ty: int, loc: 5 },
                 NodeRec::Decl { entry: 1, decl: 1 },
+                // A binary fold's second operator token (WP-2910).
+                NodeRec::Oper { entry: 1, expr: 0, slot: 1 },
             ],
             udirs: vec![[1, 1, 0]],
-            leads: vec![[1, NONE, 4, NONE], [2, NONE, NONE, 0]],
+            leads: vec![[1, NONE, 4, NONE, NONE, NONE, NONE], [2, NONE, NONE, 0, NONE, NONE, NONE]],
             found_sets: vec![FoundRec { how: 1, flags: 1, decls: vec![[1, 1], [0, 1]] }],
             found_rows: vec![[1, 0]],
         });
@@ -806,7 +845,7 @@ mod tests {
     #[test]
     fn written_refs_section_is_validated() {
         type Corrupt = (&'static str, fn(&mut RefsRec));
-        let corrupt: [Corrupt; 21] = [
+        let corrupt: [Corrupt; 25] = [
             ("qualifier after its entry", |t| t.entries[0].words[5] = 0),
             ("unknown role", |t| t.entries[0].role = 99),
             ("unknown lookup", |t| t.entries[1].how = 99),
@@ -819,13 +858,21 @@ mod tests {
             ("node past the expressions", |t| t.nodes[0] = NodeRec::Expr { entry: 1, expr: 9999 }),
             ("row directive past the records", |t| t.specs[0].words[5] = 1000),
             ("directive of no entry", |t| t.udirs[0][0] = 3),
+            ("operator node past the expressions", |t| {
+                t.nodes[3] = NodeRec::Oper { entry: 1, expr: 9999, slot: 0 }
+            }),
+            ("operator node slot past a fold's two", |t| {
+                t.nodes[3] = NodeRec::Oper { entry: 1, expr: 0, slot: 2 }
+            }),
             ("using node past the records", |t| {
                 t.nodes[2] = NodeRec::Decl { entry: 1, decl: 1000 }
             }),
             ("lead of no entry", |t| t.leads[1][0] = 3),
             ("a `::` on an entry without one", |t| t.leads[0][1] = 4),
             ("a specifier on an entry without one", |t| t.leads[0][3] = 4),
-            ("leads out of order", |t| t.leads.insert(0, [1, NONE, 4, NONE])),
+            ("leads out of order", |t| t.leads.insert(0, [1, NONE, 4, NONE, NONE, NONE, NONE])),
+            ("a closing token on an entry that is no operator", |t| t.leads[0][4] = 4),
+            ("a `<` without its `>`", |t| t.leads[0][5] = 4),
             ("found set of an unknown lookup", |t| t.found_sets[0].how = 99),
             ("found declaration past the records", |t| t.found_sets[0].decls[0][1] = 1000),
             ("found row of no set", |t| t.found_rows[0][1] = 1),

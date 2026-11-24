@@ -1,0 +1,87 @@
+20:53-20:54  type  'A' -> A@20:19 in=(anonymous)@20:56
+20:64-20:65  type  'B' -> B@20:28 in=(anonymous)@20:67
+23:25-23:26  type  'T' -> T@22:17 in=a@23:28
+23:37-23:38  type  'T' -> T@22:17 in=b@23:40
+23:58-23:59  expr  'a' -> a@23:28 in=less::operator()@23:8
+23:62-23:63  expr  'b' -> b@23:40 in=less::operator()@23:8
+23:60-23:61  operator  '<' -> (dependent) in=less::operator()@23:8 def=0+adl
+25:20-25:24  spec-target  'less' -> less@22:34 in=less@25:20
+26:53-26:54  type  'A' -> A@26:19 in=a@26:56
+26:65-26:66  type  'B' -> B@26:28 in=b@26:68
+27:12-27:13  expr  'a' -> a@26:56 in=less<>::operator()@26:36
+27:16-27:17  expr  'b' -> b@26:68 in=less<>::operator()@26:36
+27:14-27:15  operator  '<' -> (dependent) in=less<>::operator()@26:36 def=0+adl
+27:14-27:15  operator  '<' -> (builtin) spec=less<>::operator()<int, int>@26:36 how=builtin
+32:12-32:15  type  'Ptr' -> Fp::Ptr@31:9 in=Fp::operator int (*)(int)@32:3
+40:29-40:30  type  'T' -> T@40:17 in=t@40:31
+40:43-40:44  expr  't' -> t@40:31 in=call@40:24
+40:44-40:45  operator  '(' -> (dependent) close=40:46 in=call@40:24
+40:44-40:45  operator  '(' -> (builtin) spec=call<int (*)(int)>@40:24 how=builtin
+40:44-40:45  operator  '(' -> F::operator()@17:7 spec=call<F>@40:24 how=member
+40:44-40:45  operator  '(' -> Fp::operator int (*)(int)@32:3 spec=call<Fp>@40:24 how=member
+41:28-41:29  type  'T' -> T@41:17 in=a@41:30
+41:33-41:34  type  'T' -> T@41:17 in=b@41:35
+42:3-42:7  type  'Less' -> Less@19:8 in=l@42:8
+43:10-43:11  expr  'l' -> l@42:8 in=lt@41:25
+43:12-43:13  expr  'a' -> a@41:30 in=lt@41:25
+43:15-43:16  expr  'b' -> b@41:35 in=lt@41:25
+43:11-43:12  operator  '(' -> (dependent) close=43:16 in=lt@41:25
+43:11-43:12  operator  '(' -> Less::operator()<int, int>@20:36 found=Less::operator()@20:36 spec=lt<int>@41:25 how=member
+45:29-45:30  type  'T' -> T@45:17 in=a@45:31
+45:34-45:35  type  'T' -> T@45:17 in=b@45:36
+45:48-45:52  template  'less' -> less@22:34 in=lt2@45:25
+45:57-45:58  expr  'a' -> a@45:31 in=lt2@45:25
+45:60-45:61  expr  'b' -> b@45:36 in=lt2@45:25
+45:56-45:57  operator  '(' -> (dependent) close=45:61 in=lt2@45:25
+45:56-45:57  operator  '(' -> less<>::operator()<int, int>@26:36 found=less<>::operator()@26:36 spec=lt2<int>@45:25 how=member
+46:30-46:31  type  'T' -> T@46:17 in=p@46:33
+46:47-46:48  expr  'p' -> p@46:33 in=deref@46:24
+46:49-46:50  operator  '(' -> (dependent) close=46:51 in=deref@46:24
+46:49-46:50  operator  '(' -> (builtin) spec=deref<int (*)(int)>@46:24 how=builtin
+47:28-47:29  type  'T' -> T@47:17 in=t@47:30
+47:42-47:43  expr  't' -> t@47:30 in=sub@47:24
+47:43-47:44  operator  '[' -> (dependent) close=47:45 in=sub@47:24
+47:43-47:44  operator  '[' -> (builtin) spec=sub<int *>@47:24 how=builtin
+47:43-47:44  operator  '[' -> M::operator[]@35:7 spec=sub<M>@47:24 how=member
+48:30-48:31  type  'T' -> T@48:17 in=m@48:32
+48:44-48:45  expr  'm' -> m@48:32 in=multi@48:24
+48:45-48:46  operator  '[' -> (dependent) close=48:50 in=multi@48:24
+48:45-48:46  operator  '[' -> M::operator[]@36:7 spec=multi<M>@48:24 how=member
+49:30-49:31  type  'T' -> T@49:17 in=t@49:32
+49:44-49:49  expr  'plain' -> (dependent) in=named@49:24 def=1+adl
+49:44-49:49  expr  'plain' def=plain@38:5
+49:44-49:49  expr  'plain' -> plain@38:5 spec=named<int>@49:24 adl-ns=
+49:50-49:51  expr  't' -> t@49:32 in=named@49:24
+50:28-50:29  type  'T' -> T@50:17 in=t@50:30
+51:30-51:31  expr  'x' -> x@51:18 in=lam(type-parameter-0-0)::(lambda)::operator()@51:10
+51:35-51:36  expr  't' -> t@50:30 in=lam@50:24
+51:34-51:35  operator  '(' -> (dependent) close=51:36 in=lam@50:24
+51:34-51:35  operator  '(' -> lam(int)::(lambda)::operator()<int>@51:10 found=lam(int)::(lambda)::operator()@51:10 spec=lam<int>@50:24 how=member
+53:30-53:31  type  'T' -> T@53:17 in=t@53:32
+53:44-53:45  expr  't' -> t@53:32 in=never@53:24
+53:45-53:46  operator  '(' -> (dependent) close=53:47 in=never@53:24
+54:32-54:33  type  'T' -> T@54:17 in=t@54:34
+55:24-55:25  type  'T' -> T@54:17 in=discard@54:24
+56:12-56:13  expr  't' -> t@54:34 in=discard@54:24
+56:13-56:14  operator  '(' -> (dependent) close=56:15 in=discard@54:24
+63:20-63:25  expr  'plain' -> plain@38:5 in=fp@63:9
+64:10-64:14  expr  'call' -> call<F>@40:24 found=call@40:24 in=run@61:5 how=both adl-ns=:: adl-cls=F@16:8
+64:15-64:16  type  'F' -> F@16:8 in=run@61:5
+64:22-64:26  expr  'call' -> call<Fp>@40:24 found=call@40:24 in=run@61:5 how=both adl-ns=:: adl-cls=Fp@30:8
+64:27-64:29  type  'Fp' -> Fp@30:8 in=run@61:5
+64:35-64:39  expr  'call' -> call<int (*)(int)>@40:24 found=call@40:24 in=run@61:5 adl-ns=
+64:40-64:45  expr  'plain' -> plain@38:5 in=run@61:5
+64:49-64:51  expr  'lt' -> lt<int>@41:25 found=lt@41:25 in=run@61:5 adl-ns=
+64:60-64:63  expr  'lt2' -> lt2<int>@45:25 found=lt2@45:25 in=run@61:5 adl-ns=
+65:10-65:15  expr  'deref' -> deref<int (*)(int)>@46:24 found=deref@46:24 in=run@61:5 adl-ns=
+65:17-65:19  expr  'fp' -> fp@63:9 in=run@61:5
+65:23-65:26  expr  'sub' -> sub<M>@47:24 found=sub@47:24 in=run@61:5 how=both adl-ns=:: adl-cls=M@34:8
+65:27-65:28  type  'M' -> M@34:8 in=run@61:5
+65:34-65:37  expr  'sub' -> sub<int *>@47:24 found=sub@47:24 in=run@61:5 adl-ns=
+65:38-65:39  expr  'a' -> a@62:7 in=run@61:5
+65:43-65:48  expr  'multi' -> multi<M>@48:24 found=multi@48:24 in=run@61:5 how=both adl-ns=:: adl-cls=M@34:8
+65:49-65:50  type  'M' -> M@34:8 in=run@61:5
+65:56-65:61  expr  'named' -> named<int>@49:24 found=named@49:24 in=run@61:5 adl-ns=
+65:67-65:70  expr  'lam' -> lam<int>@50:24 found=lam@50:24 in=run@61:5 adl-ns=
+66:10-66:17  expr  'discard' -> discard<F>@54:24 found=discard@54:24 in=run@61:5 how=both adl-ns=:: adl-cls=F@16:8
+66:18-66:19  type  'F' -> F@16:8 in=run@61:5

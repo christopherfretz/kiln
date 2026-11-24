@@ -47,9 +47,12 @@ impl WrittenRefId {
 /// The tokens of an entry's written name outside its `range`
 /// (spec/ast.md §18.11.2, WP-2326): the leading `::` of a name whose
 /// qualifier is [`RefQualifier::GLOBAL`], the `~` of a destructor name,
-/// and the first token of the specifier before a name whose qualifier is
-/// [`RefQualifier::SPECIFIER`] (WP-2828), each `Loc::INVALID` when
-/// absent. Kept only for the entries that have one, sorted by entry.
+/// the first token of the specifier before a name whose qualifier is
+/// [`RefQualifier::SPECIFIER`] (WP-2828), the closing `]` or `)` of a
+/// subscript or call operator entry (§18.13, WP-2820) and the `<` and `>`
+/// of a friend function template specialization's template argument list
+/// (WP-3008), each `Loc::INVALID` when absent. Kept only for the entries
+/// that have one, sorted by entry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, kiln_snap::Snap)]
 pub struct RefLead {
     /// The entry.
@@ -62,6 +65,12 @@ pub struct RefLead {
     /// (`[: r :]::`, `template [: r :]<...>::`) specifier the name
     /// follows: the `decltype` keyword, the `[:`, the `template`.
     pub spec: Loc,
+    /// The `]` or `)` closing the `[` or `(` of an `operator` entry.
+    pub close: Loc,
+    /// The `<` and `>` of the template argument list after a friend
+    /// function template specialization's name (`friend void f<>(T);`).
+    pub langle: Loc,
+    pub rangle: Loc,
 }
 
 /// The syntactic role of a written name (spec/ast.md §18.4). The full
@@ -105,11 +114,18 @@ pub enum RefRole {
     /// redeclares an entity declared before it, written qualified
     /// (`void A::f() {}`, `int C::x = 0;`, `struct C::In {}`; stage 3).
     Redecl,
+    /// An operator token whose overload resolution selected a function:
+    /// `s [+] s`, `m[[]1]`, `f[(]x)` calling `operator()`, `p[->]m`
+    /// through `operator->` (spec/ast.md §18.13, stage 6, WP-2820).
+    Operator,
+    /// The ud-suffix of a user-defined literal, naming its literal
+    /// operator: `12[_k]`, `"ab"[_s]` (§18.13, stage 6).
+    UdSuffix,
 }
 
 impl RefRole {
     /// Every role, in declaration order (`r as u8` is its index).
-    pub const ALL: [RefRole; 15] = [
+    pub const ALL: [RefRole; 17] = [
         RefRole::Expr,
         RefRole::Member,
         RefRole::Type,
@@ -125,6 +141,8 @@ impl RefRole {
         RefRole::Concept,
         RefRole::Designator,
         RefRole::Redecl,
+        RefRole::Operator,
+        RefRole::UdSuffix,
     ];
 
     /// The role whose `as u8` is `b` (a module image's byte).
@@ -150,6 +168,8 @@ impl RefRole {
             RefRole::Concept => "concept",
             RefRole::Designator => "designator",
             RefRole::Redecl => "redecl",
+            RefRole::Operator => "operator",
+            RefRole::UdSuffix => "ud-suffix",
         }
     }
 }
@@ -230,6 +250,16 @@ pub const REF_UNRESOLVED: u8 = 2;
 /// [`WrittenRef::flags`]: a member or member template name written after
 /// `.` or `->` (spec/ast.md §18.7.2).
 pub const REF_MEMBER: u8 = 4;
+/// [`WrittenRef::flags`]: an `operator` entry whose overload resolution
+/// selected a rewritten comparison candidate ([over.match.oper]/3.4):
+/// `a != b` selecting `operator==`, `a < b` selecting `operator<=>` (and
+/// the comparison of its result with zero), any reversed candidate
+/// (spec/ast.md §18.13.3).
+pub const REF_REWRITTEN: u8 = 8;
+/// [`WrittenRef::flags`]: the selected candidate is the reversed
+/// synthesized form ([over.match.oper]/3.4.4); always with
+/// [`REF_REWRITTEN`].
+pub const REF_REVERSED: u8 = 16;
 
 /// How lookup found a written name (spec/ast.md §18.7.2, WP-2130).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, kiln_snap::Snap)]
@@ -458,7 +488,8 @@ pub struct WrittenRef {
     pub qualifier: RefQualifier,
     /// The syntactic role.
     pub role: RefRole,
-    /// [`REF_DEPENDENT`], [`REF_UNRESOLVED`], [`REF_MEMBER`].
+    /// [`REF_DEPENDENT`], [`REF_UNRESOLVED`], [`REF_MEMBER`],
+    /// [`REF_REWRITTEN`], [`REF_REVERSED`].
     pub flags: u8,
     /// How lookup found the name (§18.7.2).
     pub how: RefLookup,
@@ -612,6 +643,13 @@ pub enum PatternNode {
     /// (`using T::size;`, `using typename T::type;`): its
     /// `UnresolvedUsingValue` or `UnresolvedUsingTypename` member.
     Decl(DeclId),
+    /// The operator token of a dependent operator expression (spec/ast.md
+    /// §18.13.6): the expression (a dependent operator, subscript, call or
+    /// member access through `->`, a fold-expression) and the token's
+    /// index in it (1 for a binary fold's second operator, else 0). Kept
+    /// apart from [`PatternNode::Expr`]: a dependent `t->m` is the node of
+    /// both the `->` and the member name.
+    Oper(ExprId, u8),
 }
 
 /// The id of a per-specialization entry (index + 1).
@@ -635,6 +673,16 @@ impl SpecRefId {
 /// duplicate); never seen through the read API.
 pub const SPEC_DEAD: u8 = 0x80;
 
+/// [`SpecRef::flags`]: the dependent operator token of the row's entry
+/// selected no function in this specialization: overload resolution chose
+/// a built-in candidate ([over.built]), the operand was a pointer or a
+/// function pointer (`->`, a call), or a fold-expression's expansion
+/// applied no operator (spec/ast.md §18.13.6). No entity, no `found`,
+/// `how` [`RefLookup::Builtin`]; dumped `(builtin)`. Distinguishes a
+/// specialization that reached the token from one that never did (a
+/// discarded `if constexpr` branch has no row).
+pub const SPEC_BUILTIN: u8 = 32;
+
 /// What one dependent name of a template pattern resolved to in one
 /// specialization (spec/ast.md §18.9; 28 bytes).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, kiln_snap::Snap)]
@@ -652,7 +700,9 @@ pub struct SpecRef {
     /// The using-directive ordinary lookup found the selected declaration
     /// through at the pattern's definition (§18.7.3, §18.9.1).
     pub udir: Option<DeclId>,
-    /// [`REF_UNRESOLVED`], [`REF_MEMBER`] (the entry's).
+    /// [`REF_UNRESOLVED`], [`REF_MEMBER`] (the entry's),
+    /// [`REF_REWRITTEN`], [`REF_REVERSED`], [`SPEC_BUILTIN`] (this
+    /// specialization's resolution of an operator, §18.13.6).
     pub flags: u8,
     /// How lookup found the name (§18.7.2).
     pub how: RefLookup,
@@ -754,7 +804,17 @@ impl WrittenRefs {
         let id = WrittenRefId::from_index(self.entries.len() - 1);
         if let Some(c) = tok {
             let (colon, spec) = if spec { (Loc::INVALID, c) } else { (c, Loc::INVALID) };
-            self.leads.push(RefLead { entry: id, colon, tilde: Loc::INVALID, spec });
+            let none = Loc::INVALID;
+            let l = RefLead {
+                entry: id,
+                colon,
+                tilde: none,
+                spec,
+                close: none,
+                langle: none,
+                rangle: none,
+            };
+            self.leads.push(l);
         }
         Some(id)
     }
@@ -789,19 +849,34 @@ impl WrittenRefs {
     /// Notes that entry `id` names a destructor whose `~` is at `tilde`
     /// (its `range` is the class name's, §18.11.2).
     pub fn set_tilde(&mut self, id: WrittenRefId, tilde: Loc) {
-        self.set_lead(id, None, Some(tilde));
+        self.set_lead(id, None, Some(tilde), None);
+    }
+
+    /// Notes that the `operator` entry `id` (a `[` or `(`) is closed by
+    /// the `]` or `)` at `close` (spec/ast.md §18.13).
+    pub fn set_close(&mut self, id: WrittenRefId, close: Loc) {
+        self.set_lead(id, None, None, Some(close));
     }
 
     /// Sets the leading `::` (an entry whose qualifier is
-    /// [`RefQualifier::GLOBAL`]) and the `~` of entry `id`, each when
-    /// given (a carried table's, §18.10).
-    pub fn set_lead(&mut self, id: WrittenRefId, colon: Option<Loc>, tilde: Option<Loc>) {
+    /// [`RefQualifier::GLOBAL`]), the `~` and the closing token of entry
+    /// `id`, each when given (a carried table's, §18.10).
+    pub fn set_lead(
+        &mut self,
+        id: WrittenRefId,
+        colon: Option<Loc>,
+        tilde: Option<Loc>,
+        close: Option<Loc>,
+    ) {
         let l = self.lead_mut(id);
         if let Some(c) = colon {
             l.colon = c;
         }
         if let Some(t) = tilde {
             l.tilde = t;
+        }
+        if let Some(c) = close {
+            l.close = c;
         }
     }
 
@@ -811,6 +886,14 @@ impl WrittenRefs {
         self.lead_mut(id).spec = first;
     }
 
+    /// Sets the `<` and `>` of the template argument list after entry
+    /// `id`, a friend function template specialization's name.
+    pub fn set_args(&mut self, id: WrittenRefId, langle: Loc, rangle: Loc) {
+        let l = self.lead_mut(id);
+        l.langle = langle;
+        l.rangle = rangle;
+    }
+
     /// The row of entry `id`, inserted in order when it has none.
     fn lead_mut(&mut self, id: WrittenRefId) -> &mut RefLead {
         let at = match self.leads.last() {
@@ -818,8 +901,16 @@ impl WrittenRefs {
             _ => self.leads.partition_point(|l| l.entry < id),
         };
         if self.leads.get(at).is_none_or(|l| l.entry != id) {
-            let l =
-                RefLead { entry: id, colon: Loc::INVALID, tilde: Loc::INVALID, spec: Loc::INVALID };
+            let none = Loc::INVALID;
+            let l = RefLead {
+                entry: id,
+                colon: none,
+                tilde: none,
+                spec: none,
+                close: none,
+                langle: none,
+                rangle: none,
+            };
             self.leads.insert(at, l);
         }
         &mut self.leads[at]
@@ -850,6 +941,13 @@ impl WrittenRefs {
         self.lead(id).map(|l| l.tilde).filter(|l| l.is_valid())
     }
 
+    /// The location of the `]` or `)` that closes the `[` or `(` of the
+    /// `operator` entry `id` (a subscript or a call of `operator()` or of
+    /// a surrogate call function, spec/ast.md §18.13).
+    pub fn close(&self, id: WrittenRefId) -> Option<Loc> {
+        self.lead(id).map(|l| l.close).filter(|l| l.is_valid())
+    }
+
     /// The first token of the `decltype(...)::` or splice specifier
     /// before entry `id`, whose qualifier is [`RefQualifier::SPECIFIER`]:
     /// the `decltype` keyword, the `[:` or the `template` of
@@ -857,6 +955,14 @@ impl WrittenRefs {
     /// one whose token was not recorded).
     pub fn specifier_lo(&self, id: WrittenRefId) -> Option<Loc> {
         self.lead(id).map(|l| l.spec).filter(|l| l.is_valid())
+    }
+
+    /// The `<` and `>` of the template argument list written after entry
+    /// `id`, a friend function template specialization's name (`None` for
+    /// any other entry, §18.11.2).
+    pub fn template_args(&self, id: WrittenRefId) -> Option<(Loc, Loc)> {
+        let l = self.lead(id)?;
+        (l.langle.is_valid() && l.rangle.is_valid()).then_some((l.langle, l.rangle))
     }
 
     /// Where the name of entry `id` begins as an expression stores it:
@@ -1599,7 +1705,7 @@ impl WrittenRefs {
         }
     }
 
-    /// The dump's `q=` and `tilde=` fields of entry `id` (§18.6).
+    /// The dump's `q=`, `tilde=` and `close=` fields of entry `id` (§18.6).
     fn dump_lead(&self, id: WrittenRefId, out: &mut String, pos: &dyn Fn(Loc) -> String) {
         match self.get(id).qualifier.link() {
             QualLink::None => {}
@@ -1624,6 +1730,16 @@ impl WrittenRefs {
         if let Some(t) = self.tilde(id) {
             out.push_str(" tilde=");
             out.push_str(&pos(t));
+        }
+        if let Some(c) = self.close(id) {
+            out.push_str(" close=");
+            out.push_str(&pos(c));
+        }
+        if let Some((l, r)) = self.template_args(id) {
+            out.push_str(" args=");
+            out.push_str(&pos(l));
+            out.push('-');
+            out.push_str(&pos(r));
         }
     }
 
@@ -1712,6 +1828,7 @@ impl WrittenRefs {
             if r.entity.is_some() && r.flags & REF_DEPENDENT != 0 {
                 out.push_str(" dep");
             }
+            dump_rewrite_flags(r.flags, &mut out);
             if sm.is_macro_loc(r.range.lo) {
                 out.push_str(" exp=");
                 out.push_str(&pos(sm.expansion_loc(r.range.lo)));
@@ -1827,6 +1944,7 @@ impl WrittenRefs {
                 let mut l = head.to_owned();
                 match sr.entity {
                     Some(d) => decl(d, &mut l),
+                    None if sr.flags & SPEC_BUILTIN != 0 => l.push_str("(builtin)"),
                     None => l.push_str("(unresolved)"),
                 }
                 if let Some(f) = sr.found {
@@ -1835,6 +1953,7 @@ impl WrittenRefs {
                 }
                 l.push_str(" spec=");
                 spec_decl(sr.spec, &mut l);
+                dump_rewrite_flags(sr.flags, &mut l);
                 if sr.how != sr.default_how(r) {
                     l.push_str(" how=");
                     l.push_str(sr.how.spelling());
@@ -1913,6 +2032,17 @@ impl crate::Ast {
 
 /// The ` def=<n>[+adl][+base][+using]` suffix of a dependent entry's
 /// dump line (spec/ast.md §18.12.5).
+/// The dump's `rewritten` and `reversed` words of an entry's or a
+/// per-specialization row's `flags` (spec/ast.md §18.13.7).
+fn dump_rewrite_flags(flags: u8, out: &mut String) {
+    if flags & REF_REWRITTEN != 0 {
+        out.push_str(" rewritten");
+    }
+    if flags & REF_REVERSED != 0 {
+        out.push_str(" reversed");
+    }
+}
+
 fn dump_found_suffix(set: &FoundSet<'_>, out: &mut String) {
     let _ = write!(out, " def={}", set.decls.len());
     let flags =
@@ -2052,13 +2182,42 @@ mod tests {
         assert_eq!(t.name_lo(dtor), Loc::from_raw(30));
         assert_eq!(t.qualified_lo(dtor), Loc::from_raw(30));
         // Out-of-order lead rows (a carried table's) stay sorted.
-        t.set_lead(ec, None, Some(Loc::from_raw(19)));
+        t.set_lead(ec, None, Some(Loc::from_raw(19)), None);
         let entries: Vec<_> = t.leads().iter().map(|l| l.entry).collect();
         assert_eq!(entries, [ea, ec, dtor]);
         assert_eq!(t.tilde(ec), Some(Loc::from_raw(19)));
         t.truncate(mark);
         assert_eq!(t.leads().len(), 2);
         assert_eq!(t.tilde(dtor), None);
+        assert_eq!(size_of::<WrittenRef>(), 28);
+    }
+
+    /// Stage 6 (spec/ast.md §18.13, WP-2820): the two roles round trip by
+    /// byte, the closing token of a `[`/`(` entry is kept beside it (the
+    /// lead row grows to 20 bytes, the entry stays 28) and the rewritten
+    /// and reversed flags print on the entry's line.
+    #[test]
+    fn operator_entries_keep_their_close_and_flags() {
+        for r in RefRole::ALL {
+            assert_eq!(RefRole::from_u8(r as u8), Some(r));
+        }
+        assert_eq!(RefRole::Operator.spelling(), "operator");
+        assert_eq!(RefRole::UdSuffix.spelling(), "ud-suffix");
+        assert_eq!(RefRole::from_u8(RefRole::ALL.len() as u8), None);
+        let mut t = WrittenRefs::default();
+        t.set_on(true);
+        let sub = t.push(WrittenRef { role: RefRole::Operator, ..at(5, RefQualifier::NONE) });
+        let sub = sub.unwrap();
+        t.set_close(sub, Loc::from_raw(9));
+        assert_eq!(t.close(sub), Some(Loc::from_raw(9)));
+        assert_eq!(t.tilde(sub), None);
+        assert_eq!(t.global_colon(sub), None);
+        // The join location of an operator entry is its own token.
+        assert_eq!(t.name_lo(sub), Loc::from_raw(5));
+        let mut out = String::new();
+        dump_rewrite_flags(REF_REWRITTEN | REF_REVERSED, &mut out);
+        assert_eq!(out, " rewritten reversed");
+        assert_eq!(size_of::<RefLead>(), 28);
         assert_eq!(size_of::<WrittenRef>(), 28);
     }
 
@@ -2261,6 +2420,38 @@ mod tests {
         assert_eq!(t.specs().count(), 1);
         assert_eq!(t.specs_naming(DeclId::new(20)).count(), 1);
         assert_eq!(t.specs_of(w).count(), 1);
+    }
+
+    /// spec/ast.md §18.13.6: an operator token is its own pattern node,
+    /// apart from the expression's (a dependent `t->m` is the node of both
+    /// `->` and `m`), one per slot of a binary fold; a built-in row names
+    /// nothing and is kept once, apart from an unresolved one.
+    #[test]
+    fn operator_nodes_and_builtin_rows() {
+        let mut t = WrittenRefs::default();
+        t.set_on(true);
+        let m = t.push(dependent()).unwrap();
+        let arrow = t.push(WrittenRef { role: RefRole::Operator, ..dependent() }).unwrap();
+        let second = t.push(WrittenRef { role: RefRole::Operator, ..dependent() }).unwrap();
+        let x = ExprId::new(7);
+        t.note_pattern_node(PatternNode::Expr(x), m);
+        t.note_pattern_node(PatternNode::Oper(x, 0), arrow);
+        t.note_pattern_node(PatternNode::Oper(x, 1), second);
+        assert_eq!(t.pattern_entry(PatternNode::Expr(x)), Some(m));
+        assert_eq!(t.pattern_entry(PatternNode::Oper(x, 0)), Some(arrow));
+        assert_eq!(t.pattern_entry(PatternNode::Oper(x, 1)), Some(second));
+        let builtin = SpecRef {
+            entity: None,
+            flags: SPEC_BUILTIN,
+            how: RefLookup::Builtin,
+            ..spec_row(arrow, 10, 1)
+        };
+        let unresolved = SpecRef { flags: REF_UNRESOLVED, how: RefLookup::Unqualified, ..builtin };
+        let a = t.push_spec(builtin);
+        assert_eq!(t.push_spec(builtin), a);
+        assert_ne!(t.push_spec(unresolved), a);
+        assert_eq!(t.specs_of(arrow).count(), 2);
+        assert_eq!(t.specs_of(arrow).filter(|(_, r)| r.flags & SPEC_BUILTIN != 0).count(), 1);
     }
 
     fn el(decl: u32, found: u32) -> FoundDecl {

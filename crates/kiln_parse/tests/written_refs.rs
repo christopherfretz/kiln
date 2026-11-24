@@ -772,3 +772,279 @@ fn pack_index_and_member_variable_template_names() {
         assert_eq!(targs, 1, "`d.twice<7>` keeps its template arguments");
     });
 }
+
+/// `line:col` of the last `needle` on 1-based `line` of `src`.
+fn pos_in(src: &str, line: u32, needle: &str) -> (u32, u32) {
+    let text = src.lines().nth(line as usize - 1).expect("the line");
+    let col = text.rfind(needle).expect("the needle") + 1;
+    (line, u32::try_from(col).expect("a short line"))
+}
+
+const FRIEND_SPEC: &str = "namespace n {\n\
+                           template <class T> void f(T) {}\n\
+                           template <class T> void f(T, int) {}\n\
+                           template <class T> class A { friend void f<>(T, int); };\n\
+                           template <class T> class N { friend void f<int>(int); };\n\
+                           }\n\
+                           void run() { n::A<int> a; n::A<char> c; }\n";
+
+/// A friend function template specialization in a template (spec/ast.md
+/// §18.4, WP-3008): dependent, the entry's found set is the candidate
+/// templates, its written `<>` is the lead's argument list, and each
+/// instantiation's row names the specialization of the template the
+/// declarator matches (the second overload, not lookup's first). A non-dependent one
+/// in a template never instantiated names its matched template.
+#[test]
+fn friend_specializations_name_their_template() {
+    use kiln_ast::written_refs::REF_DEPENDENT;
+    with_ast(FRIEND_SPEC, |ast, sm| {
+        let t = &ast.written_refs;
+        let pos = |d: kiln_ast::DeclId| line_col(sm, ast.decls.get(d).loc());
+        let first = pos_in(FRIEND_SPEC, 2, "f(");
+        let second = pos_in(FRIEND_SPEC, 3, "f(");
+        let entry = entry_at(t, sm, pos_in(FRIEND_SPEC, 4, "f<"));
+        let pat = t.get(entry);
+        assert!(pat.entity.is_none() && pat.flags & REF_DEPENDENT != 0, "dependent");
+        let set = t.found_at_definition(entry).expect("a found set");
+        let mut at: Vec<_> = set.decls.iter().map(|e| pos(e.decl)).collect();
+        at.sort_unstable();
+        assert_eq!(at, [first, second], "the candidate templates");
+        let (langle, rangle) = t.template_args(entry).expect("the written arguments");
+        assert_eq!(line_col(sm, langle), pos_in(FRIEND_SPEC, 4, "<>"));
+        assert_eq!(line_col(sm, rangle), pos_in(FRIEND_SPEC, 4, ">("));
+        let rows: Vec<_> = t.specs_of(entry).map(|(_, s)| *s).collect();
+        assert_eq!(rows.len(), 2, "A<int> and A<char>");
+        for row in &rows {
+            assert_eq!(row.found.map(pos), Some(second));
+            assert_eq!(row.entity.map(pos), Some(second), "a specialization of it");
+            assert_ne!(row.entity, row.found);
+        }
+        assert_ne!(rows[0].entity, rows[1].entity);
+        let plain = t.get(entry_at(t, sm, pos_in(FRIEND_SPEC, 5, "f<")));
+        assert_eq!(plain.flags & REF_DEPENDENT, 0);
+        assert_eq!(plain.entity.map(pos), Some(first));
+    });
+}
+
+const FRIEND_MEMBER: &str = "namespace n {\n\
+                             template <class T> struct S { void f(); };\n\
+                             template <class T> struct S<T *> { void f(); };\n\
+                             }\n\
+                             class X {\n\
+                             \x20 template <class T> friend void n::S<T>::f();\n\
+                             \x20 template <class T> friend void n::S<T *>::f();\n\
+                             };\n";
+
+/// A friend member of a dependent specialization ([temp.friend]/5,
+/// spec/ast.md §18.4, WP-3008): `n::S<T>::f` names the primary's
+/// member, `n::S<T *>::f` the partial specialization's.
+#[test]
+fn friend_members_name_the_pattern_member() {
+    with_ast(FRIEND_MEMBER, |ast, sm| {
+        let t = &ast.written_refs;
+        let pos = |d: kiln_ast::DeclId| line_col(sm, ast.decls.get(d).loc());
+        for (line, member) in [(6, 2), (7, 3)] {
+            let r = t.get(entry_at(t, sm, pos_in(FRIEND_MEMBER, line, "f(")));
+            assert_eq!(r.role, RefRole::Elaborated);
+            assert_eq!(r.entity.map(pos), Some(pos_in(FRIEND_MEMBER, member, "f(")));
+        }
+    });
+}
+
+const VAR_TEMPLATE_ID: &str = "namespace n { template <class T> constexpr bool v = true; }\n\
+                               template <class T> bool k() { return n::v<T>; }\n\
+                               bool z = k<int>();\n";
+
+/// A variable template-id (spec/ast.md §18.5, WP-3009): `n::v<T>` names
+/// the variable template, as a class template-id names its template.
+#[test]
+fn variable_template_ids_name_the_template() {
+    use kiln_ast::written_refs::REF_DEPENDENT;
+    with_ast(VAR_TEMPLATE_ID, |ast, sm| {
+        let t = &ast.written_refs;
+        let r = t.get(entry_at(t, sm, pos_in(VAR_TEMPLATE_ID, 2, "v<")));
+        assert_eq!(r.flags & REF_DEPENDENT, 0);
+        let v = r.entity.expect("the variable template");
+        assert_eq!(ast.decls.get(v).kind(), kiln_ast::decl::DeclKind::VarTemplate);
+    });
+}
+
+const UDL: &str = "using Z = decltype(sizeof 0);\n\
+                   int operator\"\"_n(unsigned long long v) { return int(v); }\n\
+                   Z operator\"\"_s(const char *, Z n) { return n; }\n\
+                   Z operator\"\"_s(const char8_t *, Z n) { return n; }\n\
+                   Z operator\"\"_s(const char16_t *, Z n) { return n; }\n\
+                   Z operator\"\"_s(const char32_t *, Z n) { return n; }\n\
+                   Z operator\"\"_s(const wchar_t *, Z n) { return n; }\n\
+                   int operator\"\"_\u{e9}(unsigned long long v) { return int(v); }\n\
+                   #define BODY 3_n\n\
+                   #define ARG(x) x\n\
+                   #define PASTE(n) n##_n\n\
+                   int a = 1_n + ARG(2_n) + BODY + PASTE(4);\n\
+                   int b = 5_\\\n\
+                   n;\n\
+                   Z c = R\"x(r)x\"_s + u8\"p\"_s + L\"q\"_s + u\"r\"_s + U\"s\"_s;\n\
+                   int d = 6_\\u00e9;\n";
+
+/// The range of a ud-suffix entry (spec/ast.md §18.13.4): the suffix's
+/// own bytes, so its editable file range is the suffix in a file and in
+/// a macro argument, none in a macro body or from `##` (no file bytes
+/// spell it alone); a line splice in the suffix is inside the range, a
+/// universal-character-name is spelled verbatim; raw and prefixed
+/// strings end in their suffix the same way. Never the token's last
+/// `len` cleaned bytes.
+#[test]
+fn ud_suffix_ranges_are_the_suffix_bytes() {
+    with_ast(UDL, |ast, sm| {
+        let t = &ast.written_refs;
+        let suffixes: Vec<_> =
+            t.iter().filter(|(_, r)| r.role == RefRole::UdSuffix).map(|(_, r)| *r).collect();
+        assert_eq!(suffixes.len(), 11, "every suffixed literal");
+        let text = |r: &kiln_ast::written_refs::WrittenRef| {
+            sm.editable_file_range(r.range).map(|(_, lo, hi)| &UDL[lo as usize..hi as usize])
+        };
+        let got: Vec<Option<&str>> = suffixes.iter().map(text).collect();
+        assert_eq!(
+            got,
+            [
+                Some("_n"),
+                Some("_n"),
+                None,
+                None,
+                Some("_\\\nn"),
+                Some("_s"),
+                Some("_s"),
+                Some("_s"),
+                Some("_s"),
+                Some("_s"),
+                Some("_\\u00e9"),
+            ]
+        );
+        for r in &suffixes {
+            assert!(r.entity.is_some(), "every suffix names its literal operator");
+            let f = r.entity.unwrap();
+            assert_eq!(
+                ast.decls.get(f).name().kind(),
+                kiln_ast::names::DeclNameKind::LiteralOperator,
+                "a literal operator"
+            );
+        }
+        // The literal operator call joins its entry: its callee is at the
+        // suffix.
+        let at_suffix = (1..=ast.exprs.len())
+            .map(|i| kiln_ast::ExprId::new(i as u32))
+            .filter(|&e| ast.is_udl_call(e))
+            .all(|e| {
+                let mut c = ast.exprs.callee(e);
+                while ast.exprs.get(c).kind() == kiln_ast::expr::ExprKind::ImplicitCastExpr {
+                    c = ast.exprs.operand(c);
+                }
+                let lo = ast.exprs.get(c).loc();
+                suffixes.iter().any(|r| r.range.lo == lo)
+            });
+        assert!(at_suffix, "every literal operator callee is at a suffix entry");
+    });
+}
+
+const OPS: &str = "struct V { int &operator[](int); int operator()(int) const; };\n\
+                   struct O { int operator<=>(const O &) const; bool operator==(const O &) const; };\n\
+                   int use(V v, O a, O b) {\n\
+                   \x20 bool r = a < b, s = a != b;\n\
+                   \x20 return v[1] + v(2) + r + s;\n\
+                   }\n";
+
+/// Operator entries through the API (spec/ast.md §18.13): a `[]` or
+/// `()` entry spans its opening token and keeps its closing one
+/// (`WrittenRefs::close`), how is `member` for a member operator, and a
+/// rewritten comparison's entry is flagged.
+#[test]
+fn operator_entries_through_the_api() {
+    use kiln_ast::written_refs::{REF_REVERSED, REF_REWRITTEN, RefLookup};
+    with_ast(OPS, |ast, sm| {
+        let t = &ast.written_refs;
+        let sub = entry_at(t, sm, (5, 11));
+        assert_eq!(t.get(sub).role, RefRole::Operator);
+        assert_eq!(t.get(sub).how, RefLookup::Member);
+        assert_eq!(line_col(sm, t.close(sub).expect("a `]`")), (5, 13));
+        let call = entry_at(t, sm, (5, 18));
+        assert_eq!(line_col(sm, t.close(call).expect("a `)`")), (5, 20));
+        let less = entry_at(t, sm, (4, 14));
+        assert_eq!(t.get(less).flags & (REF_REWRITTEN | REF_REVERSED), REF_REWRITTEN);
+        assert!(t.close(less).is_none());
+        let ne = entry_at(t, sm, (4, 25));
+        assert_eq!(t.get(ne).flags & REF_REWRITTEN, REF_REWRITTEN);
+        let name = |id| {
+            let mut s = String::new();
+            kiln_ast::types::TypeNames::write_decl_name(
+                ast,
+                t.get(id).entity.unwrap(),
+                true,
+                &mut s,
+            );
+            s
+        };
+        assert_eq!(name(less), "O::operator<=>");
+        assert_eq!(name(ne), "O::operator==");
+    });
+}
+
+const DEP_OPS: &str = "struct S { int v; };\n\
+                       S operator+(S, S);\n\
+                       struct P { S *operator->(); };\n\
+                       struct Q { P operator->(); };\n\
+                       template <class T> T add(T a, T b) { return a + b; }\n\
+                       template <class T> int get(T t) { return t->v; }\n\
+                       template <class... T> S sum(T... t) { return (S{} + ... + t); }\n\
+                       int run() { S s{}; add(s, s); add(1, 2); sum(s, s); return get(Q{}); }\n";
+
+/// spec/ast.md §18.13.6 through the API: a dependent operator is a
+/// DEPENDENT entry whose found set holds the non-member candidates of the
+/// definition with the ADL flag ([over.match.oper]/3.2,
+/// [temp.dep.candidate]/1); its rows name the operator function each
+/// specialization selected, from that set, or are built-in rows naming
+/// nothing ([over.built]); a `->` chain's rows are in application order
+/// ([over.ref]/1); a binary fold has an entry per token ([expr.prim.fold]/1).
+#[test]
+fn dependent_operator_entries_through_the_api() {
+    use kiln_ast::written_refs::{REF_DEPENDENT, RefLookup, SPEC_BUILTIN};
+    with_ast(DEP_OPS, |ast, sm| {
+        let t = &ast.written_refs;
+        let pos = |d: kiln_ast::DeclId| line_col(sm, ast.decls.get(d).loc());
+        let plus = entry_at(t, sm, (5, 47));
+        assert_eq!(t.get(plus).role, RefRole::Operator);
+        assert_ne!(t.get(plus).flags & REF_DEPENDENT, 0);
+        assert!(t.get(plus).entity.is_none());
+        let set = t.found_at_definition(plus).expect("a set");
+        assert!(set.adl());
+        let [op] = set.decls else { panic!("one candidate") };
+        assert_eq!(pos(op.decl), (2, 3));
+        let rows: Vec<_> = t.specs_of(plus).map(|(_, r)| *r).collect();
+        assert_eq!(rows.len(), 2, "add<S> and add<int>");
+        let user = rows.iter().find(|r| r.entity.is_some()).expect("add<S>");
+        assert_eq!(ast.spec_origin(user), Some(op.decl));
+        assert_eq!(user.flags & SPEC_BUILTIN, 0);
+        let builtin = rows.iter().find(|r| r.entity.is_none()).expect("add<int>");
+        assert_ne!(builtin.flags & SPEC_BUILTIN, 0);
+        assert_eq!(builtin.how, RefLookup::Builtin);
+        assert_ne!(user.spec, builtin.spec);
+        // `t->v` with `T = Q`: `Q::operator->`, then `P::operator->`.
+        let arrow = entry_at(t, sm, (6, 43));
+        assert_eq!(t.get(arrow).role, RefRole::Operator);
+        assert!(t.found_at_definition(arrow).is_none(), "a member only");
+        let chain: Vec<_> = t
+            .specs_of(arrow)
+            .map(|(_, r)| {
+                assert_eq!(r.how, RefLookup::Member);
+                pos(r.entity.expect("an operator->"))
+            })
+            .collect();
+        assert_eq!(chain, [(4, 14), (3, 15)]);
+        // `(S{} + ... + t)`: two tokens, two entries, each with its row.
+        for at in [(7, 51), (7, 57)] {
+            let e = entry_at(t, sm, at);
+            assert_eq!(t.found_at_definition(e).map(|s| s.decls.len()), Some(1));
+            let named: Vec<_> = t.specs_of(e).filter_map(|(_, r)| r.entity).collect();
+            assert_eq!(named.len(), 1, "one distinct resolution at {at:?}");
+        }
+    });
+}

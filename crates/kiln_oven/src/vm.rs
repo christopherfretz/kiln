@@ -3086,6 +3086,7 @@ impl Oven {
         if p == 0 && q == 0 {
             return Ok(0);
         }
+        let q = self.made_twin(p, q);
         if p == 0 || q == 0 || Ptr::alloc_key(p) != Ptr::alloc_key(q) {
             if let Some(d) = self.nowhere_sub(p, q, elem) {
                 return d;
@@ -3394,6 +3395,38 @@ impl Oven {
         longer.starts_with(shorter)
     }
 
+    /// `q` moved onto `p`'s object when the two point into different
+    /// string objects kiln made itself with equal contents and encoding
+    /// ([`flags::MADE_STR`]), else `q`. Such objects differ only in their
+    /// maker (spec/ast.md §5.8.1): one address at run time (codegen's
+    /// string pool), and one object to comparison and subtraction, as in
+    /// clang 19 and 22 (`getPredefinedStringLiteralFromCache`: one
+    /// `StringLiteral` per content) and GCC 16.1 (spec/oven.md "Kiln-made
+    /// strings", WP-3000).
+    fn made_twin(&self, p: u64, q: u64) -> u64 {
+        if p == 0
+            || q == 0
+            || Ptr::alloc_key(p) == Ptr::alloc_key(q)
+            || Ptr::is_nowhere(p)
+            || Ptr::is_nowhere(q)
+        {
+            return q;
+        }
+        let (dp, dq) = (Ptr::decode(p), Ptr::decode(q));
+        if !dp.is_static() || !dq.is_static() || dp.is_fn() || dq.is_fn() {
+            return q;
+        }
+        let (Some(a), Some(b)) = (self.alloc_any(dp), self.alloc_any(dq)) else { return q };
+        match (a.origin, b.origin) {
+            (Origin::Str(l, _), Origin::Str(r, _))
+                if l == r && a.flags & b.flags & flags::MADE_STR != 0 =>
+            {
+                Ptr::with_off(p, u64::from(dq.off), dq.past)
+            }
+            _ => q,
+        }
+    }
+
     /// A pointer into an object of unknown identity (P2280).
     fn is_unknown(&self, raw: u64) -> bool {
         raw != 0
@@ -3448,6 +3481,7 @@ impl Oven {
         weak: (bool, bool),
     ) -> Result<bool, Fault> {
         let eq = c == cmp::EQ || c == cmp::NE;
+        let q = self.made_twin(p, q);
         let same =
             (p == 0 && q == 0) || (p != 0 && q != 0 && Ptr::alloc_key(p) == Ptr::alloc_key(q));
         if same {

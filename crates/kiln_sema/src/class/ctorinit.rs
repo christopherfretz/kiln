@@ -13,6 +13,7 @@
 
 use kiln_ast::decl::{CtorInit, CtorInitKind, DeclFlags, DeclKind, DefinitionBits};
 use kiln_ast::expr::{BinaryOp, CastKind, ConstructionKind, ExprKind, TraitKind, UnaryOp};
+use kiln_ast::templates::{PatternMemInit, PatternMemInitArgs, PatternMemInitId, PatternMemInits};
 use kiln_ast::types::Quals;
 use kiln_ast::{DeclId, ExprId, QualType, TypeId};
 use kiln_diag::DiagId;
@@ -40,9 +41,10 @@ pub(crate) struct MemInitState {
     any_errors: bool,
     /// The list is not checked (an invalid constructor, a template).
     skip: bool,
-    /// The mem-initializers of a constructor in a template, kept for its
-    /// instantiation (when `skip`).
-    pattern: Vec<MemInitInfo>,
+    /// The mem-initializers of a constructor in a template, as the
+    /// `Ast` keeps them for its instantiation (when `skip`; spec/ast.md
+    /// §8.6).
+    pattern: Vec<PatternMemInit>,
     /// A mem-initializer of the template failed its definition-time check
     /// (when `skip`).
     pattern_failed: bool,
@@ -97,28 +99,39 @@ impl Sema<'_, '_> {
         let index = u8::try_from(self.mem_inits.count).unwrap_or(CtorInit::IMPLICIT - 1);
         self.mem_inits.count += 1;
         if self.mem_inits.skip {
-            if !self.pattern_mem_init_names_something(ctor, info) {
-                self.mem_inits.pattern_failed = true;
-                self.cleanup = super::CleanupState::default();
-                return;
-            }
-            if !self.ast.decls.get(ctor).flags().contains(DeclFlags::INVALID) {
+            // An identifier the definition does not resolve is reported
+            // and kept as written (`PatternMemInitId::Ident`), which the
+            // instantiations skip.
+            let id = self.pattern_mem_init_id(ctor, info);
+            self.mem_inits.pattern_failed |= id.is_err();
+            if id.is_ok() && !self.ast.decls.get(ctor).flags().contains(DeclFlags::INVALID) {
                 // Its non-dependent immediate invocations are evaluated
                 // now ([expr.const]/16; clang checks them as it parses).
                 self.finish_immediate_parts(&initializer_exprs(&info.init));
             }
-            // Braced arguments keep their nested lists for the
-            // instantiation (`m({{1, 2}, {3, 4}})`).
-            let mut info = info.clone();
-            if let Initializer::Paren(es, ..) = &mut info.init {
-                *es = self.dependent_args(es);
-            }
-            if let MemInitId::Ident(name) = info.id
-                && let Some(ty) = self.mem_init_bound_typedef(ctor, name)
-            {
-                info.id = MemInitId::Type(ty);
-            }
-            self.mem_inits.pattern.push(info);
+            // Braced arguments and lists keep their nested lists for the
+            // instantiation (`m({{1, 2}, {3, 4}})`), as type-`void`
+            // `InitListExpr`s.
+            let init = match &info.init {
+                Initializer::Paren(es, l, r) => PatternMemInitArgs::Paren {
+                    args: self.dependent_args(es).into(),
+                    lparen: *l,
+                    rparen: *r,
+                },
+                Initializer::List(l) => PatternMemInitArgs::List(self.dependent_init_list(l)),
+                // The parser hands over `(...)` or `{...}` only.
+                Initializer::Expr(e) => {
+                    let at = self.ast.exprs.get(*e).loc();
+                    PatternMemInitArgs::Paren { args: Box::new([*e]), lparen: at, rparen: at }
+                }
+            };
+            self.mem_inits.pattern.push(PatternMemInit {
+                id: id.unwrap_or_else(|e| e),
+                loc: info.loc,
+                end: info.end,
+                pack_expansion: info.pack_expansion,
+                init,
+            });
             self.cleanup = super::CleanupState::default();
             return;
         }
@@ -276,15 +289,20 @@ impl Sema<'_, '_> {
             MemInitState { skip: !self.check_mem_inits_of(ctor), ..MemInitState::default() }
         };
         if st.skip {
-            // A template: the instantiation substitutes into the list
-            // (`templ/class.rs`).
-            if st.pattern_failed {
-                self.inst.failed_mem_inits.insert(ctor);
-            }
-            if !st.pattern.is_empty()
-                && !self.ast.decls.get(ctor).flags().contains(DeclFlags::INVALID)
-            {
-                self.inst.pattern_mem_inits.insert(ctor, (st.pattern, colon_loc));
+            // A template: the list goes on the `Ast` as written
+            // (spec/ast.md §8.6); the instantiation substitutes into it
+            // (`Substituter::ctor_initializer`). An invalid constructor
+            // keeps only the failure.
+            let d = self.ast.decls.get(ctor);
+            let inits =
+                if d.flags().contains(DeclFlags::INVALID) { Vec::new() } else { st.pattern };
+            if d.kind() == DeclKind::CXXConstructor && (st.pattern_failed || !inits.is_empty()) {
+                let rec = PatternMemInits {
+                    colon: colon_loc,
+                    failed: st.pattern_failed,
+                    inits: inits.into(),
+                };
+                let _ = self.builder().set_pattern_mem_inits(ctor, rec);
             }
             return;
         }
@@ -338,45 +356,72 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// The definition-time check of an unqualified mem-initializer-id of a
-    /// constructor in a template ([class.base.init]/2, clang
-    /// `BuildMemInitializer` in a dependent context): it must name a
-    /// non-static data member of the class, or a type found by lookup
-    /// from the constructor's scope. A member of a dependent base is not
-    /// found ([temp.dep.general]/3), so `B(1)` for a dependent base `B<T>`
-    /// is ill-formed; the base is named `B<T>(1)` or `D::B(1)`. Reports
-    /// the error and returns false; instantiations of the constructor then
-    /// add no implicit initializers (as for a failed substitution).
-    fn pattern_mem_init_names_something(&mut self, ctor: DeclId, info: &MemInitInfo) -> bool {
-        let MemInitId::Ident(name) = info.id else { return true };
-        if info.pack_expansion || self.ast.decls.get(ctor).flags().contains(DeclFlags::INVALID) {
-            return true;
+    /// The mem-initializer-id of a constructor in a template as the
+    /// definition resolves it (spec/ast.md §8.6), and its definition-time
+    /// check ([class.base.init]/2, clang `BuildMemInitializer` in a
+    /// dependent context): an identifier must name a non-static data
+    /// member of the class, or a type found by lookup from the
+    /// constructor's scope. A member of a dependent base is not found
+    /// ([temp.dep.general]/3), so `B(1)` for a dependent base `B<T>` is
+    /// ill-formed; the base is named `B<T>(1)` or `D::B(1)`; so is a pack
+    /// expansion `m(args)...` whose name is no type (clang). Reports the
+    /// error and returns `Err` with the identifier as written;
+    /// instantiations of the constructor skip it and add no implicit
+    /// initializers (as for a failed substitution). A mem-initializer of
+    /// an invalid constructor is not checked (an identifier stays one;
+    /// its list is not kept).
+    fn pattern_mem_init_id(
+        &mut self,
+        ctor: DeclId,
+        info: &MemInitInfo,
+    ) -> Result<PatternMemInitId, PatternMemInitId> {
+        let name = match info.id {
+            MemInitId::Type(ty) => return Ok(PatternMemInitId::Type { ty, ident: None }),
+            MemInitId::Ident(name) => name,
+        };
+        let bound = |s: &mut Self, or: PatternMemInitId| match s.mem_init_bound_typedef(ctor, name)
+        {
+            Some(ty) => PatternMemInitId::Type { ty, ident: None },
+            None => or,
+        };
+        if self.ast.decls.get(ctor).flags().contains(DeclFlags::INVALID) {
+            return Ok(bound(self, PatternMemInitId::Ident(name)));
         }
-        let Some(class) = self.ast.decls.get(ctor).ctx() else { return true };
+        let Some(class) = self.ast.decls.get(ctor).ctx() else {
+            return Err(PatternMemInitId::Ident(name));
+        };
         let def = self.class_def(class);
         let found = self.lookup_in(def, name, LookupKind::Ordinary);
-        if found
+        if let Some(&m) = found
             .decls
             .iter()
-            .any(|&d| matches!(self.kind_of(d), DeclKind::Field | DeclKind::IndirectField))
+            .find(|&&d| matches!(self.kind_of(d), DeclKind::Field | DeclKind::IndirectField))
         {
-            return true;
+            return Ok(PatternMemInitId::Member(m));
         }
-        if self.mem_init_class_member_type(def, name).is_some() {
-            return true;
-        }
-        match self.classify_name(name, None) {
-            crate::NameClass::Type(..) => return true,
-            crate::NameClass::TypeTemplate(t) if self.injected_class_type(t).is_some() => {
-                return true;
-            }
-            _ => {}
+        let ty = match self.mem_init_class_member_type(def, name) {
+            Some(ty) => Some(ty),
+            None => match self.classify_name(name, None) {
+                // The type as a type-specifier would write it.
+                crate::NameClass::Type(ty, d) => {
+                    Some(if crate::lookup::is_tag_kind(self.kind_of(d)) {
+                        self.elaborated_tag_type(d, kiln_ast::types::TagKeyword::None)
+                    } else {
+                        ty
+                    })
+                }
+                crate::NameClass::TypeTemplate(t) => self.injected_class_type(t),
+                _ => None,
+            },
+        };
+        if let Some(ty) = ty {
+            return Ok(bound(self, PatternMemInitId::Type { ty, ident: Some(name) }));
         }
         let msg = self
             .diag(DiagId::sema_init_mem_not_member_or_base, info.loc)
             .arg(crate::decl::sym_str(self, name));
         self.emit(msg);
-        false
+        Err(PatternMemInitId::Ident(name))
     }
 
     /// Whether the mem-initializers of `ctor` are checked: not for an

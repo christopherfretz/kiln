@@ -1,0 +1,34 @@
+13:1-13:2  type  'S' -> lib::S@10:8 in=lib::operator-@13:3
+13:13-13:14  type  'S' -> lib::S@10:8 in=(anonymous)@13:14
+13:16-13:17  type  'S' -> lib::S@10:8 in=(anonymous)@13:17
+18:24-18:25  type  'T' -> T@17:17 in=Sub@18:9
+18:31-18:32  expr  'a' -> a@18:26 in=Sub@18:9
+18:35-18:36  expr  'a' -> a@18:26 in=Sub@18:9
+18:33-18:34  operator  '-' -> (dependent) in=Sub@18:9 def=0+adl
+18:33-18:34  operator  '-' -> (builtin) spec=Sub@18:9 how=builtin
+18:33-18:34  operator  '-' -> lib::operator-@13:3 spec=Sub@18:9 how=adl
+19:11-19:14  concept  'Sub' -> Sub@18:9 in=(tu)
+19:26-19:27  type  'T' -> T@19:15 in=(anonymous)@19:27
+20:28-20:29  type  'T' -> T@20:17 in=(anonymous)@20:29
+22:29-22:30  type  'T' -> T@22:17 in=t@22:31
+22:46-22:47  expr  't' -> t@22:31 in=mul@22:25
+22:50-22:51  expr  't' -> t@22:31 in=mul@22:25
+22:48-22:49  operator  '*' -> (dependent) in=mul@22:25 def=0+adl
+22:48-22:49  operator  '*' -> (builtin) spec=mul<int>@22:25 how=builtin
+22:62-22:63  expr  't' -> t@22:31 in=mul@22:25
+22:66-22:67  expr  't' -> t@22:31 in=mul@22:25
+22:64-22:65  operator  '*' -> (dependent) in=mul@22:25 def=0+adl
+22:64-22:65  operator  '*' -> (builtin) spec=mul<int>@22:25 how=builtin
+26:10-26:13  expr  'con' -> con<lib::S>@19:22 found=con@19:22 in=run@25:5 adl-ns=lib@9:11 adl-cls=lib::S@10:8
+26:14-26:17  nns  'lib' -> lib@9:11 in=run@25:5
+26:19-26:20  type  'S' -> lib::S@10:8 q=26:14 in=run@25:5
+26:26-26:29  expr  'con' -> con<lib::N>@20:24 found=con@20:24 in=run@25:5 adl-ns=lib@9:11 adl-cls=lib::N@14:8
+26:30-26:33  nns  'lib' -> lib@9:11 in=run@25:5
+26:35-26:36  type  'N' -> lib::N@14:8 q=26:30 in=run@25:5
+26:42-26:45  expr  'con' -> con<int>@19:22 found=con@19:22 in=run@25:5 adl-ns=
+26:55-26:58  nns  'lib' -> lib@9:11 in=run@25:5
+26:60-26:61  type  'N' -> lib::N@14:8 q=26:55 in=run@25:5
+26:51-26:54  expr  'mul' -> mul<lib::N>@23:24 found=mul@23:24 in=run@25:5 adl-ns=lib@9:11 adl-cls=lib::N@14:8
+26:63-26:66  nns  'lib' -> lib@9:11 in=run@25:5
+26:68-26:69  type  'N' -> lib::N@14:8 q=26:63 in=run@25:5
+27:10-27:13  expr  'mul' -> mul<int>@22:25 found=mul@22:25 in=run@25:5 adl-ns=

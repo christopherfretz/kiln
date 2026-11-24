@@ -107,7 +107,22 @@ impl Parser<'_, '_> {
     /// (`redecl`). A first declaration's own name is not recorded. Callers
     /// run it before the declaration claims its names.
     pub(crate) fn note_declarator_ref(&mut self, decl: Option<DeclId>, d: &Declarator) {
-        if !self.s.records_written_refs() || d.id_recorded {
+        if !self.s.records_written_refs() {
+            return;
+        }
+        if d.id_recorded {
+            // A template-id's template name, recorded with lookup's first
+            // template: an explicit specialization or instantiation names
+            // the one it matched (a friend's is patched by sema, which
+            // matches it).
+            let Some(id) = d.id_ref.filter(|_| !d.friend) else { return };
+            let t = self.s.ast.written_refs.take_inst_target(d.name_loc()).or_else(|| {
+                let x = decl?;
+                self.s.ast.spec_info(x).map(|(_, i)| i.template)
+            });
+            if let Some(t) = t {
+                self.s.note_written_spec_template(id, t);
+            }
             return;
         }
         let range = match d.special {
@@ -167,6 +182,21 @@ impl Parser<'_, '_> {
         let target = if ast.decls.get(decl).kind() == DeclKind::Friend {
             match ast.decls.friend_target(decl) {
                 FriendTarget::Decl(t) => t,
+                // A qualified friend kept with its type only: a member of
+                // every specialization of a class template
+                // ([temp.friend]/5) or of a dependent class.
+                FriendTarget::Type { .. } if qualified => {
+                    let (entity, dep) = self.s.written_friend_type_target(decl, d);
+                    let id = self.s.note_written_decl_name(
+                        range,
+                        entity,
+                        RefRole::Elaborated,
+                        d.id_link,
+                        dep,
+                    );
+                    self.note_decl_tilde(id, tilde);
+                    return;
+                }
                 FriendTarget::Type { .. } => return,
             }
         } else {

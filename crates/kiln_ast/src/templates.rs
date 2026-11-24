@@ -14,6 +14,7 @@
 
 use kiln_source::Loc;
 use kiln_source::fx::{FxHashMap, FxHashSet};
+use kiln_source::symbol::Symbol;
 
 use crate::ast::Ast;
 use crate::builder::{AstBuilder, DeclHead};
@@ -280,6 +281,89 @@ pub struct PartialSpecInfo {
     shapes_len: u32,
 }
 
+/// The ctor-initializer of a constructor definition in a template (the
+/// pattern), as written: [`TemplateTables::pattern_mem_inits`],
+/// spec/ast.md §8.6 (WP-3026). Its instantiations substitute into it;
+/// a constructor that is no pattern has its resolved list instead
+/// ([`Ast::ctor_inits`]).
+#[derive(Clone, Debug, PartialEq, Eq, kiln_snap::Snap)]
+pub struct PatternMemInits {
+    /// The `:` that begins the ctor-initializer.
+    pub colon: Loc,
+    /// A mem-initializer failed its definition-time check (diagnosed):
+    /// the instantiations add no implicit initializers. An identifier the
+    /// definition could not resolve stays in `inits`
+    /// ([`PatternMemInitId::Ident`]); one whose packs are ill-formed
+    /// ([temp.variadic]/12) is left out.
+    pub failed: bool,
+    /// The mem-initializers in written order.
+    pub inits: Box<[PatternMemInit]>,
+}
+
+/// One mem-initializer of a [`PatternMemInits`] ([class.base.init]/1).
+#[derive(Clone, Debug, PartialEq, Eq, kiln_snap::Snap)]
+pub struct PatternMemInit {
+    /// The mem-initializer-id as the definition resolved it.
+    pub id: PatternMemInitId,
+    /// The written range: `loc` is the first token (the qualifier's, if
+    /// any; clang's `getSourceRange` begin), `end` the last (`)`, `}`, or
+    /// the `...` of a pack expansion).
+    pub loc: Loc,
+    /// See `loc`.
+    pub end: Loc,
+    /// `B(args)...` ([temp.variadic]/5.4).
+    pub pack_expansion: bool,
+    /// The initializer.
+    pub init: PatternMemInitArgs,
+}
+
+/// What a pattern mem-initializer-id names at the definition.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kiln_snap::Snap)]
+pub enum PatternMemInitId {
+    /// A non-static data member of the class: a `Field`, or the
+    /// `IndirectField` of a member of an anonymous union or struct. It
+    /// was written as an identifier, the member's name, which each
+    /// instantiation looks up again in the instantiated class.
+    Member(DeclId),
+    /// A class type: a base (dependent ones included, `B<T>`) or the
+    /// class itself (a delegating constructor, `S` or `S<T>`), as
+    /// written (sugar kept). `ident` is the identifier when it was
+    /// written as one that each instantiation looks up again
+    /// ([class.base.init]/2); `None` when the type is bound at the
+    /// definition (a qualified name, a template-id, `decltype`, a
+    /// splice, a template parameter, or a typedef found outside a class
+    /// with dependent bases).
+    Type {
+        /// The type.
+        ty: QualType,
+        /// The written identifier, when looked up again.
+        ident: Option<Symbol>,
+    },
+    /// An identifier the definition could not resolve (it names no member
+    /// of the class and no type, [class.base.init]/2): diagnosed there,
+    /// the record is `failed`, and the instantiations skip it.
+    Ident(Symbol),
+}
+
+/// The initializer of a [`PatternMemInit`].
+#[derive(Clone, Debug, PartialEq, Eq, kiln_snap::Snap)]
+pub enum PatternMemInitArgs {
+    /// `( expression-list )`, possibly empty. A braced-init-list argument
+    /// is a type-`void` `InitListExpr` (as in a dependent call).
+    Paren {
+        /// The arguments (a pack expansion is one `PackExpansionExpr`).
+        args: Box<[ExprId]>,
+        /// The `(`.
+        lparen: Loc,
+        /// The `)`.
+        rparen: Loc,
+    },
+    /// A braced-init-list: a type-`void` `InitListExpr` (§5.6) whose
+    /// `{`/`}` are its location and end location; a designated clause is
+    /// a `DesignatedInitExpr`, a nested list another such `InitListExpr`.
+    List(ExprId),
+}
+
 /// Template tables (spec/ast.md §8, M3).
 #[derive(Debug, kiln_snap::Snap)]
 pub struct TemplateTables {
@@ -300,6 +384,11 @@ pub struct TemplateTables {
     /// Trailing requires-clauses of function declarations
     /// ([dcl.decl.general]/2).
     pub trailing_requires: ColdMap<DeclId, ExprId>,
+    /// The ctor-initializer of each constructor definition in a template
+    /// (the pattern), as written (§8.6, WP-3026): write-once at the
+    /// definition (or by the module-image importer); read by
+    /// [`Ast::pattern_mem_inits`] and by each instantiation.
+    pub pattern_mem_inits: ColdMap<DeclId, PatternMemInits>,
     /// Explicit template arguments of dependent and unresolved names.
     pub expr_targs: ColdMap<ExprId, ArgListId>,
     /// Nested-name-specifiers of dependent and unresolved names.
@@ -332,7 +421,7 @@ pub struct TemplateTables {
     /// destructor name `~N` named no type at the definition: the
     /// identifier `N`, looked up in the object's class at instantiation
     /// (clang's identifier-only `PseudoDestructorTypeStorage`; WP-457).
-    pub pseudo_dtor_name: ColdMap<ExprId, kiln_source::symbol::Symbol>,
+    pub pseudo_dtor_name: ColdMap<ExprId, Symbol>,
     /// A `CXXPseudoDestructorExpr` `p->S::F::~Q()` with a dependent `S`:
     /// the first type-name `S::F` and where `F` is, checked against the
     /// object's type at instantiation (clang's `ScopeType`; WP-1155).
@@ -480,6 +569,7 @@ impl Default for TemplateTables {
             defaults: ColdMap::new("template_defaults"),
             inherited_defaults: ColdMap::new("template_inherited_defaults"),
             trailing_requires: ColdMap::new("trailing_requires"),
+            pattern_mem_inits: ColdMap::new("pattern_mem_inits"),
             expr_targs: ColdMap::new("expr_targs"),
             expr_begin: ColdMap::new("expr_begin"),
             size_of_pack_origin: ColdMap::new("size_of_pack_origin"),
@@ -805,6 +895,24 @@ impl HeapSize for TemplateTables {
         r.push(self.defaults.mem_row());
         r.push(self.inherited_defaults.mem_row());
         r.push(self.trailing_requires.mem_row());
+        let mut row = self.pattern_mem_inits.mem_row();
+        let deep = self
+            .pattern_mem_inits
+            .iter()
+            .map(|(_, p)| {
+                p.inits.len() * size_of::<PatternMemInit>()
+                    + p.inits
+                        .iter()
+                        .map(|m| match &m.init {
+                            PatternMemInitArgs::Paren { args, .. } => args.len() * 4,
+                            PatternMemInitArgs::List(_) => 0,
+                        })
+                        .sum::<usize>()
+            })
+            .sum::<usize>() as u64;
+        row.live_bytes += deep;
+        row.reserved_bytes += deep;
+        r.push(row);
         r.push(self.expr_targs.mem_row());
         r.push(self.expr_begin.mem_row());
         r.push(self.size_of_pack_origin.mem_row());

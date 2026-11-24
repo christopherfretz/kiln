@@ -1,0 +1,14 @@
+10:27-10:28  type  'T' -> T@10:17 in=(anonymous)@10:28
+11:27-11:28  type  'T' -> T@11:17 in=(anonymous)@11:28
+15:18-15:19  nns  'n' -> n@9:11 in=n::f<char>@15:21
+15:21-15:22  spec-target  'f' -> n::f@11:25 q=15:18 in=n::f<char>@15:21
+16:18-16:19  nns  'n' -> n@9:11 in=n::f<char>@16:21
+16:21-16:22  spec-target  'f' -> n::f@10:25 q=16:18 in=n::f<char>@16:21
+17:15-17:16  nns  'n' -> n@9:11 in=(tu)
+17:18-17:19  spec-target  'f' -> n::f@11:25 q=17:15 in=(tu)
+18:15-18:16  nns  'n' -> n@9:11 in=(tu)
+18:18-18:19  spec-target  'f' -> n::f@10:25 q=18:15 in=(tu)
+19:22-19:23  nns  'n' -> n@9:11 in=(tu)
+19:25-19:26  spec-target  'f' -> n::f@11:25 q=19:22 in=(tu)
+20:27-20:28  nns  'n' -> n@9:11 in=n::v@20:30
+20:30-20:31  spec-target  'v' -> n::v@12:34 q=20:27 in=n::v@20:30

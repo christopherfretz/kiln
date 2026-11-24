@@ -265,7 +265,7 @@ impl Sema<'_, '_> {
         let Some(sym) = sym else {
             return fail(loc, "operators argument is not a valid operator");
         };
-        let cv = self.frozen_string(sym, utf8);
+        let cv = self.reflection_string(sym, utf8);
         let cv = cv.ok_or_else(|| MetaError::note(loc, "kiln: string too large for a constant"))?;
         Ok((cv, sym.len() as u64))
     }

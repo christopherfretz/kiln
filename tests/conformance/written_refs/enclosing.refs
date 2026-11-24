@@ -30,3 +30,4 @@
 30:78-30:79  expr  'l' -> l@28:5 in=uses@24:5
 30:80-30:83  member  'get' -> uses()::Local::get@27:9 in=uses@24:5
 30:88-30:93  expr  'twice' -> twice@29:8 in=uses@24:5
+30:93-30:94  operator  '(' -> uses()::(lambda)::operator()@29:16 close=30:94 in=uses@24:5 how=member

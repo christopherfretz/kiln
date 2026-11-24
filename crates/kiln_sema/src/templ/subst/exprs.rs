@@ -85,7 +85,10 @@ impl Substituter<'_, '_, '_> {
         self.sema.subst_expr_depth -= 1;
         if let Some(errors) = written {
             match r {
-                Ok(r) => self.sema.note_written_spec_expr(e, r),
+                Ok(r) => {
+                    self.sema.note_written_spec_expr(e, r);
+                    self.sema.note_written_spec_oper(e, r);
+                }
                 Err(_) => self.sema.note_written_spec_failed(e, errors),
             }
         }
@@ -2310,7 +2313,11 @@ impl Substituter<'_, '_, '_> {
         let r = self.callee_node(c);
         if let Some(errors) = written {
             match r {
-                Ok(r) => self.sema.note_written_spec_expr(c, r),
+                Ok(r) => {
+                    self.sema.note_written_spec_expr(c, r);
+                    // A dependent `->` in the callee (`t->f(x)`).
+                    self.sema.note_written_spec_oper(c, r);
+                }
                 Err(_) => self.sema.note_written_spec_failed(c, errors),
             }
         }
@@ -2875,16 +2882,6 @@ impl Substituter<'_, '_, '_> {
         Ok(out)
     }
 
-    /// The designators of a written clause, array indices substituted.
-    fn written_designators(
-        &mut self,
-        ds: &[crate::init::Designator],
-    ) -> SubstResult<Vec<crate::init::Designator>> {
-        let v: Vec<kiln_ast::expr::Designator> =
-            ds.iter().map(crate::init::Designator::to_ast).collect();
-        self.designators(&v)
-    }
-
     /// The initializer-clauses `items` of a braced list, pack expansions
     /// expanded ([temp.variadic]/5).
     fn init_items(&mut self, items: &[ExprId]) -> SubstResult<Vec<InitItem>> {
@@ -3013,67 +3010,6 @@ impl Substituter<'_, '_, '_> {
         }
     }
 
-    /// A braced-init-list as the parser built it (a mem-initializer's).
-    fn written_list(&mut self, l: &InitList) -> SubstResult<InitList> {
-        /// The elements of the expansion `{a, b}...` (`e`), each a
-        /// braced-init-list item with `designator`.
-        fn out_lists(
-            s: &mut Substituter<'_, '_, '_>,
-            e: ExprId,
-            designator: &[crate::init::Designator],
-            items: &mut Vec<InitItem>,
-        ) -> SubstResult<()> {
-            let Some(p) = s.braced_pattern(e) else { return Ok(()) };
-            let ellipsis = s.sema.ast.exprs.get(e).loc();
-            match s.expand_pattern_at(Some(ellipsis), |s| s.init_list(p))? {
-                crate::templ::pack::Expansion::Elements(ls) => {
-                    for n in ls {
-                        items.push(InitItem {
-                            designator: designator.to_vec(),
-                            value: InitValue::List(n),
-                        });
-                    }
-                }
-                crate::templ::pack::Expansion::Unexpanded(n) => {
-                    let value = InitValue::Expr(s.sema.act_pack_expansion_list(&n, ellipsis));
-                    items.push(InitItem { designator: designator.to_vec(), value });
-                }
-            }
-            Ok(())
-        }
-        let mut items = Vec::with_capacity(l.items.len());
-        for it in &l.items {
-            let designator = self.written_designators(&it.designator)?;
-            let value = match &it.value {
-                InitValue::Expr(e) if self.braced_pattern(*e).is_some() => {
-                    // `{a, b}...`: one braced-init-list per element.
-                    out_lists(self, *e, &designator, &mut items)?;
-                    continue;
-                }
-                InitValue::Expr(e) if crate::templ::pack::expr_pattern(self.sema, *e).is_some() => {
-                    // `.m = e...` repeats the designators per element.
-                    for y in self.expand_exprs(&[*e])? {
-                        items.push(InitItem {
-                            designator: designator.clone(),
-                            value: InitValue::Expr(y),
-                        });
-                    }
-                    continue;
-                }
-                InitValue::Expr(e) => InitValue::Expr(self.written_arg(*e)?),
-                InitValue::List(n) => InitValue::List(self.written_list(n)?),
-            };
-            items.push(InitItem { designator, value });
-        }
-        Ok(InitList { items, lbrace: l.lbrace, rbrace: l.rbrace })
-    }
-
-    /// A single written initializer (an expansion in it, never expanded
-    /// by a list here, is rebuilt by `expr`).
-    fn written_arg(&mut self, e: ExprId) -> SubstResult<ExprId> {
-        self.expr(e)
-    }
-
     /// Written arguments, pack expansions expanded; a braced argument
     /// (`m(v, {v + 1})`, `m(a..., {a..., 7})`) is rebuilt as a braced
     /// argument as in a call ([class.base.init]/7, WP-445).
@@ -3084,18 +3020,49 @@ impl Substituter<'_, '_, '_> {
         self.expand_exprs(v)
     }
 
-    /// A mem-initializer of a constructor of the pattern, as the parser
-    /// handed it to `act_on_mem_initializer` (clang
+    /// The ctor-initializer of constructor `f`, an instantiation of the
+    /// pattern definition `pdef`: the pattern's list (spec/ast.md §8.6)
+    /// substituted and handed to `act_on_mem_initializer` as the parser
+    /// would hand it (clang `InstantiateMemInitializers`), then ended at
+    /// its `:` (`lbrace`, the body's `{`, when it has none). True if a
+    /// mem-initializer failed (substitution or initialization).
+    pub(crate) fn ctor_initializer(&mut self, f: DeclId, pdef: DeclId, lbrace: Loc) -> bool {
+        let rec = self.sema.ast.pattern_mem_inits(pdef).cloned();
+        let (inits, colon, failed) =
+            rec.map_or((Box::default(), lbrace, false), |r| (r.inits, r.colon, r.failed));
+        for info in &*inits {
+            // Unresolved at the definition: reported there (`failed`).
+            if matches!(info.id, kiln_ast::templates::PatternMemInitId::Ident(_)) {
+                continue;
+            }
+            match self.mem_initializer(info) {
+                Ok(v) => {
+                    for i in &v {
+                        self.sema.act_on_mem_initializer(f, i);
+                    }
+                }
+                Err(_) => self.sema.note_failed_mem_initializer(f),
+            }
+        }
+        let inits_failed = self.sema.instantiated_mem_inits_failed(f);
+        if failed {
+            self.sema.note_failed_mem_initializer(f);
+        }
+        self.sema.act_on_mem_initializers(f, &[], colon);
+        inits_failed
+    }
+
+    /// A mem-initializer of a constructor of the pattern (clang
     /// `InstantiateMemInitializers`): the id's type and the initializer's
-    /// expressions are substituted; the id is resolved again in the
-    /// instantiated class.
+    /// expressions are substituted; an identifier (a member's name among
+    /// them) is resolved again in the instantiated class.
     /// A pack expansion `B(args)...` gives one mem-initializer per
     /// element ([temp.variadic]/5); one whose packs belong to a level not
     /// substituted yet (a constructor of a member class template) stays an
     /// expansion of its substituted pattern.
-    pub(crate) fn mem_initializer(
+    fn mem_initializer(
         &mut self,
-        info: &crate::class::MemInitInfo,
+        info: &kiln_ast::templates::PatternMemInit,
     ) -> SubstResult<Vec<crate::class::MemInitInfo>> {
         if !info.pack_expansion {
             return Ok(vec![self.mem_initializer_one(info)?]);
@@ -3111,19 +3078,32 @@ impl Substituter<'_, '_, '_> {
 
     fn mem_initializer_one(
         &mut self,
-        info: &crate::class::MemInitInfo,
+        info: &kiln_ast::templates::PatternMemInit,
     ) -> SubstResult<crate::class::MemInitInfo> {
         use crate::class::MemInitId;
+        use kiln_ast::templates::{PatternMemInitArgs, PatternMemInitId};
         let id = match info.id {
-            MemInitId::Ident(s) => MemInitId::Ident(s),
-            MemInitId::Type(t) => MemInitId::Type(self.ty(t, info.loc)?),
+            PatternMemInitId::Member(m) => {
+                MemInitId::Ident(self.sema.ast.decls.get(m).name().as_ident().ok_or(SubstFail)?)
+            }
+            PatternMemInitId::Type { ident: Some(s), .. } | PatternMemInitId::Ident(s) => {
+                MemInitId::Ident(s)
+            }
+            PatternMemInitId::Type { ty, ident: None } => MemInitId::Type(self.ty(ty, info.loc)?),
         };
         let init = match &info.init {
-            Initializer::Expr(e) => Initializer::Expr(self.written_arg(*e)?),
-            Initializer::Paren(v, l, r) => Initializer::Paren(self.written_args(v)?, *l, *r),
-            Initializer::List(l) => Initializer::List(self.written_list(l)?),
+            PatternMemInitArgs::Paren { args, lparen, rparen } => {
+                Initializer::Paren(self.written_args(args)?, *lparen, *rparen)
+            }
+            PatternMemInitArgs::List(e) => Initializer::List(self.init_list(*e)?),
         };
-        Ok(crate::class::MemInitInfo { id, loc: info.loc, init, pack_expansion: false })
+        Ok(crate::class::MemInitInfo {
+            id,
+            loc: info.loc,
+            end: info.end,
+            init,
+            pack_expansion: false,
+        })
     }
 
     /// The initializer of a variable of the pattern, in the form the
