@@ -178,6 +178,15 @@ impl Substituter<'_, '_, '_> {
                 self.sema.builder().class_partial_spec(h, new_tmpl, list, args, tag)
             };
             self.sema.ast.templates.set_instantiated_from(p, m);
+            // Its arguments as written, substituted as the converted ones
+            // are (clang's `InstantiateClassTemplatePartialSpecialization`
+            // substitutes `getTemplateArgsAsWritten`; spec/ast.md §8.3,
+            // WP-3102): `In<T, f(1)>` in `Outer<int>` keeps `f(1)`.
+            if let Some(w) = self.sema.ast.templates.args_as_written(m)
+                && let Ok(w) = self.args(w, n.loc())
+            {
+                self.sema.ast.templates.set_args_as_written(p, w, false);
+            }
             // Its constraints stay the original's, checked with this
             // specialization's levels outside its own (as for a member
             // template, `member_constraints`).

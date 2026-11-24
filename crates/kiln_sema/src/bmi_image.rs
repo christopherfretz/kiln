@@ -103,7 +103,7 @@ pub(crate) use locs::Locs;
 use locs::{FileRec, LocTable, SlocRec};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 94;
+pub(crate) const IMAGE_VERSION: u32 = 95;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -3778,10 +3778,11 @@ impl Writer<'_, '_, '_> {
             TypeView::Pointer(q) => TyRec::Pointer(self.qref(q)?),
             TypeView::LValueRef(q) => TyRec::LRef(self.qref(q)?),
             TypeView::RValueRef(q) => TyRec::RRef(self.qref(q)?),
-            // A kept bound (WP-2720) is an expression type ([`exprs`]); a
-            // bound kept only as written is written as its value
-            // (spec/types.md §7.2 "Written bounds", WP-3015).
-            TypeView::ConstantArray(a) if types.inst_bound(&a).is_none() => {
+            // A kept bound (WP-2720) and a bound kept as written
+            // (spec/types.md §7.2 "Written bounds", WP-3015, WP-3102) are
+            // expression types ([`exprs`]); a bound not written is the
+            // value.
+            TypeView::ConstantArray(a) if a.size_expr.is_none() => {
                 TyRec::CArray(self.qref(a.elem)?, a.size)
             }
             TypeView::IncompleteArray(q) => TyRec::IArray(self.qref(q)?),

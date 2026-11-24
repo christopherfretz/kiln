@@ -21,6 +21,19 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   checks the rule. Under a trap, a class template used inside its own
   definition and a lambda naming `this` in a requires-expression are no
   longer made invalid, and an implicit definition is not a SFINAE context.
+- Module images carry the arguments as written of every specialization
+  they list (WP-3102, spec/ast.md §8.3, spec/modules.md §11.11
+  "Arguments as written"): an importer's partial specializations,
+  explicit specializations of class, variable and function templates
+  have the `TemplateTables::args_as_written` row the interface's parse
+  gave, each non-type argument the expression written (built from its
+  section, never evaluated), and its non-dependent written array bounds
+  keep their expressions (`WrittenArray` type records); a partial
+  specialization of a member template redeclared in an instantiation of
+  its class gets the original's row, substituted (`In<U, f(7)>` in
+  `O<long>`). PCH snapshots already carried both (now tested).
+  `IMAGE_VERSION` 95.
+
 - The value of each immediate invocation of a default argument or default
   member initializer per use (WP-3279, spec/ast.md §5.8.2):
   `ColdExprData::use_imm` on the `CXXDefaultArgExpr`/`CXXDefaultInitExpr`
@@ -1308,6 +1321,21 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   theirs too. A module whose specialization has one can now get a
   declaration image, unless a carried body names a member of the
   unnamed class.
+- Importing a module whose interface declares an explicit specialization
+  with a non-type argument that calls one of its constexpr functions
+  (`template <> struct P<int, f(2)>`) through its declaration image no
+  longer fails with "undefined function 'f' cannot be used in a constant
+  expression" (WP-3100, spec/modules.md §11.11 "Arguments as written"):
+  the image carries the converted value and the importer never
+  evaluates the argument again; one whose value the image cannot hold
+  and that calls a function (a pointer `Q<g()>`) makes the unit replay.
+- An array parameter adjusted to a pointer keeps its written bound,
+  constant or not (`void g(int a[f(2)])`, `int a[3]`), as `Decayed`
+  sugar on the parameter's and the function's type, so a tooling
+  client's walk reaches it (WP-3101, spec/types.md §7.2 "Written
+  bounds"); the canonical type, mangling and overloading are the
+  pointer's, as before.
+
 - An immediate invocation in a default argument or a default member
   initializer is evaluated at each use, in the context of that use
   (WP-3278, CWG 2631, [expr.const]/16, [dcl.fct.default]/5,

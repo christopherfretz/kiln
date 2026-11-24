@@ -2389,10 +2389,13 @@ impl Sema<'_, '_> {
     /// decl-specifier one) moves to the pointer (clang keeps
     /// `int * _Nonnull`).
     ///
-    /// An array whose outermost bound is an instantiation-dependent
-    /// expression keeps its declared type as `Decayed` sugar (clang's
-    /// `DecayedType`, WP-2720): the pointer lost the bound, which
-    /// substitution must still check ([temp.deduct.general]/7).
+    /// An array with a written outermost bound keeps its declared type as
+    /// `Decayed` sugar (clang's `DecayedType`): one that is
+    /// instantiation-dependent because the pointer lost the bound, which
+    /// substitution must still check ([temp.deduct.general]/7; WP-2720);
+    /// any other (`int a[f(2)]`, `int a[3]`) so that the parameter's
+    /// written type holds the expression (spec/types.md §7.2 "Written
+    /// bounds", WP-3101). The canonical type is the pointer's.
     pub(crate) fn adjust_param_type(&mut self, ty: QualType) -> QualType {
         if let TypeView::Attributed { kind, modified, .. } = self.ast.types.view(ty.ty())
             && crate::nullability::is_nullability(kind)
@@ -2404,7 +2407,7 @@ impl Sema<'_, '_> {
         if self.ast.types.is_array(ty) {
             let elem = self.ast.types.element(ty).unwrap_or(QualType::ERROR);
             let p = self.ast.types.pointer_to(elem);
-            if self.has_dependent_outer_bound(ty) {
+            if self.has_written_outer_bound(ty) {
                 return self.ast.types.decayed(ty, p);
             }
             p
@@ -2415,20 +2418,18 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// True if the outermost bound of the array type `ty`, as written, is
-    /// an instantiation-dependent expression: a value-dependent one, or
-    /// one a constant array type keeps (WP-2720). Adjusting `ty` to a
-    /// pointer would lose it.
-    fn has_dependent_outer_bound(&self, ty: QualType) -> bool {
+    /// True if the outermost bound of the array type `ty` was written:
+    /// a value-dependent one, or a constant one (`size_expr`, kept on
+    /// every written constant bound; WP-2720, WP-3015). Adjusting `ty` to
+    /// a pointer would lose it. A variable length array's bound is not
+    /// kept (WP-3101: the parameter's original type has it).
+    fn has_written_outer_bound(&self, ty: QualType) -> bool {
         let t = &self.ast.types;
-        if !t.flags(ty.ty()).intersects(TypeFlags::DEPENDENT_INSTANTIATION) {
-            return false;
-        }
         let mut q = ty;
         for _ in 0..256 {
             match t.view(q.ty()) {
                 TypeView::DependentSizedArray { .. } => return true,
-                TypeView::ConstantArray(a) => return t.inst_bound(&a).is_some(),
+                TypeView::ConstantArray(a) => return a.size_expr.is_some(),
                 TypeView::IncompleteArray(_) | TypeView::VariableArray { .. } => return false,
                 _ => {
                     let n = t.desugar_once(q);

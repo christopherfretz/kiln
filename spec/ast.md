@@ -1383,10 +1383,19 @@ none for one whose arguments are all deduced. The first declaration's
 row stays, except as the class rule above says (clang 19 resets a
 class's at its definition). A client reads the written expressions of
 any of them with one routine, `TypeContext::written_arg_exprs`
-(spec/types.md §8.4). The PCH snapshot carries the table; a module
-image carries the class rows only (a partial specialization, function
-or variable specialization imported from a module has no row).
-Instantiated partial specializations of member templates have none.
+(spec/types.md §8.4). The PCH snapshot carries the table, and so does
+a module image (WP-3102): every specialization it lists carries its row
+beside the arguments it is matched by, each non-type argument as its
+expression section, which the importer builds and never converts or
+evaluates (spec/modules.md §11.11 "Arguments as written"); an argument
+a section cannot hold leaves that declaration without a row (it then
+reads as before WP-3102: the converted arguments only). A partial
+specialization of a member template redeclared in an instantiation of
+its class ([temp.spec.partial.member]/2, `Sema::member_partial_spec`)
+gets the original's row substituted with the enclosing arguments, as
+clang's `InstantiateClassTemplatePartialSpecialization` substitutes
+`getTemplateArgsAsWritten` (`In<U, f(7)>` in `O<long>` keeps `f(7)`;
+WP-3102); none when that substitution fails.
 
 A class-scope explicit specialization of a member function template in a
 class template ([temp.expl.spec]/2, CWG 727) is redeclared in each

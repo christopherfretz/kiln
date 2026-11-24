@@ -150,7 +150,9 @@ impl Writer<'_, '_, '_> {
             }
             args.push(CArg::Arg(self.arg_rec(a)?));
         }
-        self.img.cspecs.push_fn(ClassSpec::explicit(i, template, args));
+        // The arguments as written on the declaration (WP-3102).
+        let written = self.written_args(d, &args, false);
+        self.img.cspecs.push_fn(ClassSpec::explicit(i, template, args, written));
         let n = ast.decls.get(s);
         let bits = u8::from(n.has(DeclFlags::USED)) | u8::from(n.has(DeclFlags::REFERENCED)) << 1;
         if bits != 0 {
@@ -198,7 +200,9 @@ impl Sema<'_, '_> {
             }
         }
         let lexical = h.lexical.unwrap_or(h.ctx);
-        Some(self.builder().function_spec_redecl(s, lexical, h.loc, ty, fspec))
+        let f = self.builder().function_spec_redecl(s, lexical, h.loc, ty, fspec);
+        self.image_set_written(img, tys, ids, c, sugared, f);
+        Some(f)
     }
 
     /// Marks the explicit specializations the unit used, once the bodies
@@ -221,6 +225,7 @@ impl Sema<'_, '_> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::classtempl::WrittenArgs;
     use super::super::tests::template_sample;
     use super::super::{ArgRec, DeclRec, NONE, QRef, decode, encode};
     use super::*;
@@ -254,7 +259,7 @@ mod tests {
             },
         });
         let args = vec![CArg::Arg(ArgRec::Type(int)), CArg::Arg(ArgRec::Value(int, 3))];
-        img.cspecs.push_fn(ClassSpec::explicit(k as u32, 13, args));
+        img.cspecs.push_fn(ClassSpec::explicit(k as u32, 13, args, WrittenArgs::None));
         img.fsuses.uses.push((k as u32, 3));
         img.fexpl.recs.push(k as u32 + 1);
         (img, k)
@@ -282,7 +287,7 @@ mod tests {
                 let int = QRef { ty: BuiltinType::Int as u32, quals: 0 };
                 img.cspecs = super::super::classtempl::ClassSpecs::default();
                 let args = vec![CArg::Arg(ArgRec::Type(int))];
-                img.cspecs.push_fn(ClassSpec::explicit(k as u32, 13, args));
+                img.cspecs.push_fn(ClassSpec::explicit(k as u32, 13, args, WrittenArgs::None));
             }),
             ("not a function", |img, k| img.decls[k].payload = Payload::Namespace),
             ("a use of an unlisted record", |img, k| img.fsuses.uses[0].0 = k as u32 + 1),

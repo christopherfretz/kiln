@@ -515,7 +515,7 @@ libstdc++ 14's `<complex>` uses them where `_Float128` is not
 | `Elaborated` | I | S | aux = keyword (none/struct/class/union/enum/typename), pairs [NnsId or 0, named QualType] | created **only** when a keyword or a qualifier was written (§15 R4) |
 | `QualifiedArray` | I | S | aux = Quals, data = base TypeId | §2.1 |
 | `Paren` | I | S | data = inner QualType | declarator grouping parentheses (clang's `ParenType`, WP-191; `paren_type`), created only around a pointer, reference or member-pointer declarator (`int (*p)`, `int ((&r))`): never around the outermost type or a function or array type, which clang's printer shows no differently. Prints as `(inner)` in the declarator position; `PrintOptions::no_parens` prints the inner type instead (the `aka` check, clang's `desugarForDiagnostic` looking through it) |
-| `Decayed` | I | S | pairs [original QualType, adjusted QualType] | clang's `DecayedType` (WP-2720; `decayed`), built only by sema's `adjust_param_type` for an array parameter whose outermost bound, as written, is an instantiation-dependent expression (a `DependentSizedArray`, or a `ConstantArray` with `size_expr`): the adjusted pointer lost that bound, which substitution must still check (§7.2 "Kept bounds"). Canonical = canonical(adjusted); flags = adjusted's, plus `INSTANTIATION_DEPENDENT` (not `DEPENDENT`) and `UNEXPANDED_PACK` from `original`. Prints as the adjusted type (clang `printAdjustedBefore`). Appended last to `TypeKind` |
+| `Decayed` | I | S | pairs [original QualType, adjusted QualType] | clang's `DecayedType` (WP-2720; `decayed`), built only by sema's `adjust_param_type` for an array parameter whose outermost bound was written (a `DependentSizedArray`, or a `ConstantArray` with `size_expr`; WP-3101 extended it from instantiation-dependent bounds to every written one): the adjusted pointer lost that bound, which substitution must still check when it is instantiation-dependent (§7.2 "Kept bounds") and a client reads as written (§7.2 "Written bounds"). Canonical = canonical(adjusted); flags = adjusted's, plus `INSTANTIATION_DEPENDENT` (not `DEPENDENT`) and `UNEXPANDED_PACK` from `original`. Prints as the adjusted type (clang `printAdjustedBefore`). Appended last to `TypeKind` |
 | `Adjusted` | — | — | — | **not represented** (§15 R6): other parameter types are stored adjusted; `ParmVar` keeps the written type if it differs |
 | `TemplateTypeParm` | D | S | data = `TemplateTypeParm` `DeclId` | the name a template uses; canonical = the canonical parm below |
 | `CanonTemplateTypeParm` dep | I | C | aux = depth (15 bits) \| pack bit, data = index | prints `type-parameter-D-I`; makes `template<class T> f(T)` and `template<class U> f(U)` the same type |
@@ -869,15 +869,27 @@ canonical form of a dependent type must identify *equivalent* types:
   written bound (the expression was already built). Only an
   instantiation-dependent bound is marked (`TypeContext::note_inst_bound`,
   carried in the PCH snapshot; `inst_bound(&a)` reads it): a bound that is
-  not adds no flag, so substitution does not visit the type for it, it
-  is not `Decayed` in a parameter, and a module image writes the type
-  as its value (an importer's declarations keep no written bound).
+  not adds no flag, so substitution does not visit the type for it, and
+  a module image writes it as a `WrittenArray` type record, the bound's
+  expression section beside the value (WP-3102; the importer builds the
+  section and keeps it as `size_expr`, never evaluating it; a bound no
+  section can hold is written as the value alone, as before).
   Substitution keeps a written bound it does not change (`T a[f(5)]`
   instantiated keeps the pattern's `f(5)`, no new expression); a bound
   it substitutes (`T a[N]`) gives the value only, as before. An array
-  parameter adjusted to a pointer keeps no non-dependent written bound
-  (the adjusted type has none; clang's `DecayedType` would). The
-  expressions written in a type are listed by
+  parameter adjusted to a pointer keeps its written bound as `Decayed` sugar, whether the bound is
+  instantiation-dependent or not, a call or a literal (`int a[f(2)]`,
+  `int a[3]`; WP-3101, clang's `DecayedType`): the parameter's type and
+  the function's type hold it, so `written_exprs` reaches it, while
+  the canonical type is the pointer's (mangling, overloading and
+  redeclaration are unchanged) and it prints as the pointer. An
+  incomplete array has no bound to keep; a variable length array's
+  bound is not kept on the adjusted type (the `ParmVar`'s original type
+  has it, which is what C's evaluation of the bound at function entry
+  reads; a variable length array is a distinct type at each writing,
+  so the sugar would make every such function type distinct). The
+  expressions written in a type are
+  listed by
   `TypeContext::written_exprs` (§8.4).
 
 **Landed (WP-116).** The profiler is `kiln_ast::types::profile_expr`

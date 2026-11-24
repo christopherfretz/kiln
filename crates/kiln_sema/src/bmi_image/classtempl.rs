@@ -63,14 +63,34 @@ pub(super) struct ClassSpec {
     /// A partial specialization's head; `None` for an explicit one.
     head: Option<PartialHead>,
     /// A partial specialization's converted arguments, an explicit one's
-    /// as written.
+    /// as written with each non-type argument the image holds as a value
+    /// replaced by its converted value (WP-3100).
     args: Vec<CArg>,
+    /// The arguments as written (`TemplateTables::args_as_written`,
+    /// spec/ast.md §8.3; WP-3102).
+    written: WrittenArgs,
+}
+
+/// A specialization's arguments as written (WP-3102): its
+/// `TemplateTables::args_as_written` row in the importer.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(super) enum WrittenArgs {
+    /// No row (an explicit specialization of a function template whose
+    /// arguments are all deduced, or a row the image cannot hold).
+    None,
+    /// The row is the entry's `args` (an explicit class specialization
+    /// none of whose arguments is an expression).
+    Same,
+    /// The row: types, values and templates as [`ClassSpec::args`]
+    /// carries them, every non-type argument an expression section
+    /// (never its value, never a head parameter's record).
+    List(Vec<CArg>),
 }
 
 impl ClassSpec {
     /// An explicit specialization's entry (WP-1352, [`super::fnspec`]).
-    pub(super) fn explicit(rec: u32, template: u32, args: Vec<CArg>) -> Self {
-        ClassSpec { rec, template, head: None, args }
+    pub(super) fn explicit(rec: u32, template: u32, args: Vec<CArg>, written: WrittenArgs) -> Self {
+        ClassSpec { rec, template, head: None, args, written }
     }
 
     /// The template's record.
@@ -111,7 +131,7 @@ impl ClassSpecs {
     #[cfg(test)]
     pub(super) fn push_explicit(&mut self, rec: u32, template: u32, args: &[QRef]) {
         let args = args.iter().map(|&q| CArg::Arg(ArgRec::Type(q))).collect();
-        self.specs.push(ClassSpec { rec, template, head: None, args });
+        self.specs.push(ClassSpec { rec, template, head: None, args, written: WrittenArgs::Same });
     }
 }
 
@@ -216,7 +236,8 @@ impl Writer<'_, '_, '_> {
                 rangle: self.loc(list.r_angle)?,
                 params,
             };
-            ClassSpec { rec: i, template, head: Some(head), args: out }
+            let written = self.written_args(d, &out, false);
+            ClassSpec { rec: i, template, head: Some(head), args: out, written }
         } else {
             let (_, si) = ast.spec_info(d).ok_or(MALFORMED)?;
             let si = *si;
@@ -250,8 +271,19 @@ impl Writer<'_, '_, '_> {
             self.spec_defaults_ok(d, si.template, written.len())?;
             let mut out = Vec::with_capacity(written.len());
             for (k, a) in written.into_iter().enumerate() {
-                // `X<3>`: the converted value, which prints the same.
                 let c = if packs { None } else { converted.get(k).copied() };
+                // WP-3100: a non-type argument the image holds as a value
+                // (`P<int, f(2)>`'s `2`) is carried as its converted
+                // value, which the importer's `get_class_spec` converts
+                // as itself: it never evaluates the expression again,
+                // which it could not while it builds the records (no
+                // function has its body yet).
+                if let ArgView::Expr { .. } = a.view()
+                    && let Some(v) = c.and_then(|c| self.value_rec(c))
+                {
+                    out.push(CArg::Arg(v));
+                    continue;
+                }
                 let rec = match (self.written_arg(a, c), a.view()) {
                     // WP-1358: what is outside the image keeps its
                     // reason, a cascade (`enable_borrowed_range<
@@ -259,6 +291,13 @@ impl Writer<'_, '_, '_> {
                     (Some(a), _) => self.arg_rec(a).map_err(|e| {
                         if e.contains("outside the image") { e } else { EXPLICIT_ARG }
                     })?,
+                    // WP-3100: an expression whose value the image does
+                    // not hold (a pointer, a class) and that calls a
+                    // function: converting it again needs the function's
+                    // body, which the records come before. Replay.
+                    (None, ArgView::Expr { expr, .. }) if self.calls_a_function(expr) => {
+                        return Err(EXPLICIT_ARG_CALL);
+                    }
                     // WP-1344: any other expression as written, which the
                     // importer's `get_class_spec` converts again.
                     (None, ArgView::Expr { expr, profile }) => ArgRec::Expr(
@@ -269,7 +308,8 @@ impl Writer<'_, '_, '_> {
                 };
                 out.push(CArg::Arg(rec));
             }
-            ClassSpec { rec: i, template, head: None, args: out }
+            let written = self.written_args(d, &out, !var);
+            ClassSpec { rec: i, template, head: None, args: out, written }
         };
         self.img.cspecs.specs.push(entry);
         Ok(())
@@ -378,6 +418,92 @@ impl Writer<'_, '_, '_> {
         (literal && e.ty() == ty && ty.quals_bits() == 0).then_some(c)
     }
 
+    /// Converted argument `c` as the image's value, when it is one the
+    /// image holds (an integer, `bool` or enumeration value; WP-3100).
+    fn value_rec(&mut self, c: TemplateArg) -> Option<ArgRec> {
+        if !matches!(c.view(), ArgView::Value { .. }) {
+            return None;
+        }
+        self.arg_rec(c).ok()
+    }
+
+    /// Whether evaluating expression `e` calls a function other than a
+    /// builtin (WP-3100): a call, an overloaded operator, a constructor
+    /// that is not trivial, a user-defined literal. Unevaluated operands
+    /// (`sizeof`, `noexcept`, a requires-expression) call nothing.
+    pub(super) fn calls_a_function(&self, e: kiln_ast::ExprId) -> bool {
+        let ast = &self.s.ast;
+        let ex = &ast.exprs;
+        let mut stack = vec![e];
+        while let Some(x) = stack.pop() {
+            match ex.get(x).kind() {
+                ExprKind::CallExpr => {
+                    let builtin =
+                        self.s.callee_decl(x).is_some_and(|f| ast.decls.builtin_id(f).is_some());
+                    if !builtin {
+                        return true;
+                    }
+                    ex.children_into(x, &ast.lists, &mut stack);
+                }
+                ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
+                    let c = ex.constructor(x);
+                    if !ast.decls.function(c).is_some_and(|f| f.spec.is_trivial()) {
+                        return true;
+                    }
+                    ex.children_into(x, &ast.lists, &mut stack);
+                }
+                ExprKind::CXXMemberCallExpr
+                | ExprKind::CXXOperatorCallExpr
+                | ExprKind::UserDefinedLiteral
+                | ExprKind::CXXInheritedCtorInitExpr
+                | ExprKind::CXXDefaultArgExpr
+                | ExprKind::CXXDefaultInitExpr
+                | ExprKind::LambdaExpr => return true,
+                ExprKind::UnaryExprOrTypeTraitExpr
+                | ExprKind::CXXNoexceptExpr
+                | ExprKind::RequiresExpr => {}
+                _ => ex.children_into(x, &ast.lists, &mut stack),
+            }
+        }
+        false
+    }
+
+    /// The arguments as written of specialization `d` (its
+    /// `args_as_written` row; WP-3102), whose entry carries `args`: each
+    /// non-type argument as an expression section, never its value.
+    /// [`WrittenArgs::None`] without a row or when an argument is one the
+    /// image cannot hold (the importer then has no row: a client sees
+    /// the converted arguments only, as before WP-3102). With `aligned`
+    /// (an explicit class specialization), `args[k]` was made from the
+    /// `k`th argument as written, and an expression section there is
+    /// shared, not written twice.
+    pub(super) fn written_args(&mut self, d: DeclId, args: &[CArg], aligned: bool) -> WrittenArgs {
+        let ast = &self.s.ast;
+        let Some(list) = ast.templates.args_as_written(d) else { return WrittenArgs::None };
+        let written: Vec<TemplateArg> = ast.types.args(list).to_vec();
+        let mut out = Vec::with_capacity(written.len());
+        for (k, a) in written.into_iter().enumerate() {
+            let shared = match args.get(k) {
+                Some(&CArg::Arg(r @ ArgRec::Expr(..))) if aligned => Some(r),
+                _ => None,
+            };
+            let rec = match (a.view(), shared) {
+                (ArgView::Expr { .. }, Some(r)) => r,
+                (ArgView::Expr { expr, profile }, None) => match self.texpr(expr) {
+                    Ok(i) => ArgRec::Expr(i, profile.is_some()),
+                    Err(_) => return WrittenArgs::None,
+                },
+                (ArgView::Pack(_), _) => return WrittenArgs::None,
+                _ => match self.arg_rec(a) {
+                    Ok(r) => r,
+                    Err(_) => return WrittenArgs::None,
+                },
+            };
+            out.push(CArg::Arg(rec));
+        }
+        if out == args { WrittenArgs::Same } else { WrittenArgs::List(out) }
+    }
+
     /// The arguments of class template specialization type `X<args>`
     /// whose specialization is `spec` (`None` while dependent), each as
     /// [`Self::written_arg`] carries it.
@@ -452,6 +578,7 @@ impl Writer<'_, '_, '_> {
 }
 
 const MALFORMED: &str = "a malformed specialization";
+const EXPLICIT_ARG_CALL: &str = "an explicit specialization argument the image does not carry: a call whose value is not an integer";
 const EXPLICIT_ARG: &str = "an explicit specialization argument the image does not carry";
 const EXPLICIT_ARG_EXPR: &str = "an explicit specialization argument the image does not carry: an expression a section cannot hold";
 
@@ -549,6 +676,17 @@ pub(super) fn encode_class_specs(w: &mut Wr, s: &ClassSpecs) {
         for a in &c.args {
             encode_arg(w, a);
         }
+        match &c.written {
+            WrittenArgs::None => w.u8(0),
+            WrittenArgs::Same => w.u8(1),
+            WrittenArgs::List(v) => {
+                w.u8(2);
+                w.len(v.len());
+                for a in v {
+                    encode_arg(w, a);
+                }
+            }
+        }
     }
 }
 
@@ -575,7 +713,20 @@ pub(super) fn decode_class_specs(r: &mut Rd) -> Res<ClassSpecs> {
         for _ in 0..k {
             args.push(decode_arg(r, true)?);
         }
-        specs.push(ClassSpec { rec, template, head, args });
+        let written = match r.u8()? {
+            0 => WrittenArgs::None,
+            1 => WrittenArgs::Same,
+            2 => {
+                let k = r.count(5)?;
+                let mut v = Vec::with_capacity(k);
+                for _ in 0..k {
+                    v.push(decode_arg(r, false)?);
+                }
+                WrittenArgs::List(v)
+            }
+            _ => return bad("bad class template specialization"),
+        };
+        specs.push(ClassSpec { rec, template, head, args, written });
     }
     Ok(ClassSpecs { specs })
 }
@@ -584,6 +735,15 @@ pub(super) fn decode_class_specs(r: &mut Rd) -> Res<ClassSpecs> {
 pub(super) fn class_spec_locs(img: &Image, offs: &mut Vec<u32>) {
     for h in img.cspecs.specs.iter().filter_map(|c| c.head.as_ref()) {
         offs.extend([h.tloc, h.langle, h.rangle]);
+    }
+}
+
+/// Whether arguments as written `w` (WP-3102) are each an argument
+/// `expr_ok` accepts, none a head parameter's record or a pack.
+fn written_ok(w: &WrittenArgs, expr_ok: &dyn Fn(&CArg) -> bool) -> bool {
+    match w {
+        WrittenArgs::None | WrittenArgs::Same => true,
+        WrittenArgs::List(v) => v.iter().all(|a| !matches!(a, CArg::Parm(_)) && expr_ok(a)),
     }
 }
 
@@ -651,6 +811,9 @@ pub(super) fn validate_class_specs(
             }),
             _ => arg_ok(a, &[]),
         };
+        if !written_ok(&c.written, &expr_ok) {
+            return bad("bad class template specialization");
+        }
         let Some(h) = &c.head else {
             if !c.args.iter().all(expr_ok) {
                 return bad("bad class template specialization");
@@ -721,7 +884,9 @@ impl Sema<'_, '_> {
         if let Some(head) = &c.head {
             let list = self.image_partial_head(img, ids, main, c.template, head);
             let al = self.ast.types.arg_list(&args);
-            return self.builder().class_partial_spec(h, tmpl, list, al, tag);
+            let p = self.builder().class_partial_spec(h, tmpl, list, al, tag);
+            self.image_set_written(img, tys, ids, c, al, p);
+            return p;
         }
         let locs = vec![h.loc; args.len()];
         let Ok(spec) = self.get_class_spec(tmpl, &args, &locs, h.loc) else {
@@ -737,7 +902,7 @@ impl Sema<'_, '_> {
             });
         }
         let w = self.ast.types.arg_list(&args);
-        self.ast.templates.set_args_as_written(spec, w, true);
+        self.image_set_written(img, tys, ids, c, w, spec);
         if let Some(r) = self.ast.decls.record(spec)
             && r.tag != tag
             && (r.tag == TagKind::Union) == (tag == TagKind::Union)
@@ -771,14 +936,17 @@ impl Sema<'_, '_> {
         let c = img.cspecs.get(i)?;
         let tmpl = self.ast.first(ids[c.template as usize]);
         let args = self.image_spec_args(img, tys, ids, c);
+        let al = self.ast.types.arg_list(&args);
         if let Some(head) = &c.head {
             let list = self.image_partial_head(img, ids, main, c.template, head);
-            let al = self.ast.types.arg_list(&args);
-            return Some(self.builder().var_partial_spec(h, tmpl, list, al, ty, vspec));
+            let p = self.builder().var_partial_spec(h, tmpl, list, al, ty, vspec);
+            self.image_set_written(img, tys, ids, c, al, p);
+            return Some(p);
         }
         let locs = vec![h.loc; args.len()];
         let spec =
             self.find_or_create_var_spec(tmpl, &args, &locs, h.loc, ty, vspec, false).ok()?;
+        self.image_set_written(img, tys, ids, c, al, spec);
         if let Some((k, _)) = self.ast.spec_info(spec) {
             self.ast.templates.update_spec(k, |s| {
                 s.kind = SpecKind::ExplicitSpecialization;
@@ -788,6 +956,32 @@ impl Sema<'_, '_> {
         let lexical = h.lexical.unwrap_or(h.ctx);
         self.builder().declare_spec_in(spec, lexical, h.loc);
         Some(spec)
+    }
+
+    /// Gives `d`, the declaration listed specialization `c` built (whose
+    /// arguments are `args`), its arguments as written (WP-3102): the
+    /// expression sections built now, never converted.
+    pub(super) fn image_set_written(
+        &mut self,
+        img: &Image,
+        tys: &mut Vec<QualType>,
+        ids: &[DeclId],
+        c: &ClassSpec,
+        args: kiln_ast::ArgListId,
+        d: DeclId,
+    ) {
+        let w = match &c.written {
+            WrittenArgs::None => return,
+            WrittenArgs::Same => args,
+            WrittenArgs::List(v) => {
+                let mut out = Vec::with_capacity(v.len());
+                for a in v {
+                    out.push(self.image_carg(img, tys, ids, a));
+                }
+                self.ast.types.arg_list(&out)
+            }
+        };
+        self.ast.templates.set_args_as_written(d, w, true);
     }
 
     /// The arguments of listed specialization `c`.
