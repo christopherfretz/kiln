@@ -1173,6 +1173,7 @@ pub static COLD_MAPS: &[ColdMapRoles] = &[
     cold("ColdDeclData", "hidden_shadow", D, D),
     cold("ColdDeclData", "using_shadows", D, DL),
     cold("ColdDeclData", "shadow_using", D, D),
+    cold("ColdDeclData", "shadow_named", D, D),
     cold("ColdDeclData", "conversion_spec_target", D, T),
     cold("ColdDeclData", "compound_literal", D, E),
     cold("ColdDeclData", "init_fp", D, Role::Record("fp::FpOverride")),

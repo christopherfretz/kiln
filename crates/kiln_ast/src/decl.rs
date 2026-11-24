@@ -1842,6 +1842,14 @@ pub struct ColdDeclData {
     /// Shadow → the using-declaration that introduced it (the reverse of
     /// `using_shadows`; `Ast::shadow_using`).
     pub shadow_using: ColdMap<DeclId, DeclId>,
+    /// `UsingShadow` → the using-shadow its using-declaration's lookup
+    /// found, when what the lookup found for the shadow's target was
+    /// itself a shadow (`namespace a { using std::string; } using
+    /// a::string;`: the second shadow → `a`'s): the first link of a
+    /// chain of using-declarations, write-once, absent for a shadow whose
+    /// lookup found its target directly (spec/ast.md §4.2, WP-3401;
+    /// `Ast::shadow_named`).
+    pub shadow_named: ColdMap<DeclId, DeclId>,
     /// Conversion function template specialization → the target type its
     /// name prints with (the pattern's, substituted before any return
     /// type deduction; clang's instantiated declaration name). The
@@ -1914,6 +1922,7 @@ impl Default for ColdDeclData {
             hidden_shadow: ColdMap::new("hidden_shadow"),
             using_shadows: ColdMap::new("using_shadows"),
             shadow_using: ColdMap::new("shadow_using"),
+            shadow_named: ColdMap::new("shadow_named"),
             conversion_spec_target: ColdMap::new("conversion_spec_target"),
             compound_literal: ColdMap::new("compound_literal"),
             init_fp: ColdMap::new("init_fp"),
@@ -1926,7 +1935,7 @@ impl Default for ColdDeclData {
 }
 
 impl ColdDeclData {
-    fn rows(&self) -> [MemRow; 38] {
+    fn rows(&self) -> [MemRow; 39] {
         [
             self.lexical_ctx.mem_row(),
             self.written_ns.mem_row(),
@@ -1960,6 +1969,7 @@ impl ColdDeclData {
             self.hidden_shadow.mem_row(),
             self.using_shadows.mem_row(),
             self.shadow_using.mem_row(),
+            self.shadow_named.mem_row(),
             self.conversion_spec_target.mem_row(),
             self.compound_literal.mem_row(),
             self.init_fp.mem_row(),
@@ -2591,6 +2601,16 @@ impl DeclArena {
     /// If `s` is already recorded hidden.
     pub fn set_hidden_shadow(&mut self, s: DeclId, by: DeclId) -> Result<(), AlreadySet> {
         self.cold.hidden_shadow.insert(s, by)
+    }
+
+    /// Records that the lookup of using-shadow `s`'s using-declaration
+    /// found `found`, itself a using-shadow, for `s`'s target
+    /// (`Ast::shadow_named`, WP-3401).
+    ///
+    /// # Errors
+    /// If `s` already has one.
+    pub fn set_shadow_named(&mut self, s: DeclId, found: DeclId) -> Result<(), AlreadySet> {
+        self.cold.shadow_named.insert(s, found)
     }
 
     /// Records the shadows using-declaration `using` introduced (`list`

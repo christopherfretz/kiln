@@ -219,7 +219,7 @@ impl Sema<'_, '_> {
                 let using = self.new_using_decl(name, name_loc, q.nns);
                 let h = DeclHead::new(self.ctx, name, using_loc);
                 let uuie = self.builder().unresolved_using_if_exists(h);
-                let shadow = self.introduce_shadow(name, name_loc, uuie);
+                let shadow = self.introduce_shadow(name, name_loc, uuie, None);
                 self.link_using_shadows(using, shadow.as_slice());
                 return Some(using);
             }
@@ -243,8 +243,9 @@ impl Sema<'_, '_> {
             return None;
         }
         let using = self.new_using_decl(name, name_loc, q.nns);
-        let shadows: Vec<DeclId> =
-            found.decls.iter().filter_map(|&t| self.introduce_shadow(name, name_loc, t)).collect();
+        let shadows: Vec<DeclId> = (0..found.decls.len())
+            .filter_map(|i| self.introduce_shadow(name, name_loc, found.decls[i], found.shadow(i)))
+            .collect();
         self.link_using_shadows(using, &shadows);
         Some(using)
     }
@@ -523,12 +524,17 @@ impl Sema<'_, '_> {
         if name.as_operator() == Some(kiln_ast::names::OverloadedOperator::Equal) {
             self.note_inherited_assign(class);
         }
-        let mut targets = found.decls.clone();
+        // Each target with the shadow lookup found it through, if any
+        // (`Ast::shadow_named`, WP-3401).
+        let mut targets: Vec<(DeclId, Option<DeclId>)> =
+            (0..found.decls.len()).map(|i| (found.decls[i], found.shadow(i))).collect();
         if self.reverse_using_shadows {
             targets.reverse();
         }
-        let shadows: Vec<DeclId> =
-            targets.into_iter().filter_map(|t| self.introduce_shadow(name, name_loc, t)).collect();
+        let shadows: Vec<DeclId> = targets
+            .into_iter()
+            .filter_map(|(t, named)| self.introduce_shadow(name, name_loc, t, named))
+            .collect();
         self.link_using_shadows(using, &shadows);
         Some(using)
     }
@@ -914,7 +920,17 @@ impl Sema<'_, '_> {
     /// current scope, unless it conflicts with a declaration already
     /// there ([namespace.udecl]/11, [basic.scope.scope]/4). A repeated
     /// using-declaration of the same entity replaces the earlier shadow.
-    fn introduce_shadow(&mut self, name: DeclName, loc: Loc, target: DeclId) -> Option<DeclId> {
+    /// `named` is the using-shadow the using-declarator's lookup found
+    /// for `target`, when it found one (`lookup::Found::shadow`): the new
+    /// shadow records it (`Ast::shadow_named`, spec/ast.md §4.2,
+    /// WP-3401), a cold row only for such a shadow.
+    fn introduce_shadow(
+        &mut self,
+        name: DeclName,
+        loc: Loc,
+        target: DeclId,
+        named: Option<DeclId>,
+    ) -> Option<DeclId> {
         let in_class = self.member_spec_class().is_some();
         let fnlike = |me: &Self, d| {
             let k = me.kind_of(d);
@@ -995,6 +1011,10 @@ impl Sema<'_, '_> {
         let s = self.builder().using_shadow(h, target, prev);
         if let Some(by) = hidden_by {
             let _ = self.ast.decls.set_hidden_shadow(s, by);
+        }
+        if let Some(f) = named {
+            let r = self.ast.decls.set_shadow_named(s, f);
+            debug_assert!(r.is_ok(), "a new shadow's named shadow set twice: {r:?}");
         }
         if self.in_local_scope() {
             match name.as_ident() {
@@ -1470,7 +1490,7 @@ impl Sema<'_, '_> {
             .into_iter()
             .filter_map(|c| {
                 let n = self.ast.decls.get(c).name().as_ident()?;
-                self.introduce_shadow(DeclName::ident(n), name_loc, c)
+                self.introduce_shadow(DeclName::ident(n), name_loc, c, None)
             })
             .collect();
         self.link_using_shadows(ud, &shadows);

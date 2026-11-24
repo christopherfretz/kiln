@@ -430,6 +430,53 @@ read with `Ast::using_target`/`Ast::using_qualifier`):
     for anything but a member function or member function template.
   - `Ast::overridden_methods(m)`: the virtual functions `m` overrides,
     read at its first declaration, so any redeclaration answers.
+  - `Ast::shadow_named(s)` (WP-3401, [namespace.udecl]/1): the shadow
+    that `s`'s using-declarator named, when what its lookup found for
+    `s`'s target was itself a using-shadow. In `namespace acme { using
+    std::string; } using acme::string;` the second shadow's target is
+    `std::string` (kiln, like clang, makes a shadow's target the entity,
+    never a shadow), and `shadow_named` gives `acme`'s shadow. `None`
+    for a shadow whose lookup found its target directly (declared in the
+    scope searched, or made visible there by a using-directive: the
+    directive route is not recorded), for the shadows of `using enum`
+    (its enumerators are not looked up) and of an
+    `UnresolvedUsingIfExists`, and for any other declaration.
+    *Walking the chain:* the record is the first link only. A client
+    reads `shadow_named(s)`, then `shadow_named` of that shadow, and so
+    on; the chain ends at a shadow whose lookup found its target
+    directly. Every link is a shadow of the same entity (its
+    `strip_shadow` is `s`'s target), and a link is never `s` itself.
+    The record is what the lookup found, not a redeclaration link: a
+    using-declarator repeated through another base (*A repeated
+    using-declarator* below) has its own record beside its `prev`, and
+    `using B1::f;` names `B1`'s shadow only when `B1` has one. Per form:
+    - namespace, block and class scope: one record per shadow of an
+      overload set, each naming the shadow its own element was found
+      through (`using Base::f;` where `Base` has `using Mid::f;` and a
+      `void f(char);` of its own: `Base`'s shadows for `Mid::f`'s
+      overloads, none for `Base::f(char)`); a hidden shadow keeps its
+      record ([namespace.udecl]/14, either order);
+    - an inheriting constructor (`using B::B;` where `B` has `using
+      A::A;`): a `ConstructorUsingShadow` of an `A` constructor names
+      `B`'s `ConstructorUsingShadow` of it, the nominated base's shadow
+      it was inherited through (the same entry as
+      `DeclArena::ctor_shadow_nominated`, clang's
+      `getNominatedBaseClassShadowDecl`; no second row); one of a
+      constructor `B` declares names none;
+    - templates: a dependent using-declarator makes no shadows; each
+      specialization's using-declaration (class or block scope) records
+      what its own lookup found (`G<Base>`'s `using T::f;` names
+      `Base`'s shadows, `G<Mid>`'s none); a non-dependent one is redone
+      in each specialization with the pattern's records.
+
+    Storage: `ColdDeclData::shadow_named: ColdMap<DeclId, DeclId>`
+    (`UsingShadow` → the shadow found), written once by sema as the
+    shadow is made (`introduce_shadow`, from `lookup::Found::shadow`); a
+    shadow that found its target directly has no row, so the cost is a
+    map entry per chained shadow only. A PCH snapshot carries the map; a
+    module image carries it per shadow record (the `named` word,
+    spec/modules.md §11.11 kind 21). The dump is unchanged, and no list
+    changes order or targets.
 
   The rules the record keeps:
   - *One mark in either order.* A member declared before or after the
@@ -495,6 +542,8 @@ read with `Ast::using_target`/`Ast::using_qualifier`):
 
   Tests: `crates/kiln_parse/tests/using_hidden_shadow.rs` (each rule
   above, the snapshot round trip and totality),
+  `crates/kiln_parse/tests/using_shadow_named.rs` (`shadow_named`: every
+  form above, both orders, the snapshot and module image round trips),
   `crates/kiln_driver/tests/modules_image_using.rs` (the repeated
   using-declarators' marks in the module image; a class template's
   using-declarations are not in the image, spec/modules.md §11.11),

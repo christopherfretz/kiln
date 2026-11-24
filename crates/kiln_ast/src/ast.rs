@@ -611,6 +611,29 @@ impl Ast {
         self.decls.hidden_shadow(s)
     }
 
+    /// The using-shadow that shadow `s`'s using-declaration named, when
+    /// what its lookup found for `s`'s target was itself a shadow
+    /// (spec/ast.md §4.2, WP-3401): in `namespace a { using std::string;
+    /// } using a::string;` the second `UsingShadow` names `a`'s, while
+    /// its target is `std::string` (a shadow's target is never a shadow).
+    /// The first link only: the named shadow's own `shadow_named` gives
+    /// the next one, and a chain ends at a shadow whose lookup found its
+    /// target directly. For a `ConstructorUsingShadow` it is the shadow
+    /// in the nominated base the constructor was inherited through
+    /// (`using B::B;` where `B` has `using A::A;`: `B`'s shadow; clang's
+    /// nominated base class shadow). `None` for a shadow whose lookup
+    /// found its target directly (declared in the scope searched, or
+    /// made visible there by a using-directive), for a shadow of `using
+    /// enum` or of an `UnresolvedUsingIfExists`, and for any other
+    /// declaration.
+    pub fn shadow_named(&self, s: DeclId) -> Option<DeclId> {
+        match self.decls.get(s).kind() {
+            DeclKind::UsingShadow => self.decls.cold.shadow_named.get(s).copied(),
+            DeclKind::ConstructorUsingShadow => self.decls.ctor_shadow_nominated(s),
+            _ => None,
+        }
+    }
+
     /// What using-declaration `u` names, in [`Ast::using_shadows`] order:
     /// each shadow with its target and the member that hides it, if any
     /// ([`Ast::shadow_hider`]). The named set is the targets; the members

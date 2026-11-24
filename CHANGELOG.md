@@ -10,6 +10,17 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- The shadow a using-declaration named, for tooling clients (WP-3401,
+  spec/ast.md §4.2): when a using-declarator's lookup finds a
+  using-shadow (`namespace acme { using std::string; } using
+  acme::string;`), the new shadow records the shadow it found, while its
+  target stays the entity. The total accessor `Ast::shadow_named(s)` gives
+  that first link, and a client walks the chain link by link. It covers
+  namespace, block and class scope, one record per shadow of an overload
+  set, inheriting constructors (the nominated base's shadow) and each
+  specialization of a template. A cold map holds a row only for a shadow
+  that found a shadow. PCH snapshots and module images carry it (a fourth
+  word in an image's shadow records).
 - What a using-declaration names, for tooling clients (WP-3403,
   spec/ast.md §4.2): total accessors `Ast::using_named(u)` (each shadow
   with its target and the member that hides it, `UsingNamed`),
