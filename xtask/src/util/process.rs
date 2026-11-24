@@ -1137,7 +1137,7 @@ mod tests {
 
     /// [`child_runs_keep_no_descriptors_inner`] in a process of its own:
     /// this test binary again, one test thread (no other test opens or
-    /// closes anything meanwhile, so the counts compare exactly) and no
+    /// closes anything meanwhile, so a count that grew is a leak) and no
     /// jobserver (2000 token waits on a shared pool took minutes).
     #[cfg(target_os = "linux")]
     #[test]
@@ -1156,8 +1156,8 @@ mod tests {
     /// 2000 children started by every route of the harness's child-process
     /// path (capped and wrapped `run`, `run_with_input`, `run_streaming`,
     /// `run_measured`, a spawn that fails, a timeout) leave this process's
-    /// descriptor and thread counts exactly where they were: no pipe, child
-    /// handle or reader thread outlives its run (WP-2780).
+    /// descriptor and thread counts no higher than they were: no pipe,
+    /// child handle or reader thread outlives its run (WP-2780, WP-3420).
     #[cfg(target_os = "linux")]
     #[test]
     #[ignore = "run by child_runs_keep_no_descriptors in a process of its own"]
@@ -1203,8 +1203,14 @@ mod tests {
         let (fds, threads) = fds_and_threads();
         (0..RUNS).for_each(&one);
         let (fds_after, threads_after) = fds_and_threads();
-        assert_eq!(fds_after, fds, "descriptors before and after {RUNS} runs");
-        assert_eq!(threads_after, threads, "threads before and after {RUNS} runs");
+        // A run's reader thread or pipe may still be closing when the
+        // first count is taken (the warm-up's timeout run): the counts may
+        // drop, and a leak is a count that grew.
+        assert!(fds_after <= fds, "descriptors before {fds} and after {RUNS} runs {fds_after}");
+        assert!(
+            threads_after <= threads,
+            "threads before {threads} and after {RUNS} runs {threads_after}"
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
