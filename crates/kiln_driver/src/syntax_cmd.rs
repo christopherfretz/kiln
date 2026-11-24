@@ -395,6 +395,8 @@ impl SyntaxJob<'_> {
             target_attr_features: crate::features::target_attr_feature_list,
             cfg_dump: a.dump_cfg,
             written_refs: a.written_refs,
+            fn_names: a.fn_names,
+            fn_names_verify: crate::env::fn_names_verify(&a.env),
             decl_extents: a.decl_extents,
             cfg_stats: a.cfg_stats,
             cfg_max_elems: a.cfg_max_elems.unwrap_or(kiln_sema::cfg::DEFAULT_MAX_ELEMS),
@@ -406,6 +408,7 @@ impl SyntaxJob<'_> {
             record_carried: writes_kind2,
             record_image: a.bmi_image && writes_kind2,
             image_census: a.bmi_image_census,
+            verify_subst_failed: a.verify_subst_failed || crate::args::verify_subst_failed_env(),
             gnu89_inline: a.predef.gnu89_inline_for(&job.std),
             prefix: a.pch.producing || a.pch.record_lookups,
             // [module.import]/6 applies to a header unit's build only, as
@@ -726,9 +729,15 @@ impl SyntaxJob<'_> {
         if a.dump_decl_extents {
             result.output.push_str(&tu.ast.decl_extents.dump(&tu.ast, sm, main_id));
         }
+        if a.dump_fn_names {
+            result.output.push_str(&tu.ast.fn_names.dump(&tu.ast, sm, main_id));
+        }
         if a.dump_expr_extents {
             let x = kiln_parse::ExprExtents::new(&tu.ast, sm, interner, lex_options);
             result.output.push_str(&x.dump());
+        }
+        if a.dump_friend_forms {
+            result.output.push_str(&tu.ast.dump_friend_forms(sm, main_id));
         }
         if let Some(d) = pp_record {
             result.output.push_str(&d);

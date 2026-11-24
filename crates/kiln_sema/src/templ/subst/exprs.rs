@@ -57,6 +57,12 @@ impl Substituter<'_, '_, '_> {
             if self.lambda_bodies > 0 {
                 self.note_shared_captures(e);
             }
+            // A temporary the pattern's declaration extended is copied
+            // for the instantiated one (WP-3271).
+            let e = match self.extending_init {
+                0 => e,
+                _ => self.sema.unshare_temporaries(e).unwrap_or(e),
+            };
             self.sema.mark_shared_expr_referenced(e);
             self.sema.note_shared_consteval_only(e);
             self.sema.note_shared_throws(e);
@@ -3024,12 +3030,13 @@ impl Substituter<'_, '_, '_> {
     /// pattern definition `pdef`: the pattern's list (spec/ast.md §8.6)
     /// substituted and handed to `act_on_mem_initializer` as the parser
     /// would hand it (clang `InstantiateMemInitializers`), then ended at
-    /// its `:` (`lbrace`, the body's `{`, when it has none). True if a
-    /// mem-initializer failed (substitution or initialization).
-    pub(crate) fn ctor_initializer(&mut self, f: DeclId, pdef: DeclId, lbrace: Loc) -> bool {
+    /// its `:` (`None` when it has none: the empty list, or no record for
+    /// an invalid pattern). True if a mem-initializer failed (substitution
+    /// or initialization).
+    pub(crate) fn ctor_initializer(&mut self, f: DeclId, pdef: DeclId) -> bool {
         let rec = self.sema.ast.pattern_mem_inits(pdef).cloned();
         let (inits, colon, failed) =
-            rec.map_or((Box::default(), lbrace, false), |r| (r.inits, r.colon, r.failed));
+            rec.map_or((Box::default(), None, false), |r| (r.inits, r.colon, r.failed));
         for info in &*inits {
             // Unresolved at the definition: reported there (`failed`).
             if matches!(info.id, kiln_ast::templates::PatternMemInitId::Ident(_)) {
@@ -3110,7 +3117,32 @@ impl Substituter<'_, '_, '_> {
     /// parser hands to `act_on_init` (§5.6).
     /// `None`: a default-initialized variable (its pattern initializer is
     /// the implicit `CXXConstructExpr` of [dcl.init.general]/7).
+    ///
+    /// The temporaries the pattern's variable extended are its own: in
+    /// a subexpression shared with the pattern they are copied
+    /// ([`Self::unsharing_temporaries`], WP-3271).
     pub(crate) fn initializer(
+        &mut self,
+        init: ExprId,
+        style: kiln_ast::decl::InitStyle,
+    ) -> SubstResult<Option<Initializer>> {
+        self.unsharing_temporaries(|s| s.initializer_inner(init, style))
+    }
+
+    /// Runs `f`, a substitution of a declaration's initializer, with the
+    /// temporaries of the subexpressions it shares with the pattern
+    /// copied where the pattern's declaration extended them
+    /// ([`Sema::unshare_temporaries`]; spec/ast.md "Lifetime-extended
+    /// temporaries of instantiations", WP-3271).
+    pub(crate) fn unsharing_temporaries<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        self.extending_init += 1;
+        let r = f(self);
+        self.extending_init -= 1;
+        r
+    }
+
+    /// [`Self::initializer`].
+    fn initializer_inner(
         &mut self,
         init: ExprId,
         style: kiln_ast::decl::InitStyle,

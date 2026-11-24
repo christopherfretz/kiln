@@ -123,7 +123,7 @@ impl Sema<'_, '_> {
         let n = *self.ast.decls.get(v);
         let Some(ty) = n.ty() else { return };
         if self.require_non_abstract(n.loc(), ty, AbstractUse::Variable) {
-            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            self.invalidate(v);
         }
     }
 
@@ -198,7 +198,7 @@ impl Sema<'_, '_> {
                         self.require_non_abstract(n.loc(), ty, AbstractUse::Variable)
                     };
                     if ok {
-                        self.ast.decls.set_flags(m, DeclFlags::INVALID);
+                        self.invalidate(m);
                     }
                 }
                 DeclKind::CXXRecord

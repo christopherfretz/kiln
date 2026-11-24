@@ -7,7 +7,7 @@
 //! translation unit.
 
 use kiln_ast::QualType;
-use kiln_ast::decl::{ConstexprKind, DeclFlags, DeclKind};
+use kiln_ast::decl::{ConstexprKind, DeclFlags, DeclKind, SubstFailedKind};
 use kiln_ast::ids::{ArgListId, RawId};
 use kiln_ast::templates::SpecKind;
 use kiln_ast::types::{ExcSpec, NoexceptValue, TypeView};
@@ -148,7 +148,12 @@ impl Sema<'_, '_> {
             let _ = self.templ.suppressed_diags.insert(spec, warnings);
         }
         if r.is_err() || captured {
-            self.ast.decls.set_flags(spec, DeclFlags::INVALID);
+            // Not formed (spec/ast.md §4.1): marked when the frame trapped
+            // every error. The closures it substituted keep it as their
+            // owner, so nothing it created is left without one.
+            self.invalidate_as(spec, SubstFailedKind::FunctionSignature);
+            self.claim_failed_locals(after as usize);
+            self.note_failed_formation(spec, after as usize);
             return Err(());
         }
         if self.fn_spec(pattern).is_explicit()
@@ -240,6 +245,7 @@ impl Sema<'_, '_> {
         let pairs = self.inst_context_pairs(self.spec_pairs_ctx(spec, tmpl));
         let trapped = self.sfinae_errors();
         let access = self.friend_template_access_ctx(spec);
+        let first = self.ast.decls.len();
         let r = self.in_inst_context(ctx, |s| {
             s.access_ctx = Some(access);
             let mut sub = Substituter::new(s, &margs);
@@ -249,7 +255,8 @@ impl Sema<'_, '_> {
         });
         let captured = self.sfinae_errors() > trapped;
         if r.is_err() || captured {
-            self.ast.decls.set_flags(spec, DeclFlags::INVALID);
+            self.invalidate_as(spec, SubstFailedKind::ExplicitSpecifier);
+            self.claim_failed_locals(first);
             return Err(());
         }
         Ok(())
@@ -414,7 +421,7 @@ impl Sema<'_, '_> {
             if sub.sema.kind_of(f) == DeclKind::CXXConstructor {
                 // A constructor template's ctor-initializer, as a class
                 // template member's (`templ/class.rs`).
-                inits_failed = sub.ctor_initializer(f, pdef, lbrace);
+                inits_failed = sub.ctor_initializer(f, pdef);
             }
             let b = sub.body(body);
             let discarded = std::mem::take(&mut sub.discarded);
@@ -442,7 +449,7 @@ impl Sema<'_, '_> {
                     .function(f)
                     .is_some_and(|x| x.spec.constexpr_kind() != ConstexprKind::None);
             if sub.stmt_failed || inits_failed || named_failed {
-                s.ast.decls.set_flags(f, DeclFlags::INVALID);
+                s.invalidate(f);
             }
             s.act_on_finish_function_def(f, b, rbrace);
         });
@@ -1503,6 +1510,14 @@ impl Sema<'_, '_> {
     ) -> DeclId {
         let lexical = self.ctx;
         let f = self.builder().function_spec_redecl(s, lexical, name_loc, ty, fspec);
+        // The template arguments as written on this declaration (an
+        // instantiation-dependent `sizeof(sizeof(f(T())))` in a class
+        // template stays an expression), beside the converted ones of
+        // its `SpecInfo` (spec/ast.md §8.3, WP-3142).
+        if let Some(sid) = &d.spec_id {
+            let w = self.ast.types.arg_list(&sid.args);
+            self.ast.templates.set_args_as_written(f, w, false);
+        }
         // Its namespace definition is the one it is written in or its
         // qualifier names, not its template's (clang's `DeclContext` of a
         // function template specialization; spec/ast.md §4.2

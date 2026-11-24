@@ -31,7 +31,6 @@ use crate::decl::{is_deduction_guide, is_untyped_special};
 use crate::fp_pragma::FpAt;
 use crate::keywords::Kw;
 use crate::parser::{Parser, quote};
-use kiln_sema::templ::auto::AutoGroup;
 
 /// Saved tokens and the location of the `Eof` sentinel that ends their
 /// replay.
@@ -836,7 +835,7 @@ impl Parser<'_, '_> {
                     if self.s.check_default_arg_refs(e) {
                         self.s.act_on_param_default_arg(p, e, eq);
                     } else {
-                        self.s.ast.decls.set_flags(p, DeclFlags::INVALID);
+                        self.s.invalidate(p);
                     }
                 }
             }
@@ -997,13 +996,13 @@ impl Parser<'_, '_> {
             }
             if ctor {
                 self.trace(|_| format!("mem_initializers({count})"));
-                self.s.act_on_mem_initializers(f, &[], colon);
+                self.s.act_on_mem_initializers(f, &[], Some(colon));
             } else {
                 self.s.error(DiagId::parse_only_constructors_take_base_inits, colon);
             }
         } else if ctor {
             self.trace(|_| "mem_initializers(0)".to_owned());
-            self.s.act_on_mem_initializers(f, &[], self.loc());
+            self.s.act_on_mem_initializers(f, &[], None);
         }
         if !self.at(Punct::LBrace) {
             if !had_colon {
@@ -1794,7 +1793,7 @@ impl Parser<'_, '_> {
         self.error_here(DiagId::parse_incomplete_array_member_init);
         self.skip_until(&[Punct::Comma], true, false);
         if let Some(x) = decl {
-            self.s.ast.decls.set_flags(x, DeclFlags::INVALID);
+            self.s.invalidate(x);
         }
     }
 
@@ -1891,7 +1890,7 @@ impl Parser<'_, '_> {
         let mut base_ty: Option<QualType> = None;
         let mut restrict_error = None;
         let mut first = true;
-        let mut group = AutoGroup::default();
+        let mut group = self.s.group_after_specifiers(self.member_ref_mark);
         let mut ext_decls = Vec::new();
         loop {
             let mut d = Declarator::new(DeclaratorContext::Member, self.loc());

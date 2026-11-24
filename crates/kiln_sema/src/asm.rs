@@ -675,7 +675,7 @@ impl Sema<'_, '_> {
             let note = self.diag(DiagId::note_attribute, naked.loc);
             let msg = self.diag(DiagId::sema_naked_non_asm_stmt, at).with_note(note);
             self.emit(msg);
-            self.ast.decls.set_flags(f, kiln_ast::decl::DeclFlags::INVALID);
+            self.invalidate(f);
             return;
         }
     }

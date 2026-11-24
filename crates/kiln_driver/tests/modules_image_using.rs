@@ -84,3 +84,51 @@ fn image_carries_using_shadows() {
     assert!(maps[1].starts_with(&want("shadow_using", 6)), "{replay}");
     assert_eq!(shadow_maps(&image), maps, "the image's maps are the replay's");
 }
+
+/// WP-3145, WP-3146: a class-scope shadow a member hides ([namespace.udecl]/14,
+/// in either declaration order) and one an implicitly-declared assignment
+/// operator hides ([namespace.udecl]/4, declared at the class's `}`) are
+/// marked hidden in the importer that builds the module from its image as
+/// in the one that replays it, so the calls below are not ambiguous.
+#[test]
+fn image_keeps_hidden_shadows() {
+    let d = scratch("hidden");
+    std::fs::write(
+        d.join("h.cppm"),
+        "export module h;\n\
+         export struct B { int f() { return 1; } int f(int) { return 2; } };\n\
+         export struct D : B { using B::f; int f() { return 3; } };\n\
+         export struct E : B { int f() { return 4; } using B::f; };\n\
+         export struct A;\n\
+         export struct P {\n\
+         P &operator=(const P &) { return *this; }\n\
+         P &operator=(P &&) { return *this; }\n\
+         P &operator=(const A &) { return *this; }\n\
+         P &operator=(int) { return *this; }\n\
+         };\n\
+         export struct A : P { using P::operator=; };\n",
+    )
+    .unwrap();
+    std::fs::write(
+        d.join("u.cpp"),
+        "import h;\n\
+         int g(D &d, E &e, A &a, A &b) { a = b; a = 1; return d.f() + d.f(0) + e.f() + e.f(0); }\n",
+    )
+    .unwrap();
+    let v = ok(&d, &["-v", "-fkiln-bmi-image", "--precompile", "h.cppm", "-o", "h.pcm"]);
+    assert!(v.contains("with a declaration image of "), "{v}");
+
+    let use_args = ["-fkiln-memory-report", "-fmodule-file=h=h.pcm", "-fsyntax-only", "u.cpp"];
+    let image = ok(&d, &[&["-v", "-fkiln-bmi-image"][..], &use_args].concat());
+    assert!(image.lines().any(|l| l == "note: imported 'h' from its declaration image"), "{image}");
+    let replay = ok(&d, &[&["-fno-kiln-bmi-image"][..], &use_args].concat());
+    let hidden = |r: &str| -> Option<String> {
+        r.lines()
+            .find(|l| l.starts_with("memory: decls.cold.hidden_shadow "))
+            .map(|l| l.split_whitespace().take(3).collect::<Vec<_>>().join(" "))
+    };
+    // `B::f()` in `D` and in `E`, `P::operator=(const A&)` in `A`.
+    let want = "memory: decls.cold.hidden_shadow count=3";
+    assert_eq!(hidden(&replay).as_deref(), Some(want), "{replay}");
+    assert_eq!(hidden(&image), hidden(&replay), "the image's marks are the replay's");
+}

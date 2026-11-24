@@ -320,6 +320,9 @@ pub struct TestSpec {
     /// (`-fkiln-dump-decl-extents`, spec/ast.md §19.7), relative to the
     /// test's directory; compared with the compile's standard output.
     pub decl_extents: Option<PathBuf>,
+    /// `fn-names:`: the golden function-name span dump
+    /// (`-fkiln-dump-fn-names`, spec/ast.md §24.6), relative to the test.
+    pub fn_names: Option<PathBuf>,
     /// `decl-extents: <golden> unordered`: compared as sorted lines (an
     /// importer built from a module image numbers its declarations in
     /// another order than a parse; WP-2091).
@@ -550,6 +553,7 @@ impl TestSpec {
             || self.inst_report.is_some()
             || self.written_refs.is_some()
             || self.decl_extents.is_some()
+            || self.fn_names.is_some()
             || self.pp_record.is_some()
     }
 }
@@ -607,6 +611,8 @@ struct Parser {
     decl_extents: Option<PathBuf>,
     decl_extents_unordered: bool,
     decl_extents_line: usize,
+    fn_names: Option<PathBuf>,
+    fn_names_line: usize,
     pp_record: Option<PathBuf>,
     pp_record_line: usize,
     ast_implicit: bool,
@@ -697,6 +703,8 @@ impl Parser {
             decl_extents: None,
             decl_extents_unordered: false,
             decl_extents_line: 0,
+            fn_names: None,
+            fn_names_line: 0,
             pp_record: None,
             pp_record_line: 0,
             ast_implicit: false,
@@ -851,6 +859,16 @@ impl Parser {
                 } else {
                     self.written_refs_line = line;
                     self.written_refs = Some(PathBuf::from(value));
+                }
+            }
+            "fn-names" => {
+                if self.fn_names.is_some() {
+                    self.err(line, "duplicate `fn-names`");
+                } else if value.is_empty() {
+                    self.err(line, "`fn-names` requires a path");
+                } else {
+                    self.fn_names_line = line;
+                    self.fn_names = Some(PathBuf::from(value));
                 }
             }
             "decl-extents" => {
@@ -1508,6 +1526,15 @@ impl Parser {
                 self.err(line, "`decl-extents` and `written-refs` cannot share a test");
             }
         }
+        if self.fn_names.is_some() {
+            let line = self.fn_names_line;
+            if !matches!(expect, Expect::CompileOk | Expect::CompileFail) {
+                self.err(line, "`fn-names` only applies to `compile-ok` and `compile-fail` tests");
+            } else if self.written_refs.is_some() || self.decl_extents.is_some() {
+                // Every dump goes to standard output.
+                self.err(line, "`fn-names` cannot share a test with another dump golden");
+            }
+        }
         if self.pp_record.is_some()
             && !matches!(expect, Expect::CompileOk | Expect::CompileFail | Expect::Pp)
         {
@@ -1627,6 +1654,7 @@ impl Parser {
             inst_report: self.inst_report,
             written_refs: self.written_refs,
             decl_extents: self.decl_extents,
+            fn_names: self.fn_names,
             decl_extents_unordered: self.decl_extents_unordered,
             pp_record: self.pp_record,
             ast_implicit: self.ast_implicit,
@@ -1804,6 +1832,18 @@ mod tests {
 
     fn ok(src: &str) -> TestSpec {
         parse(src, Lang::Cxx).unwrap_or_else(|e| panic!("unexpected errors: {e:?}"))
+    }
+
+    #[test]
+    fn fn_names_golden() {
+        let s = ok("//@ fn-names: a.names\n");
+        assert_eq!(s.fn_names.as_deref(), Some(Path::new("a.names")));
+        assert!(s.is_kiln_specific());
+        assert!(parse("//@ fn-names:\n", Lang::Cxx).is_err());
+        assert!(parse("//@ fn-names: a.names\n//@ fn-names: b.names\n", Lang::Cxx).is_err());
+        assert!(parse("//@ fn-names: a.names\n//@ expect: run\n", Lang::Cxx).is_err());
+        let two = "//@ fn-names: a.names\n//@ decl-extents: a.extents\n";
+        assert!(parse(two, Lang::Cxx).is_err());
     }
 
     #[test]

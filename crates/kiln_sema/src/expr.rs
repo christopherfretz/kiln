@@ -2870,7 +2870,7 @@ impl Sema<'_, '_> {
                     .arg(self.ty_arg(t)),
             };
             self.emit(msg);
-            self.ast.decls.set_flags(d, DeclFlags::INVALID);
+            self.invalidate(d);
             return self.recover_err(&[], loc);
         }
         // The exception specification is part of the type ([dcl.fct]/14):

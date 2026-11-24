@@ -1,9 +1,9 @@
 16:38-16:39  type  'T' -> T@15:17 in=outer::inner::Box::size@16:24
 20:19-20:24  nns  'outer' -> outer@8:11 in=alias@20:11
 20:26-20:31  ns-alias  'inner' -> outer::inner@9:11 q=20:19 in=alias@20:11
-21:12-21:17  nns  'outer' -> outer@8:11 in=(tu)
-21:19-21:24  nns  'inner' -> outer::inner@9:11 q=21:12 in=(tu)
-21:26-21:27  type  'S' -> outer::inner::S@11:8 q=21:19 in=(tu)
+21:12-21:17  nns  'outer' -> outer@8:11 in=SS@21:7
+21:19-21:24  nns  'inner' -> outer::inner@9:11 q=21:12 in=SS@21:7
+21:26-21:27  type  'S' -> outer::inner::S@11:8 q=21:19 in=SS@21:7
 24:45-24:46  nns  'T' -> T@24:17 in=via_param@24:24
 24:48-24:53  expr  'count' -> (dependent) q=24:45 in=via_param@24:24
 24:48-24:53  expr  'count' -> outer::inner::S::count@12:14 spec=via_param<outer::inner::S>@24:24

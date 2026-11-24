@@ -60,6 +60,13 @@ impl Environment {
     }
 }
 
+/// Whether `KILN_FN_NAMES_VERIFY=1` is set in `env`: the function-name
+/// span table records and self-checks every record (spec/ast.md §24.7;
+/// `cargo xtask test --fn-names-verify` sets it for every compile).
+pub(crate) fn fn_names_verify(env: &Environment) -> bool {
+    env.var_os("KILN_FN_NAMES_VERIFY").is_some_and(|v| v == "1")
+}
+
 /// Whether `KILN_WREF_RAW` is set in `env`: the written-reference dump
 /// prefixes each line with the name's raw location (a developer switch).
 pub(crate) fn wref_raw(env: &Environment) -> bool {

@@ -10,11 +10,17 @@
 //! instantiation that reaches the token a per-specialization row read off
 //! the rebuilt expression (`note_written_spec_oper`, and per application
 //! of a fold-expression's expansion, `note_written_spec_fold`).
+//!
+//! Stage 6c (WP-2911): the `new` and `delete` keywords of new- and
+//! delete-expressions naming the allocation or deallocation function
+//! selected, and the `co_await` keyword naming the `operator co_await`
+//! applied (`note_written_new_delete`, `note_written_coawait`), with the
+//! same dependent entries and rows.
 
 use kiln_ast::decl::DeclKind;
-use kiln_ast::expr::{BinaryOp, CastKind, ExprFlags, ExprKind, UnaryOp};
+use kiln_ast::expr::{BinaryOp, CastKind, ExprDeps, ExprFlags, ExprKind, UnaryOp};
 use kiln_ast::ids::RawId;
-use kiln_ast::names::OverloadedOperator as OO;
+use kiln_ast::names::{DeclName, OverloadedOperator as OO};
 use kiln_ast::written_refs::{
     FOUND_ADL, FoundDecl, PatternNode, REF_DEPENDENT, REF_REVERSED, REF_REWRITTEN, REF_UNRESOLVED,
     RefLookup, RefQualifier, RefRole, SPEC_BUILTIN, WrittenRefId,
@@ -196,6 +202,175 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Records the keyword of the new- or delete-expression `e` the parser
+    /// just built (spec/ast.md §18.13.6, stage 6c): `tok` the `new`
+    /// keyword, or `delete` (`delete[]` as one range over its three
+    /// tokens), `colon` the `::` of `::new` / `::delete` (the entry's
+    /// qualifier is then `GLOBAL`, the `::` its lead). The entry names the
+    /// allocation function ([expr.new]/12) or deallocation function
+    /// ([expr.delete]/9-11) the expression selected, `how=qualified`
+    /// (looked up in the class's scope, then the global scope); the
+    /// deallocation function a new-expression calls when the
+    /// initialization throws and the destructor a `delete` calls have no
+    /// token and no entry. A dependent one (its type or an operand
+    /// dependent, so nothing was selected) gets a `DEPENDENT` entry with no
+    /// found set and a row per specialization; a failed one whose operands
+    /// are not erroneous an `UNRESOLVED` entry.
+    pub fn note_written_new_delete(&mut self, e: ExprId, tok: Span, colon: Option<Loc>) {
+        if !self.records_written_refs() || !self.inst.stack.is_empty() {
+            return;
+        }
+        let x = self.written_oper_peel(e);
+        let mut kids = Vec::new();
+        self.ast.exprs.children_into(x, &self.ast.lists, &mut kids);
+        if kids.iter().any(|&k| self.contains_errors(k)) {
+            return;
+        }
+        let q = match colon {
+            Some(c) => self.ast.written_refs.global_link(c),
+            None => RefQualifier::NONE,
+        };
+        if self.is_err_expr(x) {
+            self.push_written_ref(tok, None, None, RefRole::Operator, q, REF_UNRESOLVED);
+            return;
+        }
+        match self.written_alloc_fn(x) {
+            Some(f) => {
+                let target = self.written_fn_found(f);
+                let id =
+                    self.push_written_ref(tok, Some(target.0), target.1, RefRole::Operator, q, 0);
+                if let Some(id) = id {
+                    self.ast.written_refs.set_how(id, RefLookup::Qualified);
+                    self.ast.written_refs.set_using_directive(id, None);
+                }
+            }
+            None if self.written_alloc_dependent(x) => {
+                if let Some(id) =
+                    self.push_written_ref(tok, None, None, RefRole::Operator, q, REF_DEPENDENT)
+                {
+                    self.ast.written_refs.note_pattern_node(PatternNode::Oper(x, 0), id);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Records the `co_await` keyword `tok` of the await-expression `e`
+    /// the parser just built ([expr.await]/3.3, spec/ast.md §18.13.6): an
+    /// entry naming the `operator co_await` applied (member or not) to the
+    /// operand, or to the result of the promise's `await_transform`; none
+    /// when no `operator co_await` applies (the awaitable is the awaiter).
+    /// The `await_transform`, `await_ready`, `await_suspend` and
+    /// `await_resume` calls, `co_yield` and the initial and final suspend
+    /// points have no token of their own: no entry. In a coroutine
+    /// template (a `DependentCoawaitExpr`, its promise known only per
+    /// specialization) a `DEPENDENT` entry with the definition's
+    /// unqualified lookup of `operator co_await` as its found set (open to
+    /// argument-dependent lookup) and a row per specialization; a failed
+    /// one whose operand is not erroneous an `UNRESOLVED` entry.
+    pub fn note_written_coawait(&mut self, e: ExprId, tok: Span) {
+        if !self.records_written_refs() || !self.inst.stack.is_empty() {
+            return;
+        }
+        let x = self.written_oper_peel(e);
+        let mut kids = Vec::new();
+        self.ast.exprs.children_into(x, &self.ast.lists, &mut kids);
+        match self.ast.exprs.get(x).kind() {
+            ExprKind::DependentCoawaitExpr => {
+                let o = self.ast.exprs.coawait_operand(x, &self.ast.lists);
+                if self.contains_errors(o) {
+                    return;
+                }
+                let Some(id) = self.push_written_ref(
+                    tok,
+                    None,
+                    None,
+                    RefRole::Operator,
+                    RefQualifier::NONE,
+                    REF_DEPENDENT,
+                ) else {
+                    return;
+                };
+                self.ast.written_refs.note_pattern_node(PatternNode::Oper(x, 0), id);
+                self.note_written_coawait_found(id);
+            }
+            ExprKind::CoawaitExpr => {
+                if let Some(c) = self.written_coawait_call(x) {
+                    self.push_written_oper_call(c, tok, Loc::INVALID, 0);
+                }
+            }
+            _ if self.is_err_expr(x) && !kids.iter().any(|&k| self.contains_errors(k)) => {
+                self.push_written_oper_unresolved(tok, Loc::INVALID);
+            }
+            _ => {}
+        }
+    }
+
+    /// The found set of the dependent `co_await` entry `id`: the
+    /// non-member `operator co_await` functions unqualified lookup finds
+    /// at the definition ([over.match.oper]/3.2), flag `ADL`.
+    fn note_written_coawait_found(&mut self, id: WrittenRefId) {
+        let found = self.lookup_operator_name(DeclName::operator(OO::Coawait));
+        let mut elems: Vec<FoundDecl> = Vec::new();
+        for (&d, &f) in found.decls.iter().zip(found.found.iter()) {
+            let target = self.ast.strip_shadow(d);
+            let decl = self.ast.first(target);
+            if elems.iter().any(|e| e.decl == decl) {
+                continue;
+            }
+            let found = if f != d && f != target { f } else { decl };
+            elems.push(FoundDecl { decl, found });
+        }
+        let s = self.ast.written_refs.intern_found(&elems, RefLookup::Unqualified, FOUND_ADL);
+        self.ast.written_refs.set_found(id, s);
+    }
+
+    /// The `operator co_await` call of the resolved await-expression `x`
+    /// (a `CoawaitExpr`): its awaiter when that is an `operator co_await`
+    /// call sema built at the keyword ([expr.await]/3.3), else `None`.
+    fn written_coawait_call(&self, x: ExprId) -> Option<ExprId> {
+        let ex = &self.ast.exprs;
+        let parts = ex.coawait_parts(x, &self.ast.lists)?;
+        let c = self.written_oper_peel(parts.common);
+        (ex.get(c).kind() == ExprKind::CXXOperatorCallExpr
+            && ex.operator_call_op(c) == OO::Coawait
+            && ex.get(c).loc() == ex.get(x).loc())
+        .then_some(c)
+    }
+
+    /// The allocation or deallocation function of the new- or
+    /// delete-expression `x`: `None` when it selected none (dependent;
+    /// see `written_alloc_dependent`) or `x` is neither.
+    fn written_alloc_fn(&self, x: ExprId) -> Option<DeclId> {
+        let ex = &self.ast.exprs;
+        match ex.get(x).kind() {
+            ExprKind::CXXNewExpr => ex.new_extra(x).operator_new,
+            ExprKind::CXXDeleteExpr => ex.operator_delete(x),
+            _ => None,
+        }
+    }
+
+    /// Whether the new- or delete-expression `x`, which selected no
+    /// function, is dependent: a new-expression whose type or operands
+    /// are dependent, a delete-expression whose operand is type-dependent
+    /// ([temp.dep.expr]/3).
+    fn written_alloc_dependent(&self, x: ExprId) -> bool {
+        let ex = &self.ast.exprs;
+        match ex.get(x).kind() {
+            ExprKind::CXXNewExpr => {
+                ex.get(x).deps().intersects(ExprDeps::TYPE_VALUE_INST | ExprDeps::UNEXPANDED_PACK)
+            }
+            ExprKind::CXXDeleteExpr => ex.get(ex.delete_operand(x)).is_type_dependent(),
+            _ => false,
+        }
+    }
+
+    /// `f` with what lookup found when it differs: the template of an
+    /// allocation function template's specialization.
+    fn written_fn_found(&self, f: DeclId) -> (DeclId, Option<DeclId>) {
+        (f, self.ast.spec_info(f).map(|(_, i)| i.template).filter(|&t| t != f))
+    }
+
     /// Records the operator tokens `toks` (one for a unary fold, two for a
     /// binary one) of the fold-expression `e` the parser just built
     /// ([expr.prim.fold]): each a `DEPENDENT` entry with the fold's
@@ -368,7 +543,11 @@ impl Sema<'_, '_> {
             | ExprKind::UnaryOperator
             | ExprKind::ArraySubscriptExpr
             | ExprKind::CallExpr
-            | ExprKind::CXXOperatorCallExpr => false,
+            | ExprKind::CXXOperatorCallExpr
+            | ExprKind::CXXNewExpr
+            | ExprKind::CXXDeleteExpr
+            | ExprKind::DependentCoawaitExpr
+            | ExprKind::CoawaitExpr => false,
             ExprKind::CXXDependentScopeMemberExpr | ExprKind::MemberExpr => true,
             _ => return,
         };
@@ -490,6 +669,21 @@ impl Sema<'_, '_> {
             }
             ExprKind::CallExpr => match self.written_surrogate(ex.callee(x)) {
                 Some(conv) => vec![OperSel::Fn(conv, 0, Some(RefLookup::Member))],
+                None => vec![OperSel::Builtin],
+            },
+            // Stage 6c: the allocation or deallocation function (the
+            // global replaceable ones count as functions); a still
+            // dependent one stands for the entry.
+            ExprKind::CXXNewExpr | ExprKind::CXXDeleteExpr => match self.written_alloc_fn(x) {
+                Some(f) => {
+                    vec![OperSel::Fn(self.written_fn_found(f), 0, Some(RefLookup::Qualified))]
+                }
+                _ if self.written_alloc_dependent(x) => vec![OperSel::Dependent],
+                _ => vec![OperSel::Builtin],
+            },
+            ExprKind::DependentCoawaitExpr => vec![OperSel::Dependent],
+            ExprKind::CoawaitExpr => match self.written_coawait_call(x) {
+                Some(c) => vec![self.written_call_sel(c, 0)],
                 None => vec![OperSel::Builtin],
             },
             _ => vec![OperSel::Builtin],

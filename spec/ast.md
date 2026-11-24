@@ -119,7 +119,7 @@ After a node is created its header and side record are immutable, except:
 | lookup tables, specialization maps, `layouts`, `virtuals`, `vtables`, `consts`, `types` | insert-only | sema / Oven / `kiln_abi` |
 | cold `member_overload` `template_args` (§5.10) | once, when the parser reaches the template-id after the overloaded access | sema |
 | `templates.oper_lookups` (§8.5) | insert-only; one set per dependent operator expression, at its creation | sema / module-image importer |
-| `templates.pattern_mem_inits` (§8.6) | once per constructor definition in a template, at the end of its ctor-initializer | sema / module-image importer |
+| `templates.pattern_mem_inits` (§8.6) | once per constructor definition in a template, at the end of its ctor-initializer (before the body when it has none) | sema / module-image importer |
 | `WrittenRefs` entries (§18) | append-only; `entity`/`found` of an overloaded name patched once by overload resolution; `enclosing` narrowed by declaration claims | parser / sema |
 
 **Instantiation adds nodes, never rewrites patterns**: substituting a
@@ -203,6 +203,125 @@ struct DeclNode {        // 28 bytes
   / template-param) is a function of `kind` and `misc.friend`/
   `local_extern`, not stored.
 
+#### Silent failures (WP-3281)
+
+`DeclArena::subst_failed(d) -> Option<SubstFailedKind>` (cold map
+`subst_failed`, memory row `subst_failed`; the header has no spare flag
+bit) marks a declaration kiln made `INVALID` while it was inside a
+*trap* (a SFINAE context, or a diagnostic capture whose stash was then
+discarded) that printed no error; the kind says what failed to form.
+Sema writes it through its trap ledger only (spec/sema-templates.md
+§5.7.3), at the end of the translation unit and before a snapshot;
+`set_subst_failed` requires `INVALID` and keeps the first kind;
+`subst_failed_decls()` lists the marks by id.
+
+| value | `SubstFailedKind` | set on | its state |
+|---|---|---|---|
+| 1 | `FunctionSignature` | a function template specialization, or a deduction guide's, whose declaration failed to substitute ([temp.deduct.general]/8), or substituted while the frame trapped an error | substitution failed: type `ERROR`, no parameters; trapped error: full type and parameters. Neither is a usable specialization |
+| 2 | `ExplicitSpecifier` | the same, when only its `explicit(expr)` failed ([temp.deduct.general]/7) | full type and parameters |
+| 3 | `VariablePartialAmbiguity` | a variable template specialization whose partial-specialization choice was ambiguous ([temp.spec.partial.match]/1) | type `ERROR`, not listed as instantiated |
+| 4 | `ClassPartialAmbiguity` | a class template specialization whose choice was ambiguous | a never-instantiated specialization (kind `Undeclared`, no definition, members or bases), still a nameable type (`X<int>*`) |
+| 5 | `LocalOfFailedSignature` | an invalid declaration created while a kind 1 or 2 specialization failed to form (a parameter, a statement-expression's local), or whose owner chain reaches one | whatever its own failure left |
+| 6 | `OtherTrapped` | any other invalidation under a trap or a discarded pack-expansion probe, and the duplicate of a definition merged from another unit's global module fragment (spec/modules.md §6) | as the site left it |
+
+Value 0 is never written; `SubstFailedKind::from_value` gives `None`
+for 0 and for any value above 6. A tooling client treats a kind it does
+not know as indeterminate. The values are fixed: a new kind takes 7.
+
+Not marked: a variable template specialization whose template or
+matching partial specialization is only declared (a valid entity,
+[temp.inst]/7); a class template specialization used inside its own
+definition under a trap ([temp.inst]/2: the use's signature fails, the
+class instantiates on its next use, valid); a candidate dropped for
+unsatisfied constraints ([temp.deduct.general]/5: at clang compat 22 no
+specialization is formed, at 19 it is formed and valid).
+
+**The invariant.** In a translation unit without diagnosed errors,
+every `INVALID` declaration reachable from the lists carries
+`SUBST_FAILED` (`DeclArena::subst_failed`). An `INVALID` declaration
+without it means kiln printed an error.
+
+"Without diagnosed errors" means no diagnostic of error severity was
+emitted. "Reachable from the lists" is the closure, from the translation
+unit, over these lists and links:
+- the member list of a record, an enumeration, a namespace (the
+  translation unit is one) or a scope payload (`DeclArena::members`);
+- a function's parameter list (`FunctionData::params`);
+- the template parameter list of a template (`TemplateInfo::params`), a
+  partial specialization (`PartialSpecInfo::params`) or a template
+  template parameter (`TemplateParmInfo::params`);
+- a template's pattern (`TemplateInfo::pattern`) and its specializations
+  (`TemplateTables::specs_of`);
+- the closure types whose `closure_owner` is a reached declaration.
+
+The checker tests the stronger form: every `INVALID` declaration in the
+arena, reachable or not.
+
+**Rule A.** A declaration created while a marked kind 1 or 2
+specialization S was formed belongs to something; none sits unmarked and
+ownerless. From the declaration, ownership is followed until one of
+these holds:
+- it is kind 5 itself;
+- it reaches S, or an independent entity formed as a side effect: a
+  specialization (whose members belong to it), or an implicit deduction
+  guide (memoised with its class template);
+- a template is followed to its pattern;
+- a template parameter is followed to the declaration whose parameter
+  list holds it (a template, a partial specialization, a template
+  template parameter); one older than the formation lists it;
+- anything else is followed through `closure_owner`, else its lexical
+  context; once that owner is older than the formation, the owner lists
+  the declaration reached: as a member (a pattern through its template:
+  `Al<int>` completed inside the failed signature lists its member
+  template, whose pattern constructor and parameter are reached through
+  it), or as a function's parameter.
+
+Two exceptions are a known gap: valid scratch declarations held by no
+list, built only to check or compare in every instantiation (not because
+of the failure). Neither is `INVALID`, so the invariant is not affected.
+- Constraint-satisfaction `ParmVar` copies. Satisfying a function
+  template's trailing requires-clause substitutes its parameters into
+  new `ParmVar`s whose context is the pattern; clang maps the
+  specialization's own parameters instead
+  (`addInstantiatedParametersToScope`). The checker accepts a `ParmVar`
+  named like a parameter of its older function. One path from the lists
+  reaches a copy: a variable template specialization first formed while
+  the clause is satisfied stores its converted arguments as written
+  (crates/kiln_sema/src/templ/var.rs:93 into `SpecInfo::args`,
+  crates/kiln_ast/src/templates.rs:165), and a `decltype` argument keeps
+  its operand (crates/kiln_ast/src/types/context.rs:185), a
+  `DeclRefExpr` that names the copy: `v<decltype(x), int>` in
+  `requires v<decltype(x), int>`. No other path exists. The substituted
+  constraint expression is evaluated and dropped
+  (crates/kiln_sema/src/templ/concepts/sat.rs:648); the satisfaction
+  records and the atom cache keep a result, locations and text, no
+  declaration (crates/kiln_sema/src/templ/concepts/mod.rs:38); a written
+  reference or found set records only dependent lookups, and a
+  parameter's name is resolved at the definition
+  (crates/kiln_sema/src/written_specs.rs:93).
+- Friend class template head comparison. Instantiating
+  `template <class U> friend struct F;` substitutes the friend's head
+  only to compare it with `F`'s (`check_friend_class_head`); Sema
+  records that head, and the checker accepts its parameters. No path
+  from the lists reaches one. The compared head is passed only to
+  `check_template_heads_match`
+  (crates/kiln_sema/src/templ/equiv.rs:159), which compares, diagnoses
+  and keeps nothing. Every type or expression naming one of its
+  parameters depends on it, so it forms no specialization, satisfaction
+  record or atom-cache entry; a written reference or found set records
+  no template parameter, which is always found at the definition.
+
+No written reference (`Ast::written_refs`) is keyed by a kind 1 or 2
+specialization.
+
+The checker `-fkiln-verify-subst-failed` (or `KILN_VERIFY_SUBST_FAILED=1`
+in the environment; spec/harness.md) reports each violation of the
+invariant and of rule A as an error. Snapshots carry the map (an unknown
+kind is a `BadTag` decode error, spec/pch.md); module images do not: an
+importer re-forms the specializations, and the marks with them
+(spec/modules.md). The dump prints ` subst-failed=<kind>` after
+` invalid` (spec/ast-dump.md).
+
 ### 4.2 Kinds and payloads
 Context kinds (★) own a member list `members: Members { first, last }` (append O(1)
 through `next`) and a lookup table (§4.3). Functions are the semantic
@@ -270,13 +389,21 @@ read with `Ast::using_target`/`Ast::using_qualifier`):
   introduced, an `UnresolvedUsingIfExists`'s for `using_if_exists`), an
   inheriting-constructor `using B::B;` (one `ConstructorUsingShadow` per
   constructor of the base, its implicit copy and move constructors
-  included, that no constructor the class declared earlier hides), and `using
+  included, one a constructor of the class hides marked hidden), and `using
   enum E;` (one per enumerator). A dependent using-declarator
   (`UnresolvedUsingValue`, `UnresolvedUsingTypename`) introduces none;
   the `Using` its instantiation makes in the class specialization (or in
   the instantiated function body) has the instantiation's shadows. A
-  shadow hidden later ([namespace.udecl]/14, `hidden_shadow`) stays in
-  the list. The module image carries the link (each shadow record names
+  shadow a member of the class hides ([namespace.udecl]/4, /14) stays in
+  the list, marked: `DeclArena::hidden_shadow(s)` names the member that
+  hides it. The mark is the same whatever the order of the member and
+  the using-declarator (WP-3145: `void f(); using B::f;` makes the shadow
+  and marks it, as `using B::f; void f();` does), and it is decided by
+  the class's `}` at the latest: an implicit member that hides a shadow
+  (the copy or move assignment operator for `using B::operator=;`, the
+  constructors for `using B::B;`) is declared there, so the record does
+  not depend on what the rest of the unit uses (WP-3146). The dump
+  leaves hidden shadows out, as clang's (which has none). The module image carries the link (each shadow record names
   its using-declaration's record, spec/modules.md §11.11 kind 21), and a
   snapshot carries the maps. Cost: a forward-map entry and an 8 B list
   span per using-declaration, 4 B per shadow in the list arena and a
@@ -722,6 +849,31 @@ capture initializers and shares the closure type, call operator and body
 (WP-2507): the copy is the same lambda-expression, so it has the same
 closure type.
 
+**Lifetime-extended temporaries of instantiations** (WP-3271). Every
+extended `MaterializeTemporaryExpr` reached from a variable's
+initializer names a `LifetimeExtendedTemporary` whose `extending` is
+that variable, and no other variable's initializer reaches it: an
+instantiation's variables extend their own temporaries, never the
+pattern's ([temp.inst]: each specialization's variables are distinct
+objects, and so are the temporaries bound to them). This covers every
+extending context: a local or static reference and what its initializer
+binds (a member subobject of a temporary included), the reference
+members of an aggregate, a structured binding's hidden variable, an
+inline static data member or variable template specialization, and the
+range-based `for`'s `__range` with its P2718R0 temporaries (default
+arguments included). The substituter shares non-dependent
+subexpressions with the pattern by id (spec/sema-templates.md §5.4);
+in the initializer of a variable it instantiates (and of `__range`) it
+first copies the spine above each such temporary
+(`Sema::unshare_temporaries`): `ExprArena::clone_unextended(mte,
+operand)` copies an MTE as a full-expression temporary with no record,
+which extension then gives the instantiated variable's own record
+(mangled `_ZGR<the specialization's name>_`, as clang). Copying stops
+where a new full-expression or unevaluated operand starts (a nested
+`ExprWithCleanups`, a `ConstantExpr`, a lambda, a statement expression,
+`sizeof`, `noexcept`, a requires-expression, ...) and below 256 levels.
+Constant evaluation is unchanged: the copies are the same expressions.
+
 Builtin *functions* (`__builtin_memcpy`, `__builtin_is_constant_evaluated`,
 `__builtin_is_within_lifetime`, `__builtin_constant_p`, ...) are ordinary
 `CallExpr`s whose callee is a `DeclRefExpr` to an implicit `Function`
@@ -934,6 +1086,47 @@ Tests: `tests/conformance/support.srcloc/string-identity*.cpp`,
 `meta.reflection.names/string-identity-srcloc.cpp`,
 `kiln_parse/tests/string_maker.rs`.
 
+#### 5.8.2 Immediate invocations of a default argument, per use (WP-3278, WP-3279)
+An immediate invocation in a default argument or a default member
+initializer is evaluated at each use, in the context of that use (CWG
+2631; [expr.const]/16, [dcl.fct.default]/5, [class.base.init]/9 in the
+working draft). Its `ConstantExpr` belongs to the shared default
+argument (or initializer) and has no value of its own
+(`constant_value` is `None`; the dump elides it at the declaration). The
+values sema found are kept by use:
+- **A use with source-location values** (a `CXXDefaultArgExpr` /
+  `CXXDefaultInitExpr` with an entry in `exprs.cold.source_loc`, §5.8):
+  `exprs.cold.use_imm: ColdMap<ExprId, Box<[UseImmediate]>>`, keyed by
+  the use beside its `source_loc` entry. `UseImmediate { invocation:
+  ExprId, value: ConstValueId }` is the value of the invocation at that
+  use, in evaluation order, the invocations of the default arguments
+  and initializers the use's argument uses included (they are evaluated
+  in the outermost use's context too). Written once per (use,
+  invocation) by sema (`ExprArena::note_use_immediate`); read with
+  `ExprArena::use_immediates(u)` / `use_immediate(u, c)`.
+- **A use without them**: every use evaluates the invocation the same
+  way, so the value is kept once, on the invocation
+  (`exprs.cold.default_imm`, `ExprArena::default_immediate_value(c)`).
+  It is never the value at a use with source-location values: with
+  `void log(unsigned n = len(__builtin_FUNCTION()))` called from `f`,
+  `default_immediate_value` of the `len(...)` wrapper is `None` and the
+  use's record holds 1.
+
+`Ast::default_use_immediate_value(u, c)` answers for any use: the use's
+record when it has source-location values, else `default_imm`. `None`
+when sema kept no value: the invocation failed (an error was reported),
+its value depends on the evaluation point (`access_context::current()`,
+WP-1462), or the use is in a template pattern, or in a body imported
+from a module image (images carry the use's location and context, not
+its values: codegen evaluates the invocation at the use there). PCH
+snapshots carry both maps (`ColdExprData`). The dump prints the value at
+the outermost use on the path as the `ConstantExpr`'s `value:` (clang's
+rebuilt default argument). Codegen's fold prepass and the Oven
+(`Compiler::stored_value`) read these values instead of evaluating the
+call again. Tests: `tests/conformance/expr.const/default-arg-immediate-per-use*.cpp`,
+`tests/conformance/class.base.init/*default-member-init-immediate-per-use*.cpp`,
+`kiln_parse/tests/default_use_immediate.rs`.
+
 ### 5.9 Lambdas (WP-075)
 - **`LambdaExpr`** ([expr.prim.lambda]; spec/sema-lambda.md): `a` is its
   `LambdaId`, an index into `exprs.lambdas: LambdaArena` (side records
@@ -995,8 +1188,9 @@ Tests: `tests/conformance/support.srcloc/string-identity*.cpp`,
   closure whose owner existed at the mark and is not a function whose
   body holds it, and the parser's claims skip the closures substitution
   created meanwhile (an instantiation the declaration's text triggered).
-  Template parameters, template heads and alias declarations claim
-  closures only (not written references). Carried by PCH snapshots
+  Template parameters claim closures only (not written references);
+  template heads and alias declarations claim their names too, and
+  enumerators and `static_assert`s claim names only (§18.3, WP-3143). Carried by PCH snapshots
   (the cold maps are snapshot state; FORMAT_VERSION 124) and module
   images (a lambda record's `owner` word, spec/modules.md; IMAGE_VERSION
   58). Tests: `crates/kiln_parse/tests/closure_owner.rs`.
@@ -1149,6 +1343,16 @@ struct MemberSpecInfo { instantiated_from: DeclId, kind: SpecKind, point_of_inst
 for decls with a `TemplLink`, and a sparse map for other kinds
 (`Field`, `EnumConstant`, `ParmVar`, `Typedef`, `UsingShadow`, local
 decls), so every instantiated decl reaches its pattern in O(1).
+An unnamed member class (`struct { T x; } m;`, an anonymous struct or
+union, nested ones, those of member class templates and partial
+specializations) is a `MemberOfSpecialization` of the class it is
+instantiated in, exactly as an unnamed member enumeration is
+(`ImplicitInstantiation`, its `instantiated_from` the pattern's unnamed
+class; clang's `setInstantiationOfMemberClass`), and never a
+`Specialization`: it has no `SpecInfo`, no template arguments and no
+name of its own (WP-3273). The implicit member object of an anonymous
+struct or union and its injected `IndirectField`s reach theirs through
+the sparse map.
 
 ### 8.3 Specialization keys
 One global `specializations: FxHashMap<(DeclId /*first decl of template*/,
@@ -1157,6 +1361,51 @@ ArgListId /*canonical*/), DeclId>` for class, function, variable, alias
 specializations (keyed by their canonical pattern args; listed per
 template in `partials: DeclId -> ListId`). The template decl's payload
 lists its specializations in creation order (dump order, ast-dump.md §5).
+
+**Arguments as written (WP-3016, WP-3142).** The key, `SpecInfo.args`
+and `PartialSpecInfo.args` hold the converted arguments (a non-type
+argument is its value: `P<T, f(1)>`'s second argument is `1`), which
+matching ([temp.spec.partial.match]), partial ordering and the
+specialization's identity read. The arguments as written are kept
+beside them in one table, `TemplateTables::args_as_written(d)` (clang's
+`getTemplateArgsAsWritten`), an `ArgListId` in which a non-type
+argument is the expression written (`ArgView::Expr`), never its value,
+also when it is instantiation-dependent but not dependent
+(`h<sizeof(sizeof(f(T())))>` in a class template stays the expression,
+not `8`). It has a row for: an explicit specialization or explicit
+instantiation of a class template (the type printer prints these); a
+partial specialization of a class or variable template (`d` its
+declaration; printed with its converted arguments, as clang's injected
+class name); an explicit specialization of a variable template; and
+each declaration of an explicit specialization of a function template
+that writes `<...>` (namespace or class scope, `d` that declaration),
+none for one whose arguments are all deduced. The first declaration's
+row stays, except as the class rule above says (clang 19 resets a
+class's at its definition). A client reads the written expressions of
+any of them with one routine, `TypeContext::written_arg_exprs`
+(spec/types.md §8.4). The PCH snapshot carries the table, and so does
+a module image (WP-3102): every specialization it lists carries its row
+beside the arguments it is matched by, each non-type argument as its
+expression section, which the importer builds and never converts or
+evaluates (spec/modules.md §11.11 "Arguments as written"); an argument
+a section cannot hold leaves that declaration without a row (it then
+reads as before WP-3102: the converted arguments only). A partial
+specialization of a member template redeclared in an instantiation of
+its class ([temp.spec.partial.member]/2, `Sema::member_partial_spec`)
+gets the original's row substituted with the enclosing arguments, as
+clang's `InstantiateClassTemplatePartialSpecialization` substitutes
+`getTemplateArgsAsWritten` (`In<U, f(7)>` in `O<long>` keeps `f(7)`;
+WP-3102); none when that substitution fails.
+
+A class-scope explicit specialization of a member function template in a
+class template ([temp.expl.spec]/2, CWG 727) is redeclared in each
+instantiation of the class as a specialization of the member template
+there, its arguments as written substituted (the converted ones when it
+has no row; clang's `VisitCXXMethodDecl`), so a non-type argument no
+parameter deduces (`h<8>()`) still selects it; its `SpecInfo.from` is
+the pattern class's declaration, whose definition it is instantiated
+from (clang's member specialization info), the one exception to "an
+explicit specialization is never instantiated" ([temp.expl.spec]/7).
 
 ### 8.4 Deduction results, substitution, instantiation stack
 - Deduction produces a `DeducedArgs` scratch (a `Vec<TemplateArg>` with
@@ -1230,10 +1479,26 @@ reads that record and nothing else:
   `Ast::pattern_mem_inits(ctor) -> Option<&PatternMemInits>`; written
   once (`AstBuilder::set_pattern_mem_inits`) at the end of the
   ctor-initializer by Sema and by the module-image importer.
-- `PatternMemInits { colon, failed, inits }`: the `:`; `failed` when a
-  mem-initializer failed its definition-time check (diagnosed; the
-  instantiations then add no implicit initializers, [class.base.init]/9
-  is not applied after an error); the mem-initializers in written order.
+- `PatternMemInits { colon, failed, inits }`: `colon` is `Some` of the
+  `:` that begins the ctor-initializer, `None` when the definition has
+  none (`S() {}`, WP-3200); `failed` when a mem-initializer failed its
+  definition-time check (diagnosed; the instantiations then add no
+  implicit initializers, [class.base.init]/9 is not applied after an
+  error); the mem-initializers in written order.
+- Every such constructor definition has a record, the empty list
+  included (WP-3200): `S() {}` has `colon == None` and no
+  mem-initializers, so a client tells "no ctor-initializer written" from
+  a constructor that is no pattern (no record) on the `Ast` alone. The
+  parser tells Sema which it is (`Sema::act_on_mem_initializers` takes
+  `Option<Loc>`); `None` is never inferred from an empty list. The
+  instantiation of the empty list is unchanged: the implicit
+  initializers are added ([class.base.init]/9). The exception is an
+  `INVALID` constructor definition: it gets a record only when a
+  mem-initializer failed (`failed`, no list), as before. The cost is one
+  cold-map entry with an empty list per pattern constructor: for
+  `#include <bits/stdc++.h>` (libstdc++, `-std=c++26`) 1531 records, 108
+  of them empty (1423 before), and the memory row `pattern_mem_inits`
+  at 180 KB live of 43 MB.
 - `PatternMemInit { id, loc, end, pack_expansion, init }`: `loc` is the
   first token of the mem-initializer-id (its qualifier included), `end`
   its last token (`)`, `}`, or the `...` of a pack expansion); the written
@@ -1263,7 +1528,11 @@ Why this shape: the record is the syntax a tooling client needs (which
 entity each mem-initializer names, where, and with which expressions)
 and nothing semantic, so it is the same for every instantiation and
 survives a snapshot as plain data; a cold map keyed by the constructor
-costs nothing for the constructors that are no patterns. A constructor
+costs nothing for the constructors that are no patterns. The empty
+list is a record too because a tooling client must see that the
+definition writes no ctor-initializer without reading the source again
+(the client request), and an absent record already means "no pattern".
+A constructor
 that is no pattern (a non-template class's non-template constructor, or
 any instantiation) does not get a record: its resolved initializers,
 implicit ones included, are `ColdDeclData::ctor_inits` (§2.4,
@@ -1271,8 +1540,10 @@ implicit ones included, are `ColdDeclData::ctor_inits` (§2.4,
 `INVALID` keeps no list.
 
 Carriage: PCH snapshots carry the map with the `Ast` (§17; snapshot
-format 166). Module images carry the record with the constructor
-(spec/modules.md §11; image version 89): a `Member` by its name, looked
+format 166, 171 since `colon` is an `Option`). Module images carry the
+record with the constructor, the empty one included, `colon: None` as
+the location `NONE` (spec/modules.md §11; image version 89, 94 since
+WP-3200): a `Member` by its name, looked
 up again in the importing class; a braced list decomposed and rebuilt; an
 image is refused (the source fallback) for a designated clause and for a
 failed record.
@@ -1287,8 +1558,8 @@ the written arguments only, so matching clang would need a second,
 resolved list per pattern constructor.
 
 Tests: `crates/kiln_parse/tests/pattern_mem_inits.rs` (every kind, a
-failed and an unresolved one, the record after a prefix snapshot
-round trip), `crates/kiln_driver/tests/front_end.rs`
+failed and an unresolved one, the empty list of every kind of pattern
+constructor, the record after a prefix snapshot round trip), `crates/kiln_driver/tests/front_end.rs`
 (`pattern_mem_inits_through_a_module_image`).
 
 ### 8.7 Pattern syntax and the AST (WP-3027)
@@ -1313,8 +1584,9 @@ reachable from the `Ast` or names the row that puts it there.
 - friends of a dependent class (the written name and template arguments,
   the special member and qualifier, the member friend of a dependent
   specialization, a method friend's dependent qualifier): their names as
-  written references with WP-3008; the written qualifier, the friend's
-  own template-head and trailing requires-clause not yet, row WP-3124.
+  written references with WP-3008; the written qualifier, template
+  arguments, the friend's own template-heads and trailing
+  requires-clause in its `FriendForm` row (§23, WP-3164).
 - the template-head of a partial specialization defined after its
   declaration: not yet, row WP-3120.
 - the written placeholder of a structured binding declaration and of
@@ -2078,7 +2350,7 @@ field `Ast::written_refs`. Built in stages:
 | | the found set of a dependent entry: what lookup found at the template definition (§18.12) | WP-2472 |
 | 6 | operator uses and user-defined-literal suffixes outside dependent contexts: roles `operator` and `ud-suffix`, flags `REWRITTEN` and `REVERSED`, the closing token of `[]` and `()` (§18.13) | WP-2820 |
 | 6b | dependent operators, folds, their found sets and per-specialization rows, `SPEC_BUILTIN` rows, dependent `(` (§18.13.6) | WP-2910 |
-| 6c | stage: `new`, `delete` and `co_await` entries (§18.13.6) | WP-2911 |
+| 6c | `new`, `delete` and `co_await` entries, dependent ones with their rows (§18.13.6) | WP-2911 |
 
 ### 18.1 Contract
 
@@ -2113,7 +2385,7 @@ field `Ast::written_refs`. Built in stages:
 | `enclosing` | `Option<DeclId>` (4) | the innermost declaration whose source extent contains the name's first token (§18.3); `None` only when the table was filled without a TU |
 | `qualifier` | `RefQualifier` (4) | for a name written after `::`: the entry of the component immediately to its left, `GLOBAL` for a leading `::`, or `SPECIFIER` after a `decltype(...)::` or splice specifier, which has no entry (§18.11.2, WP-2828); `NONE` for an unqualified name |
 | `role` | `RefRole` (1) | the syntactic role (§18.4) |
-| `flags` | `u8` (1) | `DEPENDENT` (a dependent name in a template pattern: no entity until instantiation), `UNRESOLVED` (lookup or overload resolution failed), `MEMBER` (a member or member template name written after `.` or `->`, §18.7), `REWRITTEN` (8: an operator entry whose function a rewritten comparison candidate selected, [over.match.oper]/3.4), `REVERSED` (16: the reversed synthesized candidate, always with `REWRITTEN`) (§18.13.3) |
+| `flags` | `u8` (1) | `DEPENDENT` (a dependent name in a template pattern: no entity until instantiation), `UNRESOLVED` (lookup or overload resolution failed), `MEMBER` (a member or member template name written after `.` or `->`, §18.7), `REWRITTEN` (8: an operator entry whose function a rewritten comparison candidate selected, [over.match.oper]/3.4), `REVERSED` (16: the reversed synthesized candidate, always with `REWRITTEN`) (§18.13.3), `GROUP` (32: a name of a decl-specifier-seq a declarator group shares, §18.3.1) |
 | `how` | `RefLookup` (1) | how lookup found the name (§18.7, WP-2130) |
 
 **Failed lookup and dependence (WP-2291).** `UNRESOLVED` and
@@ -2168,12 +2440,39 @@ name is `name_lo(id)` (§18.11.1).
 
 ### 18.3 `enclosing`
 
-Stored, not derived from ranges. The rule: the innermost declaration
-whose source extent contains the name's first token — the particular
+Stored, not derived from ranges. **The rule**: a name is held by the
+innermost declaration whose text contains it — the particular
 redeclaration (a reopened namespace, the definition of a function, the
-class being defined). For a name inside a declaration (its type, its
-initializer, its default argument, its declarator-id qualifier) that is
-the declaration being declared.
+class being defined). A name inside a declaration (its type, its
+initializer or value, its default argument, its declarator-id
+qualifier, its attributes) is held by the declaration being declared,
+whether that declaration has a name or not; a name in no declaration
+is held by the lexical context (the namespace, class or function whose
+body holds it). The holder is what a tooling client takes as "what an
+edit of this name changes": the unit to check again. The cases
+(WP-3143 completed the rule for the last five):
+
+| declaration | holds the names of |
+|---|---|
+| a declarator of a simple declaration or a member declaration (a variable, a function declaration, a field, a `typedef` name) | its declarator and initializer, bit-field width or `= 0`; the decl-specifier-seq when it is the group's first (§18.3.1) |
+| a function definition | its decl-specifiers, declarator and body (outside the declarations nested in it) |
+| a function parameter | its type and default argument (also late-parsed): so in `typedef void F(S);` the unnamed parameter holds `S`, as in a function declaration |
+| a field with a default member initializer | the initializer, also late-parsed |
+| a concept definition | its constraint-expression |
+| an alias-declaration (an alias template's pattern) | its type-id |
+| an enumerator | its attributes and its value |
+| a `static_assert` | its condition and message: the `StaticAssert` declaration (a `DeclId` without a name; the dump prints `static_assert@<line>:<col>` of its keyword) |
+| a template | its template-head (each template parameter's type and default argument, the requires-clause): held by the templated declaration, the same declaration that holds the rest of the template's names (a function template's function, a class template's class, an alias template's alias, a variable template's variable); where no template owns the head's parameter list (a class or variable template partial specialization, an out-of-line member of a class template), the declaration the head's declaration declared; an enclosing head (`template<class T> template<class U>`) is held by the same declaration |
+| stage 3: a using-declarator, a namespace alias, a tag declared by a class-, enum- or elaborated-type-specifier | its qualifier and name (the target of an alias); a tag its class-head-name and qualifier, an explicit or partial class specialization's template name |
+
+Not holders: a template parameter (its names are the template's: an
+edit of them changes the template's signature, and the parameter is no
+unit of its own), a requires-expression's parameter scope (its names
+are held by the context around it), a friend's tag names (held by the
+class granting friendship), a using-directive (it declares no named
+entity) and an explicit instantiation of a function or variable (it
+declares nothing; its names are held by the context its qualifier
+enters).
 
 Mechanism: an entry is recorded with sema's current lexical context
 (`Sema::ctx`: the namespace, class or function whose body is being
@@ -2184,29 +2483,56 @@ count, decl count) at the declaration's start and calls
 again after the initializer). A claim sets `enclosing = d` on entries
 after the mark whose current `enclosing` was created before the mark,
 so a declaration nested inside (a lambda, a local class, a parameter)
-keeps its own entries: the innermost claim wins. Claimers in stage 1:
-simple declarations (each declarator), function definitions, member
-declarators, function parameters (their default arguments included,
-also when late-parsed), late-parsed default member initializers and
-concept definitions (their constraint-expression). A requires-expression's
-parameter scope is skipped: its names are enclosed by the context
-around it. Other declarations (template parameters and a template
-head's requires-clause, enumerators, alias and `static_assert`
-declarations, structured bindings, condition variables) leave their
-names enclosed by the lexical context; WP-1980 adds them. Claimers
-added in stage 3: using-declarations (each using-declarator claims its
-qualifier and name), namespace alias definitions (the target and its
-qualifier), a tag that a class-specifier, enum-specifier or
-elaborated-type-specifier declares (its class-head-name and qualifier;
-an explicit or partial class specialization's template name), and the
-declarators of stage 1 also claim their `redecl`, `spec-target` and
-`elaborated` entries. A friend's tag names are not claimed: they stay
-enclosed by the class granting friendship. A using-directive declares
-no named entity, so its names stay enclosed by the context around it.
-The same marks and claims decide closure owners (§5.9, WP-2023): every
-claim also claims the closures created since its mark, and template
-parameters, template heads and alias declarations claim closures (not
-yet names).
+keeps its own entries: the innermost claim wins. The declarators of
+stage 1 also claim their `redecl`, `spec-target` and `elaborated`
+entries. A template head's mark is taken at `template`; when the
+templated declaration is parsed, `claim_template_head(mark, parsed)`
+gives the head's remaining entries to the templated declaration (the
+pattern of the template whose parameter list the head is, else
+`parsed`, the last declaration the head's simple-declaration declared).
+An enumerator and a `static_assert` claim with `claim_written_names`,
+names only: their closures keep the lexical context (§5.9). The same
+marks and claims decide closure owners otherwise (§5.9, WP-2023):
+every other claim also claims the closures created since its mark,
+and template parameters claim closures (not names).
+
+#### 18.3.1 Declarator groups (WP-3144)
+
+In `S a, b;` the decl-specifier-seq is written once and belongs to each
+declarator ([dcl.decl.general]/3: each init-declarator is as if it were
+in a declaration by itself), so a rename of `S` changes `b` too. The
+one entry of `S` is held by the group's first declaration (`enclosing
+= a`, as every reader has always seen it) and has the flag `REF_GROUP`
+(32); the group's declarations, in order, are in a cold side table
+keyed by the first: `group(first) -> Option<&[DeclId]>`, `holders(id)
+-> &[DeclId]` (the group for a `REF_GROUP` entry, else `enclosing`
+alone), `groups()` (every group, by first declaration). Which entries
+are shared: those recorded in the decl-specifier-seq and the leading
+attributes (before the first declarator) that the first declaration
+holds after its claim. A name in a class or enumeration the specifier
+defines, or in a lambda in it, keeps its innermost holder and is not
+shared. A group has a row only when an entry is shared; a declarator
+whose declaration failed is not in it. The cases: a member declarator
+list (`struct C { S a, b; };`, `C::a` and `C::b`), a `typedef` list
+(`typedef S T1, T2;`), a function and a variable (`S f(), v;`: `f` and
+`v`); a structured binding declaration is one declaration whose
+bindings are no declarator group (no flag); a group of one has no flag
+and no row. Set by `Sema::act_on_end_group`, from the entry range the
+parser gives `group_after_specifiers` after the decl-specifier-seq
+(`WrittenRefs::share_group`); a truncation drops the rows whose first
+declaration was made after its mark.
+
+Rationale: `enclosing` stays one 4-byte field (the entry stays 28
+bytes; the flag takes a free bit), so a reader that wants one holder is
+unchanged and one that wants every holder tests one bit. The list costs
+8 bytes per group and 4 per declaration, only for groups that share a
+name: nothing for the single-declarator declarations that are nearly
+all of them. A list per entry would repeat the group for every name of
+the specifier (`std::map<K, V> a, b;` has four), and a mark without the
+list would leave the client to rebuild the group from source or from
+the declaration-extent table, another opt-in table (§19.5). Carried:
+the snapshot section's `groups` and `group_decls` (§18.10.1) and the
+module image `refs` section's trailing groups (§18.10.2).
 
 ### 18.4 Roles
 
@@ -2236,7 +2562,7 @@ fills `Operator` and `UdSuffix` (§18.13).
 | `Concept` | `concept` | `template <[C] T>` `[C] auto x` `{ e } -> [C]`; a concept-id as an expression (`static_assert([C]<int>)`, `requires [C]<T>`) from stage 1 | 1, 3 |
 | `Designator` | `designator` | `{ .[field] = 1 }` `{ .[a].[b] = 1 }` `{ [field]: 1 }` `__builtin_offsetof(S, [a].[b])` | 3 |
 | `Redecl` | `redecl` | `void A::[f]() {}` `int C::[x] = 0;` `struct C::[In] {};` `A::[A]() {}` `A::~[A]() {}` | 3 |
-| `Operator` | `operator` | `s [+] s` `a [!=] b` (rewritten) `m[[]1]` `f[(]x)` `p[->]m` `m[,] 4` `[++]m`; `[new] T` `[delete] p` `[co_await] e` (stage 6c) | 6 |
+| `Operator` | `operator` | `s [+] s` `a [!=] b` (rewritten) `m[[]1]` `f[(]x)` `p[->]m` `m[,] 4` `[++]m`; `[new] T` `[delete] p` `[delete[]] p` `::[new] T` `[co_await] e` (stage 6c) | 6 |
 | `UdSuffix` | `ud-suffix` | `12[_k]` `1.5[_f]` `'x'[_c]` `"ab"[_s]` `R"(r)"[_s]` | 6 |
 
 Not in the table: a declaration's own name at its declaration (an
@@ -2604,7 +2930,7 @@ stage 1.
 prints, after diagnostics' end of the TU, one line per entry:
 
 ```
-<line>:<col>-<line>:<col>  <role>  '<spelling>' -> <entity> [found=<decl>] [q=<line>:<col>|q=::[<line>:<col>]|q=specifier[:<line>:<col>]] [tilde=<line>:<col>] [close=<line>:<col>] [args=<line>:<col>-<line>:<col>] [in=<enclosing>] [dep] [rewritten] [reversed] [exp=<line>:<col>] [how=<how>] [udir=<ns>@<line>:<col>] [adl-ns=<ns>,...] [adl-cls=<class>,...] [adl-enum=<enum>,...]
+<line>:<col>-<line>:<col>  <role>  '<spelling>' -> <entity> [found=<decl>] [q=<line>:<col>|q=::[<line>:<col>]|q=specifier[:<line>:<col>]] [tilde=<line>:<col>] [close=<line>:<col>] [args=<line>:<col>-<line>:<col>] [in=<enclosing>] [shared=<decl>,...] [dep] [rewritten] [reversed] [exp=<line>:<col>] [how=<how>] [udir=<ns>@<line>:<col>] [adl-ns=<ns>,...] [adl-cls=<class>,...] [adl-enum=<enum>,...]
 ```
 
 Positions are the spelling locations of `lo` and `hi` (the end column
@@ -2621,7 +2947,10 @@ the first token of a `decltype(...)::` or splice specifier (WP-2828),
 and `tilde=` gives the `~` of a destructor name; `close=` the `]` or `)`
 of a subscript or call operator entry, and `rewritten` and `reversed`
 its flags (§18.13); `args=` the `<` and `>` of a friend function
-template specialization's template argument list (§18.11.2). A
+template specialization's template argument list (§18.11.2);
+`shared=` the rest of the declarator group that holds a `GROUP` entry
+with `in=` (§18.3.1). A `static_assert` prints `static_assert@` and its
+keyword's position. A
 ud-suffix's position is a column inside its
 literal token. `exp=` is the outermost expansion point of a name written in
 a macro. The harness directive `written-refs: <golden>`
@@ -3454,7 +3783,8 @@ names to be carried.
   the directive cache; the deferred designators; the per-specialization
   rows, dropped rows included so every `SpecRefId` stays; the pattern
   nodes and their candidates' using-directives (§18.9.1); the unrecorded rows (§18.10.3); the leads (§18.11.2); the found sets, their
-  elements and the (entry, set) rows (§18.12.6). Maps are written as their
+  elements and the (entry, set) rows (§18.12.6); the declarator groups of
+  the shared entries (`groups`, `group_decls`, §18.3.1, WP-3144). Maps are written as their
   entries sorted by key, so the bytes do not depend on hashing.
   **Rebuilt** on read: the set index, the found-set index and the row
   de-duplication index, from the sets and the live rows. **Transient**: the scratch of one
@@ -3463,7 +3793,8 @@ names to be carried.
 - **Validated** on read (an `Invalid` error, never a panic): every
   entry, row and set id in range, every qualifier before the entry it
   qualifies, the leads sorted and each `::` on a globally qualified
-  entry, no set interned twice, no live row kept twice, and the
+  entry, the groups sorted by first declaration, of two or more each,
+  and every `GROUP` entry's `enclosing` a group's first, no set interned twice, no live row kept twice, and the
   section's typed ids within the restored AST's arenas
   (`Ast::check_ids`).
 - **Restored, recording on.** The restored table continues the
@@ -3925,8 +4256,8 @@ instantiated. The found set is that result.
 | `this->a(t)`, `C::a(t)`, `a(t)` (implicit `this`), `this->mt(t)`, `this->template mt<T>(t)`: members of the current instantiation (`CXXDependentScopeMemberExpr`, or an overloaded member access) | class member lookup in the current instantiation: members of the pattern class and its non-dependent bases | none when the class searched has no dependent base; else `DEPENDENT_BASE`: the instantiation looks the name up again, and a different result is ill-formed ([temp.dep.type]/6; not diagnosed, §18.12.6) |
 | a name a dependent using-declarator introduces (`using B<T>::bm; ... bm(t)`) | the class's lookup result, the `UnresolvedUsingValue` an element | `UNRESOLVED_USING`: what it names exists per specialization only |
 | `T::x`, `B<T>::bm(t)` (a dependent qualifier), `t.m(t)`, `this->bm(t)` naming nothing the class declares in a class with a dependent base (a member of an unknown specialization), `using B<T>::bm;` itself, `typename T::ty`, a dependent nested-name-specifier component | no set (`None`): no lookup runs at the definition; all knowledge is per specialization (§18.9) | |
-| a dependent operator `t + t`, a fold's operator (§18.13.6), `co_await t` (stage: WP-2911; no entry until then) | the definition-context lookup of `operator@` (`Ast::dependent_oper_candidates`, §8.5; the `DependentCoawaitExpr`'s set) | `ADL` |
-| a dependent `t[i]`, `t(x)`, `t->m`, `t = u` (§18.13.6), `new T`, `delete p` (stage: WP-2911) | no set: no definition-context lookup ([over.match.oper]/3.1: member candidates only) | |
+| a dependent operator `t + t`, a fold's operator, a `co_await` in a coroutine template (§18.13.6) | the definition-context lookup of `operator@` (`Ast::dependent_oper_candidates`, §8.5; for `co_await`, the unqualified lookup of `operator co_await` re-run at the recording site) | `ADL` |
+| a dependent `t[i]`, `t(x)`, `t->m`, `t = u`, `new T`, `delete p` (§18.13.6) | no set: no definition-context lookup ([over.match.oper]/3.1: member candidates only; [expr.new]/12, [expr.delete]/9: the class's scope, then the global scope) | |
 
 An unqualified name in a class template with a dependent base: the
 dependent base is not examined, at the definition or at instantiation
@@ -4085,10 +4416,11 @@ using-shadow lookup found it through):
   [over.inc], [over.ass]), role `operator`;
 - the ud-suffix of a user-defined literal ([lex.ext]/2-8,
   [over.literal]), role `ud-suffix`;
-- stage 6c (WP-2911): the `new` and `delete` keywords of a new- or
-  delete-expression ([expr.new]/12, [expr.delete]/9) and the
-  `co_await` keyword where an `operator co_await` applies
-  ([expr.await]/3.3).
+- the `new` and `delete` keywords of a new- or delete-expression
+  ([expr.new]/12, [expr.delete]/9), naming the allocation or
+  deallocation function, and the `co_await` keyword where an
+  `operator co_await` applies ([expr.await]/3.3), role `operator`
+  (stage 6c, WP-2911).
 
 A token whose resolution selects a built-in candidate ([over.built];
 also for class operands converted to a built-in type, `c + 1` with an
@@ -4208,6 +4540,15 @@ class with no `operator->` is `UNRESOLVED` too (clang's recovery
 treats it as `.`). A failed built-in operator (`p + p` on pointers)
 and one with an erroneous operand (`missing + a`) have none.
 
+A new-, delete- or await-expression that failed (diagnosed: no
+matching or an inaccessible allocation or deallocation function, an
+ambiguous `operator co_await`, but also any other error in it, such as
+its initialization or an awaiter's member, which the failed expression
+does not tell apart) has an `UNRESOLVED` entry at its keyword (`::` as
+its lead for `::new` and `::delete`), unless one of its operands
+(placement arguments, initializer, the deleted pointer, the awaited
+operand) contains an error: `delete missing` has none.
+
 #### 18.13.6 Templates and later stages
 
 In a template pattern a non-dependent operator (`s + s` with `s` of a
@@ -4301,17 +4642,64 @@ Measured on `<bits/stdc++.h>` (§18.13.8), the `SPEC_BUILTIN` rows
 and the design's fallback (one entry flag `BUILTIN_IN_SOME_SPEC`) is
 not used.
 
-**Stage 6c (WP-2911).** `new` (range the keyword), `delete` and
-`delete[]` (one entry over its three tokens), `::new` and `::delete`
-(qualifier `GLOBAL`, the `::` as lead), naming the allocation or
-deallocation function the expression selected; a specialization of a
-dependent one selecting no function gets a `SPEC_BUILTIN` row. The
-entry of `delete p` names the deallocation function the lookup in the
-static type's scope selects ([expr.delete]/9-10); under a virtual
-destructor the call may reach another (the one found at the dynamic
-type's destructor). `co_await e` names the `operator co_await`
-applied, if any; the awaiter's and promise's calls have no entry.
-Until stage 6c lands, these have no entry.
+**New and delete (stage 6c, WP-2911).** The `new` keyword of a
+new-expression (range the keyword) names the allocation function it
+selected ([expr.new]/12: looked up in the scope of the allocated class,
+or of an array's element class, then in the global scope; `::new` the
+global scope only), and the `delete` keyword of a delete-expression
+(`delete[]` one entry over its three tokens, `delete [ ]` as written)
+the deallocation function ([expr.delete]/9-11: the usual, sized,
+aligned or destroying form). `how` is `qualified` (a lookup in a named
+scope, not the scope walk); `::new` and `::delete` have qualifier
+`GLOBAL` with the `::` as lead (§18.11.2). The implicitly declared
+global replaceable functions ([basic.stc.dynamic.general]/2) and those
+of `<new>` are functions like any other; an allocation function
+template's specialization (`template <class A> void *operator
+new(size_t, A &)`) has `found=` the template. The entry of `delete p`
+names the deallocation function the lookup in the static type's scope
+selects ([expr.delete]/9-10); under a virtual destructor the call may
+reach another (the one found at the dynamic type's destructor), so a
+client must not read it as "the function called". The deallocation
+function a new-expression calls if the initialization throws
+([expr.new]/27), the destructor a `delete` calls and a deleting
+destructor's own lookup have no token of their own: no entry. Not yet
+(follow-up): a class-scope allocation function found through a
+using-declaration (`using B::operator new;`) has `found` empty, not
+the using-shadow (the new-expression keeps the function only).
+
+A new-expression whose allocated type or an operand is dependent, and
+a delete-expression whose operand is type-dependent ([temp.dep.expr]/3),
+select nothing at the definition: a `DEPENDENT` entry with no found set
+(nothing is looked up at the definition) and the pattern node
+`PatternNode::Oper(e, 0)` of the expression. Each specialization that
+reaches it has a row naming the function selected, `how=qualified`
+(`spec=make<C>` names `C::operator new`, `spec=make<int>` the global
+one). A specialization of a dependent one that selected no function
+would get a `SPEC_BUILTIN` row; every valid specialization selects one
+(the global functions count), so none is expected in practice. A
+non-dependent new- or delete-expression in a template (`new int`) is
+resolved at the definition and has no rows.
+
+**Await-expressions (stage 6c, WP-2911).** The `co_await` keyword of
+`co_await e` names the `operator co_await` applied ([expr.await]/3.3:
+a member, `how=member`; a non-member found by unqualified lookup, or by
+argument-dependent lookup alone, `how=adl`), to the operand or to the
+result of the promise's `await_transform` ([expr.await]/3.2). When none
+applies (the awaitable is its own awaiter) the keyword has no entry.
+The calls of `await_transform`, `await_ready`, `await_suspend`,
+`await_resume` and the promise's other members, `co_yield` (its
+`yield_value` and any `operator co_await` applied to it,
+[expr.yield]/1) and the initial and final suspend points
+([dcl.fct.def.coroutine]/5) have no written token of their own: no
+entry. In a coroutine template every await-expression is a
+`DependentCoawaitExpr` (the promise is known only per specialization):
+a `DEPENDENT` entry whose found set is the unqualified lookup of
+`operator co_await` at the definition, re-run at the recording site
+(flag `ADL`), with the pattern node `PatternNode::Oper(e, 0)`; each
+specialization that reaches it has a row naming the `operator
+co_await` applied, or a `SPEC_BUILTIN` row when none applies. A
+discarded `if constexpr` branch has none, as for any dependent
+operator.
 
 #### 18.13.7 Recording sites, `how` and the operator join
 
@@ -4346,6 +4734,18 @@ Until stage 6c lands, these have no entry.
   the fold expansion (`fold_combine` per application,
   `fold_applied_none` for an expansion applying none), all behind
   `has_pattern_nodes()`.
+- **Stage 6c sites.** `parse_new_expr` and `parse_delete_expr`
+  (`crates/kiln_parse/src/new_delete.rs`) call
+  `Sema::note_written_new_delete` with the expression built, the
+  keyword's range (through the `]` for `delete[]`) and the `::` of
+  `::new` / `::delete`; the `co_await` site of the cast-expression
+  parser calls `Sema::note_written_coawait`. The facts are read from the
+  `CXXNewExpr` (`NewExtra::operator_new`), the `CXXDeleteExpr`
+  (`operator_delete`) and the `CoawaitExpr` (its awaiter, when it is an
+  `operator co_await` call at the keyword); the rows of the dependent
+  ones come from the same `note_written_spec_oper` hook, which reads the
+  rebuilt expressions the same way. Off, each site is one branch on
+  `records_written_refs()`.
 - **`how`.** `member` when the function is a member (a member
   candidate, [over.match.oper]/3.1; `operator[]`, `operator()`,
   `operator->`, a surrogate's conversion function); `adl` when the
@@ -4365,7 +4765,14 @@ Until stage 6c lands, these have no entry.
   parenthesized operand, whose call is at the `(`). Test
   `every_operator_use_joins_its_entries`
   (`crates/kiln_parse/tests/written_refs_accounting.rs`), over the
-  same files as the name join (§18.11.1).
+  same files as the name join (§18.11.1). Stage 6c adds: every
+  new- and delete-expression of the code as written that selected a
+  function has an `operator` entry naming it whose qualified name
+  begins at the expression's location (`qualified_lo`: its `::`, else
+  its keyword); an explicit `co_await`'s `operator co_await` call is a
+  `CXXOperatorCallExpr` at the keyword and joins by the rule above,
+  while the implicit ones (`co_yield`'s, the suspend points') are not
+  at a `co_await` token and are exceptions.
 - **Identifier accounting** (§18.8) is unchanged: operator tokens are
   not identifiers, and a ud-suffix is inside its literal token.
 
@@ -4437,6 +4844,24 @@ pattern nodes, found-set rows and the rows) and 4.0% of total live heap
 (51,658,625 to 53,741,821 bytes). The `SPEC_BUILTIN` rows (5,984) are
 fewer than the new entries (17,691): the rows are kept (§18.13.6).
 
+Stage 6c (WP-2911), measured the same way against its base (WP-2910's
+tip), with debug builds. With the table off nothing new is recorded:
+`note_written_new_delete` and `note_written_coawait` test
+`records_written_refs()` first and the substituter's hook tests
+`has_pattern_nodes()`; the memory report is byte-identical (total live
+heap 43,094,089 bytes); the Oven's counters (everything but wall time)
+are identical on all 29 `bench/oven` programs (234 report lines, 16,583
+evaluations); wall time is within run-to-run noise on a loaded host
+(median 11.41 s before, 11.07 s after, 5 interleaved rounds). With
+the table on, the header adds 151 entries (128 dependent, 23 naming a function; `new` 100, `delete` 23,
+`delete[]` 28; no `co_await`, which the header does not use) and 55 rows
+from its own instantiations (all naming a function, none
+`SPEC_BUILTIN`, none unresolved): `written_refs` 228,772 to 228,923
+items, 14,856 bytes of live table (10,569,108 to 10,583,964) and 0.03%
+of total live heap (53,663,197 to 53,678,053 bytes). Nothing is
+carried that the snapshot and the image did not already carry, so
+neither `FORMAT_VERSION` nor `IMAGE_VERSION` moves.
+
 #### 18.13.9 Tests
 
 `crates/kiln_ast/src/written_refs.rs`
@@ -4477,6 +4902,29 @@ built-in, a template never instantiated and a discarded `if constexpr`
 branch where the form allows), `found-operator.cpp`, and the carriage
 goldens (`Inputs/refs_pch.h`, `Inputs/refs_mod.cppm`: a dependent
 `t + t` and a fold the consumer instantiates).
+
+Stage 6c (WP-2911): `crates/kiln_parse/tests/written_refs.rs`
+(`alloc_entries_through_the_api`: a class's own and the global
+functions, `how=qualified`, the range of `delete[]`, `::new`'s
+`GLOBAL` qualifier and lead, a dependent `::new T`'s row),
+`written_refs_accounting.rs` (the operator join over new- and
+delete-expressions), and `tests/conformance/written_refs/`:
+`operators-new-delete.cpp` (class-scope and global, `new[]` and
+`delete[]`, `::new` and `::delete`, placement, an allocation function
+template, sized, aligned and destroying deallocation, a virtual
+destructor, an unevaluated operand), `operators-new-delete-dependent.cpp`
+(rows for a class's and the global functions, `::new`, placement, a
+value-dependent bound, a class template's members, a template never
+instantiated, a discarded branch), `operators-coawait.cpp` (member and
+non-member `operator co_await`, by ADL, none, through
+`await_transform`, `co_yield`, and a coroutine template's rows with a
+`(builtin)` one), `operators-new-delete-errors.cpp`, and the carriage
+goldens (`Inputs/refs_pch.h`, `Inputs/refs_mod.cppm`: a class's own
+`new` and `delete`, `::new` and `::delete`, and a dependent
+`delete new T` the consumer instantiates, through the snapshot and the
+image). The entries reuse the role, qualifier, lead and pattern-node
+shapes of stages 1 to 6b, so neither carriage changes (no
+`FORMAT_VERSION` or `IMAGE_VERSION` bump).
 
 ## 19. The declaration-extent table (WP-2090)
 
@@ -5301,3 +5749,402 @@ macro and as arguments; pasted into an integer, a suffixed and a
 floating literal; stringized; a middle and a last string piece; written
 literals; off by default), and
 `tests/conformance/cpp.predefined/builtin-literal-provenance.cpp`.
+
+## 23. A friend's written form (WP-3164)
+
+A `Friend` declaration's target (`FriendTarget`) is what it befriends.
+In a class template a friend named through a qualifier or a template-id
+is resolved, and the target alone loses what was written: the qualifier
+`Bq<sizeof(sizeof(f(T())))>::` of `friend void
+Bq<sizeof(sizeof(f(T())))>::g();` holds an instantiation-dependent
+expression whose validity is decided per specialization
+([temp.res.general]/6), though its value (and so the target) is the
+same as `Bq<8>::`'s. A tooling client comparing two versions of a
+template must see the difference. `kiln_ast::friend_form` keeps a
+friend's written form as one row per friend that has written parts.
+
+### 23.1 When a row exists
+
+`DeclArena::friend_forms` holds the rows in declaration order (the
+order Sema declares the friends, patterns and instantiations alike);
+`ColdDeclData::friend_form` maps a `Friend` to its row. A friend has a
+row, in any class (templated or not), when
+
+- its declarator-id is qualified (`friend void N::f();`, `friend int
+  B<T>::m(T);`, `template <class U> friend void A<U>::f();`);
+- its declarator-id is a template-id (`friend void h<int>();`, `friend
+  bool operator==<>(const X&, const X&);`, [temp.friend]/1.3);
+- it names a constructor, destructor or conversion function (`friend
+  Z<T>::Z();`);
+- it is a qualified class friend with a template-head of its own
+  (`template <class U> friend class N::X;`, `template <class U> friend
+  class A<U>::In;`).
+
+`friend void f(int);`, `template <class U> friend void f(U);` and
+`friend class C;` have none: the target declaration (or type) is their
+whole written form. A qualified class friend without a head of its own
+has none either: its target type keeps the elaborated type with the
+qualifier as written (§23.2.1).
+
+A friend an instantiation declares in a class that is not itself a
+pattern has a row only while it is still matched per specialization
+(`DEPENDENT`, below): a fully instantiated friend's target is
+`FriendTarget::Decl` of the exact entity (`h<int>` for `friend void
+h<>(T);` in `S<int>`). Such a row is a copy of the pattern's with the
+substituted qualifier.
+
+### 23.2 The row
+
+`FriendForm` (40 bytes):
+
+| field | type | meaning |
+|---|---|---|
+| `kind` | `FriendFormKind` (1) | `Function` (a qualified function or function template), `Specialization` ([temp.friend]/1.3), `Constructor`, `Destructor`, `Conversion`, `Class` |
+| `flags` | `FriendFormFlags` (1) | `GLOBAL` (the qualifier begins with `::`), `TEMPLATE_KW` (`Bq<8>::template t<1>`), `EVERY_SPEC` (a [temp.friend]/5 friend of every specialization: its own head deduces the qualifier's arguments), `DEPENDENT` (matched per specialization of the class, §23.3), `UNSUPPORTED` (accepted with `-Wunsupported-friend` and ignored) |
+| `name` | `DeclName` | the befriended name: as written (`g`, `h`), or the special member's own name when it is known |
+| `name_loc` | `Loc` | where the name is written |
+| `qualifier` | `Option<NnsId>` | the nested-name-specifier as written: its `Nns::Type` components keep their sugar, so `Bq<sizeof(sizeof(f(T())))>::` holds the expression and `Bq<8>::` does not |
+| `qualifier_loc` | `Loc` | where the qualifier begins |
+| `args` | `Option<ArgListId>` | the template-id's arguments as written (instantiation-dependent expressions included); `Some(EMPTY)` for `f<>`, `None` without a template-id |
+| `entity` | `Option<DeclId>` | §23.3 |
+| `found` | `ListId` of `DeclId` | the function templates lookup of a specialization's name found (first declarations); empty otherwise |
+| `heads` | `ListId` of `TemplateParamListId` | the friend's own template-heads, outermost first; each head's parameters are declarations and its requires-clause is `TemplateParamList.requires` |
+| `requires` | `Option<ExprId>` | the trailing requires-clause |
+
+Ids, not copies: `heads` and `requires` are the lists and expressions a
+target declaration holds, when there is one.
+
+#### 23.2.1 Class friends
+
+A class friend's written form is its type: `FriendTarget::Type` keeps
+the elaborated type with its keyword and the qualifier as written
+(`friend struct ::G;` is `struct ::G`, `friend struct
+Bq<sizeof(sizeof(f(T())))>::Y;` is `struct Bq<sizeof (sizeof
+(f(T())))>::Y` over `Bq<8>::Y`), as clang's dump shows it. A row adds
+only an own head (`Class`, with `qualifier` the same specifier).
+
+### 23.3 The entity
+
+`entity` follows the written-reference referent rules (§18):
+
+- a target `Decl(t)`: none, the target is the entity
+  (`FriendFormView::entity` returns `t`);
+- a specialization ([temp.friend]/1.3): the template its match chose;
+  before the match (`DEPENDENT`) the one function template found, none
+  when several were (the client compares `found`);
+- a member template of a non-dependent class (`friend void
+  Bq<8>::t<sizeof(T)>();`): that template;
+- a dependent qualifier naming a specialization of class template `A`:
+  the member of `A`'s primary pattern found by the name and, for a
+  function, the declared type; none when the primary has no such member
+  (it may be in an explicit or partial specialization);
+- a constructor, destructor or conversion function: that special member
+  of the class (its pattern when dependent), else none.
+
+**With `DEPENDENT` set, `entity` is a CANDIDATE, not the referent**: what
+the friend befriends is decided per specialization of its class, and an
+explicit or partial specialization may make it another declaration (or
+none). `found` never lists partial specialization candidates.
+
+The written-reference entry at `name_loc` has the row's entity (WP-3008,
+§18.4): one source of truth. A `DEPENDENT` row's entry is `DEPENDENT`
+too, with the candidate as its entity (printed `dep`), and a
+specialization's keeps its found set.
+
+### 23.4 Reading it
+
+`Ast::friend_form(fd)` answers in three ways:
+
+- `FriendFormAnswer::Row(view)`: the row, through `FriendFormView`
+  (`kind`, `flags`, `name`, `name_loc`, `qualifier`, `qualifier_loc`,
+  `args`, `entity`, `found`, `heads` / `head(i)` / `head_params(i)` /
+  `head_requires(i)`, `requires`);
+- `FriendFormAnswer::None`: the friend has no written parts (§23.1);
+- `FriendFormAnswer::NotCarried`: the friend came from a module image,
+  which does not carry rows (§23.5); its form is unknown, not absent.
+
+`DeclArena::friend_forms()` lists `(Friend, row)` pairs in declaration
+order.
+
+Sema matches friends from the row (spec/sema-class.md §2.4): a
+specialization's name, arguments, found templates and location; a
+special member's kind, head and qualifier; a [temp.friend]/5 friend's
+qualifier, name, function type and requires-clause; a qualified
+friend's qualifier and the context it names. Sema keeps only its own
+state beside it: the substitution levels and caches of
+`MemberFriends`, the `noexcept` deferral of a friend specialization
+(`friend_late_exc`), and a function-to-`Friend` index
+(`friend_fn_decls`).
+
+### 23.5 Snapshots, modules
+
+A snapshot (PCH) carries the rows and the map with the `Ast` (`Snap`),
+in order (`pch_snapshot` `FORMAT_VERSION` 172). A module image does not
+carry them: an imported `Friend` answers `NotCarried`, and the friends
+that would need a row fall back as before (bmi_image/friend.rs, phase 2
+of the design: row WP-3230).
+
+### 23.6 The dump
+
+`-fkiln-dump-friend-forms` (with `-fsyntax-only`, to the output, after
+the other kiln dumps) prints one line per row in declaration order:
+
+```
+<friend loc> FriendForm <kind> [qualifier '<nns>'] name '<name>'@<loc>
+  [args <args>] [heads <n>] [requires] [entity <decl>@<loc>]
+  [found [<decl>@<loc>, ...]] [global] [template] [every-spec]
+  [dependent] [unsupported]
+```
+
+(one line; wrapped here), positions as `line:col` in the main file and
+`file:line:col` elsewhere. Tests: `crates/kiln_parse/tests/friend_forms.rs`
+(dump goldens of the reproducers above and of special members,
+[temp.friend]/5 friends (`UNSUPPORTED`), `::` and a non-templated class;
+pairs differing only in an instantiation-dependent expression or a
+head's constraint; a trailing requires-clause; `template`; the
+instantiated target `h<int>`; the written-reference agreement) and
+`crates/kiln_driver/tests/friend_forms_carry.rs` (the dump option's
+golden, a snapshot round trip in order, `NotCarried` through a module
+image). A head's default argument cannot tell two rows apart in valid
+code: a friend class template declaration has none, and a friend
+function template declaration with one must be a definition
+([temp.param]/12), which a qualified friend never is ([class.friend]/6).
+
+## 24. Function-name spans (WP-3280)
+
+`__PRETTY_FUNCTION__`, `__FUNCTION__`, `__func__`,
+`__builtin_FUNCTION()` and `std::source_location::function_name()`
+produce bytes such as `void ns::C<ns::S>::f(T) [T = ns::S]`. A tooling
+client that renames an entity must know which of those bytes name which
+declaration. `kiln_ast::fn_names` keeps, when asked for, one record per
+distinct (string, function) pair: the byte range of every declaration
+name the printers wrote, and the declaration it names. The strings
+themselves are unchanged (clang 19/22 parity as before); the table is a
+side record of how they were printed.
+
+### 24.1 Opt-in
+
+`-fkiln-fn-names` records the table; `-fkiln-dump-fn-names` records and
+prints it (§24.6). `FrontEndOptions::fn_names` is the in-process form,
+`ParseOptions::fn_names` the parser's. Off by default: no table, no
+marker, no work beyond a flag test per string. The options are not part
+of a snapshot's identity (spec/pch.md "Identity"), and a module built in
+process for an importer records nothing (§24.8). With the environment
+variable `KILN_FN_NAMES_VERIFY=1` the table is on and every record is
+self-checked as it is made (§24.7).
+
+### 24.2 What is recorded
+
+Every string the predefined-name printer makes for a function: the
+literal of a `PredefinedExpr` (`__func__`, `__FUNCTION__`,
+`__PRETTY_FUNCTION__`), the made string of a source-location builtin of
+role `Function` or `PrettyFunction` (`__builtin_FUNCTION()`, the
+`_M_function_name` of `__builtin_source_location()`'s `__impl` object,
+per use, WP-3000), and the pretty name of a contract site's function
+(reached through `get`, below). A string made for no function (`""`,
+`top level`) has no record. Strings the source spells, reflection names
+and diagnostic text are not covered.
+
+### 24.3 The entry (16 bytes, a `size_of` unit test)
+
+`FnNameSpan { lo: u32, hi: u32, entity: Option<DeclId>, role: u8,
+flags: u8, depth: u16 }`: the bytes `[lo, hi)` of the string name
+`entity`.
+
+- `role` (`FnNameRole`): `Scope` (a namespace, class or function before
+  the name), `Name` (the function's own name), `Return`, `Param` (a type
+  in the parameter list, as the pattern writes it), `Binding` (a
+  template parameter's name in `[P = A, ...]`), `Arg` (a name in a
+  bracketed argument `A`).
+- `flags`: `DEPENDENT` (1: a dependent name; `entity` is `None`),
+  `SYNTHESIZED` (2: an unnamed spelling such as `(anonymous namespace)`,
+  `(lambda)`, `(lambda at F:L:C)`, `(unnamed struct at F:L:C)`; always
+  has an entity), `CLASS_NAME` (4: a constructor's or destructor's class
+  name, the `~` excluded), `QUALIFIED` (8: the entry, or the `~` before
+  a destructor's, follows `::`, and the `::` follows the previous entry at
+  the same depth directly or after that entry's `<...>` arguments or
+  `(...)` parameters: `C` in `ns::C`, `f` in `C<int>::f`, `L` in
+  `loc()::L`), `INVENTED` (16: the `x` of an abbreviated
+  template's `x:auto`, naming the function parameter). Bit 32 is
+  reserved.
+- `depth`: nesting inside an enclosing entry's template argument list,
+  conversion target or scope function's parameter list; the owner of an
+  entry at depth `d > 0` is the nearest earlier entry at `d - 1`
+  (`FnNameView::owner`).
+
+Entries are sorted by `lo`, nest properly and never overlap at one
+depth. Each entity is normalised as §18's entries are: `Ast::first(d)`
+of the declaration printed (one id for every name of one namespace or
+class). The record key's function stays the declaration the string was
+printed for.
+
+### 24.4 Which tokens get entries
+
+Every declaration name the printers write gets exactly one entry over
+exactly its bytes, and the entity is the declaration whose name was
+written. Keywords, builtin types, punctuation, `virtual `/`static `,
+cv- and ref-qualifiers, `...`, literal values, `<dependent type>`,
+`auto`/`decltype(auto)` and the `:auto` of `x:auto` get none.
+
+- Namespaces: one `Scope` entry per printed component; an inline
+  namespace is not printed; `(anonymous namespace)` is one synthesized
+  entry.
+- Classes in the scope: the record printed (for `C<ns::S>::`, the
+  specialization; `Ast::spec_info` gives its template), its canonical
+  arguments one depth in.
+- The function's name: the identifier; an operator is one entry over
+  `operator==`, `operator()`, `operator new`, `operator""_x`; a
+  conversion function is one entry over `operator <type>` with the
+  type's names one depth in (the target is the name's type, printed
+  canonical: `operator W<S>` names the specialization `W<S>`, while a
+  written return type `W<S>` names the template); a constructor's or destructor's class name,
+  `CLASS_NAME`.
+- Lambdas: the closure is a synthesized `Scope` over its spelling
+  (`(lambda)` with clang 22, `(anonymous class)` under
+  `-fclang-compat=19`), the call operator the `Name` `operator()`; as a
+  type, `(lambda at F:L:C)` is one synthesized entry, path included.
+- A function as a scope (a local class's member): a `Scope` entry for
+  the function, the names of its printed parameters one depth in.
+- Return and parameter types are printed as the pattern writes them: a
+  typedef or alias name names the typedef or alias, a template-id the
+  alias or class template (arguments one depth in), an injected-class-name
+  the pattern record, a template parameter the pattern's parameter
+  (an unnamed one, printed `type-parameter-D-I`, is synthesized).
+- Dependent names: `DEPENDENT`, no entity; their non-dependent parts
+  keep theirs.
+- `[P = A, ...]`: `P` is a `Binding` of the template parameter (the
+  same id a `Param`/`Return` entry of it carries); `x:auto`'s `x` is an
+  `INVENTED` binding of the function parameter; `A` is printed
+  canonical, so its type entities are namespaces, classes, enums and
+  closures, never aliases; value arguments carry the names the constant
+  printer writes (enumerators, variables, members); a pack's elements
+  stay at the pack's depth.
+
+Example, `void ns::C<ns::S>::f(T) [T = ns::S]`:
+
+```
+[5,7)   scope ns
+[9,10)  scope C -> ns::C<ns::S>, q
+[11,13) scope ns, d=1
+[15,16) scope S, d=1, q
+[19,20) name f, q
+[21,22) param T -> template parameter T of C
+[25,26) binding T -> the same parameter
+[29,31) arg ns
+[33,34) arg S, q
+```
+
+### 24.5 Reading it
+
+`Ast::fn_names` holds the table: `is_on`, `get(lit, function)`,
+`len`, `entry_count`, `iter(ast)`, `unrecorded_prefix()`. The accessors
+return a `FnNameView { function, lit, bytes, spans, offset }`, with
+`text(i)`, `owner(i)`, `qualifier(i)` and `visible(len)`, which clips
+the entries to the `len` bytes from `offset` (the view of a client
+holding a pointer into the string) and marks every clipped entry
+`partial` (never dropping one silently).
+
+- `fn_name_of_string(lit, origin, offset)`: the fields of a
+  `PtrBase::StringLit` pointer and its byte offset, as a client meets
+  them walking a constant.
+- `fn_name_of_value(v)`: the same for a frozen pointer scalar.
+- `fn_name_of_predefined(e)`: a `PredefinedExpr`'s string.
+- `fn_name_at_use(u, FnNameAt::Function | FnNameAt::Location)`: the
+  function name at a source-location use (`SourceLocExpr`,
+  `CXXDefaultArgExpr` or `CXXDefaultInitExpr` with values, WP-3279):
+  `__builtin_FUNCTION()`'s string, or the `__impl` object's
+  `_M_function_name`.
+
+With the table on, the answer is `None` exactly when:
+
+1. the origin is neither a made string of role `Function` or
+   `PrettyFunction` nor a `PredefinedExpr`'s literal (a literal the
+   source spells, a reflection or contract string, a file name);
+2. the string names no function (`""` or `top level` outside one);
+3. the string was made in a restored PCH prefix (`unrecorded_prefix()`
+   is then true), or it is the literal of a `PredefinedExpr` in a body
+   read from a module image (no carriage yet, row WP-3340);
+4. `offset` is past the end of the string;
+5. for `fn_name_of_predefined` and `fn_name_at_use`: the node is not of
+   the asked kind, or has no values (a dependent `PredefinedExpr` in a
+   pattern, a use whose default holds no source-location builtin), or
+   `Location` is asked of a use with no `__impl` object.
+
+Off, every accessor answers `None`. A string the Oven builds from these
+bytes (a copy, a `std::string`) is a new object with no entries: only a
+pointer into the made string itself carries them. Two calls of one
+function with different deduced arguments (`f(1)`, `f(1L)`) are two
+functions and two records; two uses of one default argument in one
+function share a string and a record.
+
+### 24.6 The dump
+
+`-fkiln-dump-fn-names` (with `-fsyntax-only` or a compile, to the
+output, after the other kiln dumps) prints the records in `iter(ast)`
+order: by the function's location, then the bytes, then the function's
+key name (spec/types.md §12.1), a function of the source only:
+
+```
+fn-name '<bytes>' of <function>@<loc>
+  [lo,hi) <role> '<text>' -> <entity>@<loc> [d=N] [q] [dep] [synth] [class-name] [invented]
+```
+
+`<entity>` is `(dependent)` for a dependent entry; a specialization is
+printed with its arguments, a parameter unqualified. Positions are
+`line:col` in the main file and `file:line:col` elsewhere. After a
+restored PCH the dump starts with `fn-names: strings of the restored
+prefix have no records`.
+
+### 24.7 How it is recorded, and the self-check
+
+The printers are the ones that make the bytes: with a sink
+(`FnSpanSink`) they write in-band markers (private-use characters of
+plane 15: an open marker carrying the entry's index, a close marker,
+and group markers around template argument lists and a scope function's
+parameters) at `AstNames::write_name`, the unnamed spellings, the type
+printer's dependent identifiers and template parameter names. The
+markers move with the bytes through every splice; `FnSpanSink::strip`
+removes them in one pass and computes ranges, depth and `QUALIFIED`.
+Without a sink no marker is written. When a (string, function) pair is
+first made with the table on, sema prints it a second time with a sink
+and keeps the record only if the stripped bytes equal the string's.
+
+`fn_names::verify` checks a record: bounds and order, proper nesting,
+that an entry has an entity exactly when it is not `DEPENDENT`, that the
+entity exists, that a plain entry's bytes are its entity's identifier,
+and the converse: every identifier in the bytes outside all entries
+(not part of a number, character or string literal) is in a closed list
+of keywords, builtin type spellings and fixed printer words, or a
+builtin type family (`__SV`, `__clang_sv`, `__rvv_`, `__builtin_`).
+Under `KILN_FN_NAMES_VERIFY=1` a mismatch or a failed check is the error
+`sema_fn_names_verify_failed`. The lane runs over `tests/conformance`
+(`KILN_FN_NAMES_VERIFY=1 cargo xtask test tests/conformance`: every
+compile inherits the variable) and over `<bits/stdc++.h>` with
+`_GLIBCXX_ASSERTIONS`.
+
+### 24.8 Snapshots, modules, cost
+
+Stage A does not carry the table. A snapshot (PCH) restores none
+(`Snap` skips it; `FORMAT_VERSION` 178 only for the new diagnostic id
+of the self-check, which the schema hash covers), and a consumer that
+records sets `unrecorded_prefix`: the strings made by the prefix have no
+records, those made after it do. A module image carries none
+(`IMAGE_VERSION` unchanged): an importer's own strings are recorded, a
+`PredefinedExpr` in an imported body is not. Carriage of both is row
+WP-3340.
+
+Cost: off, nothing. On, 16 bytes per entry plus a 16-byte record and an
+index slot per string, the `fn_names` row of `-fkiln-memory-report`.
+Measured with `-std=c++26 -D_GLIBCXX_ASSERTIONS -fsyntax-only` (WP-3280):
+`#include <bits/stdc++.h>` alone makes 93 records with 699 entries,
+`fn_names` 14916 bytes live (19856 reserved) of 43.27 MB; a unit that
+also uses `vector`, `map`, `sort`, `regex` and `format` makes 118 records
+with 1028 entries, 21148 bytes live (35648 reserved) of 49.94 MB. The
+total live memory differs, flag off against on, by exactly the row; off,
+there is no row. Both pass the self-check.
+
+Tests: unit tests in `crates/kiln_ast/src/fn_names.rs` (entry size,
+marker round trip, depth, malformed markers, clipping, the converse
+check), `crates/kiln_parse/tests/fn_names.rs` (the accessors, per-use
+strings, deduction, contracts, off), and the `fn-names:` goldens under
+`tests/conformance/fn_names/`.

@@ -1,0 +1,7 @@
+8:1-8:2  type  'A' -> A@7:8 in=a@8:3
+10:23-10:24  expr  'a' -> a@8:3 in=K::@10:27
+10:27-10:31  elaborated  'peek' -> A::peek@7:16 q=specifier:10:14 in=K::@10:27
+14:33-14:34  type  'T' -> T@13:17 in=D::@14:41
+14:23-14:25  template  'Bq' -> Bq@12:25 in=D::@14:41
+14:41-14:42  elaborated  'g' -> (dependent) q=specifier:14:14 in=D::@14:41
+16:1-16:2  template  'D' -> D@13:26 in=d@16:8

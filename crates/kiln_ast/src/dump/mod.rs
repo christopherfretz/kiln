@@ -330,6 +330,12 @@ struct Dumper<'a, W> {
     /// declaration that is its own ancestor is printed as a leaf (a
     /// malformed AST must not make the dump unbounded).
     path: Vec<Option<DeclId>>,
+    /// The default argument and default member initializer uses
+    /// (`CXXDefaultArgExpr` / `CXXDefaultInitExpr`) on the path to the
+    /// current line, with their depths, outermost first: an immediate
+    /// invocation under one shows its value at the outermost
+    /// ([`Ast::default_use_immediate_value`], CWG 2631).
+    uses: Vec<(usize, ExprId)>,
 }
 
 /// The deepest line printed; deeper children are cut (a backstop against
@@ -351,6 +357,8 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 path_prefix_map: &[],
                 local_scopes: false,
                 key: false,
+                spans: None,
+                plain_ast: false,
             },
             opts,
             out,
@@ -359,6 +367,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             stack: Vec::new(),
             kids: Vec::new(),
             path: Vec::new(),
+            uses: Vec::new(),
         }
     }
 
@@ -579,10 +588,14 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         self.prefix.clear();
         self.stack.clear();
         self.path.clear();
+        self.uses.clear();
         self.stack.push(Item { node: root, label: None, last: true, depth: 0 });
         while let Some(it) = self.stack.pop() {
             let depth = it.depth as usize;
             self.path.truncate(depth);
+            while self.uses.last().is_some_and(|&(d, _)| d >= depth) {
+                self.uses.pop();
+            }
             let decl = match it.node {
                 Node::Decl(d) => Some(d),
                 _ => None,
@@ -647,6 +660,14 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             if depth > 0 {
                 self.prefix.push_str(if it.last { "  " } else { "| " });
             }
+            if let Node::Expr(e) = it.node
+                && matches!(
+                    self.ast.exprs.get(e).kind(),
+                    ExprKind::CXXDefaultArgExpr | ExprKind::CXXDefaultInitExpr
+                )
+            {
+                self.uses.push((depth, e));
+            }
             let mut kids = std::mem::take(&mut self.kids);
             kids.clear();
             self.children(it.node, &mut kids);
@@ -657,6 +678,13 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             self.kids = kids;
         }
         Ok(())
+    }
+
+    /// The value of immediate invocation `c` at the outermost default
+    /// argument or initializer use on the path ([`Dumper::uses`]).
+    fn use_value(&self, c: ExprId) -> Option<crate::ids::ConstValueId> {
+        let &(_, u) = self.uses.first()?;
+        self.ast.default_use_immediate_value(u, c)
     }
 
     /// The node printed for statement `s` (`ExprStmt` is elided).
@@ -721,11 +749,14 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             | Node::SpecRef(_)
             | Node::InheritedFrom(_) => {}
         }
-        // A nested immediate invocation has no wrapper in clang.
+        // A nested immediate invocation has no wrapper in clang; one of a
+        // default argument or initializer has at a use that valued it
+        // (clang's rebuilt argument).
         for (k, _) in kids.iter_mut() {
             while let Node::Expr(x) = *k
                 && self.ast.exprs.get(x).kind() == ExprKind::ConstantExpr
                 && self.ast.exprs.constant_elided(x)
+                && self.use_value(x).is_none()
             {
                 *k = Node::Expr(self.ast.exprs.operand(x));
             }
@@ -1404,6 +1435,12 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         }
         if n.has(DeclFlags::INVALID) {
             self.line.push_str(" invalid");
+            // A silent failure says what failed to form (spec/ast-dump.md
+            // §3, WP-3281); clang forms no declaration for these.
+            if let Some(k) = decls.subst_failed(d) {
+                self.line.push_str(" subst-failed=");
+                self.line.push_str(k.name());
+            }
         }
         if kind.is_function() {
             self.function_fields(d);
@@ -2672,8 +2709,9 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             ExprKind::ConstantExpr => {
                 // A `void` invocation's stand-in value is not shown (clang
                 // stores none), nor a glvalue's address (clang prints no
-                // `LValue` result).
-                if let Some(v) = exprs.constant_value(e)
+                // `LValue` result). One of a default argument or
+                // initializer shows its value at the use (CWG 2631).
+                if let Some(v) = exprs.constant_value(e).or_else(|| self.use_value(e))
                     && !exprs.constant_value_hidden(e)
                     && !ast.types.is_void(n.ty())
                     && !n.value_category().is_glvalue()

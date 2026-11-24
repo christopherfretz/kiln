@@ -323,6 +323,7 @@ sema_decltype_auto_compound = Error (1) "cannot form {0:pointer to|reference to|
 // ----- WP-1135 (clang `err_decltype_auto_function_declarator_not_declaration`)
 sema_decltype_auto_function_declarator = Error (0) "'decltype(auto)' can only be used as a return type in a function declaration";
 sema_decltype_auto_initializer_list = Error (0) "cannot deduce 'decltype(auto)' from initializer list";
+sema_decltype_in_declarator = Error (0) "a 'decltype' specifier cannot be used in a declarative nested name specifier";
 sema_decomp_decl_ambiguous_base = Error (2) "cannot bind members of ambiguous base class {1} of {0}";
 sema_decomp_decl_ambiguous_base_19 = Error (2) "cannot decompose members of ambiguous base class {1} of {0}";
 sema_decomp_decl_anon_union_member = Error (2) "cannot bind class type {0} because it has an anonymous {1:struct|union} member";
@@ -370,6 +371,10 @@ sema_deduction_guide_friend = Error (0) "cannot declare a deduction guide as a f
 sema_deduction_guide_not_deducible = Error (1) "deduction guide template contains {0:a template parameter|template parameters} that cannot be deduced";
 // WP-1471: clang err_deduction_guide_redeclared.
 sema_deduction_guide_redeclared = Error (0) "redeclaration of deduction guide";
+// WP-3272: [temp.deduct.guide]/3, clang err_deduction_guide_wrong_access
+// and err_deduction_guide_wrong_scope.
+sema_deduction_guide_wrong_access = Error (0) "deduction guide has different access from the corresponding member template";
+sema_deduction_guide_wrong_scope = Error (1) "deduction guide must be declared in the same scope as template '{0}'";
 sema_deep_exception_specs_differ = Error (1) "exception specifications of {0:return|argument} types differ";
 // [dcl.fct.default]/4, /6 (WP-1470): default arguments added by a
 // redeclaration (clang `err_param_default_argument_template_redecl`,

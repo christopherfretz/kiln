@@ -1,5 +1,5 @@
-15:15-15:18  nns  'lib' -> lib@9:11 in=(tu)
-15:20-15:24  type  'Item' -> lib::Item@10:8 q=15:15 in=(tu)
+15:15-15:18  nns  'lib' -> lib@9:11 in=Alias@15:7
+15:20-15:24  type  'Item' -> lib::Item@10:8 q=15:15 in=Alias@15:7
 17:38-17:39  type  'T' -> T@17:17 in=t@17:41
 18:12-18:13  nns  'T' -> T@17:17 in=k@18:20
 18:15-18:19  type  'kind' -> (dependent) q=18:12 in=k@18:20

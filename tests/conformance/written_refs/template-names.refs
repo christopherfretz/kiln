@@ -1,7 +1,7 @@
 12:3-12:4  type  'T' -> T@11:17 in=lib::Vec::data@12:6
 13:22-13:23  type  'U' -> U@13:19 in=lib::Vec::as@13:24
-14:55-14:56  type  'U' -> U@14:19 in=lib::Vec::Rebind@14:29
-14:51-14:54  template  'Vec' -> lib::Vec@11:27 in=lib::Vec::Rebind@14:29 how=injected
+14:55-14:56  type  'U' -> U@14:19 in=lib::Vec::Rebind::type@14:44
+14:51-14:54  template  'Vec' -> lib::Vec@11:27 in=lib::Vec::Rebind::type@14:44 how=injected
 13:44-13:45  type  'U' -> U@13:19 in=lib::Vec::as@13:24
 17:3-17:4  type  'A' -> A@16:17 in=lib::Pair::a@17:5
 18:3-18:4  type  'B' -> B@16:26 in=lib::Pair::b@18:5
@@ -11,11 +11,11 @@
 20:42-20:43  type  'T' -> T@20:17 in=lib::<deduction guide for Pair>@20:20
 20:34-20:38  template  'Pair' -> lib::Pair@16:36 in=lib::<deduction guide for Pair>@20:20
 20:20-20:24  template  'Pair' -> lib::Pair@16:36 in=lib::<deduction guide for Pair>@20:20
-21:32-21:33  type  'T' -> T@21:17 in=lib@10:11
+21:32-21:33  type  'T' -> T@21:17 in=lib::Ptr@21:26
 24:7-24:10  nns  'lib' -> lib@10:11 in=Pair@24:12
 24:12-24:16  using-decl  'Pair' -> lib::Pair@16:36 q=24:7 in=Pair@24:12
-26:38-26:41  nns  'lib' -> lib@10:11 in=(tu)
-26:43-26:46  template  'Vec' -> lib::Vec@11:27 q=26:38 in=(tu)
+26:38-26:41  nns  'lib' -> lib@10:11 in=Holder@26:55
+26:43-26:46  template  'Vec' -> lib::Vec@11:27 q=26:38 in=Holder@26:55
 27:3-27:4  template  'C' -> C@26:34 in=Holder::c@27:10
 31:1-31:4  nns  'lib' -> lib@10:11 in=app::numbers@31:15
 31:6-31:9  template  'Vec' -> lib::Vec@11:27 q=31:1 in=app::numbers@31:15

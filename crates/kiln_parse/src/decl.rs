@@ -13,7 +13,6 @@ use kiln_ast::{AttrId, DeclId, ExprId, QualType};
 use kiln_diag::{DiagId, FixIt};
 use kiln_lex::{Punct, Std, TokFlags, TokKind};
 use kiln_sema::declspec::SpecError;
-use kiln_sema::templ::auto::AutoGroup;
 use kiln_sema::{
     BindingId, Chunk, DeclSpec, Declarator, DeclaratorContext, Decomposition, DefaultArg,
     Designator, InitItem, InitList, InitValue, Initializer, NameClass, NullSpec, ParamInfo, Sign,
@@ -743,9 +742,9 @@ impl Parser<'_, '_> {
                 Some(self.s.act_on_alias_decl(name, nl, ty, &attrs, own, tl, loc))
             };
             if let Some(d) = d {
-                // Closures in the type-id belong to the alias (spec/ast.md
-                // §5.9); its names are not claimed yet (§18.3).
-                self.s.claim_alias_closures(wmark, d);
+                // The alias claims the names and closures of its type-id
+                // (spec/ast.md §5.9, §18.3).
+                self.s.claim_written_refs(wmark, Some(d));
                 self.s.note_alias_decl_loc(d, loc);
                 self.ext_name_span(d, Loc::INVALID, Span::new(nl, n_hi));
             }
@@ -962,6 +961,9 @@ impl Parser<'_, '_> {
             self.skip_to_semi();
             return None;
         };
+        // The assertion claims the names of its condition and message
+        // (spec/ast.md §18.3).
+        let wmark = self.s.written_ref_mark();
         let Some(cond) = self.parse_constant_expr() else {
             self.skip_until(&[Punct::RParen], false, true);
             self.skip_to_semi();
@@ -1015,6 +1017,7 @@ impl Parser<'_, '_> {
         }
         self.expect_closing(Punct::RParen, Punct::LParen, open);
         let d = self.s.act_on_static_assert(cond, msg, loc);
+        self.s.claim_written_names(wmark, Some(d));
         self.expect_semi_after("static_assert");
         Some(d)
     }
@@ -3059,7 +3062,13 @@ impl Parser<'_, '_> {
         ds.tag_declares = use_ != TagUse::Reference;
         ds.tag_extent = ext;
         ds.keyword = keyword;
-        let ty = self.s.elaborated_tag_type(d, keyword);
+        let mut ty = self.s.elaborated_tag_type(d, keyword);
+        if let (TagUse::Friend, Some(q)) = (use_, qual) {
+            // A friend keeps its qualifier as written (`friend struct
+            // ::G;`, `friend struct Bq<sizeof(f(T()))>::Y;`): its type is
+            // the friend's written form (spec/ast.md §23.2).
+            ty = self.s.friend_elaborated_type(ty, q.nns, q.loc);
+        }
         if let Err(e) = ds.set_base(TypeSpecKind::Named, Some(ty), kw_loc) {
             ds.invalid = true;
             self.spec_error(&e, kw_loc);
@@ -3420,6 +3429,9 @@ impl Parser<'_, '_> {
             let loc = self.loc();
             self.bump();
             let name_hi = self.prev_end();
+            // The enumerator claims the names of its attributes and value
+            // (spec/ast.md §18.3).
+            let wmark = self.s.written_ref_mark();
             let mut attrs = Vec::new();
             self.parse_attributes(&mut attrs);
             let mut init = None;
@@ -3430,6 +3442,9 @@ impl Parser<'_, '_> {
                 }
             }
             let en = self.s.act_on_enumerator(name, loc, init, &attrs);
+            if en != self.s.ast.tu {
+                self.s.claim_written_names(wmark, Some(en));
+            }
             // An enumerator-definition, before its `,` (spec/ast.md §19.3).
             if self.ext_on() {
                 self.ext_name_span(en, Loc::INVALID, Span::new(loc, name_hi));
@@ -3897,7 +3912,13 @@ impl Parser<'_, '_> {
         // The scopes a qualified declarator-id enters for the rest of the
         // declarator.
         let mut entered = 0;
-        if (self.ident().is_some() || self.at(Punct::ColonColon))
+        // A qualifier may begin with a decltype-specifier
+        // (`friend void decltype(x)::g();`, [expr.prim.id.qual]/1, as clang
+        // parses it; a non-friend one is diagnosed by sema,
+        // `diagnose_qualified_declaration`).
+        let decltype_qual =
+            self.at_kw(Kw::Decltype) && self.decltype_scope_end(self.pos()).is_some();
+        if (self.ident().is_some() || self.at(Punct::ColonColon) || decltype_qual)
             && d.ctx != DeclaratorContext::TypeName
         {
             let last_qual = self.last_qualifier_name();
@@ -3909,6 +3930,7 @@ impl Parser<'_, '_> {
             self.s.set_entering_context(saved);
             let id_lo = self.loc();
             d.id_qual = if self.pos() == q_pos { Loc::INVALID } else { q_lo };
+            d.qual_last = self.nns_last_loc;
             if matches!(qual, Ok(Some(_))) {
                 d.id_link = self.nns_link;
             }
@@ -3924,6 +3946,17 @@ impl Parser<'_, '_> {
             d.qualifier_nns = qual.map(|q| q.nns);
             let qual = qual.map(|q| q.ctx);
             d.global_qualifier = global && qual.is_some();
+            // `friend void Bq<8>::template t<1>();`: the `template`
+            // keyword before a qualified template-id ([temp.names]/5),
+            // kept on the friend's row (spec/ast.md §23).
+            if qual.is_some()
+                && self.at_kw(Kw::Template)
+                && self.ident_of(self.peek(1)).is_some()
+                && self.peek_is(2, Punct::Less)
+            {
+                self.bump();
+                d.template_kw = true;
+            }
             if self.at(Punct::Tilde) || self.at_kw(Kw::Operator) {
                 d.qualifier = qual;
                 entered = qual.map_or(0, |q| self.s.act_on_enter_declarator_scope(q));
@@ -5627,7 +5660,7 @@ impl Parser<'_, '_> {
         }
         let mut base_ty: Option<QualType> = None;
         // [dcl.spec.auto.general]/3, /8: checked at the end of the group.
-        let mut group = AutoGroup::default();
+        let mut group = self.s.group_after_specifiers(wmark);
         // [dcl.pre]/6 (clang's `BuildDeclaratorGroup`): a structured
         // binding declaration is alone in its group.
         let mut first_decomp: Option<(Loc, Option<DeclId>)> = None;

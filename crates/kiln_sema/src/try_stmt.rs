@@ -127,10 +127,11 @@ impl Sema<'_, '_> {
         let ctx = self.ctx;
         let mut h = DeclHead::new(ctx, name.map_or(DeclName::EMPTY, DeclName::ident), loc);
         if invalid {
-            h.flags = h.flags.with(DeclFlags::INVALID);
+            h.flags = h.flags.with(DeclFlags::INVALID); // ledger: born invalid
         }
         let spec = VarSpec::new().with_exception_var(true);
         let v = self.builder().var(h, ty, spec, None);
+        self.note_born_invalid(v);
         self.handler_type_locs.insert(v, type_loc);
         let mut attrs = ds.attrs.clone();
         attrs.extend(d.attrs.iter().copied());
@@ -163,7 +164,7 @@ impl Sema<'_, '_> {
         let opaque = self.builder().opaque_value_of(obj_ty, ValueCategory::LValue, loc);
         let init = self.convert_for_init(opaque, ty, ConvCtx::Initialization);
         if self.is_err_expr(init) {
-            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            self.invalidate(v);
             return;
         }
         let ctor = self.ast.exprs.get(init).kind() == ExprKind::CXXConstructExpr

@@ -1,0 +1,8 @@
+fn-name 'void ns::log(T) [T = double]' of ns::log<double>@9:25
+  [5,7) scope 'ns' -> ns@8:11
+  [9,12) name 'log' -> ns::log<double>@9:25 q
+  [13,14) param 'T' -> T@9:17
+  [17,18) binding 'T' -> T@9:17
+fn-name 'void ns::plain()' of ns::plain@10:6
+  [5,7) scope 'ns' -> ns@8:11
+  [9,14) name 'plain' -> ns::plain@10:6 q

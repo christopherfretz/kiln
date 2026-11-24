@@ -139,12 +139,14 @@ fn kept_array_bound_flags() {
     let mut ctx = TypeContext::default();
     let plain = ctx.constant_array(INT, 8, None);
     assert!(ctx.flags(plain.ty()).is_empty());
+    ctx.note_inst_bound(ExprId::new(9));
     let kept = ctx.constant_array(INT, 8, Some(ExprId::new(9)));
     let f = ctx.flags(kept.ty());
     assert!(f.contains(TypeFlags::INSTANTIATION_DEPENDENT));
     assert!(!f.intersects(TypeFlags::DEPENDENT | TypeFlags::UNEXPANDED_PACK));
     assert_eq!(ctx.canonical(kept), plain);
     assert!(!ctx.is_dependent(kept));
+    ctx.note_inst_bound(ExprId::new(10));
     ctx.note_pack_bound(ExprId::new(10));
     let packed = ctx.constant_array(INT, 8, Some(ExprId::new(10)));
     assert!(ctx.flags(packed.ty()).contains(TypeFlags::UNEXPANDED_PACK));
@@ -155,11 +157,42 @@ fn kept_array_bound_flags() {
     );
 }
 
+/// spec/types.md §7.2 "Written bounds" (WP-3015): a written bound that
+/// is not instantiation-dependent is sugar only: no flag, the canonical
+/// type of the value, and `inst_bound` tells it from a kept one.
+#[test]
+fn written_array_bound_is_sugar_only() {
+    let mut ctx = TypeContext::default();
+    let plain = ctx.constant_array(INT, 2, None);
+    let written = ctx.constant_array(INT, 2, Some(ExprId::new(5)));
+    assert_ne!(written, plain);
+    assert_eq!(ctx.canonical(written), plain);
+    assert!(ctx.flags(written.ty()).contains(TypeFlags::SUGAR));
+    assert!(
+        !ctx.flags(written.ty())
+            .intersects(TypeFlags::DEPENDENT_INSTANTIATION | TypeFlags::UNEXPANDED_PACK)
+    );
+    let TypeView::ConstantArray(a) = ctx.view(written.ty()) else { panic!("not an array") };
+    assert_eq!(a.size_expr, Some(ExprId::new(5)));
+    assert_eq!(ctx.inst_bound(&a), None);
+    // Rebuilt over a qualified element, the written bound stays sugar.
+    let c = ctx.qualify(written, Quals::CONST);
+    let TypeView::ConstantArray(ca) = ctx.view(c.ty()) else { panic!("not an array") };
+    assert_eq!(ca.size_expr, Some(ExprId::new(5)));
+    assert!(!ctx.qflags(c).intersects(TypeFlags::DEPENDENT_INSTANTIATION));
+    ctx.note_inst_bound(ExprId::new(6));
+    let kept = ctx.constant_array(INT, 2, Some(ExprId::new(6)));
+    let TypeView::ConstantArray(k) = ctx.view(kept.ty()) else { panic!("not an array") };
+    assert_eq!(ctx.inst_bound(&k), Some(ExprId::new(6)));
+    assert_eq!(ctx.canonical(kept), plain);
+}
+
 /// spec/types.md §5.3 `Decayed` (WP-2720): sugar for the adjusted
 /// pointer, instantiation-dependent through the declared array type.
 #[test]
 fn decayed_is_sugar_for_the_adjusted_type() {
     let mut ctx = TypeContext::default();
+    ctx.note_inst_bound(ExprId::new(9));
     let kept = ctx.constant_array(INT, 8, Some(ExprId::new(9)));
     let p = ctx.pointer_to(INT);
     let d = ctx.decayed(kept, p);

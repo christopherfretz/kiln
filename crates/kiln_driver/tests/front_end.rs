@@ -17,7 +17,7 @@ use kiln_driver::front_end::{
     Consulted, ConsultedKind, Content, FrontEnd, FrontEndError, FrontEndOptions, FrontEndReport,
     content_digest, run_front_end, std_config,
 };
-use kiln_pp::{Found, LookupForm};
+use kiln_pp::{DirGroup, DropReason, DroppedDir, Found, LookupForm, LookupLog};
 use kiln_sema::Oven;
 use kiln_source::FileOrigin;
 
@@ -435,6 +435,150 @@ fn record_lookups_logs_absolute_names() {
     std::fs::remove_file(&absent).unwrap();
     std::fs::remove_file(&pre).unwrap();
     assert_eq!(check(), Err(format!("lookup of \"{pre}\" now finds nothing (was '{pre}')")));
+}
+
+/// The lookup log of a `-fsyntax-only` run of `cl` (WP-1403), in the
+/// working directory `cwd` when given, with the error count.
+fn lookup_log(cl: &[&str], cwd: Option<&str>) -> (LookupLog, u32) {
+    let mut o = quiet();
+    o.record_lookups = true;
+    o.working_directory = cwd.map(PathBuf::from);
+    let r = run_front_end("kiln++", &argv(cl), o, |fe| fe.lookups.cloned()).unwrap();
+    (r.value.flatten().expect("a lookup log"), r.errors)
+}
+
+/// The search directory at `position` of the log's list.
+fn listed(log: &LookupLog, position: u32) -> &str {
+    &log.dirs[log.list[position as usize] as usize]
+}
+
+/// WP-3275 (spec/driver.md "Header search"): the lookup log names the
+/// search directories the command gave that the list does not search,
+/// each with its group, its place in the command's order and in the
+/// list, and why: a nonexistent `-I`, one that is a symbolic link to an
+/// earlier `-I` (kept is the earlier one), a `-I` the same as a later
+/// `-isystem` (the system one is searched). The list itself is clang's.
+#[cfg(unix)]
+#[test]
+fn lookup_log_names_dropped_search_directories() {
+    let s = Scratch::new("dropped-dirs");
+    let (a, b, sys) = (s.path("a"), s.path("b"), s.path("sys"));
+    for d in [&a, &b, &sys] {
+        std::fs::create_dir(d).unwrap();
+    }
+    let lnk = s.path("lnk");
+    std::os::unix::fs::symlink(&a, &lnk).unwrap();
+    let nope = s.path("nope");
+    let main = s.write("main.cpp", b"int m;\n");
+    let cl = ["-fsyntax-only", "-I", &a, "-I", &nope, "-I", &lnk, "-I", &b, "-I", &sys];
+    let cl: Vec<&str> = cl.into_iter().chain(["-isystem", &sys, &main]).collect();
+    let (log, errors) = lookup_log(&cl, None);
+    assert_eq!(errors, 0);
+    assert_eq!((listed(&log, 0), listed(&log, 1), listed(&log, 2)), (&*a, &*b, &*sys));
+    assert_eq!(log.angled_start, 0);
+    let user: Vec<&DroppedDir> = log.dropped.iter().filter(|d| !d.toolchain).collect();
+    let dropped = |path: &str, spec, position, reason, kept| DroppedDir {
+        path: path.to_owned(),
+        group: DirGroup::Angled,
+        toolchain: false,
+        spec,
+        position,
+        reason,
+        kept,
+    };
+    assert_eq!(
+        user,
+        [
+            &dropped(&nope, 1, 1, DropReason::Nonexistent, None),
+            &dropped(&lnk, 2, 1, DropReason::Duplicate, Some(0)),
+            &dropped(&sys, 4, 2, DropReason::DuplicatesSystem, Some(2)),
+        ]
+    );
+    assert_eq!(log.validate(), Ok(()));
+}
+
+/// WP-3275: a toolchain directory that does not exist (here the resource
+/// directory's `include`) is named as the toolchain's, in the system
+/// group, after the user's directories.
+#[test]
+fn lookup_log_names_a_nonexistent_toolchain_directory() {
+    let s = Scratch::new("dropped-toolchain");
+    let inc = s.path("inc");
+    std::fs::create_dir(&inc).unwrap();
+    let res = s.path("no-resource-dir");
+    let main = s.write("main.cpp", b"int m;\n");
+    let cl = ["-fsyntax-only", "-nostdinc++", "-resource-dir", &res, "-I", &inc, &main];
+    let (log, errors) = lookup_log(&cl, None);
+    assert_eq!(errors, 0);
+    assert_eq!(listed(&log, 0), inc);
+    let want = format!("{res}/include");
+    let d = log.dropped.iter().find(|d| d.path == want).expect("the resource directory");
+    assert_eq!(
+        (d.group, d.toolchain, d.reason, d.kept, d.spec, d.position),
+        (DirGroup::System, true, DropReason::Nonexistent, None, 1, 1)
+    );
+    assert!(log.dropped.iter().all(|d| d.toolchain), "{:?}", log.dropped);
+}
+
+/// The module probes of the lookup log (WP-3276), as (name, found).
+fn module_probes(log: &LookupLog) -> Vec<(&str, bool)> {
+    log.lookups
+        .iter()
+        .filter(|l| l.form == LookupForm::Module)
+        .map(|l| (l.name.as_str(), l.found == Found::Absolute))
+        .collect()
+}
+
+/// WP-3276 (spec/modules.md §2): `import m;` with two
+/// `-fprebuilt-module-path`s logs every candidate it asked about, in
+/// order, as an absolute name (the relative directory joined onto the
+/// working directory, `./` kept), up to the hit; each is repeated as an
+/// absolute lookup is.
+#[test]
+fn lookup_log_names_module_probes_hit() {
+    let s = Scratch::new("module-probes");
+    std::fs::create_dir(s.path("empty")).unwrap();
+    let src = s.write("m.cppm", b"export module m;\nexport int mv = 1;\n");
+    s.write("main.cpp", b"import m;\nint x = mv;\n");
+    let cl = ["-fsyntax-only", "-std=c++20", "-fprebuilt-module-path=empty"];
+    let cl: Vec<&str> = cl.into_iter().chain(["-fprebuilt-module-path=.", "main.cpp"]).collect();
+    let (log, errors) = lookup_log(&cl, s.0.to_str());
+    assert_eq!(errors, 0);
+    let p = |name: &str| s.path(name);
+    let empty = ["pcm", "cppm", "ixx", "cpp"].map(|e| p(&format!("empty/m.{e}")));
+    let (dot_pcm, dot_cppm) = (p("./m.pcm"), p("./m.cppm"));
+    let mut want: Vec<(&str, bool)> = empty.iter().map(|n| (n.as_str(), false)).collect();
+    want.extend([(dot_pcm.as_str(), false), (dot_cppm.as_str(), true)]);
+    assert_eq!(module_probes(&log), want);
+    assert!(log.absolute());
+    assert_eq!(log.check_absolute(&mut kiln_pp::RealFs::new(), &|_| false), Ok(()));
+    std::fs::remove_file(&src).unwrap();
+    let was = &dot_cppm;
+    assert_eq!(
+        log.check_absolute(&mut kiln_pp::RealFs::new(), &|_| false),
+        Err(format!("lookup of module file \"{was}\" now finds nothing (was '{was}')"))
+    );
+}
+
+/// WP-3276: an `import` that finds nothing logs every candidate as a
+/// miss; one created later is a difference.
+#[test]
+fn lookup_log_names_module_probes_miss() {
+    let s = Scratch::new("module-probes-miss");
+    let d = s.path("d");
+    std::fs::create_dir(&d).unwrap();
+    let main = s.write("main.cpp", b"import q;\n");
+    let path = format!("-fprebuilt-module-path={d}");
+    let (log, errors) = lookup_log(&["-fsyntax-only", "-std=c++20", &path, &main], None);
+    assert_eq!(errors, 1);
+    let want = ["pcm", "cppm", "ixx", "cpp"].map(|e| format!("{d}/q.{e}"));
+    let want: Vec<(&str, bool)> = want.iter().map(|n| (n.as_str(), false)).collect();
+    assert_eq!(module_probes(&log), want);
+    let ixx = s.write("d/q.ixx", b"export module q;\n");
+    assert_eq!(
+        log.check_absolute(&mut kiln_pp::RealFs::new(), &|_| false),
+        Err(format!("lookup of module file \"{ixx}\" now finds '{ixx}' (was not found)"))
+    );
 }
 
 #[test]
@@ -1301,6 +1445,7 @@ template <class T> struct Braced { T x; int a[2]; Braced() : x{1}, a{1, {2}} {} 
 template <class T> struct MemTmpl { T x; template <class U> MemTmpl(U u) : x(u) {} };
 template <class T> struct Outer { struct Inner { T v; Inner() : v() {} }; };
 struct NonTmpl { int v; template <class U> NonTmpl(U u) : v(u) {} };
+template <class T> struct Empty { T m; Empty() {} template <class U> Empty(U) {} };
 ";
 
 /// The shape of a braced list: its clauses' kinds, nested lists in braces.
@@ -1336,7 +1481,8 @@ fn pattern_inits_of(ast: &Ast, sm: &kiln_source::SourceManager) -> Vec<String> {
         .filter_map(|d| {
             let p = ast.pattern_mem_inits(d)?;
             let class = ast.decls.get(d).ctx().map_or("", ident);
-            let mut s = format!("{class} {}{}", lc(p.colon), if p.failed { " failed" } else { "" });
+            let colon = p.colon.map_or_else(|| "no-colon".to_owned(), lc);
+            let mut s = format!("{class} {colon}{}", if p.failed { " failed" } else { "" });
             for m in &p.inits {
                 let id = match m.id {
                     PatternMemInitId::Member(f) => {
@@ -1386,7 +1532,10 @@ fn pattern_mem_inits_through_a_module_image() {
     let r = run_front_end("kiln++", &cl, quiet(), |fe| pattern_inits_of(fe.ast, fe.sm)).unwrap();
     assert_eq!(r.errors, 0, "{:?}", r.first_error);
     let direct = r.value.unwrap();
-    assert_eq!(direct.len(), 11, "{direct:#?}");
+    // Two of them empty (`Empty() {}` and its constructor template,
+    // WP-3200).
+    assert_eq!(direct.len(), 13, "{direct:#?}");
+    assert_eq!(direct.iter().filter(|r| r.ends_with(" no-colon")).count(), 2, "{direct:#?}");
     let pcm = s.path("m.pcm");
     let out =
         Command::new(std::path::Path::new(env!("CARGO_BIN_EXE_kiln")).with_file_name("kiln++"))

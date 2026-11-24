@@ -514,6 +514,9 @@ impl Sema<'_, '_> {
         let access = self.current_member_access();
         let h = DeclHead::new(self.ctx, name, name_loc).access(access);
         let using = self.builder().using_decl(h, Some(q.nns));
+        if name.as_operator() == Some(kiln_ast::names::OverloadedOperator::Equal) {
+            self.note_inherited_assign(class);
+        }
         let mut targets = found.decls.clone();
         if self.reverse_using_shadows {
             targets.reverse();
@@ -706,13 +709,28 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Sets `HAS_INHERITED_ASSIGN` on the class being defined: a
+    /// using-declarator names a base `operator=` (clang `addedMember`'s
+    /// `HasInheritedAssignment`). The class then declares its implicit
+    /// copy and move assignment operators at `}`
+    /// (`finish_special_members`), so a shadow one of them hides is marked
+    /// when the class is completed, whatever the unit uses later
+    /// ([namespace.udecl]/4, /14; WP-3146).
+    fn note_inherited_assign(&mut self, class: DeclId) {
+        if let Some(c) = self.classes.last_mut()
+            && c.record == class
+        {
+            c.bits = c.bits.with(kiln_ast::decl::DefinitionBits::HAS_INHERITED_ASSIGN);
+        }
+    }
+
     /// `using B::B;` naming direct base `q.ctx` of `class`
     /// ([namespace.udecl]/3, [class.inhctor.init]): a `Using` named by the
     /// class's constructor name and one `ConstructorUsingShadow` per
-    /// constructor of the base (including the ones it inherits itself),
-    /// except those hidden by a constructor of `class` already declared
-    /// with the same signature ([namespace.udecl]/14; later ones hide at
-    /// `}`).
+    /// constructor of the base (including the ones it inherits itself);
+    /// one a constructor of `class` already declared with the same
+    /// signature hides is marked hidden by it ([namespace.udecl]/14;
+    /// later ones mark at `}`).
     fn inheriting_using(&mut self, class: DeclId, q: Qualifier, name_loc: Loc) -> DeclId {
         let access = self.current_member_access();
         let canon = self.ast.types.canonical(self.class_type(class)).ty();
@@ -735,11 +753,17 @@ impl Sema<'_, '_> {
         }
         let mut shadows = Vec::with_capacity(inherited.len());
         for (target, nominated) in inherited {
-            if own.iter().any(|&c| self.hides_ctor(c, target)) {
-                continue;
-            }
+            // A constructor the class declared earlier with the same
+            // signature hides the shadow, which is made and marked hidden
+            // as by a later one (`hide_inherited_ctors`): one record for
+            // both orders (WP-3145).
+            let by = own.iter().copied().find(|&c| self.hides_ctor(c, target));
             let h = DeclHead::new(self.ctx, cname, name_loc).access(access);
-            shadows.push(self.builder().constructor_using_shadow(h, target, nominated));
+            let s = self.builder().constructor_using_shadow(h, target, nominated);
+            if let Some(by) = by {
+                let _ = self.ast.decls.set_hidden_shadow(s, by);
+            }
+            shadows.push(s);
         }
         self.link_using_shadows(using, &shadows);
         using
@@ -891,6 +915,7 @@ impl Sema<'_, '_> {
             k.is_function() || k == DeclKind::FunctionTemplate
         };
         let mut prev = None;
+        let mut hidden_by = None;
         for e in self.current_scope_raw_dn(name) {
             let es = self.ast.strip_shadow(e);
             if self.ast.first(es) == self.ast.first(target) {
@@ -941,9 +966,13 @@ impl Sema<'_, '_> {
             if in_class && e == es && fnlike(self, es) && fnlike(self, target) {
                 // [namespace.udecl]/14: a member function (template) of
                 // the class hides the one the declarator would introduce
-                // when they correspond; otherwise they overload.
-                if self.member_hides_using_target(es, target) {
-                    return None;
+                // when they correspond; otherwise they overload. The
+                // shadow is made and marked hidden, as when the member is
+                // declared after the using-declarator
+                // (`check_using_shadow_conflict`): one record for both
+                // orders (WP-3145).
+                if hidden_by.is_none() && self.member_hides_using_target(es, target) {
+                    hidden_by = Some(es);
                 }
                 continue;
             }
@@ -957,6 +986,9 @@ impl Sema<'_, '_> {
             h = h.access(self.current_member_access());
         }
         let s = self.builder().using_shadow(h, target, prev);
+        if let Some(by) = hidden_by {
+            let _ = self.ast.decls.set_hidden_shadow(s, by);
+        }
         if self.in_local_scope() {
             match name.as_ident() {
                 Some(n) => self.push_local(n, s),
@@ -1248,7 +1280,7 @@ impl Sema<'_, '_> {
                 if self.check_typedef_redefinition(t, ty, false, name, loc).is_some() {
                     continue;
                 }
-                self.ast.decls.set_flags(d, kiln_ast::decl::DeclFlags::INVALID);
+                self.invalidate(d);
                 return true;
             }
             if !self.using_conflicts(t, d) {
@@ -1273,7 +1305,7 @@ impl Sema<'_, '_> {
             .with_note(self.diag(DiagId::note_using_decl_target, self.decl_loc(t)))
             .with_note(self.diag(DiagId::note_using_decl, self.decl_loc(s)));
         self.emit(msg);
-        self.ast.decls.set_flags(d, kiln_ast::decl::DeclFlags::INVALID);
+        self.invalidate(d);
         true
     }
 
@@ -1381,7 +1413,7 @@ impl Sema<'_, '_> {
                 .with_note(self.diag(DiagId::note_declared_at, self.decl_loc(e)));
             self.emit(msg);
             let ud = self.builder().using_enum(h, e);
-            self.ast.decls.set_flags(ud, kiln_ast::decl::DeclFlags::INVALID);
+            self.invalidate(ud);
             return ud;
         };
         let ud = self.builder().using_enum(h, def);

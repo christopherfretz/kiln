@@ -5829,18 +5829,34 @@ specializations ([class.mem.general]/7, [except.spec]/13, [temp.inst]/14):
     using-declared `B& operator=(int)`; clang 19 also hides a template
     differing only in its return type, gcc does not). Otherwise the two
     overload and both are candidates. A member template is compared as
-    the `FunctionTemplate`, not its pattern. Either order works: a member
-    declared after the using-declarator marks the shadow hidden
-    (`check_using_shadow_conflict`, from ordinary member declarators and
-    from special-member ones: `operator=`, conversion functions); one
-    declared before it keeps the shadow from being made
-    (`introduce_shadow`). The implicitly-declared copy or move
-    assignment operator, declared lazily, hides the class's not yet
-    hidden `operator=` shadows it corresponds to when it is declared
-    (`declare_implicit`; clang declares it before building the shadow),
-    so `struct A : B { using B::operator=; }` with a `B::operator=(const
-    A&)` is not ambiguous for `a = a` (WP-1467, test
-    `namespace.udecl/using-assignment-hidden-by-implicit.cpp`). In an instantiated class template
+    the `FunctionTemplate`, not its pattern. Either order gives one
+    record (WP-3145): the shadow is made and marked hidden by the member
+    (`Decls::hidden_shadow`), by a member declared after the
+    using-declarator (`check_using_shadow_conflict`, from ordinary member
+    declarators and from special-member ones: `operator=`, conversion
+    functions) or by one declared before it (`introduce_shadow`, which
+    makes the shadow and marks it at once). clang makes no shadow in the
+    second order and drops it in the first (`HideUsingShadowDecl`), so its
+    dump has none in either; kiln's record keeps the hidden shadow in both
+    (spec/ast.md §4.2) and its dump leaves it out, as clang's
+    (`namespace.udecl/p14-hidden-either-order-run.cpp`,
+    `ast/namespace.udecl/hidden-shadow-either-order.cpp`). The
+    implicitly-declared copy or move assignment operator hides the
+    class's not yet hidden `operator=` shadows it corresponds to when it
+    is declared (`declare_implicit`), so `struct A : B { using
+    B::operator=; }` with a `B::operator=(const A&)` is not ambiguous for
+    `a = a` (WP-1467, test
+    `namespace.udecl/using-assignment-hidden-by-implicit.cpp`). A
+    class-scope `using B::operator=;` sets
+    `DefinitionBits::HAS_INHERITED_ASSIGN` (clang
+    `HasInheritedAssignment`), so the class declares its implicit copy
+    and move assignment operators at `}` (spec/sema-class.md §4.1
+    "Laziness"): the marks are decided when the class is completed, and
+    the class's record does not depend on whether the unit later uses
+    either assignment (WP-3146,
+    `namespace.udecl/p4-implicit-assignment-hides-run.cpp`). The module
+    image does not carry the bit: the implicit records it carries are
+    declared again on import, which marks the imported shadows. In an instantiated class template
     specialization the using-declaration and the members are redone in
     declaration order, so the comparison is between the instantiated
     declarations (`D&` and `Map&` agree once `D` is `Map<T>`; the
@@ -8885,11 +8901,14 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   stripped wrapper (`strip_impcast`) from `ImmState::early_values`
   (`early_immediate_value`, checked by `try_fold`, `fold_rvalue` and
   `fold_for_overflow`). A default argument's or default member
-  initializer's invocation is evaluated at each use (below); its first
-  successful value is stored in the wrapper's `default_immediate_value`,
-  which codegen's fold prepass and the Oven (`Compiler::stored_value`,
-  outside a use with source-location values) read instead of evaluating
-  the call again.
+  initializer's invocation is evaluated at each use (below), in the
+  context of that use (CWG 2631): at a use without source-location
+  values its first successful value is stored in the wrapper's
+  `default_immediate_value`, shared by every such use; at a use with
+  them (spec/ast.md §5.8) the value is the use's own, stored on the use
+  (`ExprArena::note_use_immediate`, spec/ast.md §5.8.2). Codegen's fold
+  prepass and the Oven (`Compiler::stored_value`) read the one for the
+  use in scope instead of evaluating the call again.
   **Default arguments (WP-1171).** clang rebuilds a default argument
   that holds an immediate invocation or a source-location builtin at
   each use (`BuildCXXDefaultArgExpr`, `ImmediateCallVisitor`,
@@ -9033,8 +9052,31 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   constant expression` at the invocation, then `in the default
   initializer of 'p'` at the use (callee begin, construct loc, ctor
   name, or the closing `}`/`)` of an aggregate init) and `declared here`
-  at the parameter or field. A default used inside another default
-  argument or initializer is checked at that definition only. In an
+  at the parameter or field. Each invocation is evaluated in the
+  context of the use (CWG 2631, [expr.const]/16 in the
+  working draft; `check_default_use_with` → `eval_default_invocation`
+  → `Oven::evaluate_in` with the use as the source-location root when
+  the use has source-location values): `pick(__builtin_FUNCTION())` or
+  `pick(std::source_location::current().function_name())` as a default
+  argument sees the caller's name, so an invocation that only fails
+  with the declaration's own (empty) name is valid at a use in a
+  function. A source-location builtin written directly in the
+  invocation keeps its own file, line and column and takes the use's
+  function (clang 19 and 22: the rebuilt `SourceLocExpr` has the use's
+  context and is evaluated at its own location; GCC 14 takes the use's
+  line too); one reached through a default argument the invocation
+  uses (`current()`'s) takes every value of the use (spec/oven.md,
+  Builtins). A default used inside another default argument or
+  initializer (`void h(int = (k(), 0))`, `struct S3 { S2 s{}; }`) is
+  not checked at that definition (`finish_default_init` only keeps
+  where it is used, `ImmState::nested_use_locs`): its invocations are
+  evaluated at each use of the outermost one, in its context
+  (`default_invocations` walks into the nested uses), and a failure is
+  reported there with the nested parameter or field and its use's
+  location, as clang 19 and 22 do for default arguments. For a nested
+  default member initializer clang 22 diagnoses at the definition and
+  clang 19 does not; kiln follows clang 19, which is the working
+  draft's rule. In an
   immediate-escalating function (defaulted or implicit constructor,
   `constexpr` template specialization, lambda) the failure escalates
   instead; a constructor's reason note is `'D' is an immediate

@@ -18,14 +18,16 @@
 //! is `len = 0`, and an importer that does not record skips the section
 //! without decoding it. The found sets of the unit's dependent entries
 //! (spec/ast.md §18.12) follow, with their elements as declaration
-//! words: an element the image cannot carry fails the image.
+//! words: an element the image cannot carry fails the image. Last, the
+//! declarator groups the carried shared entries name (§18.3.1, WP-3144),
+//! each a list of declaration words.
 
 use super::body::PARAM;
 use super::{Image, LEX_TU, Locs, NONE, QRef, Rd, Res, W, Wr, Writer, bad};
 use crate::Sema;
 use kiln_ast::written_refs::{
-    AdlSet, AdlSetId, FoundDecl, FoundSetId, PatternNode, QualLink, RefLookup, RefQualifier,
-    RefRole, SpecRef, Unrecorded, WrittenRef, WrittenRefId,
+    AdlSet, AdlSetId, FoundDecl, FoundSetId, PatternNode, QualLink, REF_GROUP, RefLookup,
+    RefQualifier, RefRole, SpecRef, Unrecorded, WrittenRef, WrittenRefId,
 };
 use kiln_ast::{DeclId, QualType};
 use kiln_source::fx::FxHashMap;
@@ -44,6 +46,8 @@ const NODE_BYTES: usize = 1 + 2 * 4;
 const LEAD_BYTES: usize = 7 * 4;
 const FOUND_SET_BYTES: usize = 2 + 4;
 const FOUND_ROW_BYTES: usize = 2 * 4;
+/// The smallest group: its count and two declarations.
+const GROUP_BYTES: usize = 1 + 2 * 4;
 
 /// One entry: `lo, hi, entity, found, enclosing, qualifier, udir, adl`
 /// (declaration words, the qualifier an earlier entry's index,
@@ -102,7 +106,9 @@ pub(super) enum NodeRec {
 /// colon, tilde, spec, close, langle, rangle`, locations or [`NONE`];
 /// WP-2326, WP-2828, WP-2820, WP-3008), the
 /// found sets (`how`, flags, `decl, found` word pairs) and the dependent
-/// entries' rows (`entry, set`; WP-2472).
+/// entries' rows (`entry, set`; WP-2472), and the declarator groups of
+/// the shared entries (declaration words, the first the entries'
+/// `enclosing`; WP-3144).
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub(super) struct RefsRec {
     sets: Vec<(u32, u32, Vec<u32>)>,
@@ -113,6 +119,7 @@ pub(super) struct RefsRec {
     leads: Vec<[u32; 7]>,
     found_sets: Vec<FoundRec>,
     found_rows: Vec<[u32; 2]>,
+    groups: Vec<Vec<u32>>,
 }
 
 /// One found set: its lookup kind, flags and `decl, found` words.
@@ -131,7 +138,7 @@ pub(super) enum Refs {
     Off,
     /// The importer does not record: the section was skipped.
     Skipped,
-    Table(RefsRec),
+    Table(Box<RefsRec>),
 }
 
 impl Writer<'_, '_, '_> {
@@ -260,6 +267,7 @@ impl Writer<'_, '_, '_> {
         }
         self.ref_nodes(&map, &mut out)?;
         self.ref_found(&map, &mut out)?;
+        self.ref_groups(&mut out)?;
         for l in t.leads() {
             let entry = map[l.entry.index()];
             if entry != NONE {
@@ -269,7 +277,32 @@ impl Writer<'_, '_, '_> {
                 out.leads.push([entry, colon, tilde, spec, close, langle, rangle]);
             }
         }
-        self.img.refs = Refs::Table(out);
+        self.img.refs = Refs::Table(Box::new(out));
+        Ok(())
+    }
+
+    /// The declarator groups the section's shared entries name
+    /// (spec/ast.md §18.3.1); a declaration the image does not carry
+    /// fails it.
+    fn ref_groups(&self, out: &mut RefsRec) -> W<()> {
+        let mut firsts: Vec<u32> =
+            out.entries.iter().filter(|e| e.flags & REF_GROUP != 0).map(|e| e.words[4]).collect();
+        if firsts.is_empty() {
+            return Ok(());
+        }
+        firsts.sort_unstable();
+        firsts.dedup();
+        for g in self.s.ast.written_refs.groups() {
+            // A group none of the section's entries names: the importer's
+            // replay of the preamble makes it.
+            let first = g.first().and_then(|&d| self.ref_word(d));
+            if first.is_none_or(|f| firsts.binary_search(&f).is_err()) {
+                continue;
+            }
+            let words = g.iter().map(|&d| self.ref_word(d)).collect::<Option<Vec<u32>>>();
+            out.groups
+                .push(words.ok_or("a declarator group of a declaration the image does not carry")?);
+        }
         Ok(())
     }
 
@@ -446,6 +479,13 @@ pub(super) fn encode_refs(w: &mut Wr, s: &Refs) {
         b.u32(entry);
         b.u32(set);
     }
+    b.len(t.groups.len());
+    for g in &t.groups {
+        b.len(g.len());
+        for &d in g {
+            b.u32(d);
+        }
+    }
     // A recorded table is never empty (its six counts): the length
     // tells it from the table off.
     w.len(b.0.len());
@@ -515,10 +555,18 @@ pub(super) fn decode_refs(r: &mut Rd, want: bool) -> Res<Refs> {
     for _ in 0..r.count(FOUND_ROW_BYTES)? {
         t.found_rows.push([r.u32()?, r.u32()?]);
     }
+    for _ in 0..r.count(GROUP_BYTES)? {
+        let m = r.count(4)?;
+        let mut g = Vec::with_capacity(m);
+        for _ in 0..m {
+            g.push(r.u32()?);
+        }
+        t.groups.push(g);
+    }
     if !r.0.is_empty() {
         return bad("trailing bytes in the written references");
     }
-    Ok(Refs::Table(t))
+    Ok(Refs::Table(Box::new(t)))
 }
 
 /// Every word of the section is in range: declarations are records, the
@@ -588,7 +636,22 @@ pub(super) fn validate_refs(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Res<
             && f.decls.iter().all(|&[d, g]| word_ok(d) && word_ok(g))
     }) && t.found_rows.windows(2).all(|w| w[0][0] < w[1][0])
         && t.found_rows.iter().all(|&[entry, set]| entry < ne && set < nf);
-    if ok_sets && ok_entries && ok_specs && ok_nodes && ok_udirs && ok_leads && ok_found {
+    // Groups of two or more records; every shared entry's `enclosing`
+    // the first of one.
+    let ok_groups = t.groups.iter().all(|g| g.len() >= 2 && g.iter().all(|&w| word_ok(w)))
+        && t.entries
+            .iter()
+            .filter(|e| e.flags & REF_GROUP != 0)
+            .all(|e| t.groups.iter().any(|g| g[0] == e.words[4]));
+    if ok_sets
+        && ok_entries
+        && ok_specs
+        && ok_nodes
+        && ok_udirs
+        && ok_leads
+        && ok_found
+        && ok_groups
+    {
         Ok(())
     } else {
         bad("bad written references")
@@ -727,6 +790,18 @@ impl Sema<'_, '_> {
         }
         self.image_leads(t, &pushed, &loc);
         self.image_found(t, &pushed, &dec);
+        self.image_groups(t, &dec);
+    }
+
+    /// The declarator groups of the unit's shared entries (spec/ast.md
+    /// §18.3.1): one the importer cannot map is left out, its entries
+    /// then held by their first declaration.
+    fn image_groups(&mut self, t: &RefsRec, dec: &dyn Fn(u32) -> Option<DeclId>) {
+        for g in &t.groups {
+            if let Some(decls) = g.iter().map(|&w| dec(w)).collect::<Option<Vec<DeclId>>>() {
+                self.ast.written_refs.push_group(&decls);
+            }
+        }
     }
 
     /// The tokens of the unit's entries outside their ranges (spec/ast.md
@@ -792,13 +867,21 @@ mod tests {
         let mut img = sample();
         let int = QRef { ty: kiln_ast::types::BuiltinType::Int as u32, quals: 0 };
         let entry = |words, role: RefRole| EntryRec { words, role: role as u8, flags: 0, how: 1 };
-        img.refs = Refs::Table(RefsRec {
+        img.refs = Refs::Table(Box::new(RefsRec {
             sets: vec![(1, 0, vec![0])],
             entries: vec![
                 entry([0, 1, 1, NONE, LEX_TU, NONE, NONE, NONE], RefRole::Nns),
                 entry([2, 3, PARAM, NONE, 7, 0, NONE, 0], RefRole::Expr),
                 // `decltype(e)::m` (WP-2828): its specifier's first token.
                 entry([2, 3, 1, NONE, LEX_TU, Q_SPEC, NONE, NONE], RefRole::Expr),
+                // A name the declarator group of records 7 and 1 shares
+                // (WP-3144).
+                EntryRec {
+                    words: [0, 1, 1, NONE, 7, NONE, NONE, NONE],
+                    role: RefRole::Type as u8,
+                    flags: REF_GROUP,
+                    how: 1,
+                },
             ],
             specs: vec![SpecRec { words: [1, 7, 1, NONE, NONE, NONE], flags: 0, how: 1 }],
             nodes: vec![
@@ -812,7 +895,8 @@ mod tests {
             leads: vec![[1, NONE, 4, NONE, NONE, NONE, NONE], [2, NONE, NONE, 0, NONE, NONE, NONE]],
             found_sets: vec![FoundRec { how: 1, flags: 1, decls: vec![[1, 1], [0, 1]] }],
             found_rows: vec![[1, 0]],
-        });
+            groups: vec![vec![7, 1]],
+        }));
         img
     }
 
@@ -845,7 +929,7 @@ mod tests {
     #[test]
     fn written_refs_section_is_validated() {
         type Corrupt = (&'static str, fn(&mut RefsRec));
-        let corrupt: [Corrupt; 25] = [
+        let corrupt: [Corrupt; 28] = [
             ("qualifier after its entry", |t| t.entries[0].words[5] = 0),
             ("unknown role", |t| t.entries[0].role = 99),
             ("unknown lookup", |t| t.entries[1].how = 99),
@@ -853,11 +937,11 @@ mod tests {
             ("parameter past the parameters", |t| t.entries[1].words[2] = PARAM | 0x3e8),
             ("set past the sets", |t| t.entries[1].words[7] = 1),
             ("set counts past its list", |t| t.sets[0].0 = 2),
-            ("row of no entry", |t| t.specs[0].words[0] = 3),
+            ("row of no entry", |t| t.specs[0].words[0] = 4),
             ("row of no specialization", |t| t.specs[0].words[1] = NONE),
             ("node past the expressions", |t| t.nodes[0] = NodeRec::Expr { entry: 1, expr: 9999 }),
             ("row directive past the records", |t| t.specs[0].words[5] = 1000),
-            ("directive of no entry", |t| t.udirs[0][0] = 3),
+            ("directive of no entry", |t| t.udirs[0][0] = 4),
             ("operator node past the expressions", |t| {
                 t.nodes[3] = NodeRec::Oper { entry: 1, expr: 9999, slot: 0 }
             }),
@@ -867,7 +951,7 @@ mod tests {
             ("using node past the records", |t| {
                 t.nodes[2] = NodeRec::Decl { entry: 1, decl: 1000 }
             }),
-            ("lead of no entry", |t| t.leads[1][0] = 3),
+            ("lead of no entry", |t| t.leads[1][0] = 4),
             ("a `::` on an entry without one", |t| t.leads[0][1] = 4),
             ("a specifier on an entry without one", |t| t.leads[0][3] = 4),
             ("leads out of order", |t| t.leads.insert(0, [1, NONE, 4, NONE, NONE, NONE, NONE])),
@@ -877,6 +961,9 @@ mod tests {
             ("found declaration past the records", |t| t.found_sets[0].decls[0][1] = 1000),
             ("found row of no set", |t| t.found_rows[0][1] = 1),
             ("found rows out of order", |t| t.found_rows.insert(0, [1, 0])),
+            ("a group of one", |t| t.groups[0].truncate(1)),
+            ("group declaration past the records", |t| t.groups[0][1] = 1000),
+            ("a shared entry without its group", |t| t.groups[0][0] = 1),
         ];
         for (what, f) in corrupt {
             let mut img = with_table();

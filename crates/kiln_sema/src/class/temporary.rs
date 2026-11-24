@@ -703,6 +703,116 @@ impl Sema<'_, '_> {
         self.ast.exprs.clone_with_children(e, &mut self.ast.lists, &new_kids)
     }
 
+    /// A copy of `e`, a subexpression of a variable's initializer that
+    /// template instantiation shares with its pattern (spec/sema-templates.md
+    /// §5.4), in which every temporary the pattern's declaration extended
+    /// is a fresh full-expression temporary again, so that the
+    /// instantiated declaration extends temporaries of its own, as it does
+    /// those of an initializer it built ([class.temporary]/6; clang's
+    /// `TreeTransform` strips every `MaterializeTemporaryExpr` and forms
+    /// it again; spec/ast.md "Lifetime-extended temporaries of
+    /// instantiations", WP-3271). While a for-range-initializer collects
+    /// its temporaries (P2718R0, [`Sema::begin_for_range_init`]) every
+    /// temporary is copied and collected, in the order the parse
+    /// materializes them (operands first): the pattern extended them to
+    /// its own `__range`, or, when its range was type-dependent, to
+    /// nothing. A default argument or default member initializer use
+    /// rebuilt for the pattern's declaration ([`Sema::fresh_temporaries`])
+    /// is copied without its rebuilt operand, which the instantiated
+    /// declaration rebuilds; so is, while collecting, every such use, as
+    /// the instantiation's extension would write its rebuilt operand onto
+    /// the pattern's node. The nodes above them are copied, the rest is
+    /// shared. `None` when `e` holds none, or when a node on the way is of
+    /// a kind [`kiln_ast::ExprArena::clone_with_children`] does not copy
+    /// (the pattern's temporaries then stay shared). Nested
+    /// full-expressions and unevaluated operands are not entered, as in
+    /// [`Sema::extend_init_temporaries`]; the `ExprWithCleanups` of the
+    /// whole initializer is.
+    pub(crate) fn unshare_temporaries(&mut self, e: ExprId) -> Option<ExprId> {
+        let collect = self.extend_collector.is_some() && self.unevaluated == 0;
+        if self.ast.exprs.get(e).kind() == ExprKind::ExprWithCleanups {
+            let o = self.ast.exprs.operand(e);
+            let r = self.unshare_walk(o, collect, 0)?;
+            return self.ast.exprs.clone_with_children(e, &mut self.ast.lists, &[r]);
+        }
+        self.unshare_walk(e, collect, 0)
+    }
+
+    /// The walk of [`Sema::unshare_temporaries`].
+    fn unshare_walk(&mut self, e: ExprId, collect: bool, depth: u32) -> Option<ExprId> {
+        const MAX_DEPTH: u32 = 256;
+        if depth > MAX_DEPTH {
+            return None;
+        }
+        let ex = &self.ast.exprs;
+        let kind = ex.get(e).kind();
+        match kind {
+            ExprKind::ExprWithCleanups
+            | ExprKind::ConstantExpr
+            | ExprKind::LambdaExpr
+            | ExprKind::StmtExpr
+            | ExprKind::UnaryExprOrTypeTraitExpr
+            | ExprKind::CXXNoexceptExpr
+            | ExprKind::ExpressionTraitExpr
+            | ExprKind::RequiresExpr
+            | ExprKind::ConceptSpecializationExpr => return None,
+            ExprKind::CXXTypeidExpr if !ex.typeid_potentially_evaluated(e) => return None,
+            ExprKind::MaterializeTemporaryExpr => {
+                let extended = ex.lifetime_extended_temporary(e).is_some();
+                let o = ex.operand(e);
+                let inner = self.unshare_walk(o, collect, depth + 1);
+                if !extended && !collect {
+                    let r = inner?;
+                    return self.ast.exprs.clone_with_children(e, &mut self.ast.lists, &[r]);
+                }
+                let m = self.ast.exprs.clone_unextended(e, inner.unwrap_or(o));
+                if let Some(c) = self.extend_collector.as_mut().filter(|_| collect) {
+                    c.push(m);
+                }
+                return Some(m);
+            }
+            ExprKind::CXXDefaultArgExpr | ExprKind::CXXDefaultInitExpr => {
+                if !collect && ex.default_arg_rewritten(e).is_none() {
+                    return None;
+                }
+                return self.ast.exprs.clone_with_children(e, &mut self.ast.lists, &[]);
+            }
+            ExprKind::BinaryConditionalOperator => {
+                let [common, cond, t, f] = ex.binary_conditional_operands(e, &self.ast.lists);
+                let c2 = self.unshare_walk(common, collect, depth + 1);
+                let t2 = self.unshare_walk(t, collect, depth + 1);
+                let f2 = self.unshare_walk(f, collect, depth + 1);
+                let (cond, t) = match c2 {
+                    Some(c2) => (
+                        self.rebind_opaque(cond, common, c2, depth + 1)?,
+                        self.rebind_opaque(t2.unwrap_or(t), common, c2, depth + 1)?,
+                    ),
+                    None if t2.is_some() || f2.is_some() => (cond, t2.unwrap_or(t)),
+                    None => return None,
+                };
+                let kids = [c2.unwrap_or(common), cond, t, f2.unwrap_or(f)];
+                return self.ast.exprs.clone_with_children(e, &mut self.ast.lists, &kids);
+            }
+            _ => {}
+        }
+        let kids = ex.children(e, &self.ast.lists);
+        let mut changed = false;
+        let mut new = Vec::with_capacity(kids.len());
+        for k in kids {
+            match self.unshare_walk(k, collect, depth + 1) {
+                Some(r) => {
+                    changed = true;
+                    new.push(r);
+                }
+                None => new.push(k),
+            }
+        }
+        if !changed {
+            return None;
+        }
+        self.ast.exprs.clone_with_children(e, &mut self.ast.lists, &new)
+    }
+
     /// The returned-reference-to-temporary diagnostic: P2748R5 made it
     /// ill-formed in C++26 ([stmt.return]/6); clang warns
     /// (`-Wreturn-stack-address`) in earlier modes.

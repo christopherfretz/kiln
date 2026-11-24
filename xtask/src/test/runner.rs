@@ -305,6 +305,8 @@ impl Test<'_> {
                 "written-refs:"
             } else if spec.decl_extents.is_some() {
                 "decl-extents:"
+            } else if spec.fn_names.is_some() {
+                "fn-names:"
             } else {
                 "pp-record:"
             };
@@ -1320,6 +1322,9 @@ impl Test<'_> {
         if spec.decl_extents.is_some() && reports {
             cmd.arg("-fkiln-dump-decl-extents");
         }
+        if spec.fn_names.is_some() && reports {
+            cmd.arg("-fkiln-dump-fn-names");
+        }
         if !spec.oven.is_empty() && reports {
             // Only kiln gets here (`evaluate` skips the rest). A stale report
             // must not pass for this compile's.
@@ -1338,7 +1343,9 @@ impl Test<'_> {
         if spec.inst_report.is_some() && reports {
             self.inst_report = Some(inst_report::extract(&stderr));
         }
-        if (spec.written_refs.is_some() || spec.decl_extents.is_some()) && reports {
+        if (spec.written_refs.is_some() || spec.decl_extents.is_some() || spec.fn_names.is_some())
+            && reports
+        {
             self.written_refs = Some(o.stdout_str());
         }
         let crashed = o.code().is_none()
@@ -1762,6 +1769,9 @@ impl Test<'_> {
         if let Some(rel) = &spec.decl_extents {
             let unordered = spec.decl_extents_unordered;
             return self.check_dump(rel, "decl-extents", "declaration-extent", unordered);
+        }
+        if let Some(rel) = &spec.fn_names {
+            return self.check_dump(rel, "fn-names", "function-name span", false);
         }
         Ok(())
     }

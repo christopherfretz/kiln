@@ -77,6 +77,10 @@ impl SemaBridge for Bridge<'_, '_, '_> {
         let _ = self.sema.ast.decls.set_lifetime_extended_value(t, v);
     }
 
+    fn srcloc_object_at(&mut self, own: ExprId, at: ExprId) -> Option<ConstValueId> {
+        self.sema.srcloc_object_at(own, at)
+    }
+
     fn lvalue_ref_to(&mut self, t: QualType) -> Option<QualType> {
         Some(self.sema.ast.types.lvalue_ref_to(t))
     }
@@ -505,6 +509,32 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         if let Some(p) = probe {
             self.carried_record(&p, e, &r);
         }
+        if r.is_err() && self.host_call_failed() {
+            self.note_host_failure_in_sfinae();
+        }
+        r
+    }
+
+    /// [`Sema::eval_const`] of immediate invocation operand `e` of the
+    /// default argument or default member initializer used by `at` (a use
+    /// with source-location values), in the context of that use
+    /// ([`Oven::evaluate_in`], CWG 2631). Not carried by a module's
+    /// results: those are keyed without the use. `None` is
+    /// [`Sema::eval_const`].
+    pub(crate) fn eval_const_at(
+        &mut self,
+        e: ExprId,
+        ctx: EvalContext,
+        at: Option<ExprId>,
+    ) -> Result<ConstValueId, EvalFailure> {
+        let Some(at) = at else { return self.eval_const(e, ctx) };
+        if !self.eval_stack_ok(e) {
+            return Err(EvalFailure::silent(kiln_oven::FailKind::NotConstant));
+        }
+        self.flush_member_refs();
+        self.flush_pending_deleted_in(&[e]);
+        self.clear_host_call_failed();
+        let r = self.with_oven(Some(ctx.loc), |oven, b| oven.evaluate_in(b, e, ctx, Some(at)));
         if r.is_err() && self.host_call_failed() {
             self.note_host_failure_in_sfinae();
         }
@@ -1179,7 +1209,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
 
     /// The AST and the evaluator, at the end of the translation unit (the
     /// evaluator's [`Oven::stats`] are its `-fconstexpr-report=`).
-    pub fn into_parts(self) -> (Ast, Oven) {
+    pub fn into_parts(mut self) -> (Ast, Oven) {
+        self.flush_subst_failed();
         let Some(mut oven) = self.oven else {
             unreachable!("the Oven is out during an evaluation")
         };

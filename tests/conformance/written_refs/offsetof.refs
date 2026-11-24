@@ -19,12 +19,12 @@
 37:58-37:59  type  'T' -> T@37:17 in=o5@37:44 exp=37:49
 37:61-37:62  designator  'a' -> (dependent) in=o5@37:44 exp=37:49
 37:63-37:64  designator  'b' -> (dependent) in=o5@37:44 exp=37:49
-38:15-38:17  expr  'o3' -> o3@31:42 found=o3@31:42 in=(tu)
-38:23-38:25  expr  'o1' -> o1@29:25 in=(tu)
-38:32-38:34  type  'In' -> In@13:8 in=(tu)
-38:29-38:31  expr  'o4' -> o4@36:44 found=o4@36:44 in=(tu)
-38:47-38:48  type  'S' -> S@21:8 in=(tu)
-38:44-38:46  expr  'o5' -> o5@37:44 found=o5@37:44 in=(tu)
-38:62-38:63  type  'S' -> S@21:8 in=(tu) exp=38:53
-38:65-38:66  designator  'a' -> S::a@23:5 in=(tu) exp=38:53
-38:67-38:68  designator  'b' -> M::b@19:6 in=(tu) exp=38:53
+38:15-38:17  expr  'o3' -> o3@31:42 found=o3@31:42 in=static_assert@38:1
+38:23-38:25  expr  'o1' -> o1@29:25 in=static_assert@38:1
+38:32-38:34  type  'In' -> In@13:8 in=static_assert@38:1
+38:29-38:31  expr  'o4' -> o4@36:44 found=o4@36:44 in=static_assert@38:1
+38:47-38:48  type  'S' -> S@21:8 in=static_assert@38:1
+38:44-38:46  expr  'o5' -> o5@37:44 found=o5@37:44 in=static_assert@38:1
+38:62-38:63  type  'S' -> S@21:8 in=static_assert@38:1 exp=38:53
+38:65-38:66  designator  'a' -> S::a@23:5 in=static_assert@38:1 exp=38:53
+38:67-38:68  designator  'b' -> M::b@19:6 in=static_assert@38:1 exp=38:53

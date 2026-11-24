@@ -12,3 +12,4 @@
 import refs_mod;
 int use() { return geo::twice(2) + top(1) + geo::measure(geo::Pt{1, 2}); }
 int doubled_pt(geo::Pt p) { return geo::doubled(p).x + geo::summed(p, p, p).x; }
+void cycled() { geo::cycle<geo::Pool>(); geo::cycle<int>(); }

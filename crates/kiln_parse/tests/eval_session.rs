@@ -758,10 +758,11 @@ fn a_variable_value_checks_the_stack_of_its_own_thread() {
                 let r = run(s, "X::deep");
                 assert_eq!(r.result, Err(RunError::StackExhausted));
                 let text = render(sm, &r.diagnostics).join("\n");
+                // The phase is not pinned: it depends on frame sizes
+                // (spec/sema-templates.md §10.3).
                 assert!(
-                    text.contains(
-                        "fatal error: kiln: stack exhausted during template instantiation"
-                    ),
+                    ["template instantiation", "constant evaluation"].iter().any(|p| text
+                        .contains(&format!("fatal error: kiln: stack exhausted during {p};"))),
                     "{text}"
                 );
             });

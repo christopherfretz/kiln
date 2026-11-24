@@ -417,6 +417,18 @@ pub trait SemaBridge {
     /// ([`Oven::evaluate`], WP-640). A bridge without a mutable AST
     /// (tests) may return `None`: such an invocation is then frozen as
     /// the value it designates.
+    /// The `const std::source_location::__impl *` value of
+    /// `__builtin_source_location()` `own`, written directly in an
+    /// immediate invocation of the default argument (or default member
+    /// initializer) used by `at`, evaluated for that use: `own`'s file,
+    /// line and column with `at`'s function (clang's rebuilt
+    /// `SourceLocExpr`; spec/oven.md, Builtins). `None` (the default):
+    /// the use's values.
+    fn srcloc_object_at(&mut self, own: ExprId, at: ExprId) -> Option<ConstValueId> {
+        let _ = (own, at);
+        None
+    }
+
     fn lvalue_ref_to(&mut self, t: QualType) -> Option<QualType> {
         let _ = t;
         None
@@ -1534,6 +1546,25 @@ impl Oven {
         let r = self.eval_ctx(bridge, e, None, true, false, true).0.ok();
         self.host_leave(host);
         self.addr_next = false;
+        self.srcloc_root = saved;
+        r
+    }
+
+    /// [`Oven::evaluate`] of immediate invocation operand `e` of the
+    /// default argument (or default member initializer) used by `at` (a
+    /// `CXXDefaultArgExpr` / `CXXDefaultInitExpr` with source-location
+    /// values), in the context of that use (CWG 2631, [expr.const]/16):
+    /// its source-location builtins take the use's values as
+    /// [`Oven::fold_immediate_in`]'s do. `None` is [`Oven::evaluate`].
+    pub fn evaluate_in(
+        &mut self,
+        bridge: &mut dyn SemaBridge,
+        e: ExprId,
+        ctx: EvalContext,
+        at: Option<ExprId>,
+    ) -> Result<ConstValueId, EvalFailure> {
+        let saved = std::mem::replace(&mut self.srcloc_root, at);
+        let r = self.evaluate(bridge, e, ctx);
         self.srcloc_root = saved;
         r
     }

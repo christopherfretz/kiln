@@ -135,6 +135,14 @@ pub trait IncludeResolver {
         None
     }
 
+    /// Records a module probe of `import` (WP-3276, spec/pp.md "Lookup
+    /// log"): the candidate `path` (absolute) and whether it is a file,
+    /// in probe order, if this resolver records lookups; the default
+    /// records none.
+    fn record_module_probe(&mut self, path: &str, found: bool) {
+        let _ = (path, found);
+    }
+
     /// The header name, `<...>` or `"..."`, to suggest in a diagnostic
     /// asking for `file` to be included, given the main file's directory
     /// (clang `suggestPathToFileForDiagnostics`). The default suggests

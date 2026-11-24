@@ -1,0 +1,19 @@
+13:15-13:18  nns  'lib' -> lib@8:11 in=Alias@13:7
+13:20-13:25  type  'Shape' -> lib::Shape@9:8 q=13:15 in=Alias@13:7
+14:9-14:12  nns  'lib' -> lib@8:11 in=Named@14:20
+14:14-14:19  type  'Shape' -> lib::Shape@9:8 q=14:9 in=Named@14:20
+15:34-15:37  nns  'lib' -> lib@8:11 in=Boxed@15:26
+15:43-15:44  type  'T' -> T@15:17 in=Boxed@15:26
+15:39-15:42  template  'Box' -> lib::Box@10:27 q=15:34 in=Boxed@15:26
+16:23-16:26  nns  'lib' -> lib@8:11 in=(anonymous)@16:33
+16:28-16:33  type  'Shape' -> lib::Shape@9:8 q=16:23 in=(anonymous)@16:33
+19:18-19:21  nns  'lib' -> lib@8:11 in=Holder::Member@19:9
+19:27-19:30  nns  'lib' -> lib@8:11 in=Holder::Member@19:9
+19:32-19:37  type  'Shape' -> lib::Shape@9:8 q=19:27 in=Holder::Member@19:9
+19:23-19:26  template  'Box' -> lib::Box@10:27 q=19:18 in=Holder::Member@19:9
+20:11-20:14  nns  'lib' -> lib@8:11 in=Holder::Nested@20:22
+20:16-20:21  type  'Shape' -> lib::Shape@9:8 q=20:11 in=Holder::Nested@20:22
+24:17-24:20  nns  'lib' -> lib@8:11 in=Local@24:9
+24:22-24:27  type  'Shape' -> lib::Shape@9:8 q=24:17 in=Local@24:9
+25:3-25:8  type  'Local' -> Local@24:9 in=l@25:9
+26:9-26:10  expr  'l' -> l@25:9 in=local@23:5

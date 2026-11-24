@@ -281,7 +281,7 @@ impl Sema<'_, '_> {
                     let prev_def = prev_def.filter(|_| !redundant);
                     // The errors follow the attributes' warnings when the
                     // attributes are still checked (WP-1848).
-                    let mut tls = Vec::new();
+                    let mut tls = crate::subst_failed::Stash::default();
                     if compatible {
                         // [dcl.stc]/4: one thread storage kind.
                         let n = sym_str(self, name);
@@ -376,7 +376,7 @@ impl Sema<'_, '_> {
             self.inst.concepts.placeholder_locs.insert(v, (l, Self::placeholder_auto_loc(ds, l)));
         }
         if invalid {
-            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            self.invalidate(v);
         }
         self.check_sizeless_var(v, false);
         self.record_constinit(v, ds);
@@ -548,11 +548,11 @@ impl Sema<'_, '_> {
         let int_like = self.ast.types.is_integral(ty) || self.ast.types.as_enum(ty).is_some();
         if !quals.is_const() || self.ast.types.is_reference(ty) {
             self.error(DiagId::sema_static_member_nonconst_init, vn.loc());
-            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            self.invalidate(v);
         } else if int_like {
             if quals.is_volatile() {
                 self.error(DiagId::sema_static_member_volatile_init, vn.loc());
-                self.ast.decls.set_flags(v, DeclFlags::INVALID);
+                self.invalidate(v);
                 return;
             }
             let loc = self.begin_loc(e);
@@ -579,7 +579,7 @@ impl Sema<'_, '_> {
                     let at = self.culprit_loc(e);
                     self.error(DiagId::sema_static_member_init_not_ice, at);
                 }
-                self.ast.decls.set_flags(v, DeclFlags::INVALID);
+                self.invalidate(v);
             }
         } else if self.is_floating_or_complex_floating(ty) && self.std < kiln_lex::Std::Cxx11 {
             // C++98: a floating (or complex floating) member's in-class
@@ -592,7 +592,7 @@ impl Sema<'_, '_> {
             if self.eval_const(e, ctx).is_err() {
                 let at = self.culprit_loc(e);
                 self.error(DiagId::sema_static_member_init_not_ice, at);
-                self.ast.decls.set_flags(v, DeclFlags::INVALID);
+                self.invalidate(v);
             }
         } else if self.std >= kiln_lex::Std::Cxx11 && self.is_literal_type(ty) {
             if self.is_floating_or_complex_floating(ty) {
@@ -607,12 +607,12 @@ impl Sema<'_, '_> {
                     .diag(DiagId::sema_static_member_literal_init, vn.loc())
                     .arg(self.ty_arg(ty));
                 self.emit(msg);
-                self.ast.decls.set_flags(v, DeclFlags::INVALID);
+                self.invalidate(v);
             }
         } else {
             let msg = self.diag(DiagId::sema_static_member_bad_init, vn.loc()).arg(self.ty_arg(ty));
             self.emit(msg);
-            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            self.invalidate(v);
         }
     }
 
@@ -884,7 +884,7 @@ impl Sema<'_, '_> {
             s.act_on_full_expr(c)
         });
         if !self.check_default_arg_locals(c) {
-            self.ast.decls.set_flags(p, DeclFlags::INVALID);
+            self.invalidate(p);
         }
         let _ = self.ast.decls.set_default_arg(p, c);
     }

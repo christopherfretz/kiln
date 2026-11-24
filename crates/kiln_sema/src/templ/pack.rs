@@ -344,8 +344,12 @@ impl Substituter<'_, '_, '_> {
         let saved_index = self.pack_index.take();
         self.pack.probing = true;
         let outer = self.sema.lambda_mangle.begin_probe();
+        let scope = self.sema.open_discard();
         let probe = f(self);
         let found = self.pack.found.take();
+        // A probe that found a pack is thrown away, with what it made
+        // invalid (spec/sema-templates.md §5.7.3).
+        self.sema.close_discard(scope, found.is_some());
         // A probe that found a pack is discarded: so are the mangling
         // numbers of the closure types it created (clang substitutes the
         // pattern only per element).
@@ -423,10 +427,9 @@ impl Substituter<'_, '_, '_> {
         // prior-argument substitution of `ic<T, v>` with `T` = void and an
         // empty `v`, which clang never forms; WP-1222): only the mismatch
         // is reported, as expanding reports it.
-        let held =
-            self.sema.diag_capture.replace(Some((self.sema.inst.stack.len(), Vec::new(), true)));
+        let held = self.sema.open_capture(true);
         let swept = f(self);
-        let _ = self.sema.diag_capture.replace(held);
+        drop(self.sema.close_capture(held));
         if let Some((n, second, loc)) = self.pack.sweep_mismatch.take() {
             self.pack = PackState { ellipsis, expanding: Some((0, name)), ..PackState::default() };
             let saved_index = self.pack_index.replace(0);
@@ -614,7 +617,9 @@ impl Substituter<'_, '_, '_> {
         let saved_state = std::mem::take(&mut self.pack);
         let saved_index = self.pack_index.take();
         self.pack.probing = true;
+        let scope = self.sema.open_discard();
         let _ = self.element_ty(pat, loc);
+        self.sema.close_discard(scope, true);
         let found = self.pack.found.take();
         self.pack = saved_state;
         self.pack_index = saved_index;
@@ -1416,21 +1421,18 @@ impl Sema<'_, '_> {
             | TypeView::ExtQual { base: x, .. }
             | TypeView::Attributed { modified: x, .. }
             | TypeView::Vector { elem: x, .. }
-            | TypeView::Decayed { original: x, .. }
-            | TypeView::ConstantArray(kiln_ast::types::ConstArray {
-                elem: x,
-                size_expr: None,
-                ..
-            }) => {
+            | TypeView::Decayed { original: x, .. } => {
                 self.type_packs(x, out, depth + 1);
             }
-            // A kept bound (`char[sizeof(sizeof(Ts))]`, WP-2720).
-            TypeView::VariableArray { elem, size }
-            | TypeView::ConstantArray(kiln_ast::types::ConstArray {
-                elem,
-                size_expr: Some(size),
-                ..
-            }) => {
+            // A kept bound (`char[sizeof(sizeof(Ts))]`, WP-2720); a bound
+            // kept only as written names no pack (WP-3015).
+            TypeView::ConstantArray(a) => {
+                self.type_packs(a.elem, out, depth + 1);
+                if let Some(size) = self.ast.types.inst_bound(&a) {
+                    self.expr_packs(size, out, depth + 1);
+                }
+            }
+            TypeView::VariableArray { elem, size } => {
                 self.type_packs(elem, out, depth + 1);
                 self.expr_packs(size, out, depth + 1);
             }

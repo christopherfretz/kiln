@@ -414,7 +414,7 @@ impl Substituter<'_, '_, '_> {
                 // ill-formed bound is a deduction failure
                 // ([temp.deduct.general]/7) or an error in an
                 // instantiation; its value is the original's.
-                if let Some(s) = a.size_expr {
+                if let Some(s) = self.sema.ast.types.inst_bound(&a) {
                     let s = self.expr(s)?;
                     return self.chunk(e, Chunk::Array { size: Some(s), loc: at }, loc);
                 }
@@ -454,7 +454,11 @@ impl Substituter<'_, '_, '_> {
                     self.sema.emit(msg);
                     return Err(SubstFail);
                 }
-                Ok(self.sema.ast.types.constant_array(e, a.size, None))
+                // A written bound that is not instantiation-dependent is
+                // kept as it is: the instantiation's type holds the
+                // pattern's expression (spec/types.md §7.2 "Written
+                // bounds", WP-3015).
+                Ok(self.sema.ast.types.constant_array(e, a.size, a.size_expr))
             }
             TypeView::IncompleteArray(elem) => {
                 let e = self.ty(elem, loc)?;

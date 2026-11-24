@@ -141,6 +141,7 @@ pub mod stack_guard;
 mod static_tls;
 pub mod stmt;
 mod struct_bind;
+mod subst_failed;
 mod sve;
 mod sve_calls;
 mod swift_abi;
@@ -816,20 +817,27 @@ pub struct Sema<'a, 'sm> {
     /// of a class with virtual bases is diagnosed there before C++26
     /// (clang `getBeginLoc`; [dcl.fct.def.default]/3, P3533R2).
     pub(crate) constexpr_begin_locs: kiln_source::fx::FxHashMap<DeclId, Loc>,
-    /// The namespace named by the qualifier of each friend function (or
-    /// function template pattern) declared with a qualified name in a
-    /// templated class (`friend void N::f(T);`): its instantiation is
-    /// declared with the same qualifier, so it redeclares `N::f`
-    /// ([dcl.meaning.general]/2.3, [temp.friend]/1; WP-273).
-    pub(crate) friend_qualifiers: kiln_source::fx::FxHashMap<DeclId, DeclId>,
-    /// The dependent nested-name-specifier of each method friend whose
-    /// match waits for instantiation (`template<class U> friend int
-    /// B<T>::g(U, W<T>&);`): substituted, it names the class whose member
-    /// the instantiated friend redeclares ([temp.friend]/1; WP-1110).
-    /// With where the specifier begins: a substituted specifier that
-    /// names no class is reported there (clang).
-    pub(crate) friend_qualifier_nns:
-        kiln_source::fx::FxHashMap<DeclId, (kiln_ast::ids::NnsId, Loc)>,
+    /// The `FriendDecl` of each friend function (or function template
+    /// pattern) declared with a qualified name in a templated class
+    /// (`friend void N::f(T);`, `template<class U> friend int
+    /// B<T>::g(U, W<T>&);`): its instantiation is declared again with the
+    /// row's qualifier (spec/ast.md §23), substituted when dependent, so
+    /// it redeclares the member the qualifier names
+    /// ([dcl.meaning.general]/2.3, [temp.friend]/1; WP-273, WP-1110).
+    pub(crate) friend_fn_decls: kiln_source::fx::FxHashMap<DeclId, DeclId>,
+    /// The qualified friend function `act_on_function` just declared in
+    /// a templated class, and whether its match waits for instantiation:
+    /// taken by `declare_friend` with its `FriendDecl`.
+    pub(crate) pending_qualified_friend: Option<(DeclId, bool)>,
+    /// `-Wunsupported-friend` was given for the friend being declared
+    /// (its row's `UNSUPPORTED`, spec/ast.md §23).
+    pub(crate) pending_unsupported_friend: bool,
+    /// The own head and name location of the friend class template
+    /// `template<class U> friend class N::X;` being declared, and the
+    /// qualifier the parser wrote it with and where that begins: its row
+    /// (spec/ast.md §23.1), written by `act_on_friend`.
+    pub(crate) pending_friend_class_head: Option<(Option<kiln_ast::ids::TemplateParamListId>, Loc)>,
+    pub(crate) pending_friend_class_qual: Option<(kiln_ast::ids::NnsId, Loc)>,
     /// Where `override` / `final` were written on each member function
     /// whose override control is deferred to instantiation (a dependent
     /// class or type; `check_override_control`): the instantiation is
@@ -924,7 +932,7 @@ pub struct Sema<'a, 'sm> {
     /// until its attributes are checked: clang merges the attributes
     /// first, so their "must precede definition" warning comes before
     /// the errors (`Sema::release_after_def_held`, WP-1848).
-    pub(crate) after_def_held: Vec<Diag>,
+    pub(crate) after_def_held: Vec<subst_failed::Stash>,
     /// The "unknown attribute ignored" warnings of the attribute-specifier
     /// being parsed, while one is: clang issues them when the
     /// declaration's attributes are processed, after the syntax errors
@@ -1264,7 +1272,10 @@ pub struct Sema<'a, 'sm> {
     /// held step pushes (prior-argument substitution and the like, not an
     /// instantiation nor a SFINAE boundary) are held too: what the step
     /// substitutes is discarded, and clang never forms it.
-    pub(crate) diag_capture: std::cell::RefCell<Option<(usize, Vec<Diag>, bool)>>,
+    pub(crate) diag_capture: std::cell::RefCell<Option<subst_failed::DiagCapture>>,
+    /// The trap ledger: declarations made invalid while their errors were
+    /// trapped, waiting for the trap's end (`subst_failed.rs`, WP-3281).
+    pub(crate) subst_ledger: std::cell::RefCell<subst_failed::SubstLedger>,
     /// The "no member named" errors of qualified-ids held back until the
     /// end of the enclosing expression statement (clang's delayed typo
     /// correction, `TypoExpr`), while `typo_delay` is non-zero
@@ -1441,14 +1452,10 @@ pub struct Sema<'a, 'sm> {
     /// the parameter that has none of its own.
     /// The friend function template specializations of class template
     /// patterns (`friend bool operator==<>(const X&, const X&);`,
-    /// [temp.friend]/1.3), keyed by their `FriendDecl`: matched against
-    /// their templates per specialization.
-    pub(crate) friend_specs: kiln_source::fx::FxHashMap<DeclId, class::friend::FriendSpec>,
-    /// The constructor, destructor and conversion function friends of
-    /// templated classes naming a member of a templated or dependent
-    /// class (`friend Z<T>::Z(typename T::t);`), keyed by their
-    /// `FriendDecl`: matched per specialization (WP-1507).
-    pub(crate) special_friends: kiln_source::fx::FxHashMap<DeclId, class::friend::SpecialFriend>,
+    /// [temp.friend]/1.3) whose noexcept-specifier waits for the end of
+    /// the class, so it is not compared with the specialization's (their
+    /// written form is the row, spec/ast.md §23).
+    pub(crate) friend_late_exc: kiln_source::fx::FxHashSet<DeclId>,
     /// The [temp.friend]/5 friends (`template<class T> friend class
     /// A<T>::Member;`; spec/sema-templates.md §4.8, WP-1072).
     pub(crate) member_friends: class::member_friend::MemberFriends,
@@ -1747,8 +1754,11 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             inner_chunk_locs: kiln_source::fx::FxHashMap::default(),
             pending_chunk_loc: Loc::INVALID,
             constexpr_begin_locs: kiln_source::fx::FxHashMap::default(),
-            friend_qualifiers: kiln_source::fx::FxHashMap::default(),
-            friend_qualifier_nns: kiln_source::fx::FxHashMap::default(),
+            friend_fn_decls: kiln_source::fx::FxHashMap::default(),
+            pending_qualified_friend: None,
+            pending_unsupported_friend: false,
+            pending_friend_class_head: None,
+            pending_friend_class_qual: None,
             virt_spec_locs: kiln_source::fx::FxHashMap::default(),
             instantiating_friend_template: false,
             delayed_bodies: kiln_source::fx::FxHashSet::default(),
@@ -1851,6 +1861,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             mem_inits: class::MemInitState::default(),
             extend_collector: None,
             diag_capture: std::cell::RefCell::new(None),
+            subst_ledger: std::cell::RefCell::new(subst_failed::SubstLedger::default()),
             delayed_typos: Vec::new(),
             typo_delay: 0,
             typo_count: 0,
@@ -1893,8 +1904,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             inh_ctors: kiln_source::fx::FxHashMap::default(),
             inh_ctor_base: kiln_source::fx::FxHashMap::default(),
             anon_namespaces: kiln_source::fx::FxHashMap::default(),
-            friend_specs: kiln_source::fx::FxHashMap::default(),
-            special_friends: kiln_source::fx::FxHashMap::default(),
+            friend_late_exc: kiln_source::fx::FxHashSet::default(),
             member_friends: class::member_friend::MemberFriends::default(),
             nsdmi_this: Vec::new(),
             subst_closures: Vec::new(),
@@ -1956,7 +1966,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     }
 
     /// Consumes the `Sema`, returning the AST.
-    pub fn into_ast(self) -> Ast {
+    pub fn into_ast(mut self) -> Ast {
+        self.flush_subst_failed();
         self.ast
     }
 
@@ -2020,11 +2031,10 @@ impl<'a, 'sm> Sema<'a, 'sm> {
                 d = d.with_note(n);
             }
         }
-        if let Some((depth, held, checks)) = self.diag_capture.borrow_mut().as_mut()
-            && (*depth == self.inst.stack.len()
-                || (*checks && self.inst.stack.only_checks_above(*depth)))
+        if let Some(c) = self.diag_capture.borrow_mut().as_mut()
+            && self.capture_holds(c)
         {
-            held.push(d);
+            c.held.push(d);
             return;
         }
         if self.inst.suppress_next_error.replace(false) {
@@ -2039,10 +2049,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             let sev = self.diags.severity_at(id, d.loc());
             // clang's `NoSFINAE` errors (`SFINAE_Report`) print even in
             // a SFINAE context, with the context notes.
-            if self.inst.stack.is_sfinae()
-                && !is_sfinae_report(id)
-                && !self.host_failure_escapes(sev)
-            {
+            if self.sfinae_traps() && !is_sfinae_report(id) && !self.host_failure_escapes(sev) {
                 if self.inst.suppress_access.get() && is_access_error(id) {
                     if let Some(s) = self.inst.sfinae.borrow_mut().last_mut()
                         && s.first.is_none()

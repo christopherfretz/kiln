@@ -420,12 +420,16 @@ impl StdCache {
         a.dump_vtable_layouts = false;
         a.dump_cfg = false;
         a.dump_written_refs = false;
+        // A module file carries no function-name spans (stage A).
+        a.fn_names = false;
+        a.dump_fn_names = false;
         // `written_refs` stays: the module file carries the table its
         // build records (spec/ast.md §18.10.2), keyed apart below.
         // `decl_extents` stays: the module file carries the extents its
         // build records (spec/ast.md §19.6), keyed apart below.
         a.dump_decl_extents = false;
         a.dump_expr_extents = false;
+        a.dump_friend_forms = false;
         a.pp_record = false;
         a.dump_pp_record = false;
         // A module file carries no builtin-macro literal table (spec/ast.md

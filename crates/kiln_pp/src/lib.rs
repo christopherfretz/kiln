@@ -85,6 +85,6 @@ pub use record::{
 };
 pub use resolver::{HeaderSearch, SearchEvent, SearchObserver};
 pub use search::{
-    Characteristic, DirGroup, HeaderFs, MemoryFs, OverlayFs, RealFs, SearchDir, SearchDirSpec,
-    SearchList, join_path, parent_dir,
+    Characteristic, DirGroup, DropReason, DroppedDir, HeaderFs, MemoryFs, OverlayFs, RealFs,
+    SearchDir, SearchDirSpec, SearchList, join_path, parent_dir,
 };

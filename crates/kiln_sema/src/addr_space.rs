@@ -7,7 +7,7 @@
 //! `kiln_codegen`.
 
 use kiln_ast::attr::{AttrKind, AttrNode, AttrSyntax};
-use kiln_ast::decl::{DeclFlags, TlsKind, VarStorage};
+use kiln_ast::decl::{TlsKind, VarStorage};
 use kiln_ast::ids::RawId;
 use kiln_ast::types::AddrSpace;
 use kiln_ast::{AttrId, DeclId, QualType};
@@ -256,7 +256,7 @@ impl Sema<'_, '_> {
             return;
         }
         self.error(DiagId::sema_address_space_automatic, n.loc());
-        self.ast.decls.set_flags(v, DeclFlags::INVALID);
+        self.invalidate(v);
     }
 
     /// [temp.inst] A parameter `np` of a function type written inside

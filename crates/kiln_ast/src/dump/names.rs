@@ -77,6 +77,15 @@ pub struct AstNames<'a> {
     /// name with its whole scope, through functions, a null pointer
     /// argument with its type. Never set for diagnostics.
     pub key: bool,
+    /// The function-name span recorder (spec/ast.md §24.3): with one,
+    /// every declaration name and template argument list is written with
+    /// in-band markers. Set only by the function-name funnel.
+    pub spans: Option<&'a crate::fn_names::FnSpanSink>,
+    /// Print types exactly as the [`TypeNames`] of a bare [`Ast`] does
+    /// (no written or converted specialization arguments): how
+    /// `__PRETTY_FUNCTION__` prints its parameter and return types, so a
+    /// recording printer can stand in for the `Ast`.
+    pub plain_ast: bool,
 }
 
 impl std::fmt::Debug for AstNames<'_> {
@@ -99,6 +108,8 @@ impl<'a> AstNames<'a> {
             path_prefix_map: &[],
             local_scopes: false,
             key: false,
+            spans: None,
+            plain_ast: false,
         }
     }
 
@@ -115,6 +126,8 @@ impl<'a> AstNames<'a> {
             path_prefix_map: &[],
             local_scopes: false,
             key: false,
+            spans: None,
+            plain_ast: false,
         }
     }
 
@@ -171,7 +184,7 @@ impl<'a> AstNames<'a> {
 
     /// The key printer's name of declaration `d`: its whole scope
     /// ([`Self::write_key_scope`]) and its own component.
-    fn write_key_name(&self, d: DeclId, out: &mut String) {
+    pub(crate) fn write_key_name(&self, d: DeclId, out: &mut String) {
         self.write_key_scope(self.ast.decls.get(d).ctx(), 0, out);
         self.write_key_component(d, out);
     }
@@ -344,6 +357,9 @@ impl<'a> AstNames<'a> {
     /// append nothing.
     pub fn write_name(&self, d: DeclId, out: &mut String) {
         let n = self.ast.decls.get(d);
+        if let Some(sink) = self.spans {
+            return self.write_name_recorded(sink, d, out);
+        }
         // A conversion function template specialization keeps the
         // pattern's name (`operator T`, which the mangling needs); clang
         // names it by its substituted target type (`operator int`).
@@ -353,6 +369,70 @@ impl<'a> AstNames<'a> {
             return;
         }
         self.write_decl_name_value(n.name(), out);
+    }
+
+    /// These names without the span recorder.
+    pub(crate) fn unrecorded(&self) -> Self {
+        AstNames { spans: None, ..*self }
+    }
+
+    /// Writes `f` into `out` as one function-name entry naming `entity`
+    /// (spec/ast.md §24.3), when recording.
+    pub(crate) fn span(
+        &self,
+        entity: Option<DeclId>,
+        flags: u8,
+        out: &mut String,
+        f: impl FnOnce(&mut String),
+    ) {
+        match self.spans {
+            Some(sink) => {
+                let at = sink.open(out, entity, flags);
+                f(out);
+                sink.close(out, at);
+            }
+            None => f(out),
+        }
+    }
+
+    /// [`Self::write_name`] with the span recorder: one entry over the
+    /// name; a constructor or destructor's over its class's name only
+    /// (`CLASS_NAME`, the `~` outside); a conversion's over all of
+    /// `operator T`, with `T`'s names nested in it.
+    fn write_name_recorded(&self, sink: &crate::fn_names::FnSpanSink, d: DeclId, out: &mut String) {
+        use crate::fn_names::CLASS_NAME;
+        let n = self.ast.decls.get(d);
+        if let Some(&q) = self.ast.decls.cold.conversion_spec_target.get(d) {
+            let at = sink.open(out, Some(d), 0);
+            out.push_str("operator ");
+            write_type(&self.ast.types, self, q, PrintOptions::SUGARED, out);
+            sink.close(out, at);
+            return;
+        }
+        let plain = self.unrecorded();
+        match self.ast.names.view(n.name()) {
+            DeclNameView::Constructor(t) => {
+                let at = sink.open(out, Some(d), CLASS_NAME);
+                plain.write_class_type(t, out);
+                sink.close(out, at);
+            }
+            DeclNameView::Destructor(t) => {
+                out.push('~');
+                let at = sink.open(out, Some(d), CLASS_NAME);
+                plain.write_class_type(t, out);
+                sink.close(out, at);
+            }
+            DeclNameView::Conversion(_) => {
+                let at = sink.open(out, Some(d), 0);
+                self.write_decl_name_value(n.name(), out);
+                sink.close(out, at);
+            }
+            _ => {
+                let at = sink.open(out, Some(d), 0);
+                plain.write_decl_name_value(n.name(), out);
+                sink.close(out, at);
+            }
+        }
     }
 
     /// Appends the name a diagnostic gives `d` (clang `printName`): as
@@ -663,13 +743,17 @@ impl<'a> AstNames<'a> {
                 self.write_name(td, out);
                 return;
             }
+            let synth = Some(d);
+            let flag = crate::fn_names::SYNTHESIZED;
             match kind {
-                DeclKind::Namespace => out.push_str("(anonymous namespace)"),
+                DeclKind::Namespace => {
+                    self.span(synth, flag, out, |o| o.push_str("(anonymous namespace)"));
+                }
                 DeclKind::CXXRecord
                 | DeclKind::ClassTemplateSpecialization
                 | DeclKind::ClassTemplatePartialSpecialization => {
                     if self.closure_as_lambda && self.ast.closure_lambda(d).is_some() {
-                        out.push_str("(lambda)");
+                        self.span(synth, flag, out, |o| o.push_str("(lambda)"));
                         return;
                     }
                     let tag = self.ast.decls.record(d).map_or(TagKind::Struct, |r| r.tag);
@@ -680,15 +764,17 @@ impl<'a> AstNames<'a> {
                         .decls
                         .record(d)
                         .is_some_and(|r| r.defn.contains(DefinitionBits::ANONYMOUS));
-                    out.push_str(if self.local_scopes && !anonymous {
-                        "(unnamed "
-                    } else {
-                        "(anonymous "
+                    self.span(synth, flag, out, |out| {
+                        out.push_str(if self.local_scopes && !anonymous {
+                            "(unnamed "
+                        } else {
+                            "(anonymous "
+                        });
+                        out.push_str(tag.keyword());
+                        out.push(')');
                     });
-                    out.push_str(tag.keyword());
-                    out.push(')');
                 }
-                DeclKind::Enum => out.push_str("(anonymous enum)"),
+                DeclKind::Enum => self.span(synth, flag, out, |o| o.push_str("(anonymous enum)")),
                 _ => {}
             }
             return;
@@ -700,6 +786,9 @@ impl<'a> AstNames<'a> {
     /// `f(char, int *)`.
     fn write_function_scope(&self, f: DeclId, out: &mut String) {
         out.push('(');
+        if let Some(sink) = self.spans {
+            sink.group_open(out);
+        }
         let proto = self.ast.decls.get(f).ty().and_then(|t| self.ast.types.proto(t));
         if let Some(p) = proto {
             let params = self.ast.types.params(p);
@@ -713,6 +802,9 @@ impl<'a> AstNames<'a> {
                 out.push_str(if params.is_empty() { "..." } else { ", ..." });
             }
         }
+        if let Some(sink) = self.spans {
+            sink.group_close(out);
+        }
         out.push(')');
     }
 
@@ -721,6 +813,12 @@ impl<'a> AstNames<'a> {
     /// `(lambda at F:L:C)`, `(unnamed enum at F:L:C)`; without a source
     /// manager the ` at ...` part is omitted.
     fn write_unnamed_tag(&self, d: DeclId, out: &mut String) {
+        self.span(Some(d), crate::fn_names::SYNTHESIZED, out, |out| {
+            self.write_unnamed_tag_text(d, out);
+        });
+    }
+
+    fn write_unnamed_tag_text(&self, d: DeclId, out: &mut String) {
         let n = self.ast.decls.get(d);
         out.push('(');
         if let Some(r) = self.ast.decls.record(d) {
@@ -796,7 +894,9 @@ impl<'a> AstNames<'a> {
                     return;
                 }
                 if self.is_unnamed(ctx) {
-                    out.push_str("(anonymous namespace)::");
+                    let flag = crate::fn_names::SYNTHESIZED;
+                    self.span(Some(ctx), flag, out, |o| o.push_str("(anonymous namespace)"));
+                    out.push_str("::");
                 } else {
                     self.write_name(ctx, out);
                     out.push_str("::");
@@ -846,7 +946,9 @@ impl<'a> AstNames<'a> {
                     return;
                 }
                 if self.is_unnamed(ctx) {
-                    out.push_str("(anonymous namespace)::");
+                    let flag = crate::fn_names::SYNTHESIZED;
+                    self.span(Some(ctx), flag, out, |o| o.push_str("(anonymous namespace)"));
+                    out.push_str("::");
                 } else {
                     self.write_name(ctx, out);
                     out.push_str("::");
@@ -1801,7 +1903,8 @@ impl<'a> AstNames<'a> {
     /// The name and explicit template arguments of dependent name
     /// expression `e`.
     fn dependent_name(&self, e: ExprId, name: DeclName, out: &mut String) {
-        self.write_decl_name_value(name, out);
+        let plain = self.unrecorded();
+        self.span(None, crate::fn_names::DEPENDENT, out, |o| plain.write_decl_name_value(name, o));
         if let Some(&l) = self.ast.templates.expr_targs.get(e) {
             write_arg_list(&self.ast.types, self, l, out);
         }
@@ -1918,7 +2021,17 @@ impl TypeNames for AstNames<'_> {
     /// `'A<N::X>':'A<X>'` after `template<> struct A<X>` (WP-1816). Not
     /// in debug information, whose names print the converted arguments.
     fn args_as_written(&self, decl: DeclId) -> Option<crate::ids::ArgListId> {
-        if self.debug_info || self.key || self.ast.decls.get(decl).kind() != DeclKind::CXXRecord {
+        if self.debug_info
+            || self.key
+            || self.plain_ast
+            || self.ast.decls.get(decl).kind() != DeclKind::CXXRecord
+        {
+            return None;
+        }
+        // A partial specialization prints its converted arguments, as
+        // clang's injected class name does (`P<T, 1>`); its written ones
+        // (WP-3016) are for tooling.
+        if self.ast.partial_spec_info(decl).is_some() {
             return None;
         }
         self.ast.templates.args_as_written(decl)
@@ -1939,6 +2052,9 @@ impl TypeNames for AstNames<'_> {
         if self.key {
             return self.key_spec_args(decl);
         }
+        if self.plain_ast {
+            return self.specialization_args(decl);
+        }
         if self.ast.decls.get(decl).kind() != DeclKind::CXXRecord {
             return None;
         }
@@ -1946,6 +2062,9 @@ impl TypeNames for AstNames<'_> {
     }
 
     fn write_converted_scope(&self, decl: DeclId, out: &mut String) -> bool {
+        if self.plain_ast {
+            return false;
+        }
         self.append_converted_scope(self.ast.decls.get(decl).ctx(), 0, out);
         true
     }
@@ -2046,7 +2165,21 @@ impl TypeNames for AstNames<'_> {
     }
 
     fn write_template_param(&self, associated: DeclId, index: u32, out: &mut String) {
-        self.ast.write_replaced_param(associated, index, out);
+        if self.spans.is_none() {
+            return self.ast.write_replaced_param(associated, index, out);
+        }
+        let parm = self
+            .ast
+            .template_info(associated)
+            .map(|i| *self.ast.templates.param_list(i.params))
+            .and_then(|l| self.ast.lists.iter::<DeclId>(l.params).nth(index as usize));
+        let named = parm.is_some_and(|p| !self.is_unnamed(p));
+        let flags = if named { 0 } else { crate::fn_names::SYNTHESIZED };
+        self.span(parm, flags, out, |o| self.ast.write_replaced_param(associated, index, o));
+    }
+
+    fn fn_spans(&self) -> Option<&crate::fn_names::FnSpanSink> {
+        self.spans
     }
 
     fn is_anonymous_namespace(&self, ns: DeclId) -> bool {

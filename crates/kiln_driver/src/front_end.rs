@@ -79,6 +79,11 @@ pub struct FrontEndOptions {
     /// `fe.ast.written_refs`, with the content `-fkiln-dump-written-refs`
     /// prints for the same input. Off by default (WP-2320).
     pub written_refs: bool,
+    /// Record the function-name span table (`ParseOptions::fn_names`,
+    /// spec/ast.md §24), as `-fkiln-fn-names` on the command line does,
+    /// and print nothing: the closure reads it as `fe.ast.fn_names`
+    /// (WP-3280). Off by default.
+    pub fn_names: bool,
     /// Record which builtin macro each literal came from (the
     /// builtin-macro literal table, spec/ast.md §22), as
     /// `-fkiln-builtin-literals` on the command line does: the closure
@@ -124,6 +129,7 @@ impl Default for FrontEndOptions {
             environment: Environment::process(),
             pp_record: false,
             written_refs: false,
+            fn_names: false,
             builtin_literals: false,
             token_table: false,
             working_directory: None,
@@ -143,6 +149,7 @@ impl std::fmt::Debug for FrontEndOptions {
             .field("environment", &self.environment)
             .field("pp_record", &self.pp_record)
             .field("written_refs", &self.written_refs)
+            .field("fn_names", &self.fn_names)
             .field("builtin_literals", &self.builtin_literals)
             .field("token_table", &self.token_table)
             .field("working_directory", &self.working_directory)
@@ -664,6 +671,7 @@ fn run_here<R>(
     // the module cache's key of a module built in process (a module file
     // carries the table its producer recorded, spec/ast.md §18.10.2).
     args.written_refs |= options.written_refs;
+    args.fn_names |= options.fn_names;
     args.builtin_literals |= options.builtin_literals;
     structural_checks(&args)?;
     crate::crash_for_testing(&args);

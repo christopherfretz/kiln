@@ -19,7 +19,7 @@ use crate::overload::{ArgInfo, CandidateKind, IcsOptions, OverloadCandidateSet, 
 use crate::templ::args::ConvertedArgs;
 use crate::templ::deduce::{DeducedArgs, TdfFlags, Tdk};
 use crate::templ::order::ObjectParam;
-use crate::templ::stack::{FrameKind, SfinaeState};
+use crate::templ::stack::FrameKind;
 use crate::templ::subst::Substituter;
 
 /// A failed deduction (clang's `DeductionFailureInfo`).
@@ -212,7 +212,7 @@ impl Sema<'_, '_> {
         if let Some(a) = args {
             self.set_frame_args(a);
         }
-        self.inst.sfinae.borrow_mut().push(SfinaeState::default());
+        self.push_sfinae_state();
         let mark = self.ast.exprs.len();
         let wmark = self.written_spec_mark();
         let r = f(self);
@@ -223,7 +223,7 @@ impl Sema<'_, '_> {
         if !self.member_refs.is_empty() {
             self.flush_member_refs_since(mark);
         }
-        let mut st = self.inst.sfinae.borrow_mut().pop().unwrap_or_default();
+        let mut st = self.pop_sfinae_state();
         self.pop_inst_frame();
         held.append(&mut st.warnings);
         let failed = if st.errors > 0 { Err(st.first) } else { Ok(()) };

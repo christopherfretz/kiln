@@ -103,7 +103,7 @@ pub(crate) use locs::Locs;
 use locs::{FileRec, LocTable, SlocRec};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 91;
+pub(crate) const IMAGE_VERSION: u32 = 95;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -642,10 +642,14 @@ enum Payload {
     /// The shadow a using-declarator introduces (S6) for `target`;
     /// `using` is the record of the using-declaration (a [`Payload::Using`]
     /// or [`Payload::UsingEnum`] before it, in the same context) that
-    /// introduced it, or [`NONE`] (WP-2025, `Ast::using_shadows`).
+    /// introduced it, or [`NONE`] (WP-2025, `Ast::using_shadows`);
+    /// `hidden` is the record of the member of the same class that hides
+    /// it ([namespace.udecl]/14, `DeclArena::hidden_shadow`), or [`NONE`]
+    /// (WP-3145).
     Shadow {
         target: u32,
         using: u32,
+        hidden: u32,
     },
     /// A using-directive (S6) nominating namespace record `ns` (a first
     /// declaration).
@@ -1347,9 +1351,10 @@ fn encode_decl(w: &mut Wr, d: &DeclRec) {
             w.u8(u8::from(*typename));
             w.steps(steps);
         }
-        Payload::Shadow { target, using } => {
+        Payload::Shadow { target, using, hidden } => {
             w.u32(*target);
             w.u32(*using);
+            w.u32(*hidden);
         }
         Payload::AnonObj { rec: x }
         | Payload::Indirect { obj: x }
@@ -1912,7 +1917,7 @@ fn decode_decl(r: &mut Rd<'_>) -> Res<DeclRec> {
             };
             Payload::DepUsing { typename, steps: r.steps()? }
         }
-        K_SHADOW => Payload::Shadow { target: r.u32()?, using: r.u32()? },
+        K_SHADOW => Payload::Shadow { target: r.u32()?, using: r.u32()?, hidden: r.u32()? },
         K_ANON_OBJ => Payload::AnonObj { rec: r.u32()? },
         K_INDIRECT => Payload::Indirect { obj: r.u32()? },
         K_ASM => Payload::Asm { string: r.u32()? },
@@ -3027,6 +3032,16 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
         {
             return bad("bad shadow's using-declaration");
         }
+        // WP-3145: a hidden shadow's hider is another member of its class,
+        // before or after it.
+        if let Payload::Shadow { hidden, .. } = d.payload
+            && hidden != NONE
+            && (d.ctx == NONE
+                || hidden as usize == i
+                || img.decls.get(hidden as usize).is_none_or(|h| h.ctx != d.ctx))
+        {
+            return bad("bad hidden shadow's member");
+        }
         let ident = |n: u32| (n as usize) < img.names.len();
         let name_ok = match &d.payload {
             Payload::Export
@@ -3763,7 +3778,10 @@ impl Writer<'_, '_, '_> {
             TypeView::Pointer(q) => TyRec::Pointer(self.qref(q)?),
             TypeView::LValueRef(q) => TyRec::LRef(self.qref(q)?),
             TypeView::RValueRef(q) => TyRec::RRef(self.qref(q)?),
-            // A kept bound (WP-2720) is an expression type ([`exprs`]).
+            // A kept bound (WP-2720) and a bound kept as written
+            // (spec/types.md §7.2 "Written bounds", WP-3015, WP-3102) are
+            // expression types ([`exprs`]); a bound not written is the
+            // value.
             TypeView::ConstantArray(a) if a.size_expr.is_none() => {
                 TyRec::CArray(self.qref(a.elem)?, a.size)
             }
@@ -3955,6 +3973,7 @@ impl Writer<'_, '_, '_> {
             DeclKind::UsingShadow if class_using => Payload::Shadow {
                 target: class_shadow.ok_or(classusing::CLASS_USING)?,
                 using: NONE,
+                hidden: NONE,
             },
             DeclKind::UsingShadow => {
                 let t = rec(ast.using_target(d))
@@ -3962,7 +3981,7 @@ impl Writer<'_, '_, '_> {
                 if self.img.decls[t as usize].flags & DEP != 0 {
                     return Err("a using-declaration naming a template pattern");
                 }
-                Payload::Shadow { target: t, using: NONE }
+                Payload::Shadow { target: t, using: NONE, hidden: NONE }
             }
             DeclKind::UsingDirective => {
                 let ns = rec(ast.using_target(d).map(|x| ast.first(x)))
@@ -4422,7 +4441,7 @@ impl Writer<'_, '_, '_> {
             return Err("a destroying operator delete");
         }
         if c.inheriting_ctor.contains(d) || c.inherited_ctor.contains(d) {
-            return Err("an inherited constructor");
+            return Err("an inherited constructor or assignment operator");
         }
         if c.delete_message.contains(d)
             // `explicit(expr)` travels with the constraints (WP-1345).
@@ -4467,7 +4486,7 @@ impl Writer<'_, '_, '_> {
             return Err("a coroutine, contract-checked or implicitly defaulted function");
         }
         if s.inh_ctor_base.contains_key(&d) {
-            return Err("an inherited constructor");
+            return Err("an inherited constructor or assignment operator");
         }
         if kind == 1
             && matches!(
@@ -4750,9 +4769,7 @@ impl Writer<'_, '_, '_> {
         }
         // A class template pattern whose inheriting declarators are all
         // dependent keeps the bit (WP-1345, `depusing.rs`).
-        if (b.contains(DefinitionBits::HAS_INHERITED_CTOR) && !depusing::dep_inheriting(ast, d))
-            || b.contains(DefinitionBits::HAS_INHERITED_ASSIGN)
-        {
+        if b.contains(DefinitionBits::HAS_INHERITED_CTOR) && !depusing::dep_inheriting(ast, d) {
             return Err("an inherited constructor or assignment operator");
         }
         if b.contains(DefinitionBits::ANONYMOUS) && !self.anon_class_ok(d) {
@@ -4766,9 +4783,14 @@ impl Writer<'_, '_, '_> {
         // `COMPLETE_DEFINITION_REQUIRED` (limited -g's declaration rule,
         // WP-1389) is this unit's use, not a property of the class: it is
         // not carried, and the importing unit marks its own uses.
+        // `HAS_INHERITED_ASSIGN` is read only at the class's `}`; what it
+        // did there (the implicit assignment operators declared eagerly,
+        // the shadows they hide) is carried by the implicit records, whose
+        // declaration marks the shadows again (WP-3146).
         let bits = b
             .without(DefinitionBits::COMPLETE)
             .without(DefinitionBits::COMPLETE_DEFINITION_REQUIRED)
+            .without(DefinitionBits::HAS_INHERITED_ASSIGN)
             .bits();
         // An anonymous class keeps its bit (WP-1345, `anon.rs`).
         let closure = if rd.lambda.is_some() { lambdas::CLOSURE_BITS } else { 0 };
@@ -5012,6 +5034,7 @@ impl Writer<'_, '_, '_> {
             }
         }
         self.shadow_usings()?;
+        self.shadow_hiders()?;
         self.friend_lists()?;
         self.anon_typedefs()?;
         self.decl_locs()?;
@@ -5270,6 +5293,31 @@ impl Writer<'_, '_, '_> {
                         )?;
                     }
                 }
+            }
+        }
+        Ok(())
+    }
+
+    /// WP-3145: the `hidden` word of each class-scope shadow record a
+    /// member of the class hides (`DeclArena::hidden_shadow`), so that the
+    /// importer marks it as the replay does, whichever of the two was
+    /// declared first. A hider without a record is a fallback.
+    fn shadow_hiders(&mut self) -> W<()> {
+        let ast = &self.s.ast;
+        let mut hidden: Vec<(u32, DeclId)> = self
+            .recs
+            .iter()
+            .filter(|&(&d, _)| ast.decls.get(d).kind() == DeclKind::UsingShadow)
+            .filter_map(|(&d, &i)| Some((i, ast.decls.hidden_shadow(d)?)))
+            .collect();
+        hidden.sort_unstable();
+        for (si, by) in hidden {
+            let Some(&hi) = self.recs.get(&by) else {
+                self.miss(si, "a hidden using-shadow whose member is not carried")?;
+                continue;
+            };
+            if let Payload::Shadow { hidden, .. } = &mut self.img.decls[si as usize].payload {
+                *hidden = hi;
             }
         }
         Ok(())
@@ -6203,7 +6251,11 @@ impl Sema<'_, '_> {
                             owned_tag: at(*owned),
                         },
                     };
-                    self.builder().friend(ctx, h.loc, t)
+                    let fd = self.builder().friend(ctx, h.loc, t);
+                    // The image carries no written form (spec/ast.md
+                    // §23.5): its row is not known, rather than absent.
+                    self.ast.decls.set_friend_form_not_carried(fd);
+                    fd
                 }
                 Payload::Implicit { kind: scope::BUILTIN_KIND } => {
                     self.image_builtin(img, i as u32)
@@ -6377,6 +6429,15 @@ impl Sema<'_, '_> {
         for group in shadows.chunk_by(|a, b| a.0 == b.0) {
             let list: Vec<DeclId> = group.iter().map(|&(_, d)| d).collect();
             let _ = self.builder().set_using_shadows(ids[group[0].0 as usize], &list);
+        }
+        // WP-3145: the hidden marks (an implicit assignment operator's
+        // declaration above may have set one already).
+        for (i, r) in img.decls.iter().enumerate() {
+            if let Payload::Shadow { hidden, .. } = r.payload
+                && hidden != NONE
+            {
+                let _ = self.ast.decls.set_hidden_shadow(ids[i], ids[hidden as usize]);
+            }
         }
         if let Some((e, computed)) = open.take() {
             self.image_complete_enum(img, &mut tys, &ids, e, computed);
@@ -7513,13 +7574,13 @@ mod tests {
         };
         img.decls.extend([
             rec(1, Payload::Using { steps: vec![NnsRec::Ns(0)] }),
-            rec(1, Payload::Shadow { target: 2, using: 10 }),
+            rec(1, Payload::Shadow { target: 2, using: 10, hidden: NONE }),
             rec(na, Payload::NsAlias { target: 0 }),
             rec(2, Payload::UsingEnum { e: 3 }),
             rec(NONE, Payload::UsingDir { ns: 0 }),
             rec(5, Payload::Using { steps: vec![NnsRec::Global, NnsRec::Alias(12)] }),
-            rec(5, Payload::Shadow { target: 6, using: 15 }),
-            rec(1, Payload::Shadow { target: 11, using: NONE }),
+            rec(5, Payload::Shadow { target: 6, using: 15, hidden: NONE }),
+            rec(1, Payload::Shadow { target: 11, using: NONE, hidden: NONE }),
         ]);
         img.decls[14].owner = 1;
         img.gated = gated_names(&img);
@@ -7553,21 +7614,24 @@ mod tests {
         let img = using_sample();
         assert!(img.gated.contains(&(img.names.len() as u32 - 1)));
         assert_eq!(decode(&encode(&img)), Ok(img));
-        let corrupt: [Corrupt; 14] = [
+        let corrupt: [Corrupt; 15] = [
+            ("hidden shadow outside a class", |i| {
+                i.decls[11].payload = Payload::Shadow { target: 2, using: 10, hidden: 2 }
+            }),
             ("shadow of a later declaration", |i| {
-                i.decls[11].payload = Payload::Shadow { target: 16, using: 10 }
+                i.decls[11].payload = Payload::Shadow { target: 16, using: 10, hidden: NONE }
             }),
             ("shadow of itself", |i| {
-                i.decls[11].payload = Payload::Shadow { target: 11, using: 10 }
+                i.decls[11].payload = Payload::Shadow { target: 11, using: 10, hidden: NONE }
             }),
             ("shadow of a namespace", |i| {
-                i.decls[11].payload = Payload::Shadow { target: 0, using: 10 }
+                i.decls[11].payload = Payload::Shadow { target: 0, using: 10, hidden: NONE }
             }),
             ("shadow of a later using-declaration", |i| {
-                i.decls[11].payload = Payload::Shadow { target: 2, using: 15 }
+                i.decls[11].payload = Payload::Shadow { target: 2, using: 15, hidden: NONE }
             }),
             ("shadow whose using-declaration is an alias", |i| {
-                i.decls[16].payload = Payload::Shadow { target: 6, using: 12 }
+                i.decls[16].payload = Payload::Shadow { target: 6, using: 12, hidden: NONE }
             }),
             ("shadow under another name", |i| i.decls[11].name = 2),
             ("directive naming an export block", |i| {

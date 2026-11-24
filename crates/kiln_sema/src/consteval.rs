@@ -149,6 +149,12 @@ pub(crate) struct ImmState {
     /// of its own, so it is reported there (clang
     /// `CXXDefaultArgExpr::getUsedLocation`).
     pub(crate) default_use_locs: FxHashMap<ExprId, Loc>,
+    /// Where each default argument or default member initializer used
+    /// inside another default argument or initializer is used (its use
+    /// has no location of its own): its immediate invocations are
+    /// evaluated, and reported there, at each use of the enclosing one
+    /// (CWG 2631; [`Sema::default_invocations`]).
+    nested_use_locs: FxHashMap<ExprId, Loc>,
     /// The failed immediate invocations whose evaluation called the
     /// host-call handler, with the failure: a later check of the same
     /// invocation, or of the initializer of the variable it was deferred
@@ -156,11 +162,29 @@ pub(crate) struct ImmState {
     /// (spec/host-calls.md §5). Empty without a handler.
     #[snap(skip)]
     host_failed: Vec<(ExprId, EvalFailure)>,
+    /// The last [`Sema::eval_immediate_at`] was independent of the
+    /// evaluation point.
+    #[snap(skip)]
+    last_pure: bool,
 }
 
 /// The results of the immediate invocations of a default argument or
 /// default member initializer at a use ([`ImmState::early_defaults`]).
 type DefaultResults = Vec<(ExprId, Result<ConstValueId, EvalFailure>)>;
+
+/// An immediate invocation evaluated at a use of a default argument or
+/// default member initializer ([`Sema::default_invocations`]).
+#[derive(Clone, Copy, Debug)]
+struct DefaultInv {
+    /// The `ConstantExpr`.
+    c: ExprId,
+    /// The parameter or field whose default argument or initializer
+    /// holds it (the use's own, or one that it uses).
+    owner: DeclId,
+    /// The use of `owner` inside the use's default argument or
+    /// initializer that holds it (`None`: the use's own).
+    via: Option<ExprId>,
+}
 
 /// The pending state of an enclosing full-expression set aside by
 /// [`Sema::set_aside_outer_immediates`].
@@ -589,8 +613,9 @@ impl Sema<'_, '_> {
     /// Whether `decl`'s default argument or default member initializer
     /// holds an immediate invocation of its own.
     fn default_has_invocation(&self, decl: DeclId) -> bool {
+        let Some(root) = self.default_root(decl) else { return false };
         let mut found = Vec::new();
-        self.default_invocations(decl, &mut found);
+        self.default_invocations(root, decl, &mut found);
         !found.is_empty()
     }
 
@@ -604,16 +629,18 @@ impl Sema<'_, '_> {
             .or_else(|| self.ast.decls.field(decl).and_then(|f| f.init))
     }
 
-    /// The outermost immediate invocations of `decl`'s default argument
-    /// or default member initializer, not yet evaluated; those in an
-    /// unevaluated operand or a lambda body are not, nor those of the
-    /// default arguments and initializers it uses itself (checked where
-    /// it is defined, like clang).
-    fn default_invocations(&self, decl: DeclId, out: &mut Vec<ExprId>) {
-        let Some(root) = self.default_root(decl) else { return };
-        let mut stack = vec![root];
+    /// The outermost immediate invocations of `root`, the default
+    /// argument or default member initializer of `decl` a use stands for
+    /// (`Ast::default_arg_expr` / `default_init_expr`), not yet
+    /// evaluated, in evaluation order: those of the default arguments and
+    /// initializers it uses itself included, which are evaluated at each
+    /// use of the outermost one, in its context (CWG 2631; clang rebuilds
+    /// them there), not where they are written. Those in an unevaluated
+    /// operand or a lambda body are not.
+    fn default_invocations(&self, root: ExprId, decl: DeclId, out: &mut Vec<DefaultInv>) {
+        let mut stack = vec![(root, decl, None, 0u32)];
         let mut seen = 0usize;
-        while let Some(x) = stack.pop() {
+        while let Some((x, owner, via, depth)) = stack.pop() {
             seen += 1;
             if seen > 1_000_000 {
                 break;
@@ -623,7 +650,21 @@ impl Sema<'_, '_> {
                     if self.ast.exprs.constant_value(x).is_none()
                         && !self.expr_is_value_dependent(x)
                     {
-                        out.push(x);
+                        out.push(DefaultInv { c: x, owner, via });
+                    }
+                }
+                // A use inside it: its default argument or initializer
+                // (bounded: `void f(int = f())` is diagnosed elsewhere).
+                ExprKind::CXXDefaultArgExpr if depth < 32 => {
+                    if let Some(r) = self.ast.default_arg_expr(x) {
+                        let p = self.ast.exprs.default_arg_param(x);
+                        stack.push((r, p, Some(x), depth + 1));
+                    }
+                }
+                ExprKind::CXXDefaultInitExpr if depth < 32 => {
+                    if let Some(r) = self.ast.default_init_expr(x) {
+                        let f = self.ast.exprs.default_init_field(x);
+                        stack.push((r, f, Some(x), depth + 1));
                     }
                 }
                 ExprKind::CXXDefaultArgExpr
@@ -637,9 +678,77 @@ impl Sema<'_, '_> {
                 | ExprKind::CXXTypeidExpr => {}
                 _ => {
                     let kids = self.ast.exprs.children(x, &self.ast.lists);
-                    stack.extend(kids.into_iter().rev());
+                    stack.extend(kids.into_iter().rev().map(|k| (k, owner, via, depth)));
                 }
             }
+        }
+    }
+
+    /// The expression use `u` of `decl` stands for (its rebuilt copy,
+    /// else the shared default argument or initializer).
+    fn default_use_root(&self, u: ExprId, decl: DeclId) -> Option<ExprId> {
+        match self.ast.exprs.get(u).kind() {
+            ExprKind::CXXDefaultArgExpr => self.ast.default_arg_expr(u),
+            ExprKind::CXXDefaultInitExpr => self.ast.default_init_expr(u),
+            _ => None,
+        }
+        .or_else(|| self.default_root(decl))
+    }
+
+    /// The use whose context the immediate invocations of use `u` are
+    /// evaluated in: `u` itself when its default argument or initializer
+    /// evaluates a source-location builtin (sema recorded its values),
+    /// else none (every use shares the values).
+    fn default_use_scope(&self, u: ExprId) -> Option<ExprId> {
+        self.ast.exprs.source_loc_values(u).is_some().then_some(u)
+    }
+
+    /// Evaluates immediate invocation `c` of the default argument or
+    /// initializer used by `u`, in `u`'s context (`at`,
+    /// [`Sema::default_use_scope`]); `true` with the result when the
+    /// value does not depend on the evaluation point, which is then kept:
+    /// on the use when it has a context of its own (`ExprArena::
+    /// note_use_immediate`), else for every use
+    /// (`set_default_immediate_value`; codegen reads it instead of
+    /// evaluating the call again, WP-1129). A value that depends on the
+    /// evaluation point (`access_context::current()`) is not kept
+    /// (WP-1462).
+    fn eval_default_invocation(
+        &mut self,
+        u: ExprId,
+        at: Option<ExprId>,
+        c: ExprId,
+    ) -> (Result<ConstValueId, EvalFailure>, bool) {
+        let before = self.impure_evals();
+        let ctx = EvalContext::new(EvalKind::Consteval, self.begin_loc(c));
+        let r = self.eval_const_at(self.ast.exprs.operand(c), ctx, at);
+        let pure = self.impure_evals() == before;
+        if let Ok(v) = r
+            && pure
+        {
+            self.keep_default_value(u, at, c, v);
+        }
+        (r, pure)
+    }
+
+    /// Keeps value `v` of invocation `c` at use `u` (see
+    /// [`Sema::eval_default_invocation`]).
+    fn keep_default_value(&mut self, u: ExprId, at: Option<ExprId>, c: ExprId, v: ConstValueId) {
+        if at.is_some() {
+            self.ast.exprs.note_use_immediate(u, c, v);
+        } else {
+            self.ast.exprs.set_default_immediate_value(c, v);
+        }
+    }
+
+    /// Where an invocation `inv` found at a use at `loc` is reported:
+    /// the use of its default argument or initializer that holds it
+    /// (clang names that parameter, at that use's location).
+    fn default_inv_site(&self, inv: DefaultInv, decl: DeclId, loc: Loc) -> (DeclId, Loc) {
+        match inv.via.and_then(|v| self.imm.nested_use_locs.get(&v)) {
+            Some(&l) => (inv.owner, l),
+            None if inv.via.is_some() => (inv.owner, loc),
+            None => (decl, loc),
         }
     }
 
@@ -795,12 +904,13 @@ impl Sema<'_, '_> {
     /// using a default member initializer passes itself as `ctor`.
     pub(crate) fn check_default_use(
         &mut self,
+        u: ExprId,
         decl: DeclId,
         loc: Loc,
         escalating: Option<DeclId>,
         ctor: bool,
     ) {
-        self.check_default_use_with(decl, loc, escalating, ctor, Vec::new());
+        self.check_default_use_with(u, decl, loc, escalating, ctor, Vec::new());
     }
 
     /// [`Sema::check_default_use`] reading the results `early` that
@@ -808,6 +918,7 @@ impl Sema<'_, '_> {
     /// of its invocations) instead of evaluating them again (WP-1171).
     fn check_default_use_with(
         &mut self,
+        u: ExprId,
         decl: DeclId,
         loc: Loc,
         escalating: Option<DeclId>,
@@ -815,33 +926,27 @@ impl Sema<'_, '_> {
         early: DefaultResults,
     ) -> bool {
         let mut found = Vec::new();
-        self.default_invocations(decl, &mut found);
+        if let Some(root) = self.default_use_root(u, decl) {
+            self.default_invocations(root, decl, &mut found);
+        }
+        let scope = self.default_use_scope(u);
         let mut early = early.into_iter().peekable();
         // The first invocation whose result is consteval-only (an
         // immediate constant expression, [expr.const.imm]/2.1).
         let mut imm_leaf = None;
-        for c in found {
+        for inv in found {
+            let c = inv.c;
             let at = self.begin_loc(c);
-            // An early result was recorded (or not) where it was found.
-            let (r, pure) = if let Some((_, r)) = early.next_if(|&(x, _)| x == c) {
-                (r, false)
+            // An early result was recorded (and kept) where it was found.
+            let r = if let Some((_, r)) = early.next_if(|&(x, _)| x == c) {
+                r
             } else {
-                let before = self.impure_evals();
-                let r = self.eval_const(
-                    self.ast.exprs.operand(c),
-                    EvalContext::new(EvalKind::Consteval, at),
-                );
-                (r, self.impure_evals() == before)
+                // Evaluated at this use, in its context (CWG 2631), and
+                // kept for it ([`Sema::eval_default_invocation`]).
+                self.eval_default_invocation(u, scope, c).0
             };
             let fail = match r {
-                // Codegen reads it at each use without source-location
-                // values instead of evaluating the call again (WP-1129),
-                // unless the value depends on the evaluation point
-                // (`access_context::current()`; WP-1462).
                 Ok(v) => {
-                    if pure {
-                        self.ast.exprs.set_default_immediate_value(c, v);
-                    }
                     if imm_leaf.is_none() && self.reflection && self.ast.has_consteval_only_value(v)
                     {
                         imm_leaf = Some(c);
@@ -851,6 +956,7 @@ impl Sema<'_, '_> {
                 Err(fail) => fail,
             };
             let Some(callee) = self.invocation_callee(c) else { continue };
+            let (site_decl, site_loc) = self.default_inv_site(inv, decl, loc);
             match escalating {
                 Some(g) => {
                     let why = if ctor {
@@ -876,7 +982,9 @@ impl Sema<'_, '_> {
                     self.escalate(g, why);
                     return false;
                 }
-                None => self.report_immediate_call(c, callee, fail, Some((decl, loc)), false),
+                None => {
+                    self.report_immediate_call(c, callee, fail, Some((site_decl, site_loc)), false);
+                }
             }
         }
         let Some(leaf) = imm_leaf.or_else(|| self.default_leaf(decl)) else { return false };
@@ -983,7 +1091,21 @@ impl Sema<'_, '_> {
     }
 
     fn eval_immediate(&mut self, c: ExprId) -> Result<ConstValueId, EvalFailure> {
+        self.eval_immediate_at(c, None)
+    }
+
+    /// [`Sema::eval_immediate`] of an invocation of the default argument
+    /// or initializer used by `scope`, in its context
+    /// ([`Sema::default_use_scope`]); [`ImmState::last_pure`] tells
+    /// whether its value is independent of the evaluation point.
+    fn eval_immediate_at(
+        &mut self,
+        c: ExprId,
+        scope: Option<ExprId>,
+    ) -> Result<ConstValueId, EvalFailure> {
+        self.imm.last_pure = true;
         if self.host_calls
+            && scope.is_none()
             && let Some((_, f)) = self.imm.host_failed.iter().find(|&&(x, _)| x == c)
         {
             return Err(f.clone());
@@ -995,11 +1117,18 @@ impl Sema<'_, '_> {
         // not take the enclosing one's variable or member (WP-1328).
         let saved = self.take_immediate_state(false);
         let before = self.impure_evals();
-        let r =
-            self.eval_const(self.ast.exprs.operand(c), EvalContext::new(EvalKind::Consteval, at));
+        let r = self.eval_const_at(
+            self.ast.exprs.operand(c),
+            EvalContext::new(EvalKind::Consteval, at),
+            scope,
+        );
         self.restore_immediate_state(saved);
-        if self.impure_evals() != before && self.in_template() {
+        self.imm.last_pure = self.impure_evals() == before;
+        if !self.imm.last_pure && self.in_template() {
             self.imm.point_dependent.push(c);
+        }
+        if scope.is_some() {
+            return r;
         }
         // A template's invocation is evaluated again by each
         // instantiation, which calls the handler for its own.
@@ -1131,17 +1260,20 @@ impl Sema<'_, '_> {
                 continue;
             }
             let mut found = Vec::new();
-            self.default_invocations(u.decl, &mut found);
+            if let Some(root) = self.default_use_root(u.expr, u.decl) {
+                self.default_invocations(root, u.decl, &mut found);
+            }
             let rebuilt = !found.is_empty() || self.ast.exprs.source_loc_values(u.expr).is_some();
+            let scope = self.default_use_scope(u.expr);
             let mut results = Vec::with_capacity(found.len());
-            for c in found {
-                let before = self.impure_evals();
-                let r = self.eval_immediate(c);
-                let pure = self.impure_evals() == before;
+            for inv in found {
+                let c = inv.c;
+                let r = self.eval_immediate_at(c, scope);
+                let pure = self.imm.last_pure;
                 let failed = match r {
                     Ok(v) => {
                         if pure {
-                            self.ast.exprs.set_default_immediate_value(c, v);
+                            self.keep_default_value(u.expr, scope, c, v);
                         }
                         false
                     }
@@ -1163,7 +1295,7 @@ impl Sema<'_, '_> {
             }
             if escalating.is_none() {
                 // A consteval-only result is a leaf of the full-expression.
-                if self.check_default_use_with(u.decl, u.loc, None, false, results) {
+                if self.check_default_use_with(u.expr, u.decl, u.loc, None, false, results) {
                     self.note_pending_ref(u.expr);
                 }
                 self.imm.early_defaults.push((u.expr, None));
@@ -1201,10 +1333,14 @@ impl Sema<'_, '_> {
             || self.require_constant_init_of(v).is_some()
     }
 
-    /// A default member initializer's full-expression `e`: its
-    /// invocations are evaluated where it is used; those of the default
-    /// arguments and initializers it uses, here (clang checks them as it
-    /// builds it), unless they are part of one.
+    /// A default argument's or default member initializer's
+    /// full-expression `e`: its invocations are evaluated where it is
+    /// used, and so are those of the default arguments and initializers
+    /// it uses, at each use of `e`'s, in its context (CWG 2631,
+    /// [expr.const]/16: an invocation in a default argument or
+    /// initializer is evaluated at each use; clang 19 checks none of
+    /// them here, clang 22 the member initializers'): where each of those
+    /// is used is kept for the report.
     fn finish_default_init(
         &mut self,
         e: ExprId,
@@ -1216,7 +1352,7 @@ impl Sema<'_, '_> {
             self.ast.exprs.set_constant_elided(c);
         }
         for u in uses {
-            self.check_default_use(u.decl, u.loc, None, false);
+            self.imm.nested_use_locs.insert(u.expr, u.loc);
         }
         self.imm.pending.prefolded.clear();
     }
@@ -1458,7 +1594,7 @@ impl Sema<'_, '_> {
                 },
                 None => Vec::new(),
             };
-            if self.check_default_use_with(u.decl, u.loc, escalating, false, early) {
+            if self.check_default_use_with(u.expr, u.decl, u.loc, escalating, false, early) {
                 default_leaves.push(u.expr);
             }
         }

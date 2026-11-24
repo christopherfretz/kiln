@@ -2092,7 +2092,22 @@ literal is one instruction and one step, not an interpreted loop.
   thaws it (`thaw_ptr`, memoized per value), so every evaluation sees the
   same string and `__impl` objects. Inside a `CXXDefaultArgExpr` whose
   call site sema recorded, the outermost such default argument supplies
-  the values.
+  the values (`Compiler::srcloc`, a `SrcLocScope`). An immediate
+  invocation of a default argument evaluated for a use
+  (`Oven::evaluate_in` from sema, `Oven::fold_immediate_in` from
+  codegen; the thunk is keyed by the use, `thunks_at`) starts in that
+  use's scope with `own_pos` (CWG 2631, clang's rebuilt argument): a
+  builtin written directly in it takes the use's function but keeps its
+  own line, column and file (the use's file string when the contents
+  agree, so its maker is the use's context, spec/ast.md §5.8.1), and its
+  `__builtin_source_location()` is the object of its own position with
+  the use's pretty function (`SemaBridge::srcloc_object_at`); entering a
+  default argument from there (`current()`'s) clears `own_pos`, so
+  `std::source_location::current()` in the invocation is the use's
+  whole location, as clang 19 and 22 give. A `ConstantExpr` of the
+  default argument reads the value sema kept for the use in scope
+  (`use_immediate`, else outside every such use `default_immediate_value`;
+  spec/ast.md §5.8.2) instead of being evaluated again.
 - **Landed (WP-150): GCC integer and remaining memory builtins**
   (`builtin::INT_MEM`). Folding status, as clang 19:
 
@@ -5196,8 +5211,9 @@ still elided where it is written, but codegen's fold prepass and the
 compiler (`Compiler::stored_value`: `rv_inner`, `valued_leaf`,
 `cx_const` and the effect arm, outside a use with source-location
 values) reuse the value sema's check of a use stored
-(`default_immediate_value`) instead of evaluating the call again
-(WP-1171). The shift-count check of `<<`/`>>` (sema
+(`default_immediate_value`, or at a use with source-location values
+the use's own `use_immediate`, WP-3278) instead of evaluating the call
+again (WP-1171). The shift-count check of `<<`/`>>` (sema
 `diagnose_shift_count`) evaluates a count that is an invocation once
 and hands the result to the full-expression's finish (WP-1171). Tests:
 `tests/conformance/expr.const/immediate-invocation-evaluated-once-run.cpp`,

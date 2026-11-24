@@ -56,6 +56,18 @@ refs_pch.h:38:53-38:54  expr  't' -> t@refs_pch.h:38:40 in=pch_ns::summed@refs_p
 refs_pch.h:38:55-38:56  operator  '+' -> (dependent) in=pch_ns::summed@refs_pch.h:38:28 def=1+adl
 refs_pch.h:38:55-38:56  operator  '+' def=pch_ns::operator+@refs_pch.h:29:11
 refs_pch.h:38:55-38:56  operator  '+' -> pch_ns::operator+@refs_pch.h:29:11 spec=pch_ns::summed<pch_ns::Pt, pch_ns::Pt, pch_ns::Pt>@refs_pch.h:38:28
+refs_pch.h:49:14-49:18  type  'Pool' -> pch_ns::Pool@refs_pch.h:44:8 in=pch_ns::churn@refs_pch.h:48:13
+refs_pch.h:49:10-49:13  operator  'new' -> pch_ns::Pool::operator new@refs_pch.h:45:16 in=pch_ns::churn@refs_pch.h:48:13 how=qualified
+refs_pch.h:49:3-49:9  operator  'delete' -> pch_ns::Pool::operator delete@refs_pch.h:46:15 in=pch_ns::churn@refs_pch.h:48:13 how=qualified
+refs_pch.h:50:14-50:17  operator  'new' -> operator new@? q=::refs_pch.h:50:12 in=pch_ns::churn@refs_pch.h:48:13
+refs_pch.h:50:5-50:11  operator  'delete' -> operator delete@? q=::refs_pch.h:50:3 in=pch_ns::churn@refs_pch.h:48:13
+refs_pch.h:52:46-52:47  type  'T' -> T@refs_pch.h:52:17 in=pch_ns::cycle@refs_pch.h:52:25
+refs_pch.h:52:42-52:45  operator  'new' -> (dependent) in=pch_ns::cycle@refs_pch.h:52:25
+refs_pch.h:52:42-52:45  operator  'new' -> operator new@? spec=pch_ns::cycle<int>@refs_pch.h:52:25 how=qualified
+refs_pch.h:52:42-52:45  operator  'new' -> pch_ns::Pool::operator new@refs_pch.h:45:16 spec=pch_ns::cycle<pch_ns::Pool>@refs_pch.h:52:25 how=qualified
+refs_pch.h:52:35-52:41  operator  'delete' -> (dependent) in=pch_ns::cycle@refs_pch.h:52:25
+refs_pch.h:52:35-52:41  operator  'delete' -> operator delete@? spec=pch_ns::cycle<int>@refs_pch.h:52:25 how=qualified
+refs_pch.h:52:35-52:41  operator  'delete' -> pch_ns::Pool::operator delete@refs_pch.h:46:15 spec=pch_ns::cycle<pch_ns::Pool>@refs_pch.h:52:25 how=qualified
 10:1-10:7  nns  'pch_ns' -> pch_ns@refs_pch.h:4:11 in=boxed@10:18
 10:9-10:12  template  'Box' -> pch_ns::Box@refs_pch.h:12:27 q=10:1 in=boxed@10:18
 12:10-12:11  expr  'v' -> v@11:19 in=after_pch@11:5
@@ -83,3 +95,9 @@ refs_pch.h:38:55-38:56  operator  '+' -> pch_ns::operator+@refs_pch.h:29:11 spec
 14:80-14:81  expr  'p' -> p@14:27 in=doubled_pt@14:5
 14:83-14:84  expr  'p' -> p@14:27 in=doubled_pt@14:5
 14:86-14:87  member  'x' -> pch_ns::Pt::x@refs_pch.h:7:7 in=doubled_pt@14:5
+15:17-15:23  nns  'pch_ns' -> pch_ns@refs_pch.h:4:11 in=cycled@15:6
+15:31-15:37  nns  'pch_ns' -> pch_ns@refs_pch.h:4:11 in=cycled@15:6
+15:39-15:43  type  'Pool' -> pch_ns::Pool@refs_pch.h:44:8 q=15:31 in=cycled@15:6
+15:25-15:30  expr  'cycle' -> pch_ns::cycle<pch_ns::Pool>@refs_pch.h:52:25 found=pch_ns::cycle@refs_pch.h:52:25 q=15:17 in=cycled@15:6
+15:48-15:54  nns  'pch_ns' -> pch_ns@refs_pch.h:4:11 in=cycled@15:6
+15:56-15:61  expr  'cycle' -> pch_ns::cycle<int>@refs_pch.h:52:25 found=pch_ns::cycle@refs_pch.h:52:25 q=15:48 in=cycled@15:6

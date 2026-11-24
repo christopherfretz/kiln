@@ -159,6 +159,7 @@ const COLD_MAP_NAMES: &[&str] = &[
     "expr_nns",
     "expr_targs",
     "fp_round",
+    "friend_form",
     "friends",
     "gnu_lib_twin",
     "hidden_shadow",
@@ -189,6 +190,7 @@ const COLD_MAP_NAMES: &[&str] = &[
     "source_loc",
     "splice_args",
     "string_maker",
+    "subst_failed",
     "syntactic_list",
     "template_defaults",
     "template_inherited_defaults",
@@ -198,6 +200,7 @@ const COLD_MAP_NAMES: &[&str] = &[
     "ttp_owner",
     "typedef_for_anon",
     "union_field",
+    "use_imm",
     "using_shadows",
     "written_ns",
 ];

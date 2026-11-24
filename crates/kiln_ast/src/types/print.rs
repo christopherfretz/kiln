@@ -188,6 +188,13 @@ pub trait TypeNames {
         19
     }
 
+    /// The function-name span recorder (spec/ast.md §24.3), when these
+    /// names record: the printer then writes a dependent identifier as a
+    /// dependent entry and a template argument list as an owned group.
+    fn fn_spans(&self) -> Option<&crate::fn_names::FnSpanSink> {
+        None
+    }
+
     /// `Some(c23)` when the names print a C translation unit (clang's C
     /// `PrintingPolicy`: [`PrintOptions::c_policy`], a prototype without
     /// parameters prints `(void)`, and C23 spells `bool`).
@@ -1346,6 +1353,10 @@ impl Printer<'_> {
     /// (`(unnamed struct at F:L:C)` becomes `(unnamed at F:L:C)`).
     fn strip_unnamed_kind(&mut self, start: usize) {
         let Some(seg) = self.out.get(start..) else { return };
+        // A recorded name opens with its marker (spec/ast.md §24.3).
+        let marked = seg.len() - crate::fn_names::FnSpanSink::skip_markers(seg).len();
+        let start = start + marked;
+        let seg = &seg[marked..];
         for lead in ["(unnamed ", "(anonymous "] {
             let Some(rest) = seg.strip_prefix(lead) else { continue };
             for kw in ["struct", "union", "class", "enum"] {
@@ -1388,7 +1399,14 @@ impl Printer<'_> {
 
     fn symbol(&mut self, s: Symbol) {
         let names = self.names;
-        names.write_symbol(s, &mut self.out);
+        match names.fn_spans() {
+            Some(sink) => {
+                let at = sink.open(&mut self.out, None, crate::fn_names::DEPENDENT);
+                names.write_symbol(s, &mut self.out);
+                sink.close(&mut self.out, at);
+            }
+            None => names.write_symbol(s, &mut self.out),
+        }
     }
 
     /// True if the node of `q` itself is an array (clang's
@@ -2542,8 +2560,12 @@ impl Printer<'_> {
         }
         self.depth += 1;
         let ctx = self.ctx;
+        let group = if is_pack { None } else { self.names.fn_spans() };
         if !is_pack {
             self.push("<");
+        }
+        if let Some(sink) = group {
+            sink.group_open(&mut self.out);
         }
         let mut first = true;
         for (i, a) in ctx.args(l).iter().take(len).enumerate() {
@@ -2588,10 +2610,15 @@ impl Printer<'_> {
                 first = false;
             }
         }
+        if let Some(sink) = group {
+            sink.group_close(&mut self.out);
+        }
         if !is_pack {
             // clang's `SplitTemplateClosers`, set by the C policy (no
             // C++11): `P<P<char> >` ([`PrintOptions::split_closers`]).
-            if self.split_closers && self.out.ends_with('>') {
+            if self.split_closers
+                && crate::fn_names::FnSpanSink::trim_markers_end(&self.out).ends_with('>')
+            {
                 self.push(" ");
             }
             self.push(">");

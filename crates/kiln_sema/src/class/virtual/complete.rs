@@ -167,7 +167,7 @@ impl Sema<'_, '_> {
             }
         }
         if bad {
-            self.ast.decls.set_flags(r, DeclFlags::INVALID);
+            self.invalidate(r);
         }
         // Cache the graph for every later reader, including bridges that
         // only read `Ast::virtuals` (codegen's folds): a conversion through

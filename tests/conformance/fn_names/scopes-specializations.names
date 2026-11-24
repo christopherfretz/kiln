@@ -1,0 +1,53 @@
+fn-name 'void ns::C<ns::C<int>>::f(T) [T = ns::C<int>]' of ns::C<ns::C<int>>::f@10:8
+  [5,7) scope 'ns' -> ns@7:11
+  [9,10) scope 'C' -> ns::C<ns::C<int>>@9:27 q
+  [11,13) scope 'ns' -> ns@7:11 d=1
+  [15,16) scope 'C' -> ns::C<int>@9:27 d=1 q
+  [24,25) name 'f' -> ns::C<ns::C<int>>::f@10:8 q
+  [26,27) param 'T' -> T@9:17
+  [30,31) binding 'T' -> T@9:17
+  [34,36) arg 'ns' -> ns@7:11
+  [38,39) arg 'C' -> ns::C<int>@9:27 q
+fn-name 'void ns::C<ns::S>::f(T) [T = ns::S]' of ns::C<ns::S>::f@10:8
+  [5,7) scope 'ns' -> ns@7:11
+  [9,10) scope 'C' -> ns::C<ns::S>@9:27 q
+  [11,13) scope 'ns' -> ns@7:11 d=1
+  [15,16) scope 'S' -> ns::S@8:8 d=1 q
+  [19,20) name 'f' -> ns::C<ns::S>::f@10:8 q
+  [21,22) param 'T' -> T@9:17
+  [25,26) binding 'T' -> T@9:17
+  [29,31) arg 'ns' -> ns@7:11
+  [33,34) arg 'S' -> ns::S@8:8 q
+fn-name 'U ns::C<ns::S>::g(U, T *) [T = ns::S, U = long]' of ns::C<ns::S>::g<long>@11:24
+  [0,1) return 'U' -> U@11:19
+  [2,4) scope 'ns' -> ns@7:11
+  [6,7) scope 'C' -> ns::C<ns::S>@9:27 q
+  [8,10) scope 'ns' -> ns@7:11 d=1
+  [12,13) scope 'S' -> ns::S@8:8 d=1 q
+  [16,17) name 'g' -> ns::C<ns::S>::g<long>@11:24 q
+  [18,19) param 'U' -> U@11:19
+  [21,22) param 'T' -> T@9:17
+  [27,28) binding 'T' -> T@9:17
+  [31,33) arg 'ns' -> ns@7:11
+  [35,36) arg 'S' -> ns::S@8:8 q
+  [38,39) binding 'U' -> U@11:19
+fn-name 'static void ns::C<ns::S>::In::m() [T = ns::S]' of ns::C<ns::S>::In::m@12:27
+  [12,14) scope 'ns' -> ns@7:11
+  [16,17) scope 'C' -> ns::C<ns::S>@9:27 q
+  [18,20) scope 'ns' -> ns@7:11 d=1
+  [22,23) scope 'S' -> ns::S@8:8 d=1 q
+  [26,28) scope 'In' -> ns::C<ns::S>::In@12:10 q
+  [30,31) name 'm' -> ns::C<ns::S>::In::m@12:27 q
+  [35,36) binding 'T' -> T@9:17
+  [39,41) arg 'ns' -> ns@7:11
+  [43,44) arg 'S' -> ns::S@8:8 q
+fn-name 'static void ns::P<ns::S *, int>::p() [T = ns::S *, U = int]' of ns::P<ns::S *, int>::p@15:51
+  [12,14) scope 'ns' -> ns@7:11
+  [16,17) scope 'P' -> ns::P<ns::S *, int>@15:27 q
+  [18,20) scope 'ns' -> ns@7:11 d=1
+  [22,23) scope 'S' -> ns::S@8:8 d=1 q
+  [33,34) name 'p' -> ns::P<ns::S *, int>::p@15:51 q
+  [38,39) binding 'T' -> T@14:17
+  [42,44) arg 'ns' -> ns@7:11
+  [46,47) arg 'S' -> ns::S@8:8 q
+  [51,52) binding 'U' -> U@14:26

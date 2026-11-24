@@ -574,9 +574,13 @@ impl Parser<'_, '_> {
             Some(Kw::CoAwait) => {
                 // [expr.await]: `co_await cast-expression` (clang's
                 // `ParseCastExpression`, `kw_co_await`).
-                self.bump();
+                let tok = self.bump().span;
                 let e = self.parse_cast_expr()?;
-                return Some(self.s.act_on_coawait(e, loc));
+                let r = self.s.act_on_coawait(e, loc);
+                // spec/ast.md §18.13.6: the keyword names the applied
+                // `operator co_await`.
+                self.s.note_written_coawait(r, tok);
+                return Some(r);
             }
             _ => {}
         }

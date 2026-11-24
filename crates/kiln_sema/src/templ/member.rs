@@ -87,6 +87,46 @@ impl Substituter<'_, '_, '_> {
         Ok(v)
     }
 
+    /// The template-id of the redeclaration of member function `m` of the
+    /// pattern class when `m` is a class-scope explicit specialization of
+    /// a member function template ([temp.expl.spec]/2, CWG 727; clang's
+    /// `VisitCXXMethodDecl` substitutes its template arguments as
+    /// written): the member template `m`'s template was redeclared as,
+    /// and `m`'s arguments as written (spec/ast.md §8.3, WP-3142; else
+    /// its converted ones) substituted, so that a non-type argument no
+    /// parameter deduces (`h<8>()`, `h<sizeof(sizeof(g(T())))>()`)
+    /// specializes it. `None` for any other member.
+    pub(crate) fn member_explicit_fn_spec_id(
+        &mut self,
+        m: DeclId,
+        loc: kiln_source::Loc,
+    ) -> SubstResult<Option<crate::templ::spec::SpecDeclaratorId>> {
+        let Some((_, info)) = self.sema.ast.spec_info(m).map(|(i, s)| (i, *s)) else {
+            return Ok(None);
+        };
+        if info.kind != kiln_ast::templates::SpecKind::ExplicitSpecialization
+            || self.sema.kind_of(info.template) != DeclKind::FunctionTemplate
+        {
+            return Ok(None);
+        }
+        let Some(pattern) = self.sema.pattern_of(info.template) else { return Ok(None) };
+        let Some(&DeclOrPack::Decl(new_pattern)) = self.locals.get(&pattern) else {
+            return Ok(None);
+        };
+        let Some(new_tmpl) = self.sema.template_of(new_pattern) else { return Ok(None) };
+        let written = self.sema.ast.templates.args_as_written(m).unwrap_or(info.args);
+        let args = self.args(written, loc)?;
+        let args = self.sema.ast.types.args(args).to_vec();
+        let arg_locs = vec![loc; args.len()];
+        Ok(Some(crate::templ::spec::SpecDeclaratorId {
+            template: new_tmpl,
+            args,
+            arg_locs,
+            loc,
+            range: kiln_source::Span::new(loc, loc),
+        }))
+    }
+
     /// Redeclares partial specialization `m` of a member class or
     /// variable template of the pattern class for the member template it was redeclared as
     /// ([temp.spec.partial.member]/2, [temp.mem]; clang's
@@ -138,6 +178,15 @@ impl Substituter<'_, '_, '_> {
                 self.sema.builder().class_partial_spec(h, new_tmpl, list, args, tag)
             };
             self.sema.ast.templates.set_instantiated_from(p, m);
+            // Its arguments as written, substituted as the converted ones
+            // are (clang's `InstantiateClassTemplatePartialSpecialization`
+            // substitutes `getTemplateArgsAsWritten`; spec/ast.md §8.3,
+            // WP-3102): `In<T, f(1)>` in `Outer<int>` keeps `f(1)`.
+            if let Some(w) = self.sema.ast.templates.args_as_written(m)
+                && let Ok(w) = self.args(w, n.loc())
+            {
+                self.sema.ast.templates.set_args_as_written(p, w, false);
+            }
             // Its constraints stay the original's, checked with this
             // specialization's levels outside its own (as for a member
             // template, `member_constraints`).

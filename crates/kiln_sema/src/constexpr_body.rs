@@ -94,7 +94,7 @@ impl Sema<'_, '_> {
             self.with_non_literal_notes(msg, ty)
         };
         self.emit(msg);
-        self.ast.decls.set_flags(f, DeclFlags::INVALID);
+        self.invalidate(f);
         self.templ.body_invalid.insert(f);
     }
 
@@ -247,7 +247,7 @@ impl Sema<'_, '_> {
                 .arg(u8::from(ctor))
                 .arg(u8::from(kind == ConstexprKind::Consteval));
             self.emit(msg);
-            self.ast.decls.set_flags(f, DeclFlags::INVALID);
+            self.invalidate(f);
             self.templ.body_invalid.insert(f);
             return;
         }
@@ -279,7 +279,7 @@ impl Sema<'_, '_> {
             .arg(self.ty_arg(ty));
         let msg = self.with_non_literal_notes(msg, ty);
         self.emit(msg);
-        self.ast.decls.set_flags(f, DeclFlags::INVALID);
+        self.invalidate(f);
         // A template's deduction still runs (`TemplState::body_invalid`).
         self.templ.body_invalid.insert(f);
     }
@@ -441,7 +441,7 @@ impl Sema<'_, '_> {
             .diag(DiagId::sema_constexpr_body_no_return, self.ast.decls.get(f).loc())
             .arg(u8::from(kind == ConstexprKind::Consteval));
         self.emit(msg);
-        self.ast.decls.set_flags(f, DeclFlags::INVALID);
+        self.invalidate(f);
         self.templ.body_invalid.insert(f);
     }
 

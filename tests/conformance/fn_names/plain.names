@@ -1,0 +1,6 @@
+fn-name 'm' of ns::S::m@7:17
+  [0,1) name 'm' -> ns::S::m@7:17
+fn-name 'f' of ns::f@8:6
+  [0,1) name 'f' -> ns::f@8:6
+fn-name 't' of ns::t<int>@9:25
+  [0,1) name 't' -> ns::t<int>@9:25

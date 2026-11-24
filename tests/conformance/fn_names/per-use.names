@@ -1,0 +1,19 @@
+fn-name 'a1' of ns::a1@28:6
+  [0,2) name 'a1' -> ns::a1@28:6
+fn-name 'void ns::a1(S)' of ns::a1@28:6
+  [5,7) scope 'ns' -> ns@24:11
+  [9,11) name 'a1' -> ns::a1@28:6 q
+  [12,13) param 'S' -> ns::S@25:8
+fn-name 'a2' of ns::a2@29:25
+  [0,2) name 'a2' -> ns::a2@29:25
+fn-name 'a2' of ns::a2<int>@29:25
+  [0,2) name 'a2' -> ns::a2<int>@29:25
+fn-name 'void ns::a2(T)' of ns::a2@29:25
+  [5,7) scope 'ns' -> ns@24:11
+  [9,11) name 'a2' -> ns::a2@29:25 q
+  [12,13) param 'T' -> T@29:17
+fn-name 'void ns::a2(T) [T = int]' of ns::a2<int>@29:25
+  [5,7) scope 'ns' -> ns@24:11
+  [9,11) name 'a2' -> ns::a2<int>@29:25 q
+  [12,13) param 'T' -> T@29:17
+  [16,17) binding 'T' -> T@29:17

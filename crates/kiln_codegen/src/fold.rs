@@ -313,6 +313,13 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target, fp: FpOpt
             folds.imm.insert(key, v);
             continue;
         }
+        // Sema's value at that use, in its context (CWG 2631).
+        if let Some(u) = at
+            && let Some(v) = b.ast.exprs.use_immediate(u, e)
+        {
+            folds.imm.insert(key, v);
+            continue;
+        }
         let op = b.ast.exprs.operand(e);
         if let Some(v) = oven.fold_immediate_in(&mut b, op, at) {
             folds.imm.insert(key, v);

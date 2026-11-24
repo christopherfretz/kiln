@@ -25,7 +25,7 @@
 31:49-31:50  expr  'a' -> a@31:32 in=units::Fixed::Fixed@31:13
 31:55-31:56  expr  'a' -> a@31:32 in=units::Fixed::Fixed@31:13
 31:61-31:62  expr  'a' -> a@31:32 in=units::Fixed::Fixed@31:13
-33:11-33:16  type  'Fixed' -> units::Fixed@29:8 in=units@13:11
+33:11-33:16  type  'Fixed' -> units::Fixed@29:8 in=units::operator""_f@33:34
 33:58-33:59  expr  'F' -> F@33:17 in=units::operator""_f@33:34
 33:60-33:61  member  's' -> units::Fixed::s@30:8 in=units::operator""_f@33:34
 36:17-36:22  using-directive  'units' -> units@13:11 in=(tu)

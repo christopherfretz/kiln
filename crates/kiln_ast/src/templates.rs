@@ -270,7 +270,10 @@ pub struct PartialSpecInfo {
     pub template: DeclId,
     /// The partial's template parameter list.
     pub params: TemplateParamListId,
-    /// The arguments as written (`X<T *>`).
+    /// The converted arguments, sugared (`X<T *>`; a non-type argument
+    /// is its value, `1` for `f(1)`): what matching and ordering read.
+    /// The arguments as written are [`TemplateTables::args_as_written`]
+    /// of [`Self::partial`] (WP-3016).
     pub args: ArgListId,
     /// `types.canonical_args(args)`.
     pub canonical: ArgListId,
@@ -288,8 +291,10 @@ pub struct PartialSpecInfo {
 /// ([`Ast::ctor_inits`]).
 #[derive(Clone, Debug, PartialEq, Eq, kiln_snap::Snap)]
 pub struct PatternMemInits {
-    /// The `:` that begins the ctor-initializer.
-    pub colon: Loc,
+    /// The `:` that begins the ctor-initializer; `None` when the
+    /// definition has no ctor-initializer (`S() {}`: the record is then
+    /// the empty list, and says so).
+    pub colon: Option<Loc>,
     /// A mem-initializer failed its definition-time check (diagnosed):
     /// the instantiations add no implicit initializers. An identifier the
     /// definition could not resolve stays in `inits`
@@ -494,10 +499,16 @@ pub struct TemplateTables {
     /// written defaults included (spec/reflection.md §3.9).
     written_args: FxHashMap<DeclId, u32>,
     /// The template arguments written on an explicit specialization or
-    /// explicit instantiation of a class template, as written (sugar and
-    /// trailing defaults kept): clang's `getTemplateArgsAsWritten`, which
-    /// the type printer prints in place of the converted arguments
-    /// (`TypePrinter::printTag`; spec/codegen.md "Sanitizers").
+    /// explicit instantiation of a class template, on a partial
+    /// specialization of a class or variable template, and on each
+    /// declaration of an explicit specialization of a function or
+    /// variable template that writes them, as written (sugar and
+    /// trailing defaults kept; a non-type argument the expression written,
+    /// `ArgView::Expr`, never its value; spec/ast.md §8.3, WP-3016,
+    /// WP-3142): clang's `getTemplateArgsAsWritten`, which the type
+    /// printer prints in place of the converted arguments of a class
+    /// specialization (`TypePrinter::printTag`; spec/codegen.md
+    /// "Sanitizers"; not of a partial specialization).
     args_as_written: FxHashMap<DeclId, ArgListId>,
     /// Functions explicitly instantiated by a definition before their
     /// template's definition was seen, in order: instantiated at the end
@@ -781,7 +792,11 @@ impl TemplateTables {
     }
 
     /// The template arguments written on explicit specialization or
-    /// instantiation `spec`, if any.
+    /// instantiation `spec`, partial specialization `spec`, or declaration
+    /// `spec` of a function or variable template's explicit
+    /// specialization ([`Self::args_as_written`] field), if any. Matching
+    /// and the specialization's identity use the converted arguments
+    /// ([`SpecInfo::args`], [`PartialSpecInfo::args`]).
     pub fn args_as_written(&self, spec: DeclId) -> Option<ArgListId> {
         self.args_as_written.get(&spec).copied()
     }

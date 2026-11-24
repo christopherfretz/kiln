@@ -8,7 +8,7 @@
 //! ([temp.point]/7), as a static data member's out-of-line definition.
 
 use kiln_ast::DeclHead;
-use kiln_ast::decl::{DeclFlags, DeclKind, VarSpec};
+use kiln_ast::decl::{DeclFlags, DeclKind, SubstFailedKind, VarSpec};
 use kiln_ast::ids::{ArgListId, TemplateParamListId};
 use kiln_ast::templates::SpecKind;
 use kiln_ast::types::Quals;
@@ -155,8 +155,15 @@ impl Sema<'_, '_> {
             });
         }
         let Some(pattern) = pattern.filter(|_| !self.inst.fatal) else {
-            // Ambiguous (diagnosed) or no pattern.
-            self.ast.decls.set_flags(spec, DeclFlags::INVALID);
+            // Ambiguous (diagnosed, or trapped: spec/ast.md §4.1 kind 3),
+            // or no pattern (only after a printed error: a variable
+            // template only declared takes the declaration as its pattern
+            // above, and is formed).
+            if matched.is_err() && !self.inst.fatal {
+                self.invalidate_as(spec, SubstFailedKind::VariablePartialAmbiguity);
+            } else {
+                self.invalidate(spec);
+            }
             return Err(());
         };
         let from_args = matched.ok().flatten().map(|m| m.args);
@@ -179,7 +186,7 @@ impl Sema<'_, '_> {
         }
         let Some((_, args)) = self.spec_args(spec) else { return Err(()) };
         if !self.push_inst_frame(FrameKind::VarTemplateInstantiation, spec, tmpl, poi) {
-            self.ast.decls.set_flags(spec, DeclFlags::INVALID);
+            self.invalidate(spec);
             return Err(());
         }
         let pty = self.ast.decls.get(pattern).ty().unwrap_or(QualType::ERROR);
@@ -212,7 +219,7 @@ impl Sema<'_, '_> {
         });
         self.pop_inst_frame();
         let Ok(ty) = ty else {
-            self.ast.decls.set_flags(spec, DeclFlags::INVALID);
+            self.invalidate(spec);
             return Err(());
         };
         self.ast.decls.set_ty(spec, ty);
@@ -277,7 +284,7 @@ impl Sema<'_, '_> {
         {
             return false;
         }
-        self.ast.decls.set_flags(v, DeclFlags::INVALID);
+        self.invalidate(v);
         let loc = self.ast.decls.get(v).loc();
         let msg = self
             .diag(DiagId::sema_auto_var_requires_init, loc)
@@ -505,7 +512,7 @@ impl Sema<'_, '_> {
         };
         let d = self.diag(id, loc).arg(name).arg(self.ty_arg(ty));
         self.emit(d);
-        self.ast.decls.set_flags(v, DeclFlags::INVALID);
+        self.invalidate(v);
         Err(())
     }
 
@@ -565,8 +572,12 @@ impl Sema<'_, '_> {
         };
         self.templ.cur = None;
         let v = r.ok()?;
+        // The arguments as written, beside the converted ones the
+        // specialization is keyed by (spec/ast.md §8.3, WP-3016).
+        let w = self.ast.types.arg_list(&sid.args);
+        self.ast.templates.set_args_as_written(v, w, false);
         if ds.invalid || d.invalid {
-            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            self.invalidate(v);
         }
         // The declaration's attributes (`template<> [[deprecated]] int
         // v<int>`, [dcl.attr.deprecated]/4): an implicit specialization

@@ -587,7 +587,7 @@ impl Oven {
             None => None,
         };
         let mut c = Compiler::new(self, b);
-        c.srcloc = root;
+        c.srcloc = root.map(|at| SrcLocScope { at, own_pos: true });
         let entry = c.here();
         let ty = c.ety(e);
         if let Some(d) = object {
@@ -1429,7 +1429,7 @@ pub(crate) struct Compiler<'a> {
     /// The outermost default argument being compiled that holds a
     /// source-location builtin: the builtins in it take the values of
     /// that use (clang `SourceLocExprScopeGuard`; spec/oven.md, Builtins).
-    srcloc: Option<ExprId>,
+    srcloc: Option<SrcLocScope>,
     /// The lambda-expression initializing the variable a top-level thunk
     /// evaluates (through cleanups, an elidable copy, a materialized
     /// temporary and parentheses): at C++14 the one closure object of
@@ -8186,6 +8186,34 @@ fn is_reference_decl(ast: &kiln_ast::Ast, d: DeclId) -> bool {
     ast.decls.get(d).ty().is_some_and(|t| ast.types.is_reference(t))
 }
 
+/// The `std::source_location::__impl` object of source-location values
+/// `v` (`__builtin_source_location()`).
+fn srcloc_object(v: &kiln_ast::expr::SourceLocValues) -> kiln_ast::ConstValueId {
+    match v.location {
+        Some(c) => c,
+        None => unreachable!(
+            "sema builds `__builtin_source_location()` only once it found a valid `std::source_location::__impl` (`std_source_location_impl`), and records its object with the values (`record_source_loc`)"
+        ),
+    }
+}
+
+/// The use whose source-location values the builtins being compiled
+/// take ([`Compiler::srcloc`]; spec/oven.md, Builtins).
+#[derive(Clone, Copy, Debug)]
+struct SrcLocScope {
+    /// The `CXXDefaultArgExpr` / `CXXDefaultInitExpr` with the values.
+    at: ExprId,
+    /// The scope is an immediate invocation of that use's default
+    /// argument evaluated for the use ([`Oven::fold_immediate_in`],
+    /// [`Oven::evaluate_in`]) and no default argument was entered since:
+    /// a builtin written in it keeps its own position (file, line,
+    /// column) and takes the use's function (clang rebuilds the
+    /// argument with the use's context, and evaluates the invocation
+    /// without the use's `SourceLocExprScope`). Inside a default
+    /// argument entered since, every value is the use's.
+    own_pos: bool,
+}
+
 /// The expression a `CXXDefaultArgExpr` stands for: its parameter's
 /// default argument, evaluated afresh at each call ([dcl.fct.default]/9).
 fn default_arg_of(ast: &kiln_ast::Ast, e: ExprId) -> Option<ExprId> {
@@ -8201,18 +8229,30 @@ impl Compiler<'_> {
     /// again (WP-1171; spec/oven.md "Valued immediate invocations").
     fn stored_value(&self, e: ExprId) -> Option<kiln_ast::ConstValueId> {
         let x = &self.ast().exprs;
-        x.constant_value(e)
-            .or_else(|| self.srcloc.is_none().then(|| x.default_immediate_value(e))?)
+        x.constant_value(e).or_else(|| match self.srcloc {
+            None => x.default_immediate_value(e),
+            // The value sema found at that use (CWG 2631).
+            Some(s) => x.use_immediate(s.at, e),
+        })
     }
 
     /// Enters default argument (or default member initializer use) `e`:
     /// the source-location builtins in it
     /// take the values of this use unless an enclosing default argument
     /// already set them. Returns the scope to restore.
-    fn enter_default_arg(&mut self, e: ExprId) -> Option<ExprId> {
+    fn enter_default_arg(&mut self, e: ExprId) -> Option<SrcLocScope> {
         let saved = self.srcloc;
-        if saved.is_none() && self.ast().exprs.source_loc_values(e).is_some() {
-            self.srcloc = Some(e);
+        match saved {
+            None if self.ast().exprs.source_loc_values(e).is_some() => {
+                self.srcloc = Some(SrcLocScope { at: e, own_pos: false });
+            }
+            // A default argument used inside an immediate invocation of
+            // the use's default argument: clang rebuilds it with the
+            // outermost use's location and context
+            // (`OutermostDeclarationWithDelayedImmediateInvocations`), so
+            // its builtins take every value of that use.
+            Some(s) if s.own_pos => self.srcloc = Some(SrcLocScope { own_pos: false, ..s }),
+            _ => {}
         }
         saved
     }
@@ -8486,24 +8526,46 @@ impl Compiler<'_> {
         use kiln_ast::expr::SourceLocKind as K;
         let ast = self.ast();
         let kind = ast.exprs.source_loc_kind(e);
-        let key = self.srcloc.unwrap_or(e);
+        let (key, own) = match self.srcloc {
+            None => (e, None),
+            Some(s) if s.own_pos => (s.at, Some(e)),
+            Some(s) => (s.at, None),
+        };
         let Some(v) = ast.exprs.source_loc_values(key).copied() else {
             unreachable!(
                 "sema records the values of a source-location builtin where it builds one (`act_on_source_loc_expr`, `image_source_loc_use`), and `enter_default_arg` keys a default argument use only when sema recorded values for it"
             )
         };
-        let cv = match kind {
-            K::Line => return self.konst(dst, u128::from(v.line)),
-            K::Column => return self.konst(dst, u128::from(v.column)),
-            K::File => v.file,
-            K::FileName => v.file_name,
-            K::Function => v.function,
-            K::SourceLocStruct => match v.location {
-                Some(c) => c,
-                None => unreachable!(
-                    "sema builds `__builtin_source_location()` only once it found a valid `std::source_location::__impl` (`std_source_location_impl`), and records its object with the values (`record_source_loc`)"
-                ),
-            },
+        // Written directly in an immediate invocation evaluated for use
+        // `key` ([`SrcLocScope::own_pos`]): the builtin's own position,
+        // the use's function. Its own file name is the use's string when
+        // the contents agree (one maker, the use's context).
+        let mine = own.and_then(|o| ast.exprs.source_loc_values(o).copied());
+        let same = |a: kiln_ast::ConstValueId, b: kiln_ast::ConstValueId| {
+            let lit = |x| match ast.consts.scalar(x) {
+                Some(Scalar::Pointer { base: PtrBase::StringLit { lit, .. }, .. }) => Some(lit),
+                _ => None,
+            };
+            lit(a).is_some_and(|l| lit(b) == Some(l))
+        };
+        let cv = match (kind, mine) {
+            (K::Line, Some(m)) => return self.konst(dst, u128::from(m.line)),
+            (K::Column, Some(m)) => return self.konst(dst, u128::from(m.column)),
+            (K::Line, None) => return self.konst(dst, u128::from(v.line)),
+            (K::Column, None) => return self.konst(dst, u128::from(v.column)),
+            (K::File, Some(m)) if !same(m.file, v.file) => m.file,
+            (K::FileName, Some(m)) if !same(m.file_name, v.file_name) => m.file_name,
+            (K::File, _) => v.file,
+            (K::FileName, _) => v.file_name,
+            (K::Function, _) => v.function,
+            (K::SourceLocStruct, Some(_)) => {
+                let o = own.unwrap_or(e);
+                match self.b.srcloc_object_at(o, key) {
+                    Some(c) => c,
+                    None => srcloc_object(&v),
+                }
+            }
+            (K::SourceLocStruct, None) => srcloc_object(&v),
         };
         let ty = self.ety(e);
         let raw = kiln_ast::RawId::raw(cv);

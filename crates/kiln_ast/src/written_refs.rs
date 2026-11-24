@@ -260,6 +260,23 @@ pub const REF_REWRITTEN: u8 = 8;
 /// synthesized form ([over.match.oper]/3.4.4); always with
 /// [`REF_REWRITTEN`].
 pub const REF_REVERSED: u8 = 16;
+/// [`WrittenRef::flags`]: a name in the decl-specifier-seq (or the leading
+/// attributes) shared by a declarator group of two or more declarators
+/// (`S a, b;`): `enclosing` is the group's first declaration, and every
+/// declaration of the group holds the name
+/// ([`WrittenRefs::group`], [`WrittenRefs::holders`]; spec/ast.md §18.3.1).
+pub const REF_GROUP: u8 = 32;
+
+/// A declarator group of two or more declarators (spec/ast.md §18.3.1):
+/// a run of [`WrittenRefs`]' group declarations, the first of which an
+/// entry with [`REF_GROUP`] has as its `enclosing`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kiln_snap::Snap)]
+pub struct DeclGroupRec {
+    /// The run's start in the group declarations.
+    pub start: u32,
+    /// The number of declarations (2 or more).
+    pub len: u32,
+}
 
 /// How lookup found a written name (spec/ast.md §18.7.2, WP-2130).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, kiln_snap::Snap)]
@@ -600,6 +617,11 @@ pub struct WrittenRefs {
     /// ([`global_link`](Self::global_link)): scratch of the parse, never
     /// carried (no link outlives the name it qualifies).
     colons: Vec<Loc>,
+    /// The declarator groups whose shared names have entries with
+    /// [`REF_GROUP`] (§18.3.1), sorted by their first declaration: runs
+    /// of `group_decls`.
+    groups: Vec<DeclGroupRec>,
+    group_decls: Vec<DeclId>,
 }
 
 /// Source the table has no entries for although it is on (spec/ast.md
@@ -779,7 +801,9 @@ impl WrittenRefs {
         self.entries.iter().enumerate().map(|(i, r)| (WrittenRefId::from_index(i), r))
     }
 
-    /// The entries whose `enclosing` is `d`.
+    /// The entries whose `enclosing` is `d` (an entry a declarator group
+    /// shares is enclosed by the group's first declaration only; see
+    /// [`holders`](Self::holders)).
     pub fn enclosed_by(&self, d: DeclId) -> impl Iterator<Item = (WrittenRefId, &WrittenRef)> + '_ {
         self.iter().filter(move |(_, r)| r.enclosing == Some(d))
     }
@@ -1587,6 +1611,13 @@ impl WrittenRefs {
             }
         }
         self.spec_seen.retain(|r, _| r.entry.index() < n);
+        // A group whose first declaration the dropped text made.
+        if !self.groups.is_empty() {
+            let decls = &self.group_decls;
+            self.groups.retain(|g| decls[g.start as usize].index() <= m.decls);
+            let end = self.groups.iter().map(|g| (g.start + g.len) as usize).max().unwrap_or(0);
+            self.group_decls.truncate(end);
+        }
     }
 
     /// Declaration `d`, whose names were parsed after `m`, claims them:
@@ -1602,6 +1633,96 @@ impl WrittenRefs {
         }
     }
 
+    /// The declarator group whose first declaration is `first`, in
+    /// declaration order, when an entry is shared by it (spec/ast.md
+    /// §18.3.1).
+    pub fn group(&self, first: DeclId) -> Option<&[DeclId]> {
+        let i = self.group_at(first).ok()?;
+        Some(self.group_run(self.groups[i]))
+    }
+
+    /// The declarations that hold entry `id`: the declarator group of its
+    /// `enclosing` for an entry with [`REF_GROUP`], else its `enclosing`
+    /// alone (empty when it has none; spec/ast.md §18.3.1).
+    pub fn holders(&self, id: WrittenRefId) -> &[DeclId] {
+        let Some(r) = self.entries.get(id.index()) else { return &[] };
+        match r.enclosing {
+            Some(d) if r.flags & REF_GROUP != 0 => {
+                self.group(d).unwrap_or_else(|| self.group_decls_one(id))
+            }
+            _ => self.group_decls_one(id),
+        }
+    }
+
+    fn group_decls_one(&self, id: WrittenRefId) -> &[DeclId] {
+        self.entries.get(id.index()).map_or(&[], |r| r.enclosing.as_slice())
+    }
+
+    /// Every declarator group with a shared entry, by first declaration.
+    pub fn groups(&self) -> impl Iterator<Item = &[DeclId]> + '_ {
+        self.groups.iter().map(|&g| self.group_run(g))
+    }
+
+    fn group_run(&self, g: DeclGroupRec) -> &[DeclId] {
+        let lo = g.start as usize;
+        self.group_decls.get(lo..lo + g.len as usize).unwrap_or(&[])
+    }
+
+    fn group_at(&self, first: DeclId) -> Result<usize, usize> {
+        self.groups.binary_search_by_key(&first, |&g| self.group_decls[g.start as usize])
+    }
+
+    /// The declarator group `decls` (in declaration order) shares the
+    /// decl-specifier-seq whose names are the entries `specs` (indices,
+    /// half-open): those its first declaration holds get [`REF_GROUP`],
+    /// and the group its row when one does (spec/ast.md §18.3.1). A group
+    /// of one has neither.
+    pub fn share_group(&mut self, specs: (u32, u32), decls: &[DeclId]) {
+        let &[first, _, ..] = decls else { return };
+        if !self.on {
+            return;
+        }
+        let hi = (specs.1 as usize).min(self.entries.len());
+        let lo = (specs.0 as usize).min(hi);
+        let mut any = false;
+        for r in &mut self.entries[lo..hi] {
+            if r.enclosing == Some(first) {
+                r.flags |= REF_GROUP;
+                any = true;
+            }
+        }
+        if !any {
+            return;
+        }
+        if let Err(at) = self.group_at(first) {
+            self.push_group_at(at, decls);
+        }
+    }
+
+    /// Adds the group `decls` (its first declaration not yet a group's):
+    /// a module image's group, after its entries (spec/ast.md §18.10.2).
+    pub fn push_group(&mut self, decls: &[DeclId]) -> bool {
+        let &[first, _, ..] = decls else { return false };
+        let Err(at) = self.group_at(first) else { return false };
+        self.push_group_at(at, decls);
+        true
+    }
+
+    fn push_group_at(&mut self, at: usize, decls: &[DeclId]) {
+        let start = self.group_decls.len() as u32;
+        self.group_decls.extend_from_slice(decls);
+        self.groups.insert(at, DeclGroupRec { start, len: decls.len() as u32 });
+    }
+
+    /// Whether an entry after `m` is still enclosed by a declaration that
+    /// existed at `m` (a claim would change it).
+    pub fn has_unclaimed(&self, m: RefMark) -> bool {
+        self.entries
+            .iter()
+            .skip(m.entries as usize)
+            .any(|r| r.enclosing.is_none_or(|e| e.index() <= m.decls))
+    }
+
     /// The memory row (`written_refs`), only when recording is on.
     pub fn mem_row(&self) -> Option<MemRow> {
         if !self.on {
@@ -1615,6 +1736,8 @@ impl WrittenRefs {
         let (prov_live, prov_reserved) = self.provenance_mem();
         let (spec_live, spec_reserved) = self.spec_mem();
         let (found_live, found_reserved) = self.found_mem();
+        let grow = size_of::<DeclGroupRec>() as u64;
+        let gdecl = size_of::<DeclId>() as u64;
         Some(MemRow::new(
             "written_refs",
             self.entries.len() as u64,
@@ -1625,7 +1748,9 @@ impl WrittenRefs {
                 + self.colons.len() as u64 * colon
                 + prov_live
                 + spec_live
-                + found_live,
+                + found_live
+                + self.groups.len() as u64 * grow
+                + self.group_decls.len() as u64 * gdecl,
             self.entries.capacity() as u64 * sz
                 + self.pending.capacity() as u64 * pend
                 + self.designators.capacity() as u64 * desig
@@ -1633,7 +1758,9 @@ impl WrittenRefs {
                 + self.colons.capacity() as u64 * colon
                 + prov_reserved
                 + spec_reserved
-                + found_reserved,
+                + found_reserved
+                + self.groups.capacity() as u64 * grow
+                + self.group_decls.capacity() as u64 * gdecl,
         ))
     }
 
@@ -1706,6 +1833,37 @@ impl WrittenRefs {
     }
 
     /// The dump's `q=`, `tilde=` and `close=` fields of entry `id` (§18.6).
+    /// ` in=` and the entry's `enclosing` (`(tu)` for the translation
+    /// unit `tu`), then ` shared=` and the rest of the declarator group
+    /// that holds a shared entry (§18.3.1).
+    fn dump_holders(
+        &self,
+        id: WrittenRefId,
+        tu: DeclId,
+        decl: &dyn Fn(DeclId, &mut String),
+        out: &mut String,
+    ) {
+        let r = self.get(id);
+        match r.enclosing {
+            Some(d) if d == tu => out.push_str(" in=(tu)"),
+            Some(d) => {
+                out.push_str(" in=");
+                decl(d, out);
+            }
+            None => {}
+        }
+        if r.flags & REF_GROUP == 0 {
+            return;
+        }
+        out.push_str(" shared=");
+        for (k, &g) in self.holders(id).iter().skip(1).enumerate() {
+            if k > 0 {
+                out.push(',');
+            }
+            decl(g, out);
+        }
+    }
+
     fn dump_lead(&self, id: WrittenRefId, out: &mut String, pos: &dyn Fn(Loc) -> String) {
         match self.get(id).qualifier.link() {
             QualLink::None => {}
@@ -1766,6 +1924,13 @@ impl WrittenRefs {
         };
         let decl_in = |names: &crate::diag_names::DiagNames<'_>, d: DeclId, out: &mut String| {
             let mut s = String::new();
+            // A `static_assert` has no name: its keyword's location names
+            // it (§18.3).
+            if ast.decls.get(d).kind() == crate::decl::DeclKind::StaticAssert {
+                out.push_str("static_assert@");
+                out.push_str(&pos(ast.decls.get(d).loc()));
+                return;
+            }
             // A function or template parameter prints unqualified, as a
             // local variable does.
             let scoped = !matches!(
@@ -1817,14 +1982,7 @@ impl WrittenRefs {
                 decl(f, &mut out);
             }
             self.dump_lead(id, &mut out, &pos);
-            match r.enclosing {
-                Some(d) if d == ast.tu => out.push_str(" in=(tu)"),
-                Some(d) => {
-                    out.push_str(" in=");
-                    decl(d, &mut out);
-                }
-                None => {}
-            }
+            self.dump_holders(id, ast.tu, &decl, &mut out);
             if r.entity.is_some() && r.flags & REF_DEPENDENT != 0 {
                 out.push_str(" dep");
             }
@@ -2275,6 +2433,44 @@ mod tests {
         // A claim is idempotent.
         t.claim(outer_mark, outer);
         assert_eq!(t.get(WrittenRefId::from_index(1)).enclosing, Some(inner));
+    }
+
+    /// spec/ast.md §18.3.1 (WP-3144): the entries of a shared
+    /// decl-specifier-seq that the first declaration holds get
+    /// `REF_GROUP` and every declaration of the group holds them; a name
+    /// nested in the specifier, a declarator's own name and a group of one
+    /// are unchanged; a truncation drops a group made after its mark.
+    #[test]
+    fn a_declarator_group_shares_its_specifier() {
+        let (ctx, first, second, third, lam) =
+            (DeclId::new(1), DeclId::new(3), DeclId::new(4), DeclId::new(5), DeclId::new(2));
+        let mut t = WrittenRefs::default();
+        t.set_on(true);
+        let shared = t.push(entry(Some(first))).unwrap();
+        let nested = t.push(entry(Some(lam))).unwrap();
+        let own = t.push(entry(Some(second))).unwrap();
+        t.share_group((0, 2), &[first]);
+        assert_eq!(t.get(shared).flags, 0, "a group of one");
+        assert!(t.groups().next().is_none());
+        t.share_group((0, 2), &[first, second, third]);
+        assert_eq!(t.get(shared).flags, REF_GROUP);
+        assert_eq!(t.get(nested).flags, 0);
+        assert_eq!(t.get(own).flags, 0);
+        assert_eq!(t.holders(shared), &[first, second, third]);
+        assert_eq!(t.holders(nested), &[lam]);
+        assert_eq!(t.group(first), Some(&[first, second, third][..]));
+        assert_eq!(t.group(second), None);
+        // Declarations 1..=5 exist at the mark; 6 is made after it.
+        let m = t.mark(5);
+        let _ = t.push(entry(Some(ctx))).unwrap();
+        let inner = t.push(entry(Some(DeclId::new(6)))).unwrap();
+        t.share_group((inner.index() as u32, inner.index() as u32 + 1), &[DeclId::new(6), third]);
+        assert_eq!(t.groups().count(), 2);
+        // Sorted by first declaration.
+        assert_eq!(t.groups().map(|g| g[0]).collect::<Vec<_>>(), [first, DeclId::new(6)]);
+        t.truncate(m);
+        assert_eq!(t.groups().count(), 1);
+        assert_eq!(t.holders(shared), &[first, second, third]);
     }
 
     #[test]

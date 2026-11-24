@@ -961,7 +961,7 @@ impl Sema<'_, '_> {
                 self.emit(msg);
             }
             // clang `setInvalidDecl`: overload resolution skips it.
-            self.ast.decls.set_flags(f, DeclFlags::INVALID);
+            self.invalidate(f);
             had_error = true;
         }
         if first {

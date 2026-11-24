@@ -21,6 +21,7 @@
 //! befriended by a qualified name still fall back.
 
 use kiln_ast::decl::{DeclFlags, DeclKind, FriendKind, FriendTarget};
+use kiln_ast::friend_form::{FriendFormFlags, FriendFormKind};
 
 use crate::Sema;
 use kiln_ast::{DeclHead, DeclId};
@@ -70,7 +71,7 @@ impl Writer<'_, '_, '_> {
             return Err("a friend declaration in a class template");
         }
         let s = self.s;
-        if s.friend_qualifiers.contains_key(&d) || s.friend_qualifier_nns.contains_key(&d) {
+        if s.friend_fn_decls.contains_key(&d) {
             return Err("a friend declared by a qualified name");
         }
         Ok(())
@@ -120,10 +121,14 @@ impl Writer<'_, '_, '_> {
         {
             return Err("a friend declaration in a template");
         }
-        if self.s.friend_specs.contains_key(&d)
-            || self.s.special_friends.contains_key(&d)
-            || self.s.member_friends.by_friend.contains_key(&d)
-        {
+        // A friend still matched per specialization (its row, spec/ast.md
+        // §23): a specialization kept with its type, a dependent special
+        // member, or a [temp.friend]/5 member.
+        let per_spec = ast.decls.friend_form_row(d).is_some_and(|r| {
+            r.flags.contains(FriendFormFlags::DEPENDENT)
+                || (r.kind == FriendFormKind::Specialization && self.s.friend_fn_ty(d).is_some())
+        });
+        if per_spec || self.s.member_friends.by_friend.contains_key(&d) {
             return Err("a friend specialization or member of a class template");
         }
         Ok(match ast.decls.friend_target(d) {

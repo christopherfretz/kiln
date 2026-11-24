@@ -493,7 +493,7 @@ libstdc++ 14's `<complex>` uses them where `_Float128` is not
 | `LValueRef` | I | C | data = referee QualType | reference collapsing ([dcl.ref]/7) is done by the constructor: the referee is never a reference |
 | `RValueRef` | I | C | data = referee QualType | |
 | `MemberPointer` | I | C | pairs [pointee QualType, class TypeId] | class stays sugared in sugar nodes |
-| `ConstantArray` | I | C | data = arrays index | `size_expr` is sugar: canonical has `None`; set only for an instantiation-dependent bound whose value is known (§7.2 "Kept bounds") |
+| `ConstantArray` | I | C | data = arrays index | `size_expr` is sugar: canonical has `None`; the bound a declarator wrote, kept on every written constant bound (§7.2 "Written bounds"); only an instantiation-dependent one (§7.2 "Kept bounds") adds a flag |
 | `IncompleteArray` | I | C | data = element QualType | `int[]` |
 | `VariableArray` | O | C | pairs [element, size ExprId] | GNU VLA; never equal to another type (as clang) |
 | `DependentSizedArray` dep | I | S/C | pairs [element, size ExprId] / [element, ProfileId] | §7.2 |
@@ -515,7 +515,7 @@ libstdc++ 14's `<complex>` uses them where `_Float128` is not
 | `Elaborated` | I | S | aux = keyword (none/struct/class/union/enum/typename), pairs [NnsId or 0, named QualType] | created **only** when a keyword or a qualifier was written (§15 R4) |
 | `QualifiedArray` | I | S | aux = Quals, data = base TypeId | §2.1 |
 | `Paren` | I | S | data = inner QualType | declarator grouping parentheses (clang's `ParenType`, WP-191; `paren_type`), created only around a pointer, reference or member-pointer declarator (`int (*p)`, `int ((&r))`): never around the outermost type or a function or array type, which clang's printer shows no differently. Prints as `(inner)` in the declarator position; `PrintOptions::no_parens` prints the inner type instead (the `aka` check, clang's `desugarForDiagnostic` looking through it) |
-| `Decayed` | I | S | pairs [original QualType, adjusted QualType] | clang's `DecayedType` (WP-2720; `decayed`), built only by sema's `adjust_param_type` for an array parameter whose outermost bound, as written, is an instantiation-dependent expression (a `DependentSizedArray`, or a `ConstantArray` with `size_expr`): the adjusted pointer lost that bound, which substitution must still check (§7.2 "Kept bounds"). Canonical = canonical(adjusted); flags = adjusted's, plus `INSTANTIATION_DEPENDENT` (not `DEPENDENT`) and `UNEXPANDED_PACK` from `original`. Prints as the adjusted type (clang `printAdjustedBefore`). Appended last to `TypeKind` |
+| `Decayed` | I | S | pairs [original QualType, adjusted QualType] | clang's `DecayedType` (WP-2720; `decayed`), built only by sema's `adjust_param_type` for an array parameter whose outermost bound was written (a `DependentSizedArray`, or a `ConstantArray` with `size_expr`; WP-3101 extended it from instantiation-dependent bounds to every written one): the adjusted pointer lost that bound, which substitution must still check when it is instantiation-dependent (§7.2 "Kept bounds") and a client reads as written (§7.2 "Written bounds"). Canonical = canonical(adjusted); flags = adjusted's, plus `INSTANTIATION_DEPENDENT` (not `DEPENDENT`) and `UNEXPANDED_PACK` from `original`. Prints as the adjusted type (clang `printAdjustedBefore`). Appended last to `TypeKind` |
 | `Adjusted` | — | — | — | **not represented** (§15 R6): other parameter types are stored adjusted; `ParmVar` keeps the written type if it differs |
 | `TemplateTypeParm` | D | S | data = `TemplateTypeParm` `DeclId` | the name a template uses; canonical = the canonical parm below |
 | `CanonTemplateTypeParm` dep | I | C | aux = depth (15 bits) \| pack bit, data = index | prints `type-parameter-D-I`; makes `template<class T> f(T)` and `template<class U> f(U)` the same type |
@@ -854,6 +854,43 @@ canonical form of a dependent type must identify *equivalent* types:
   above, so `char[sizeof(f(T()))]` and `char[sizeof(g(T()))]` are two
   templates. An array parameter adjusted to a pointer keeps a
   kept or value-dependent outermost bound in `Decayed` sugar (§5.3).
+- **Written bounds (WP-3015).** Every constant bound a declarator
+  writes is kept in `size_expr` of the sugar node, also one that is
+  not instantiation-dependent (`int arr[f(2)]`, `sizeof(int[f(13)])`,
+  `int (&x)[f(19)]`, a member `int m[f(4)]`, the inner bound of
+  `new int[n][f(3)]`): the declaration's written type, the type operand
+  of `sizeof`, a cast or `new` hold it, so a walk from them reaches the
+  expression and every call written in it, as clang's `TypeLoc` does
+  (clang drops a non-dependent `SizeExpr` from `ConstantArrayType` and
+  keeps it in `ArrayTypeLoc`; kiln has no type locations, and a sugar
+  node is the one place every holder of a written type already
+  reaches). The canonical type is unchanged, so `int[f(2)]` and
+  `int[2]` are one type; the sugar node costs one interned type per
+  written bound (the expression was already built). Only an
+  instantiation-dependent bound is marked (`TypeContext::note_inst_bound`,
+  carried in the PCH snapshot; `inst_bound(&a)` reads it): a bound that is
+  not adds no flag, so substitution does not visit the type for it, and
+  a module image writes it as a `WrittenArray` type record, the bound's
+  expression section beside the value (WP-3102; the importer builds the
+  section and keeps it as `size_expr`, never evaluating it; a bound no
+  section can hold is written as the value alone, as before).
+  Substitution keeps a written bound it does not change (`T a[f(5)]`
+  instantiated keeps the pattern's `f(5)`, no new expression); a bound
+  it substitutes (`T a[N]`) gives the value only, as before. An array
+  parameter adjusted to a pointer keeps its written bound as `Decayed` sugar, whether the bound is
+  instantiation-dependent or not, a call or a literal (`int a[f(2)]`,
+  `int a[3]`; WP-3101, clang's `DecayedType`): the parameter's type and
+  the function's type hold it, so `written_exprs` reaches it, while
+  the canonical type is the pointer's (mangling, overloading and
+  redeclaration are unchanged) and it prints as the pointer. An
+  incomplete array has no bound to keep; a variable length array's
+  bound is not kept on the adjusted type (the `ParmVar`'s original type
+  has it, which is what C's evaluation of the bound at function entry
+  reads; a variable length array is a distinct type at each writing,
+  so the sugar would make every such function type distinct). The
+  expressions written in a type are
+  listed by
+  `TypeContext::written_exprs` (§8.4).
 
 **Landed (WP-116).** The profiler is `kiln_ast::types::profile_expr`
 (`crates/kiln_ast/src/types/profile_expr.rs`), modelled on clang's
@@ -994,6 +1031,31 @@ pub struct ArgListId(NonZeroU32);   // interned list of TemplateArg
 - The specialization key of every template is `(first DeclId of the
   template, canonical ArgListId)`: an 8-byte key into one global map
   (spec/ast.md §8).
+
+### 8.4 Expressions written in a type (WP-3015)
+`TypeContext::written_exprs(q, &mut out)` appends the root of every
+expression written in type `q` (clang's `TypeLoc` children; kiln keeps
+them in type sugar), in pre-order over the type's structure: a
+constant array's written bound (§7.2 "Written bounds"), a dependent or
+variable array's bound (not `[*]`'s shared one), the operand of
+`decltype(e)`, `typeof(e)` and a function type's `noexcept(e)`, a pack
+index, a splice, a dependent vector size or address space, and every
+expression argument of a template-id in it. It descends into the types
+`q` is written of: elements, pointees, referees, a member pointer's
+class, return and parameter types, qualifiers' types, template-id type
+arguments and packs, a type-constraint's arguments, a pack expansion's
+pattern, an attributed type's modified type, `typeof(type)`, an
+adjusted parameter's declared array type (`Decayed`). It does not enter
+what a name denotes (a typedef's, alias's or using-declaration's type,
+a class, a deduced or substituted type: those were written elsewhere)
+nor a canonical profile (§7.2: its expression is the first
+declaration's). `written_arg_exprs(args, &mut out)` is the same over a
+template argument list, for the arguments as written of a
+specialization (spec/ast.md §8.3). Each expression's subexpressions are
+`ExprArena::children`'s. The dump walks (`kiln_ast::dump::written_exprs`,
+`for_each_written_expr`) stay clang's dump, which prints no `TypeLoc`
+and no written template arguments: a client wanting every expression
+of a declaration walks its type with `written_exprs` as well.
 
 ## 9. Memory accounting
 `TypeContext::memory() -> MemReport` with one row per arena: element
@@ -1487,7 +1549,9 @@ Printing:
   spec/codegen.md "Sanitizers") and the AST names (`AstNames`, the
   dump's desugared string: `'A<N::X>':'A<X>'`, WP-1816) supply them;
   debug-information names do not (clang names the `DICompositeType`
-  with the converted arguments).
+  with the converted arguments). A partial specialization, which also
+  has a row (spec/ast.md §8.3, WP-3016), prints its converted
+  arguments.
 - Nesting deeper than 400 prints `...` (balanced) instead of recursing.
 - `ExtQual` prints as clang's `Qualifiers::print` in C++: after the cv
   qualifiers, `__attribute__((address_space(N)))` for a target space and

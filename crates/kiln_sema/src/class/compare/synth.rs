@@ -99,7 +99,7 @@ impl Sema<'_, '_> {
                 let _ = self.builder().set_body(d, b);
                 self.mark_used(d);
             }
-            None => self.ast.decls.set_flags(d, DeclFlags::INVALID),
+            None => self.invalidate(d),
         }
         self.pop_synth(saved);
         self.resolve_exception_spec(d, use_loc);

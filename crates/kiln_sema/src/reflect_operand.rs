@@ -200,7 +200,7 @@ impl Sema<'_, '_> {
             .arg(self.decl_name(d))
             .arg(self.ty_arg(t));
         self.emit(msg);
-        self.ast.decls.set_flags(d, DeclFlags::INVALID);
+        self.invalidate(d);
         true
     }
 

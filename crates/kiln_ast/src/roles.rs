@@ -1126,6 +1126,7 @@ pub static COLD_MAPS: &[ColdMapRoles] = &[
     cold("ColdExprData", "source_loc", E, Role::Record("SourceLocValues")),
     cold("ColdExprData", "string_maker", E, Role::Record("StringMaker")),
     cold("ColdExprData", "default_imm", E, Role::ConstValue),
+    cold("ColdExprData", "use_imm", E, Role::Record("Box<[UseImmediate]>")),
     cold("ColdExprData", "union_field", E, D),
     cold("ColdExprData", "cast_written", E, T),
     cold(
@@ -1176,6 +1177,8 @@ pub static COLD_MAPS: &[ColdMapRoles] = &[
     cold("ColdDeclData", "init_fp", D, Role::Record("fp::FpOverride")),
     cold("ColdDeclData", "closure_owner", D, D),
     cold("ColdDeclData", "written_ns", D, D),
+    cold("ColdDeclData", "friend_form", D, Role::Value("friend_forms row")),
+    cold("ColdDeclData", "subst_failed", D, Role::Record("SubstFailedKind")),
 ];
 
 #[cfg(test)]

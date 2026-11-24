@@ -1101,8 +1101,13 @@ impl Sema<'_, '_> {
             let data = self.ast.exprs.lambdas.get(l);
             if data.default == CaptureDefault::None {
                 let rbracket = data.rbracket;
-                if let Some(f) = data.call_op {
-                    self.ast.decls.set_flags(f, DeclFlags::INVALID);
+                // A `this` named in a requires-expression substituted in a
+                // SFINAE context fails the requirement, not the lambda
+                // (WP-3281; as a default member initializer, define.rs).
+                if let Some(f) = data.call_op
+                    && !self.sfinae_traps()
+                {
+                    self.invalidate(f);
                 }
                 let mut msg = self.diag(DiagId::sema_this_capture, loc).arg(1u32);
                 if top.is_none() {
@@ -1384,7 +1389,7 @@ impl Sema<'_, '_> {
                 let msg = self.diag(DiagId::sema_capture_more_than_once, nloc).arg(text);
                 self.emit(msg);
                 if !init {
-                    self.ast.decls.set_flags(var, DeclFlags::INVALID);
+                    self.invalidate(var);
                 }
                 continue;
             }

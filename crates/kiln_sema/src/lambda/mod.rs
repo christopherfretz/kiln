@@ -1320,7 +1320,7 @@ impl Sema<'_, '_> {
             self.ctor_entity = top.saved_ctor_entity.take();
         }
         self.pop_lambda_heads(top.heads, top.scope_base, top.saved_invented);
-        self.ast.decls.set_flags(top.closure, DeclFlags::INVALID);
+        self.invalidate(top.closure);
         self.finish_closure(top.closure);
         if let Some(depth) = top.saved_dependent_depth {
             self.ast.templates.dependent_depth = depth;

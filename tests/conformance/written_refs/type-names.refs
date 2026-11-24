@@ -3,8 +3,8 @@
 22:3-22:6  type  'Box' -> lib::Box@20:27 in=lib::Box::self@22:8 how=injected
 27:7-27:10  nns  'lib' -> lib@12:11 in=app::Rec@27:12
 27:12-27:15  using-decl  'Rec' -> lib::Rec@13:8 q=27:7 in=app::Rec@27:12
-28:15-28:18  nns  'lib' -> lib@12:11 in=app@26:11
-28:20-28:23  type  'Rec' -> lib::Rec@13:8 q=28:15 in=app@26:11
+28:15-28:18  nns  'lib' -> lib@12:11 in=app::Alias@28:7
+28:20-28:23  type  'Rec' -> lib::Rec@13:8 q=28:15 in=app::Alias@28:7
 29:9-29:12  nns  'lib' -> lib@12:11 in=app::Total@29:20
 29:14-29:19  type  'Count' -> lib::Count@19:13 q=29:9 in=app::Total@29:20
 31:1-31:4  type  'Rec' -> lib::Rec@13:8 found=app::Rec@27:12 in=app::make@31:5
@@ -21,6 +21,7 @@
 35:3-35:6  type  'Rec' -> lib::Rec@13:8 found=app::Rec@27:12 in=app::p@35:8
 35:16-35:19  type  'Rec' -> lib::Rec@13:8 found=app::Rec@27:12 in=app::p@35:8
 35:20-35:21  expr  'k' -> k@33:25 in=app::p@35:8
+35:12-35:15  operator  'new' -> operator new@? in=app::p@35:8 how=qualified
 36:9-36:12  type  'Rec' -> lib::Rec@13:8 found=app::Rec@27:12 in=app::q@36:14
 36:36-36:39  type  'Rec' -> lib::Rec@13:8 found=app::Rec@27:12 in=app::q@36:14
 36:43-36:44  expr  'p' -> app::p@35:8 in=app::q@36:14
@@ -43,6 +44,7 @@
 40:8-40:11  template  'Box' -> lib::Box@20:27 q=40:3 in=app::b@40:17
 40:20-40:21  expr  'e' -> app::e@34:20 in=app::b@40:17
 41:10-41:11  expr  'p' -> app::p@35:8 in=app::sum@33:7
+41:3-41:9  operator  'delete' -> operator delete@? in=app::sum@33:7 how=qualified
 43:11-43:14  nns  'lib' -> lib@12:11 in=app::sum@33:7
 43:16-43:19  type  'Err' -> lib::Err@17:8 q=43:11 in=app::sum@33:7
 44:18-44:21  nns  'lib' -> lib@12:11 in=app::sum@33:7

@@ -317,7 +317,7 @@ impl Sema<'_, '_> {
         // initialization of the unnamed variable ([dcl.constinit]/2).
         self.record_constinit(v, ds);
         if invalid || self.storage_invalidates_var(ds, d) {
-            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            self.invalidate(v);
         }
         let _ = self.finish_template_pattern(v);
         let mut attrs = ds.attrs.clone();
@@ -336,7 +336,7 @@ impl Sema<'_, '_> {
     pub fn act_on_decomposition_not_alone(&mut self, lbracket: Loc, v: Option<DeclId>) {
         self.error(DiagId::sema_decomp_decl_not_alone, lbracket);
         if let Some(v) = v {
-            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            self.invalidate(v);
         }
     }
 
@@ -481,7 +481,7 @@ impl Sema<'_, '_> {
         let loc = self.ast.decls.get(v).loc();
         let msg = self.diag(DiagId::sema_decomp_decl_requires_init, loc).arg(self.decomp_name(v));
         self.emit(msg);
-        self.ast.decls.set_flags(v, DeclFlags::INVALID);
+        self.invalidate(v);
         self.invalidate_bindings(v);
     }
 
@@ -490,7 +490,7 @@ impl Sema<'_, '_> {
             if self.ast.decls.get(b).ty().is_none() {
                 self.ast.decls.set_ty(b, QualType::ERROR);
             }
-            self.ast.decls.set_flags(b, DeclFlags::INVALID);
+            self.invalidate(b);
         }
     }
 
@@ -552,7 +552,7 @@ impl Sema<'_, '_> {
             }
         };
         if !ok {
-            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            self.invalidate(v);
             self.invalidate_bindings(v);
         }
     }

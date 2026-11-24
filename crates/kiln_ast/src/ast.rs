@@ -16,7 +16,7 @@ use crate::decl::{
 };
 use crate::expr::ExprArena;
 use crate::expr::ExprKind;
-use crate::ids::{DeclId, ExprId};
+use crate::ids::{ConstValueId, DeclId, ExprId};
 use crate::lists::IdLists;
 use crate::lookup::{LookupResult, LookupTables};
 use crate::mem::{HeapSize, MemReport, MemRow};
@@ -101,6 +101,9 @@ pub struct Ast {
     /// The declaration-extent table (§19): opt-in, off by default;
     /// written into snapshots.
     pub decl_extents: crate::decl_extents::DeclExtents,
+    /// The function-name span table (§24): opt-in, off by default;
+    /// transient in snapshots (stage B carries it).
+    pub fn_names: crate::fn_names::FnNames,
     /// The `>` tokens the parser split off a `>>`, `>=`, `>>=` (or the
     /// `>>` of a `>>>`) to close a template argument list
     /// ([temp.names]/4), by location (§21.2, WP-2542): each is a
@@ -508,6 +511,7 @@ impl Ast {
             contract_sites: crate::slot::ColdMap::new("contract_sites"),
             written_refs: crate::written_refs::WrittenRefs::default(),
             decl_extents: crate::decl_extents::DeclExtents::default(),
+            fn_names: crate::fn_names::FnNames::default(),
             split_greaters: kiln_source::fx::FxHashSet::default(),
             builtin_literals: crate::builtin_literals::BuiltinLiterals::default(),
             symbols,
@@ -566,8 +570,9 @@ impl Ast {
     /// whose names were all already introduced, and for a dependent
     /// using-declarator (`UnresolvedUsingValue`/`UnresolvedUsingTypename`),
     /// which introduces nothing until instantiated: the instantiation's
-    /// `Using` has the shadows. A shadow a later member hides
-    /// ([namespace.udecl]/14) stays in the list ([`crate::decl::DeclArena::hidden_shadow`]).
+    /// `Using` has the shadows. A shadow a member of the class hides
+    /// ([namespace.udecl]/14), declared before or after it, stays in the
+    /// list, marked ([`crate::decl::DeclArena::hidden_shadow`]).
     pub fn using_shadows(&self, u: DeclId) -> impl ExactSizeIterator<Item = DeclId> + '_ {
         let list = self.decls.using_shadow_list(u).unwrap_or(crate::ids::ListId::EMPTY);
         self.lists.iter::<DeclId>(list)
@@ -734,6 +739,25 @@ impl Ast {
             ExprKind::ExprWithCleanups => self.exprs.operand(d),
             _ => d,
         })
+    }
+
+    /// The value of immediate invocation `c` (a `ConstantExpr` of a
+    /// default argument or default member initializer, or of one that it
+    /// uses) at the use `u` (a `CXXDefaultArgExpr` / `CXXDefaultInitExpr`)
+    /// that encloses it, as sema evaluated it there (CWG 2631,
+    /// [expr.const]/16; spec/ast.md §5.10): the use's own value when the
+    /// use has source-location values ([`ExprArena::use_immediates`]),
+    /// else the one every such use shares
+    /// ([`ExprArena::default_immediate_value`]). `None` when sema kept
+    /// none: the invocation failed, its value depends on the evaluation
+    /// point (`access_context::current()`), or the use is in a template
+    /// or an imported module body (codegen evaluates it there).
+    pub fn default_use_immediate_value(&self, u: ExprId, c: ExprId) -> Option<ConstValueId> {
+        if self.exprs.source_loc_values(u).is_some() {
+            self.exprs.use_immediate(u, c)
+        } else {
+            self.exprs.default_immediate_value(c)
+        }
     }
 
     /// The expression the `CXXDefaultInitExpr` `e` stands for: its
@@ -1755,6 +1779,9 @@ impl Ast {
         if let Some(row) = self.decl_extents.mem_row() {
             r.push(row);
         }
+        if let Some(row) = self.fn_names.mem_row() {
+            r.push(row);
+        }
         if let Some(row) = self.builtin_literals.mem_row() {
             r.push(row);
         }
@@ -1777,10 +1804,7 @@ impl Ast {
     /// Every pointer to a string kiln makes leads to one maker: a
     /// source-location use of one role evaluated in one declaration, a
     /// reflection, or a contract site.
-    pub fn string_maker_of(
-        &self,
-        v: crate::ConstValueId,
-    ) -> Option<(crate::expr::StringMaker, ExprId)> {
+    pub fn string_maker_of(&self, v: ConstValueId) -> Option<(crate::expr::StringMaker, ExprId)> {
         match self.consts.scalar(v)? {
             crate::consts::Scalar::Pointer {
                 base: crate::consts::PtrBase::StringLit { origin, .. },

@@ -1,0 +1,19 @@
+fn-name 'void ns::(unnamed struct)::m()' of ns::(anonymous struct)::m@12:15
+  [5,7) scope 'ns' -> ns@11:11
+  [9,25) scope '(unnamed struct)' -> ns::(anonymous struct)@12:1 q synth
+  [27,28) name 'm' -> ns::(anonymous struct)::m@12:15 q
+fn-name 'void ns::(unnamed struct)::m()' of ns::Named::m@13:23
+  [5,7) scope 'ns' -> ns@11:11
+  [9,25) scope '(unnamed struct)' -> ns::Named@13:9 q synth
+  [27,28) name 'm' -> ns::Named::m@13:23 q
+fn-name 'void ns::ty(T) [T = ns::NE]' of ns::ty<ns::NE>@15:25
+  [5,7) scope 'ns' -> ns@11:11
+  [9,11) name 'ty' -> ns::ty<ns::NE>@15:25 q
+  [12,13) param 'T' -> T@15:17
+  [16,17) binding 'T' -> T@15:17
+  [20,22) arg 'ns' -> ns@11:11
+  [24,26) arg 'NE' -> ns::NE@14:21 q
+fn-name 'static void ns::U<int>::m()' of ns::U<int>::m@16:41
+  [12,14) scope 'ns' -> ns@11:11
+  [16,17) scope 'U' -> ns::U<int>@16:25 q
+  [24,25) name 'm' -> ns::U<int>::m@16:41 q

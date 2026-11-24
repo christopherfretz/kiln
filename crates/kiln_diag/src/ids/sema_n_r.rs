@@ -163,7 +163,7 @@ sema_ovl_ambiguous_ctor = Error (1) "call to constructor of {0} is ambiguous";
 sema_ovl_ambiguous_member_call = Error (1) "call to member function '{0}' is ambiguous";
 sema_ovl_ambiguous_object_call = Error (1) "call to object of type {0} is ambiguous";
 sema_ovl_ambiguous_oper_binary = Error (3) "use of overloaded operator '{0}' is ambiguous (with operand types {1} and {2})";
-sema_ovl_ambiguous_oper_unary = Error (2) "use of overloaded operator '{0}' is ambiguous (with operand type {1})";
+sema_ovl_ambiguous_oper_unary = Error (2) "use of overloaded operator '{0}' is ambiguous (operand type {1})";
 sema_ovl_ambiguous_reversed_operator = ExtWarn [AmbiguousReversedOperator] (4) "ISO C++20 considers use of overloaded operator '{0}' (with operand types {1} and {2}) to be ambiguous despite there being a unique best viable function{3: with non-reversed arguments|}";
 sema_ovl_ambiguous_subscript_call = Error (1) "call to subscript operator of type {0} is ambiguous";
 sema_ovl_deleted_comparison = Error (2) "object of type {0} cannot be compared because its {1} is implicitly deleted";
@@ -256,6 +256,7 @@ sema_qualified_ctor_name_as_template = Error (1) "qualified reference to {0} is 
 sema_qualified_ctor_name_as_type = Error (1) "qualified reference to {0} is a constructor name rather than a type in this context";
 sema_qualified_ctor_name_despite_keyword = ExtWarn [InjectedClassName] (3) "ISO C++ specifies that qualified reference to '{0}' is a constructor name rather than a {1:template name|type} in this context, despite preceding '{2:typename|template}' keyword";
 sema_qualified_fn_type = Error (3) "{0:non-member function|static member function} of type {1} cannot have '{2}' qualifier";
+sema_qualified_friend_def = Error (1) "friend function definition cannot be qualified with '{0}'";
 sema_qualified_member_of_unrelated = Error (2) "{0} is not a member of class {1}";
 sema_qualified_param_declarator = Error (0) "parameter declarator cannot be qualified";
 // WP-1471: clang err_qualified_typedef_declarator ([dcl.meaning.general]/2).

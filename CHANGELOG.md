@@ -10,6 +10,111 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- Function-name spans for tooling clients (WP-3280, spec/ast.md §24):
+  with `-fkiln-fn-names` (or `-fkiln-dump-fn-names`, which prints it), each
+  string `__PRETTY_FUNCTION__`, `__FUNCTION__`, `__func__`,
+  `__builtin_FUNCTION()` and `std::source_location::function_name()`
+  make has a record of the byte range of every declaration name printed in
+  it and the declaration it names (namespaces, classes, the function,
+  parameter and return types as written, template parameters and the
+  bracketed arguments). Read with `Ast::fn_name_of_string` (at a
+  `PtrBase::StringLit` pointer), `fn_name_of_value`,
+  `fn_name_of_predefined` and `fn_name_at_use`. `KILN_FN_NAMES_VERIFY=1`
+  self-checks every record; the harness directive `fn-names:` compares
+  the dump with a golden. Off by default; the strings are unchanged. PCH
+  snapshots and module images do not carry the table yet (PCH format 178
+  for the self-check's new diagnostic id).
+- Silent-failure marks (WP-3281, spec/ast.md §4.1): `DeclArena::subst_failed`
+  says which invalid declarations kiln made invalid while every error was
+  trapped (SFINAE or a discarded capture) and what failed to form (a
+  function signature, an `explicit` specifier, a variable or class partial
+  specialization choice, a local of a failed signature, other); in a
+  translation unit without errors every invalid declaration is marked.
+  The dump prints `subst-failed=<kind>`; snapshots carry the marks (PCH
+  format 176); `-fkiln-verify-subst-failed` / `KILN_VERIFY_SUBST_FAILED=1`
+  checks the rule. Under a trap, a class template used inside its own
+  definition and a lambda naming `this` in a requires-expression are no
+  longer made invalid, and an implicit definition is not a SFINAE context.
+- Module images carry the arguments as written of every specialization
+  they list (WP-3102, spec/ast.md §8.3, spec/modules.md §11.11
+  "Arguments as written"): an importer's partial specializations,
+  explicit specializations of class, variable and function templates
+  have the `TemplateTables::args_as_written` row the interface's parse
+  gave, each non-type argument the expression written (built from its
+  section, never evaluated), and its non-dependent written array bounds
+  keep their expressions (`WrittenArray` type records); a partial
+  specialization of a member template redeclared in an instantiation of
+  its class gets the original's row, substituted (`In<U, f(7)>` in
+  `O<long>`). PCH snapshots already carried both (now tested).
+  `IMAGE_VERSION` 95.
+
+- The value of each immediate invocation of a default argument or default
+  member initializer per use (WP-3279, spec/ast.md §5.8.2):
+  `ColdExprData::use_imm` on the `CXXDefaultArgExpr`/`CXXDefaultInitExpr`
+  beside its source-location record, read with
+  `Ast::default_use_immediate_value`, carried in PCH (format 175) and
+  printed by the AST dump as the use's `ConstantExpr` value.
+- The search directories the driver drops, in the lookup log (WP-3275,
+  spec/driver.md "Dropped directories", spec/pp.md "Lookup log"):
+  `SearchList::dropped()` and `LookupLog::dropped` give each requested
+  directory the list does not search (nonexistent ones, the toolchain's
+  own included, and duplicates by identity such as a symbolic link to an
+  earlier `-I`) with its path, group, whether it is the toolchain's
+  (`SearchDirSpec::toolchain`, `SearchDirSpec::of_toolchain`), its index
+  in the command's order, the position in the list it would have been
+  searched at, why (`DropReason`) and, for a duplicate, the directory
+  searched instead. The search list and `-v` are unchanged. PCH
+  snapshots (format 174) carry it, and their schema hash now covers the
+  lookup log.
+- The module probes of `import` in the lookup log (WP-3276, spec/pp.md
+  "Lookup log", spec/modules.md §2): each `-fprebuilt-module-path`
+  candidate (`.pcm`, `.cppm`, `.ixx`, `.cpp`) and the standard library
+  module's source, hit or miss, in probe order, as a `LookupForm::Module`
+  lookup whose name is the candidate joined onto the working directory;
+  replay repeats them as it repeats absolute names
+  (`IncludeResolver::record_module_probe`).
+- Written constant array bounds for tooling clients (WP-3015,
+  spec/types.md §7.2 "Written bounds", §8.4): a constant bound keeps its
+  written expression as type sugar after it folds, on a variable, a
+  member, a parameter of reference-to-array type, a `sizeof` or cast
+  operand and every bound of a `new` after the first, and in a class
+  template's pattern and its instantiations; the canonical type is the
+  value's (`int[f(2)]` is `int[2]`). `TypeContext::written_exprs(ty)`
+  and `written_arg_exprs(args)` give the expressions written in a type
+  or an argument list, so a walk from a declaration reaches every call
+  written there. The PCH snapshot format is version 173.
+- The arguments as written of a class-scope explicit specialization of a
+  member function template (WP-3142, spec/ast.md §8.3 "Arguments as
+  written"), and of every explicit specialization of a function or
+  variable template: `TemplateTables::args_as_written`, where an
+  instantiation-dependent argument (`h<sizeof(sizeof(g(T())))>`) stays
+  an expression.
+
+- A friend's written form on the `Ast` (WP-3164, spec/ast.md §23): each
+  friend written with a qualified declarator-id, a template-id, a
+  special member name, or a qualified class name with a template-head of
+  its own has a `FriendForm` row with its kind, the qualifier and the
+  template arguments as written (instantiation-dependent expressions
+  included), its own template-heads and trailing requires-clause, the
+  templates found, and its entity (a candidate when it is matched per
+  specialization). `Ast::friend_form(fd)` answers `Row`, `None` or
+  `NotCarried` (a friend from a module image). Sema matches friends from
+  the row; the written-reference entry of a friend's name takes the row's
+  entity; a qualified class friend's type keeps its written qualifier
+  (`struct ::G`, `struct Bq<sizeof (sizeof (f(T())))>::Y`), as clang's
+  dump shows it; `friend void Bq<8>::template t<1>();` parses.
+  `-fkiln-dump-friend-forms` prints the rows. PCH snapshots (format 172)
+  carry them; module images do not yet.
+
+- The declarator group of a shared decl-specifier in the written-reference
+  table (WP-3144, spec/ast.md §18.3.1): in `S a, b;` the entry of `S` is
+  still enclosed by `a`, now with the flag `REF_GROUP` (32), and
+  `WrittenRefs::holders(id)` gives every declaration of the group
+  (`group(first)`, `groups()`); member declarator lists, `typedef` lists
+  and a function and a variable in one group are covered, a group of
+  one and a structured binding declaration have no mark. The dump prints
+  `shared=` after `in=`. PCH snapshots (format 170) and module images
+  (version 93) carry the groups.
 - The mem-initializers of a constructor defined in a template on the
   `Ast` (WP-3026, spec/ast.md §8.6): `Ast::pattern_mem_inits(ctor)` gives
   the `:`, a `failed` flag and, per mem-initializer in written order, the
@@ -58,8 +163,8 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   entry over the suffix's own bytes, located through line splices,
   which its literal operator's callee joins. PCH snapshots
   (`FORMAT_VERSION` 164) and module images (`IMAGE_VERSION` 88) carry
-  them. Dependent operators and folds follow (WP-2910, below); `new`,
-  `delete` and `co_await` are staged (WP-2911).
+  them. Dependent operators and folds follow (WP-2910, below), then `new`,
+  `delete` and `co_await` (WP-2911, below).
 - Written references for friends kept as a function type and for
   variable template-ids (WP-3008, WP-3009, spec/ast.md §18.4, §18.5,
   §18.11.2): a friend function template specialization with dependent
@@ -95,6 +200,22 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   `(`; a data member `t.f` called as `t.f(x)` is not covered. PCH
   snapshots (`FORMAT_VERSION` 168) and module images (`IMAGE_VERSION`
   91) carry the operator pattern nodes.
+- The written-reference table records new-, delete- and
+  await-expressions (WP-2911, spec/ast.md §18.13.6, [expr.new]/12,
+  [expr.delete]/9, [expr.await]/3.3): the `new` keyword is an `operator`
+  entry naming the allocation function selected (a class's own or the
+  global one, an allocation function template's specialization with
+  `found=` the template), `delete` (`delete[]` one entry over its three
+  tokens) the deallocation function (sized, aligned and destroying forms;
+  under a virtual destructor, the static type's), `how=qualified`;
+  `::new` / `::delete` have the `::` as lead. `co_await` names the
+  `operator co_await` applied (member, non-member, by ADL, after
+  `await_transform`); none applies, `co_yield` and the suspend points
+  have no entry. Dependent ones (a dependent type or operand, any
+  `co_await` of a coroutine template) are `DEPENDENT` entries (with the
+  definition's `operator co_await` lookup as found set) whose rows name
+  what each specialization selected, `(builtin)` for an await with no
+  `operator co_await`; failed ones are `UNRESOLVED`. No carriage change.
 - A refused evaluation session's diagnostics as data (WP-2827,
   spec/eval-session.md §2, spec/diag.md §10.4):
   `SessionRefused::TuHasErrors` and `Stopped` carry `records`
@@ -992,6 +1113,15 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Changed
 
+- `PatternMemInits::colon` is an `Option<Loc>` and every constructor
+  definition in a template has a record, the empty list included
+  (WP-3200, spec/ast.md §8.6): `S() {}` is a record with `colon: None`
+  and no mem-initializers, so a tooling client tells it from a
+  constructor that is no pattern on the `Ast` alone.
+  `Sema::act_on_mem_initializers` takes the `:` as `Option<Loc>`.
+  Instantiation is unchanged. PCH snapshot format 171, module image
+  version 94.
+
 - String identity (WP-3000, spec/ast.md §5.8.1): a source-location
   string is one object per (content, role, declaration the use is
   evaluated in), and reflection's and contract sites' strings are
@@ -1165,6 +1295,147 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- A deduction guide declared outside the scope of its class template is
+  rejected ([temp.deduct.guide]/3, WP-3272, spec/sema-templates.md "A
+  deduction guide's scope and access"). The template's name can be found
+  through a using-directive, a using-declaration, the namespace enclosing
+  an inline namespace or a base class. The error is clang's "deduction
+  guide must be declared in the same scope as template", with the template
+  noted. A guide for a member class template with an access other than the
+  template's is "deduction guide has different access from the
+  corresponding member template", with clang's two notes. Both used to be
+  accepted.
+- A constructor defined out of line through a nested-name-specifier naming
+  a templated class without a definition (`template<> template<class U>
+  A<int>::C<U>::C()` with `A<int>::C` only declared, `G<T>::H::H()`) is
+  clang's "incomplete type 'C' named in nested name specifier" (WP-3274,
+  spec/sema-templates.md). Any other member defined that way is "out-of-line
+  definition of 'f' from class 'G::H' without definition". Either
+  diagnostic replaces the follow-on "out-of-line definition ... does not
+  match any declaration", or "no member named" for a static data member.
+  The PCH snapshot format is version 177 (new diagnostics).
+
+- A coroutine whose promise is not constructible from the parameter copies
+  ([dcl.fct.def.coroutine]/5) no longer leaves an invalid trial `__promise`
+  variable beside the default-initialized one (WP-3282).
+- An elaborated-type-specifier naming a dependent class template
+  specialization (`friend class It<T, true>;`, `struct It<T, true> *q;`,
+  a friend naming a member template's `In<T, 2>`) is formed as the same
+  template-id written as a simple-type-specifier is (WP-3270,
+  spec/sema-templates.md §2.2): its non-type arguments are profiled, so
+  the friend befriends the one canonical type a member's `It<T, true>`
+  names ([temp.type]/1, [temp.over.link]/5); tooling clients comparing
+  canonical types saw two.
+- An instantiated unnamed member class (`struct { T x; } m;`, an
+  anonymous struct or union, nested ones, those of member class
+  templates and partial specializations) links to its pattern
+  (`Ast::instantiated_from`, a member's `MemberSpecInfo`, never a
+  `SpecInfo`) as an unnamed member enumeration does (WP-3273,
+  spec/ast.md §8.2); its implicit member object and injected names reach
+  theirs too. A module whose specialization has one can now get a
+  declaration image, unless a carried body names a member of the
+  unnamed class.
+- Importing a module whose interface declares an explicit specialization
+  with a non-type argument that calls one of its constexpr functions
+  (`template <> struct P<int, f(2)>`) through its declaration image no
+  longer fails with "undefined function 'f' cannot be used in a constant
+  expression" (WP-3100, spec/modules.md §11.11 "Arguments as written"):
+  the image carries the converted value and the importer never
+  evaluates the argument again; one whose value the image cannot hold
+  and that calls a function (a pointer `Q<g()>`) makes the unit replay.
+- An array parameter adjusted to a pointer keeps its written bound,
+  constant or not (`void g(int a[f(2)])`, `int a[3]`), as `Decayed`
+  sugar on the parameter's and the function's type, so a tooling
+  client's walk reaches it (WP-3101, spec/types.md §7.2 "Written
+  bounds"); the canonical type, mangling and overloading are the
+  pointer's, as before.
+
+- An immediate invocation in a default argument or a default member
+  initializer is evaluated at each use, in the context of that use
+  (WP-3278, CWG 2631, [expr.const]/16, [dcl.fct.default]/5,
+  [class.base.init]/9): `len(__builtin_FUNCTION())` as a default argument
+  is the length of the caller's name, also through a nested default
+  argument, in an aggregate initialization, a constructor that does not
+  name the member, a `= default` constructor and a template. The
+  declaration is no longer diagnosed (and no longer valued) for an
+  invocation that would only fail in its own context, and a nested
+  default is diagnosed at each outermost use, as clang does. A
+  `__builtin_LINE`/`__builtin_COLUMN` written directly in the invocation
+  keeps its own position, as in clang 19 and 22.
+
+- An instantiation's lifetime-extended temporaries are its own (WP-3271,
+  spec/ast.md "Lifetime-extended temporaries of instantiations"): a
+  reference, structured binding, aggregate reference member, static
+  local, inline static data member, variable template specialization or
+  range-based `for` (`__range` and its P2718R0 temporaries) in a template
+  shared the pattern's temporary when its initializer was not dependent,
+  so a second specialization's temporaries were not extended (destroyed
+  at the end of the full-expression, a dangling reference) and the
+  `_ZGR` objects of static ones were the pattern's, internal and shared.
+  They now get records of their own, mangled as clang mangles them.
+- A class-scope explicit specialization of a member function template in
+  a class template ([temp.expl.spec]/2, CWG 727) is a specialization in
+  every instantiation of the class (WP-3142, spec/ast.md §8.3): one with
+  a non-type argument no parameter deduces (`template <> int h<8>()`)
+  was dropped, and calls reached the primary template; one with deduced
+  arguments was redeclared as a plain member function. Its definition is
+  the one written in the class, instantiated with the class's arguments.
+
+- A partial specialization of a class or variable template keeps its
+  arguments as written (WP-3016, spec/ast.md §8.3): a non-type argument
+  written as a call (`P<T, f(1)>`) is an expression in
+  `TemplateTables::args_as_written`, where it was lost to its value;
+  matching, ordering and printing still use the converted arguments.
+- The written-reference table's `enclosing` of the names in an
+  alias-declaration, an enumerator, a template-head (default template
+  arguments, parameter types, the requires-clause) and a `static_assert`
+  (WP-3143, spec/ast.md §18.3): they are held by the alias, the
+  enumerator, the templated declaration (also for a partial
+  specialization and an out-of-line member of a class template) and the
+  `static_assert` declaration (dumped `static_assert@L:C`), not by the
+  lexical context.
+- Diagnostics: an ambiguous unary operator says "(operand type 'A')" as
+  clang does, not "(with operand type 'A')"; `new (p) C` for a class `C`
+  whose own `operator new` hides the global placement form says "no
+  matching function for call to 'operator new'" with its candidates, the
+  "include <new>" hint being for a global lookup only (clang
+  `resolveAllocationOverload`) (WP-2911).
+- Using-declarations: a class's record of the shadows its using-declarators
+  introduce and of which are hidden ([namespace.udecl]/4, /14;
+  `DeclArena::hidden_shadow`, spec/ast.md §4.2) no longer depends on
+  declaration order or on uses elsewhere in the unit, for tooling clients.
+  `void f(); using B::f;` now makes the shadow of `B::f()` and marks it
+  hidden, as `using B::f; void f();` does (WP-3145; the same for an
+  inherited constructor a constructor declared before `using B::B;` hides).
+  `using B::operator=;` sets `HAS_INHERITED_ASSIGN`, so the class declares
+  its implicit copy and move assignment operators at `}` and the shadows
+  they hide are marked then, used or not (WP-3146; before, the mark was set
+  only when some function first used the assignment). Module images carry
+  the hidden marks (`IMAGE_VERSION` 92): an imported class whose member
+  hides a shadow no longer makes a call to that member ambiguous.
+
+- Sema: a friend function definition whose name is qualified (`friend
+  void N::f() { }`, `friend void ::g() { }`, a qualified friend
+  constructor or destructor, or a decltype qualifier) is now an error,
+  "friend function definition cannot be qualified with '...'"
+  ([class.friend]/6, WP-3140). A dependent qualifier is reported at the
+  declaration. A non-dependent one is reported once the friend matches
+  its target. As in clang, the declaration is kept.
+- Sema: friend templates whose qualifier names a specialization that is
+  not their own are now diagnosed as clang does ([temp.friend],
+  WP-3140). A friend class or function template naming a member of a
+  specialization that is not explicitly specialized (`template <int M>
+  friend struct Bq<4>::Z;`) is an error, "template parameter list
+  matching the non-templated nested type ... should be empty". This also
+  applies when the dependent qualifier resolves at instantiation. A
+  friend template whose dependent qualifier does not use its own
+  parameters is ignored with the -Wunsupported-friend warning.
+- Parse: a friend declarator-id qualified by a decltype-specifier
+  (`friend void decltype(Bq<N>{})::g();`) now parses and names the member
+  ([expr.prim.id.qual]/1, WP-3141). Outside a friend declaration, a
+  decltype qualifier on a declarative nested-name-specifier is the error
+  "a 'decltype' specifier cannot be used in a declarative nested name
+  specifier" ([expr.prim.id.qual]/3).
 - xtask (harness): no `core` dumps and honest host errors (WP-2762,
   WP-2780). xtask turns core dumps off for itself at startup, so no
   compiler, oracle, test binary, cargo test or extents clang it starts

@@ -814,6 +814,9 @@ pub struct Declarator {
     /// (`A (::N::x);`): clang's walk of its prefixes for a `Global`
     /// specifier.
     pub global_qualifier: bool,
+    /// The template-id after the qualifier is introduced by `template`
+    /// (`friend void Bq<8>::template t<1>();`, [temp.names]/4).
+    pub template_kw: bool,
     /// The operators, innermost (closest to the name) first; the type is
     /// built from the last.
     pub chunks: Vec<Chunk>,
@@ -831,6 +834,11 @@ pub struct Declarator {
     pub id_span: kiln_source::Span,
     /// See `id_span`.
     pub id_qual: Loc,
+    /// The name of the last component of the declarator-id's
+    /// nested-name-specifier (`C` of `A<int>::C<U>::C`), invalid when
+    /// unqualified: where clang 19 reports an incomplete class named
+    /// there.
+    pub qual_last: Loc,
     /// The written-reference link of the declarator-id's
     /// nested-name-specifier (its last component's entry; spec/ast.md
     /// §18.4): `NONE` when unqualified or not recording.
@@ -1118,6 +1126,7 @@ impl Declarator {
             loc,
             id_span: kiln_source::Span::INVALID,
             id_qual: Loc::INVALID,
+            qual_last: Loc::INVALID,
             id_link: kiln_ast::written_refs::RefQualifier::NONE,
             dtor_name: Loc::INVALID,
             id_recorded: false,
@@ -1143,6 +1152,7 @@ impl Declarator {
             array_param_static: None,
             array_stars: Vec::new(),
             global_qualifier: false,
+            template_kw: false,
             virt_override: None,
             virt_final: None,
             pure: None,

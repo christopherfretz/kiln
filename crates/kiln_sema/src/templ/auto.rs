@@ -15,6 +15,7 @@
 
 use kiln_ast::decl::{DeclFlags, DeclKind};
 use kiln_ast::types::{ArgView, AutoKeyword, ExprOperand, TemplateArg, TypeKind, TypeView};
+use kiln_ast::written_refs::RefMark;
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_source::Loc;
 
@@ -34,6 +35,10 @@ use crate::templ::actions::TemplateIdRef;
 #[derive(Debug, Default)]
 pub struct AutoGroup {
     decls: Vec<(DeclId, Option<QualType>)>,
+    /// The written-reference entries of the group's decl-specifier-seq
+    /// (and leading attributes), half-open, when names are recorded
+    /// (spec/ast.md §18.3.1).
+    shared_refs: Option<(u32, u32)>,
 }
 
 /// The form of a placeholder variable's initializer
@@ -320,6 +325,15 @@ impl Sema<'_, '_> {
     /// before any initializer deduces it. The parser calls this after
     /// each declarator's `act_on_declarator` / `act_on_member`, before
     /// its initializer.
+    /// A declarator group starts after its decl-specifier-seq, whose
+    /// written names were recorded since `m` (spec/ast.md §18.3.1).
+    pub fn group_after_specifiers(&self, m: Option<RefMark>) -> AutoGroup {
+        let shared_refs = m
+            .filter(|_| self.records_written_refs())
+            .map(|m| (m.entries, u32::try_from(self.ast.written_refs.len()).unwrap_or(u32::MAX)));
+        AutoGroup { decls: Vec::new(), shared_refs }
+    }
+
     pub fn act_on_group_declarator(&self, group: &mut AutoGroup, v: DeclId) {
         group.decls.push((v, self.ast.decls.get(v).ty()));
     }
@@ -334,6 +348,12 @@ impl Sema<'_, '_> {
         let decls = group.decls;
         if decls.len() < 2 {
             return;
+        }
+        // Every declarator of the group holds the names of its shared
+        // decl-specifier-seq (spec/ast.md §18.3.1).
+        if let Some(r) = group.shared_refs {
+            let ds: Vec<DeclId> = decls.iter().map(|&(v, _)| v).collect();
+            self.ast.written_refs.share_group(r, &ds);
         }
         if matches!(ds.base, TypeSpecKind::Auto | TypeSpecKind::DecltypeAuto) {
             self.check_non_deduced_alone(&decls);
@@ -454,7 +474,7 @@ impl Sema<'_, '_> {
                 .arg(self.ty_arg(deduced))
                 .arg(self.decl_name(v));
             self.emit(msg);
-            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            self.invalidate(v);
             return false;
         }
         true

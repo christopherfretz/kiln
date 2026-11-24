@@ -147,9 +147,19 @@ pub struct Parser<'a, 'sm> {
     /// The qualifier link the last nested-name-specifier parsed leaves
     /// for the name after it (its last component's entry).
     pub(crate) nns_link: RefQualifier,
+    /// The name of the last component of the last nested-name-specifier
+    /// parsed (`C` of `A<int>::C<U>::`; clang 19's
+    /// `getLastQualifierNameLoc`), invalid when it had none.
+    pub(crate) nns_last_loc: Loc,
     /// The written-reference mark of the member declaration being
     /// parsed, claimed by its declarators (spec/ast.md §18.3).
     pub(crate) member_ref_mark: Option<kiln_ast::written_refs::RefMark>,
+    /// The declaration the innermost template head's templated
+    /// declaration declared last, when a simple-declaration: the holder of
+    /// the head's names when no template owns the head's parameter list
+    /// (a partial specialization, an out-of-line member of a class
+    /// template; spec/ast.md §18.3).
+    pub(crate) templated_decl: Option<DeclId>,
     /// The entry of the type or template name recorded last
     /// ([`Parser::note_type_name`]): the outermost name of the type just
     /// parsed, which a base-specifier or mem-initializer re-roles.
@@ -457,7 +467,9 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             wname: None,
             wname_role: None,
             nns_link: RefQualifier::NONE,
+            nns_last_loc: Loc::INVALID,
             member_ref_mark: None,
+            templated_decl: None,
             last_tname: None,
             ext_lead: None,
             ext_tag_qual: Loc::INVALID,
@@ -555,7 +567,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
     /// | `targs_memo` | rebuilt | a memo valid for one lookup stamp |
     /// | `replay`, `late`, `late_fn`, `mods`, `depth`, `fp_pragmas`, `loop_hints`, `stmt_attrs`, `lead_decl_attrs`, `chunk_decl_attrs`, `decltype_scope`, `template_delay_level`, `template_decl_kind`, `member_depr`, `halt`, `in_stmt_expr` | transient, checked | token replay, late-parsed class members and default arguments, a module unit (refused), open brackets, pragmas and attributes waiting for their construct |
     /// | `cur`, `prev_hi`, `prev_lo`, `pos` | transient | the token position: the consumer starts at its main file's first token |
-    /// | `gnu_attr_end`, `cxx11_attr_run`, `expr_invalid`, `cast_paren_list`, `paren_callee`, `comma_loc`, `greater_is_op`, `greater_off_depth`, `pack_hint`, `addr_operand_at`, `offsetof_at`, `catch_declarator`, `member_ds_range`, `in_exception_decl`, `type_id_constraint`, `named_cast_type_id`, `type_id_attrs`, `param_typename`, `param_recovery`, `next_tag_site`, `param_abort`, `typename_failed`, `typename_pack_index`, `type_id_spec_loc`, `stmt_attrs_loc`, `fp_intrin`, `wname`, `wname_role`, `nns_link`, `member_ref_mark`, `last_tname` | transient | handed from one grammar rule to the next within a declaration; a new parser starts from the defaults, as it does at the start of a translation unit |
+    /// | `gnu_attr_end`, `cxx11_attr_run`, `expr_invalid`, `cast_paren_list`, `paren_callee`, `comma_loc`, `greater_is_op`, `greater_off_depth`, `pack_hint`, `addr_operand_at`, `offsetof_at`, `catch_declarator`, `member_ds_range`, `in_exception_decl`, `type_id_constraint`, `named_cast_type_id`, `type_id_attrs`, `param_typename`, `param_recovery`, `next_tag_site`, `param_abort`, `typename_failed`, `typename_pack_index`, `type_id_spec_loc`, `stmt_attrs_loc`, `fp_intrin`, `wname`, `wname_role`, `nns_link`, `nns_last_loc`, `member_ref_mark`, `templated_decl`, `last_tname` | transient | handed from one grammar rule to the next within a declaration; a new parser starts from the defaults, as it does at the start of a translation unit |
     /// | `trace` | transient | test-only parse trace |
     ///
     /// No field is state: the late-parse lists end with their class, and
@@ -564,6 +576,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
     ///
     /// # Errors
     /// The first field not at rest.
+    #[allow(clippy::too_many_lines, reason = "one binding per Parser field, exhaustive on purpose")]
     pub(crate) fn snapshot_ready(&self) -> Result<(), String> {
         let Parser {
             s: _,
@@ -593,7 +606,9 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             wname: _,
             wname_role: _,
             nns_link: _,
+            nns_last_loc: _,
             member_ref_mark: _,
+            templated_decl: _,
             last_tname: _,
             ext_lead: _,
             ext_tag_qual: _,
@@ -2247,6 +2262,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         let mut qual: Option<(DeclId, NnsId)> = None;
         // The written-reference qualifier link (spec/ast.md §18.4).
         let mut link = RefQualifier::NONE;
+        self.nns_last_loc = Loc::INVALID;
         if self.decltype_scope_end(self.pos).is_some() {
             self.annotate_decltype_scope();
         }
@@ -2272,6 +2288,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                 let stop = limit == Some(self.pos + 1);
                 let name_span = self.bump().span;
                 let loc = name_span.lo;
+                self.nns_last_loc = loc;
                 let cc = self.tok().span.lo;
                 if !stop {
                     self.bump();
@@ -2348,6 +2365,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             let kw = if template_kw { Some(self.bump().span.lo) } else { None };
             let name_span = self.bump().span;
             let loc = name_span.lo;
+            self.nns_last_loc = loc;
             let Some((args, _, _)) = self.parse_template_arg_list() else { return Err(()) };
             let stop = limit == Some(self.pos);
             if !stop {

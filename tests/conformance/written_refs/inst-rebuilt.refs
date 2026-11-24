@@ -1,7 +1,7 @@
-11:64-11:65  type  'V' -> V@11:46 in=A@11:8
-12:65-12:66  type  'V' -> V@12:47 in=B@12:8
-13:65-13:66  nns  'Y' -> Y@13:26 in=Pair@13:36
-13:68-13:72  type  'type' -> (dependent) q=13:65 in=Pair@13:36
+11:64-11:65  type  'V' -> V@11:46 in=A::rebind@11:55
+12:65-12:66  type  'V' -> V@12:47 in=B::rebind@12:56
+13:65-13:66  nns  'Y' -> Y@13:26 in=Pair::type@13:49
+13:68-13:72  type  'type' -> (dependent) q=13:65 in=Pair::type@13:49
 13:68-13:72  type  'type' -> B::type@12:18 spec=Pair<A, B>@13:36
 15:36-15:37  type  'T' -> T@14:17 in=Box::conv@15:48
 15:39-15:40  type  'U' -> U@15:19 in=Box::conv@15:48

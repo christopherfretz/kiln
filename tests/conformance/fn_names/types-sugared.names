@@ -1,0 +1,34 @@
+fn-name 'Alias ns::sug(SPtr, const Alias &)' of ns::sug@15:7
+  [0,5) return 'Alias' -> ns::Alias@10:7
+  [6,8) scope 'ns' -> ns@8:11
+  [10,13) name 'sug' -> ns::sug@15:7 q
+  [14,18) param 'SPtr' -> ns::SPtr@11:12
+  [26,31) param 'Alias' -> ns::Alias@10:7
+fn-name 'WA<T> ns::at(W<T>) [T = ns::S]' of ns::at<ns::S>@16:26
+  [0,2) return 'WA' -> ns::WA@13:26
+  [3,4) return 'T' -> T@16:17 d=1
+  [6,8) scope 'ns' -> ns@8:11
+  [10,12) name 'at' -> ns::at<ns::S>@16:26 q
+  [13,14) param 'W' -> ns::W@12:27
+  [15,16) param 'T' -> T@16:17 d=1
+  [20,21) binding 'T' -> T@16:17
+  [24,26) arg 'ns' -> ns@8:11
+  [28,29) arg 'S' -> ns::S@9:8 q
+fn-name 'bool ns::C<ns::S>::eq(const C<T> &) const [T = ns::S]' of ns::C<ns::S>::eq@18:8
+  [5,7) scope 'ns' -> ns@8:11
+  [9,10) scope 'C' -> ns::C<ns::S>@17:27 q
+  [11,13) scope 'ns' -> ns@8:11 d=1
+  [15,16) scope 'S' -> ns::S@9:8 d=1 q
+  [19,21) name 'eq' -> ns::C<ns::S>::eq@18:8 q
+  [28,29) param 'C' -> ns::C@17:27
+  [30,31) param 'T' -> T@17:17 d=1
+  [43,44) binding 'T' -> T@17:17
+  [47,49) arg 'ns' -> ns@8:11
+  [51,52) arg 'S' -> ns::S@9:8 q
+fn-name 'void ns::con(Any auto) [auto:1 = ns::S]' of ns::con<ns::S>@20:6
+  [5,7) scope 'ns' -> ns@8:11
+  [9,12) name 'con' -> ns::con<ns::S>@20:6 q
+  [13,16) param 'Any' -> ns::Any@14:28
+  [24,30) binding 'auto:1' -> auto:1@20:14
+  [33,35) arg 'ns' -> ns@8:11
+  [37,38) arg 'S' -> ns::S@9:8 q

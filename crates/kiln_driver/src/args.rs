@@ -706,6 +706,14 @@ pub struct Args {
     /// sets it too. Part of a precompiled header's identity (a snapshot
     /// carries the table its producer recorded).
     pub decl_extents: bool,
+    /// `-fkiln-fn-names`: record the function-name span table
+    /// (spec/ast.md §24) without printing it, for a tooling client;
+    /// `-fkiln-dump-fn-names` sets it too. Not part of either identity
+    /// (stage A carries nothing).
+    pub fn_names: bool,
+    /// `-fkiln-dump-fn-names` (`-fsyntax-only` and codegen): record the
+    /// function-name span table and print it (spec/ast.md §24.6).
+    pub dump_fn_names: bool,
     /// `-fkiln-dump-decl-extents` (`-fsyntax-only` and codegen): print the
     /// declaration-extent table (spec/ast.md §19.6).
     pub dump_decl_extents: bool,
@@ -713,6 +721,9 @@ pub struct Args {
     /// extent of every expression of the written bodies (spec/ast.md
     /// §21.4).
     pub dump_expr_extents: bool,
+    /// `-fkiln-dump-friend-forms` (`-fsyntax-only`): print every friend's
+    /// written form (spec/ast.md §23.6).
+    pub dump_friend_forms: bool,
     /// `-fkiln-pp-record`: keep the preprocessing record (spec/pp.md
     /// "Preprocessing record") and print nothing (to measure it).
     pub pp_record: bool,
@@ -990,6 +1001,11 @@ pub struct Args {
     /// `-fkiln-bmi-image-census=all` (WP-1320): the census also lists
     /// every refused top-level declaration with its reason.
     pub bmi_image_census_all: bool,
+    /// The hidden `-fkiln-verify-subst-failed` (WP-3281): at the end of
+    /// the unit, check the silent-failure marks (spec/ast.md §4.1: no
+    /// unmarked invalid declaration in a unit without errors) and report
+    /// each violation as an error.
+    pub verify_subst_failed: bool,
     /// Errors, in order.
     pub errors: Vec<ArgError>,
     /// The `-fconstexpr-*` options.
@@ -2149,12 +2165,18 @@ impl Args {
                 self.dump_written_refs = true;
             }
             "-fkiln-written-refs" => self.written_refs = true,
+            "-fkiln-fn-names" => self.fn_names = true,
+            "-fkiln-dump-fn-names" => {
+                self.fn_names = true;
+                self.dump_fn_names = true;
+            }
             "-fkiln-decl-extents" => self.decl_extents = true,
             "-fkiln-dump-decl-extents" => {
                 self.decl_extents = true;
                 self.dump_decl_extents = true;
             }
             "-fkiln-dump-expr-extents" => self.dump_expr_extents = true,
+            "-fkiln-dump-friend-forms" => self.dump_friend_forms = true,
             "-fkiln-pp-record" => self.pp_record = true,
             "-fkiln-builtin-literals" => self.builtin_literals = true,
             "-fkiln-dump-pp-record" => self.dump_pp_record = true,
@@ -2167,6 +2189,7 @@ impl Args {
             "-fkiln-bmi-image" => self.bmi_image = true,
             "-fno-kiln-bmi-image" => self.bmi_image = false,
             "-fkiln-bmi-image-census" => self.bmi_image_census = true,
+            "-fkiln-verify-subst-failed" => self.verify_subst_failed = true,
             "-fkiln-bmi-image-census=all" => {
                 self.bmi_image_census = true;
                 self.bmi_image_census_all = true;
@@ -2934,6 +2957,13 @@ pub(crate) fn parse_clang_unsigned(v: &str) -> Option<u32> {
         return None;
     }
     u32::from_str_radix(digits, radix).ok()
+}
+
+/// `KILN_VERIFY_SUBST_FAILED=1` turns `-fkiln-verify-subst-failed` on for
+/// every compile (WP-3281; spec/harness.md "The silent-failure check"): a
+/// harness run sets it once for all the compiles it starts.
+pub(crate) fn verify_subst_failed_env() -> bool {
+    std::env::var_os("KILN_VERIFY_SUBST_FAILED").is_some_and(|v| !v.is_empty() && v != "0")
 }
 
 #[cfg(test)]

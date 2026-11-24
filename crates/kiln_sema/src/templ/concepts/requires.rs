@@ -20,7 +20,7 @@ use super::{SatRecord, Satisfaction};
 use crate::Sema;
 use crate::templ::args::LevelMode;
 use crate::templ::pack::Expansion;
-use crate::templ::stack::{FrameKind, SfinaeState};
+use crate::templ::stack::FrameKind;
 use crate::templ::subst::{DeclOrPack, SubstFail, SubstResult, Substituter};
 
 impl Substituter<'_, '_, '_> {
@@ -49,9 +49,9 @@ impl Substituter<'_, '_, '_> {
         if let Some(fr) = self.sema.inst.stack.frames.last_mut() {
             fr.sfinae = Some(true);
         }
-        self.sema.inst.sfinae.borrow_mut().push(SfinaeState::default());
+        self.sema.push_sfinae_state();
         let r = f(self);
-        let st = self.sema.inst.sfinae.borrow_mut().pop().unwrap_or_default();
+        let st = self.sema.pop_sfinae_state();
         self.sema.pop_inst_frame();
         let failed = if st.errors > 0 { Err(st.first) } else { Ok(()) };
         Some((r, failed))

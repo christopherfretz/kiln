@@ -58,6 +58,9 @@ pub(crate) const SCHEMA_HASH: u64 = kiln_snap::SchemaHash::new("snapshot", "root
     .root_field("preprocessor", Preprocessor::SNAP_SCHEMA_HASH)
     .root_field("sema", Sema::SNAP_SCHEMA_HASH)
     .field::<kiln_pp::PpRecord>("preprocessing record")
+    // The head's lookup log (WP-3275: hashed so a change of its shape is
+    // a format change).
+    .field::<kiln_pp::LookupLog>("lookup log")
     .finish();
 
 /// The descriptor walk of the same roots ([`SCHEMA_HASH`]'s readable
@@ -73,6 +76,7 @@ pub(crate) fn schema() -> kiln_snap::Schema {
     Preprocessor::snap_schema(&mut s);
     Sema::snap_schema(&mut s);
     kiln_pp::PpRecord::schema(&mut s);
+    kiln_pp::LookupLog::schema(&mut s);
     s
 }
 
@@ -132,8 +136,15 @@ pub(crate) const MAGIC: [u8; 8] = *b"KILNSNAP";
 /// version 5 (WP-1422) a new note id; version 6 (WP-1419) a new
 /// driver warning id; version 7 (WP-1433) a new AST cold map
 /// (`offsetof_layout`); version 8 (WP-1426) the SME diagnostic ids and
-/// attribute kinds and the 32-bit `FuncInfo`.
-pub(crate) const FORMAT_VERSION: u32 = 168;
+/// attribute kinds and the 32-bit `FuncInfo`; version 174 (WP-3275,
+/// WP-3276) the lookup log's dropped search directories and module
+/// probes, in the head, whose lookup log the schema hash now covers;
+/// version 175 (WP-3279) the per-use immediate values of defaults;
+/// version 176 (WP-3281) the subst-failed marks of silent failures;
+/// version 177 (WP-3272, WP-3274) the guide-scope and undefined-qualifier
+/// diagnostics; version 178 (WP-3280) the function-name self-check's
+/// diagnostic.
+pub(crate) const FORMAT_VERSION: u32 = 178;
 /// The length of the magic and the format version.
 pub(crate) const HEADER_LEN: usize = 12;
 
@@ -174,8 +185,14 @@ fn excluded(args: &Args) -> Args {
         // recorded it and read when the consumer does (spec/ast.md
         // §18.10.1): either side may differ.
         written_refs: d.written_refs,
+        // The function-name span table is not carried (stage A): a
+        // consumer recording it marks the prefix unrecorded
+        // (spec/ast.md §24.6).
+        fn_names: d.fn_names,
+        dump_fn_names: d.dump_fn_names,
         dump_decl_extents: d.dump_decl_extents,
         dump_expr_extents: d.dump_expr_extents,
+        dump_friend_forms: d.dump_friend_forms,
         // The preprocessing record likewise: carried when the producer
         // recorded it, read when the consumer records (spec/pp.md
         // "Preprocessing record", stage 4).
@@ -190,6 +207,7 @@ fn excluded(args: &Args) -> Args {
         time_trace: d.time_trace,
         bmi_image_census: d.bmi_image_census,
         bmi_image_census_all: d.bmi_image_census_all,
+        verify_subst_failed: d.verify_subst_failed,
         verify: d.verify,
         no_crash_diagnostics: d.no_crash_diagnostics,
         crash_diagnostics_dir: d.crash_diagnostics_dir,
@@ -1132,6 +1150,9 @@ impl crate::pp_cmd::Job<'_> {
             return None;
         }
         sema.ast.written_refs.set_prefix_files(prefix_files);
+        if self.args.fn_names || crate::env::fn_names_verify(&self.args.env) {
+            sema.ast.fn_names.set_unrecorded_prefix();
+        }
         if restore.reader.remaining() != 0 {
             restore.failed = Some(format!("{} trailing bytes", restore.reader.remaining()));
             return None;
@@ -1227,7 +1248,9 @@ pub(crate) fn single_pass_blocker(
         (args.dump_cfg, "-fkiln-dump-cfg"),
         (args.dump_written_refs, "-fkiln-dump-written-refs"),
         (args.dump_decl_extents, "-fkiln-dump-decl-extents"),
+        (args.dump_fn_names, "-fkiln-dump-fn-names"),
         (args.dump_expr_extents, "-fkiln-dump-expr-extents"),
+        (args.dump_friend_forms, "-fkiln-dump-friend-forms"),
         (args.dump_pp_record, "-fkiln-dump-pp-record"),
         (args.cfg_stats, "-fkiln-cfg-stats"),
         (args.bmi_image_census || args.bmi_image_census_all, "-fkiln-bmi-image-census"),

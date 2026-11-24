@@ -765,6 +765,30 @@ template parameter that cannot be deduced" is reported at the template name
 with a "non-deducible template parameter" note per parameter. The guide
 becomes invalid (`tests/conformance/temp.deduct.guide/non-deducible-parameter.cpp`).
 
+**A deduction guide's scope and access** ([temp.deduct.guide]/3,
+WP-3272): a guide inhabits the scope its class template belongs to.
+`act_on_deduction_guide` compares the two redeclaration scopes
+(`check_guide_scope`: a linkage specification or export declaration is
+skipped, an inline namespace is a scope of its own, reopenings are one
+scope). A guide whose template name was found from another scope (a
+using-directive, a using-declaration, the namespace enclosing an inline
+namespace, a base class) is clang's "deduction guide must be declared in
+the same scope as template 'n::A'" at the guide's name, with "template is
+declared here" at the template. The guide is then invalid, and the
+deducibility and redeclaration checks are skipped. A guide for a member class
+template in the template's own class has the template's access
+(`check_guide_access`, also in a class template's definition). A guide with
+another access is "deduction guide has different access from the
+corresponding member template" at its first token (`explicit` when
+written). It notes "member template declared private here" at the
+template's `template` keyword and "deduction guide declared public by
+intervening access specifier" at the class's last access-specifier so
+far. clang 19 and 22 agree. A guide with an unqualified name that finds no
+template is not a guide (`template<class T> A(T) -> n::A<T>;` at global
+scope is a declaration with a missing type). Tests:
+`tests/conformance/temp.deduct.guide/guide-wrong-scope-errors.cpp`,
+`guide-wrong-access-errors.cpp`, `guide-same-scope-run.cpp`.
+
 **`template`** is needed after `::`, `.` or `->` when the qualifier or
 object is dependent and not the current instantiation, as in
 `x.template f<int>()` and `T::template X<U>`. Without it, `<` is
@@ -2049,6 +2073,17 @@ name the same type and redeclare the same function template
 (`tests/conformance/temp.over.link/non-type-literal-arg-in-dependent-specialization.cpp`).
 Divergence: clang converts such arguments first, so `X<T, true>` and
 `X<T, 1>` for a `bool` parameter are equivalent there and distinct here.
+Every spelling of a dependent template-id is formed this one way
+(`Sema::dependent_class_spec_type`): a simple-type-specifier
+(`It<T, true> *p;`, `friend It<T, true>;`, a friend function's parameter)
+and an elaborated-type-specifier (`friend class It<T, true>;`,
+`struct It<T, true> *q;`, a friend naming a member template's
+`In<T, 2>`) profile their value arguments, complete the defaults and name
+a partial specialization's current instantiation alike, so a friend
+declaration befriends exactly the canonical type the same template-id
+names anywhere else ([temp.type]/1, [temp.friend]/1; WP-3270,
+`crates/kiln_parse/tests/friend_spec_canonical.rs`,
+`tests/conformance/temp.friend/befriended-spec-value-args-run.cpp`).
 
 ### 4.3 Triggers for implicit instantiation ([temp.inst]/2)
 
@@ -2496,6 +2531,29 @@ Out-of-class partial specializations of a member template (WP-150):
   spec/diag.md §7.4.1). Tests: `temp.expl.spec/undefined-member-template-spec-qualifier.cpp`,
   `temp.expl.spec/undefined-spec-member-definition.cpp`,
   `temp.res/undefined-template-qualifier{,-clang19}.cpp`.
+- A non-friend declarator-id qualified by a templated class with no
+  definition is reported before redeclaration matching
+  (`diagnose_undefined_qualifier`, called from `act_on_declarator_impl`;
+  WP-3274; [expr.prim.id.qual]/1, [class.mfct]/1). The class can be a
+  member class template of a specialization (`A<int>::C<U>::`), a member of
+  the current instantiation (`G<T>::H::`), or a primary or partial
+  specialization never defined. A class that is not templated is reported
+  earlier, by `require_complete_nns_ctx`. A constructor name requires the
+  class complete (clang `getConstructorName`): "incomplete type 'C' named
+  in nested name specifier" printing the class's own name, with no note.
+  At compat 22 it is at the start of the specifier, at 19 at its last
+  name (`Declarator::qual_last`, from the parser's `nns_last_loc`). Any
+  other declarator-id (a member function, a destructor, a static data
+  member) is clang's `err_member_def_undefined_record` "out-of-line
+  definition of 'f' from class 'G::H' without definition" at its name.
+  Either way the declaration is dropped, so no "does not match" or "no
+  member named" follows. A complete member template whose member does not
+  match keeps the mismatch error. Not yet: a member class of an implicit
+  specialization whose pattern is undefined (`A<int>::D::D()`), which is
+  clang's "implicit instantiation of undefined member" and still "does not
+  match" in kiln. Tests:
+  `basic.lookup.qual/incomplete-qualifier-constructor{,-clang19}.cpp`,
+  `basic.lookup.qual/member-def-undefined-record.cpp`.
 - A declarator qualifier that names a class template specialization
   matching no partial specialization (`template<class T> void P<T*, int>::f()`)
   is "nested name specifier 'P<T *, int>' for declaration does not refer
@@ -3225,8 +3283,9 @@ reports a dropped statement, part or declaration lookup.
   matched when the class template is defined: its own parameters are a
   level deeper than `N::f`'s and the match may depend on the class's
   arguments ([temp.friend]/1, [temp.over.link]/6). It is kept as a hidden
-  pattern (like an unqualified one) and its qualifier recorded
-  (`Sema::friend_qualifiers`); each instantiation of the class declares it
+  pattern (like an unqualified one) and its qualifier is that of its
+  `FriendForm` row (spec/ast.md §23, reached by `Sema::friend_fn_decls`;
+  the context named is the qualifier's last component); each instantiation of the class declares it
   again with that qualifier, so the substituted friend (now at `N::f`'s
   depth, parameters compared by position) redeclares the namespace member
   and befriends it, wherever the class itself lives. A non-template
@@ -3266,10 +3325,9 @@ reports a dropped statement, part or declaration lookup.
   it to the qualifier's class template; so does an abbreviated friend
   with no written head (`friend int B<T>::g(C auto, W<T>&);`): its
   invented head is its own (WP-1145). The deferred friend
-  redeclares nothing in the pattern, without a diagnostic, and records
-  its qualifier (`friend_qualifiers`), plus the written specifier when
-  that is dependent (`friend_qualifier_nns`, with where the specifier
-  begins: a substituted specifier naming no class, "type 'int' cannot be
+  redeclares nothing in the pattern, without a diagnostic; its row
+  keeps the written specifier, `DEPENDENT` and where the specifier
+  begins (`qualifier_loc`: a substituted specifier naming no class, "type 'int' cannot be
   used prior to '::'", is reported there, as clang does; WP-1507). Each
   instantiation declares
   it with the class the substituted specifier names
@@ -3501,6 +3559,35 @@ reports a dropped statement, part or declaration lookup.
     note: kept for diagnostic parity). A friend without its own head
     (`friend class C<U>::Member;`, `friend class A<int>::Member;`) is an
     ordinary dependent friend type (above) and is not warned about.
+  - A friend class template whose head the qualifier does not take
+    (WP-3140; clang's `MatchTemplateParametersToScopeSpecifier` and
+    `CheckClassTemplate`): when the qualifier names an implicitly
+    instantiated specialization (`template <int M> friend struct
+    Bq<4>::Z;`, also through a non-dependent argument that is only
+    instantiation-dependent, `Bq<sizeof(sizeof(f(T())))>::`, which is
+    `Bq<8>`), that class takes `template<>` only: "template parameter
+    list matching the non-templated nested type 'Bq<4>' should be empty
+    ('template<>')" at the head's `template`, whether the member is a
+    class template or not, and nothing is befriended (an invalid hidden
+    class, as for "does not match"; `act_on_qualified_friend_class_template`
+    through `take_template_head_of(Some(q), true)`, the check function
+    friends had). A namespace or an explicit specialization takes no
+    head (`template <int M> friend struct Bq<9>::T;` for `template <>
+    struct Bq<9>`). A qualifier naming a class template (the current
+    instantiation, `template <bool> friend class take<V>::sentinel;` in
+    a member class template defined outside its class) is not matched:
+    the enclosing heads matched it, so the head is the friend's own
+    (`qualifier_names_class_template`;
+    `temp.friend/friend-template-current-instantiation-out-of-line-run.cpp`). When the qualifier is dependent but names none of the
+    friend's own parameters (`template <int M> friend struct
+    Bq<sizeof(T)>::Z;`), the head is the befriended class template's, a
+    member of a class the definition cannot name: clang ignores the
+    friend with `-Wunsupported-friend`, "dependent nested name specifier
+    'Bq<sizeof(T)>' for friend template declaration is not supported;
+    ignoring this friend declaration", at the name (`'Bq<sizeof(T)>::'`
+    under `-fclang-compat=19`), and so does kiln: no `Friend` is declared
+    (`ignore_dependent_friend_class_template`;
+    `temp.friend/friend-template-qualifier-*.cpp`).
   - An operator-function-id or literal-operator-id (`template <class T>
     friend void *A<T>::operator new(std::size_t);`) is matched by name
     like any other member function (WP-1737), and a deallocation
@@ -4223,6 +4310,16 @@ here because the GCC cases reaching them are template tests:
   died at scope exit, because the cleanup flag that clang's rebuild sets
   (`MaybeBindToTemporary`) was never raised;
   `tests/conformance/class.temporary/run-template-shared-operand-temporary-destroyed.cpp`.
+  The exception is a lifetime-extended temporary (WP-3271, spec/ast.md
+  "Lifetime-extended temporaries of instantiations"): in an
+  instantiated variable's initializer and a range-based `for`'s
+  range-initializer (`Substituter::unsharing_temporaries`), a shared
+  subtree holding a temporary that is or will be extended is copied up
+  to it, so the instantiated variable extends its own. Tests:
+  `crates/kiln_parse/tests/instantiated_temporaries.rs`,
+  `tests/conformance/class.temporary/run-instantiation-own-extended-temporaries.cpp`,
+  `.../instantiation-extended-temporary-names-ir.cpp`,
+  `tests/conformance/stmt.ranged/p2718-template-own-temporaries-run.cpp`.
 - **Dependent forms** are resolved:
   - `DependentScopeDeclRefExpr` becomes qualified lookup;
   - `UnresolvedLookupExpr` becomes an overload set plus ADL (§3.5);
@@ -5074,6 +5171,111 @@ error, not the array-parameter diagnostic of the definition.
 (the libc++ `MoveOnly` deleted `operator,` shape),
 `.../invalid-parameter-type-notes.cpp` (strict notes) and
 `.../invalid-parameter-type-member-template.cpp`.
+
+#### 5.7.3 Silent failures: the trap ledger (WP-3281, WP-3282)
+
+A declaration kiln makes `INVALID` inside a *trap* failed silently, and
+`DeclArena::subst_failed` (spec/ast.md §4.1 "Silent failures") says so.
+A trap is a SFINAE context (an error is counted, not printed) or a
+diagnostic capture (`Sema::capturing`, an error is held until the stash
+is released or dropped). The ledger (`crates/kiln_sema/src/subst_failed.rs`)
+keeps the marks; three choke points feed it, and the `xtask` lint
+`invalid_lint` holds them (raw use is a finding):
+
+- every invalidation in Sema and the parser goes through
+  `Sema::invalidate` / `invalidate_as(d, kind)`; a declaration created
+  invalid carries `// ledger: born invalid` and calls
+  `note_born_invalid`. Each asks `Sema::trap_now`, the predicate `emit`
+  uses, and files the declaration with that trap;
+- a SFINAE context opens and ends only through `push_sfinae_state` /
+  `pop_sfinae_state`. Its entries sit in its state and are confirmed at
+  the pop when no error was printed while it was open, else dropped (the
+  printed error explains them);
+- a capture has a serial number, carried by its `Stash`. Releasing the
+  stash re-files its entries with the trap the released diagnostics go
+  to, or drops them when an error prints; a stash never released was
+  discarded, and its entries are confirmed at the end;
+- a pack-expansion probe (`Substituter::expand_pattern`,
+  `param_pack_len`: the pattern substituted until it reaches the pack it
+  expands, then failed on purpose) is a *discard scope*
+  (`open_discard` / `close_discard`): an entry filed under no other trap
+  waits in it; a probe that found a pack is thrown away, and its entries
+  are confirmed when no error printed meanwhile; a probe that found none
+  is the substitution itself, and its entries go to the enclosing trap.
+
+The confirmed entries are written at the end of the translation unit and
+of a snapshot prefix (`Sema::flush_subst_failed`, before the snapshot is
+taken). An entry filed without a kind becomes kind 5
+(`LocalOfFailedSignature`) when it was created while a kind 1 or 2
+specialization failed to form in the same trap (`claim_failed_locals`,
+so a statement-expression's local keeps its pattern's `ctx` and is
+still kind 5) or its owner chain reaches one, else kind 6
+(`OtherTrapped`). A template whose pattern is marked and which is
+invalid with it (its head copies the pattern's flags) takes the
+pattern's mark. The flush also drops the written-reference keys
+(spec/ast.md §18) of kind 1 and 2 specializations: nothing refers to a
+specialization that did not form.
+
+The sites that mark explicitly: a function specialization's signature
+(`Err`, or `Ok` while the frame trapped an error: kind 1, a deduction
+guide's too); its `explicit(expr)` (kind 2); a variable template's
+ambiguous partial-specialization choice (kind 3, not under
+`inst.fatal`); a class template's (kind 4, not under `inst.fatal`).
+When a signature fails, the parameters substituted before the failure
+take the specialization as their owner (`set_param_owner`), so none is
+left owned by the instantiation context.
+
+Decisions (reviewed by tooling clients):
+
+- A class partial-specialization ambiguity under a trap keeps `INVALID`
+  and adds kind 4: the ambiguity belongs to (template, arguments), so
+  every use needing completeness is ill-formed (clang sets the
+  declaration invalid too), and the memo saves re-ordering on each
+  probe. The specialization is otherwise a never-instantiated one.
+- A class template specialization instantiated inside its own
+  definition ([temp.inst]/2) under a trap is not made invalid (clang's
+  `DiagnoseUninstantiableTemplate` invalidates only an explicit
+  instantiation declaration): the error is trapped, the use's signature
+  fails, and the class instantiates on its next use. Outside a trap:
+  diagnosed and invalid, as before.
+- A variable template specialization whose template or matching partial
+  specialization is only declared takes the declaration as its pattern
+  and is valid ([temp.inst]/7).
+- An implicit definition (special member, comparison, inheriting
+  constructor) is not a SFINAE context (clang `isSFINAEContext`): a
+  synthesis context opened above the innermost SFINAE frame stops the
+  trap (`Sema::sfinae_traps`), so its errors print and its declarations
+  are not filed.
+- `this` named in a requires-expression inside a lambda that captures
+  nothing fails the requirement ([expr.prim.req.general]/5), not the
+  lambda: under a trap the call operator is not invalidated (as for a
+  default member initializer).
+- WP-3282: a coroutine's promise constructed from the parameter copies
+  ([dcl.fct.def.coroutine]/5) is tried with no declaration
+  (`perform_init` under a capture); on success the one `__promise` is
+  declared with those arguments, else default-initialized. No trial
+  variable is left behind.
+
+Kind 6 sites, one per line: the empty-pack sweep and the pack-expansion
+probe (`templ/pack.rs`; the substitution is discarded, nothing refers to
+what it created, `ctx` the declaration being instantiated, typically a
+closure type of the pattern); the duplicate of a class or enumeration
+definition merged from another unit's global module fragment
+(`act_on_tag`, spec/modules.md §6: born invalid, its body skipped, no
+diagnostic, under no trap); `local_tag_used_early`
+(`templ/subst/mod.rs`; a local class or enumeration declared ahead of
+its statement, `ctx` the instantiated function); the iterating thunk of
+a reflection intrinsic (`meta/iterate.rs`; the body is discarded on
+failure, `ctx` the intrinsic's specialization). Any other invalidation
+the ledger finds under a trap is kind 6 as well.
+
+The checker's rule A (spec/ast.md §4.1) needs one record from Sema:
+`Sema::note_scratch_head` keeps each friend class template head that
+`check_friend_class_head` substitutes only to compare (while verifying).
+
+Tests: `crates/kiln_parse/tests/subst_failed.rs` (each kind, the
+decisions, rule A), `xtask` `invalid_lint`, the dump token in
+`tests/conformance/temp.deduct.general/subst-failed-*.cpp`.
 
 ### 5.8 Written locations of dependent names
 
@@ -6530,7 +6732,7 @@ For `template<> R f<args>(params)` or `template<> R f(params)`, and for
    function template" at each declaration found; the declaration is
    dropped (`sema_dependent_member_spec_no_candidate`, WP-330;
    `tests/conformance/temp.expl.spec/dependent-member-spec-no-candidate.cpp`).
-   The friend form is the `FriendSpec` entry of §11.2. When candidates exist,
+   The friend form is the `FriendForm` row of §11.2 (spec/ast.md §23). When candidates exist,
    kiln still matches in the pattern, where clang defers the match to
    the class's instantiation (kept deviation: a mismatch is reported at
    the definition, without the "in instantiation of" note).
@@ -10595,8 +10797,9 @@ requires-clause scope.**
   friend specializations `friend R f<>(...)` / `friend R N::g<T>(...)`
   (`Declarator::friend`, `friend_spec_template`,
   `act_on_friend_spec_without_template`, `function_templates_in`,
-  `match_function_spec_in`). A dependent friend specialization is a
-  `FriendSpec` in `Sema.friend_specs`, matched when its class is
+  `match_function_spec_in`). A dependent friend specialization keeps its type and a
+  `Specialization` row (spec/ast.md §23: name, written arguments, the
+  templates found), matched from the row when its class is
   instantiated (`instantiate_friend_spec`); one in a template whose
   qualifier, type and arguments depend on nothing is also matched where
   written ([temp.res.general]/6; `friend_spec_dependent`), so a friend

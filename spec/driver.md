@@ -130,7 +130,10 @@ linker prints its version; Meson's linker probe, WP-920), and `-c
 | `-fkiln-written-refs` | records the written-reference table (spec/ast.md §18) without printing it, for a tooling client of the library API and for PCH and module-file producers: a snapshot or declaration image made with it carries the table to consumers that record (spec/ast.md §18.10); part of neither identity |
 | `-fkiln-decl-extents` | records the declaration-extent table (spec/ast.md §19; off otherwise) for a tooling client of the library API; part of the PCH and module-file identity, and its rows are carried in PCH snapshots and module images |
 | `-fkiln-dump-decl-extents` | implies `-fkiln-decl-extents`; with `-fsyntax-only` (to the output) or codegen (to standard output, before the IR): prints one line per declaration with a row in the §19.7 layout; a PCH producer with it takes two passes |
+| `-fkiln-fn-names` | kiln: records the function-name span table (spec/ast.md §24; off otherwise) without printing it, for a tooling client of the library API; part of neither identity; a snapshot does not carry the table (a consumer that records marks the prefix unrecorded) and a module built in process for an importer records nothing. `KILN_FN_NAMES_VERIFY=1` in the environment implies it and self-checks every record (an error on a failure, spec/ast.md §24.7) |
+| `-fkiln-dump-fn-names` | kiln: implies `-fkiln-fn-names`; with `-fsyntax-only` (to the output, after a declaration-extent dump) or codegen (to standard output, before the IR): prints one record per (string, function) in the spec/ast.md §24.6 layout; a PCH producer with it takes two passes |
 | `-fkiln-dump-expr-extents` | kiln: with `-fsyntax-only` (to the output, after a declaration-extent dump): prints the written extent of every expression of the written bodies and initializers, one line per node in the spec/ast.md §21.4 layout (the input of `cargo xtask extents`, spec/harness.md "Expression extents"); records nothing, part of neither identity; a PCH producer with it takes two passes |
+| `-fkiln-dump-friend-forms` | kiln: with `-fsyntax-only` (to the output, after the expression-extent dump): prints every friend's written form, one line per `FriendForm` row in declaration order in the spec/ast.md §23.6 layout; not part of the written-reference dump; records nothing (the rows are always kept), part of neither identity; a PCH producer with it takes two passes |
 | `-fkiln-dump-pp-record` | kiln: records the preprocessing record (spec/pp.md "Preprocessing record"; off otherwise) and prints it, one line per entry: with `-E` in place of the preprocessed text, after one `tok` line per output token at a macro location; with `-fsyntax-only` (to the output, after a written-reference dump) or codegen (to standard output, before the IR), the entries only. A PCH producer with it (or with `-fkiln-pp-record`) takes two passes and carries the header's record in its snapshot, which a recording consumer goes on from; a snapshot built without it leaves the consumer's record `restored`, with a `-v` note (spec/pp.md "Preprocessing record", stage 4; WP-2113). `=source-order` prints each condition's reads in source order (WP-2301). The harness's `pp-record:` directive runs it (spec/harness.md; WP-2110) |
 | `-fkiln-pp-record` | kiln: records the preprocessing record and drops it (to measure its cost; WP-2110). No output changes, except the `pp.record` row of `-fkiln-memory-report` |
 | `-fkiln-builtin-literals` | kiln: keeps the builtin-macro literal table (spec/ast.md §22, WP-2821): which builtin macro (`__LINE__`, `__FILE__`, ...) each literal came from, directly, through macros, pasted or stringized. `-fdump-ast` then appends ` from <name>` to a marked literal; otherwise no output changes, except the `builtin_literals` row of `-fkiln-memory-report`. Outside the PCH identity; a snapshot and a module file carry no table |
@@ -1242,6 +1245,24 @@ toolchain's (clang 19 `Linux::AddClangCXXStdlibIncludeArgs` followed by
 list is realized by `kiln_pp::SearchList::build` (`spec/pp.md` "Header
 search"), which drops nonexistent and duplicate directories.
 
+**Dropped directories** (WP-3275). The directories `build` drops are
+kept beside the list, `SearchList::dropped()`, one `DroppedDir` each:
+the path as given, its group (`Quoted`, `Angled`, `System`,
+`ExternCSystem`, `CSystem`, `CxxSystem`, `After`, ...), whether it is
+one of the toolchain's (the directories above, given as
+`SearchDirSpec::of_toolchain`; the user's are `SearchDirSpec::new`),
+its index among the requested directories (`spec`: the order of the
+command line, then the toolchain's), the index in the list it would
+have been searched at (`position`), why it was dropped (`Nonexistent`;
+`Duplicate`, the same directory by identity as an earlier one, as a
+symbolic link to it is; `DuplicatesSystem`, a user directory that a
+later system one duplicates, which is searched instead) and, for a
+duplicate, the index of the directory searched in its place (`kept`).
+The list, and so every lookup and `-v`'s notes, are unchanged: clang
+reports nothing of this beyond those notes. The lookup log carries it
+(`LookupLog::dropped`, spec/pp.md "Lookup log") to tooling clients of
+the front-end library entry.
+
 **No environment search lists** (WP-2026). The search list comes from
 the command line and the toolchain alone: kiln reads none of `CPATH`,
 `C_INCLUDE_PATH`, `CPLUS_INCLUDE_PATH`, `OBJC_INCLUDE_PATH` (clang adds
@@ -1819,6 +1840,7 @@ driver's environment (`Args::env`: the process's for the executable,
 | variable | read by | verdict |
 |---|---|---|
 | `KILN_WREF_RAW` | the written-reference dump (`WrittenRefs::set_raw_dump`, set by the job before the closure runs) | routed: changes the dump a closure renders (`#<raw location> ` before each line); `front_end.rs` test `developer_switches_follow_the_environment` |
+| `KILN_FN_NAMES_VERIFY` | the function-name span table's self-check (`env::fn_names_verify`, read where the parser's options are made) | routed: `1` turns the table on and makes a failed self-check an error (spec/ast.md §24.7) |
 | `KILN_STATS_LOG` | the statistics log (`stats::log_path`) | routed; the entry writes no log either way |
 | `KILN_HOD_STRICT` | hod's failure handling (`hod::strict`) | routed; code generation only |
 | `KILN_PCH_SNAPSHOT_PASSES` | the PCH snapshot producer (`single_pass_blocker`) | routed; the producer never runs in the entry |

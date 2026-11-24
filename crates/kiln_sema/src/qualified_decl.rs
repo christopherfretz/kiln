@@ -4,7 +4,7 @@
 //! cannot redeclare the global `a`.
 
 use kiln_ast::DeclId;
-use kiln_ast::decl::DeclKind;
+use kiln_ast::decl::{DeclFlags, DeclKind};
 use kiln_diag::{Diag, DiagId};
 
 use crate::Sema;
@@ -38,6 +38,54 @@ pub(crate) enum QualifiedDecl {
 }
 
 impl Sema<'_, '_> {
+    /// A non-friend declarator-id qualified by a templated class that has
+    /// no definition ([expr.prim.id.qual]/1, [class.mfct]/1: a member is
+    /// defined out of line only for a defined class). A class that is
+    /// not templated was reported as an incomplete nested-name-specifier
+    /// already ([`Sema::require_complete_nns_ctx`]); here the class is a
+    /// member of the current instantiation (`G<T>::H::`) or a member
+    /// class template of a specialization (`A<int>::C<U>::`). A
+    /// constructor name requires the class complete (clang
+    /// `getConstructorName` → `RequireCompleteDeclContext`,
+    /// `err_incomplete_nested_name_spec` printing the class's own name,
+    /// at the last qualifier name under clang 19 and at the specifier's
+    /// begin under clang 22, no note); any other declarator-id is clang's
+    /// `err_member_def_undefined_record` at its name. Either way the
+    /// declaration is dropped, so no "does not match" follows (clang's
+    /// `HandleDeclarator` returns no declaration). True after the
+    /// diagnostic.
+    pub(crate) fn diagnose_undefined_qualifier(&mut self, ds: &DeclSpec, d: &Declarator) -> bool {
+        use crate::declspec::SpecialName;
+        let Some(dc) = d.qualifier else { return false };
+        if ds.friend.is_some() || d.friend || !self.inst.stack.is_empty() {
+            return false;
+        }
+        if self.kind_of(dc) != DeclKind::CXXRecord
+            || self.ast.definition(dc).is_some()
+            || !(self.is_dependent_ctx(dc) || self.ast.decls.get(dc).has(DeclFlags::DEPENDENT_CTX))
+            || self
+                .defining
+                .iter()
+                .chain(&self.suspended_defining)
+                .any(|&x| self.ast.first(x) == self.ast.first(dc))
+        {
+            return false;
+        }
+        if let Some((SpecialName::Constructor(_), _)) = d.special {
+            let last = if d.qual_last.is_valid() { d.qual_last } else { d.id_qual };
+            let at = if self.clang_compat >= 22 && d.id_qual.is_valid() { d.id_qual } else { last };
+            let name = format!("'{}'", self.decl_name(dc));
+            let m = self.diag(DiagId::sema_incomplete_nested_name_spec, at).arg(name);
+            self.emit(m);
+            return true;
+        }
+        let Some((name, loc)) = self.qualified_declarator_name(d) else { return false };
+        let class = self.class_context_str(dc);
+        let m = self.diag(DiagId::sema_member_def_undefined_record, loc).arg(name).arg(class);
+        self.emit(m);
+        true
+    }
+
     /// clang's `diagnoseQualifiedDeclaration` for a non-friend declarator
     /// whose declarator-id is qualified: what to do with the declaration.
     /// Every declarator-id is checked: an identifier, an
@@ -145,7 +193,39 @@ impl Sema<'_, '_> {
             self.emit(m);
             return QualifiedDecl::Keep;
         }
+        // [expr.prim.id.qual]/3: a declarative nested-name-specifier has no
+        // computed-type-specifier (`void decltype(a)::g() {}`; clang
+        // `err_decltype_in_declarator` at the name, the declaration is
+        // kept). A friend's is accepted, as clang (WP-3141).
+        if d.qualifier_nns.is_some_and(|q| self.nns_starts_with_decltype(q)) {
+            self.error(DiagId::sema_decltype_in_declarator, loc);
+        }
         QualifiedDecl::Keep
+    }
+
+    /// Whether the first component of `n` is a decltype-specifier
+    /// (`decltype(e)::`).
+    pub(crate) fn nns_starts_with_decltype(&self, n: kiln_ast::NnsId) -> bool {
+        use kiln_ast::types::{Nns, TypeView};
+        let t = &self.ast.types;
+        let mut cur = n;
+        for _ in 0..1024 {
+            let prefix = match t.nns_view(cur) {
+                Nns::Type { prefix: None, ty, .. } => {
+                    return matches!(t.view(ty.ty()), TypeView::Decltype { .. });
+                }
+                Nns::Type { prefix, .. }
+                | Nns::Identifier { prefix, .. }
+                | Nns::Namespace { prefix, .. }
+                | Nns::NamespaceAlias { prefix, .. } => prefix,
+                Nns::Global | Nns::Splice(_) => None,
+            };
+            match prefix {
+                Some(p) => cur = p,
+                None => return false,
+            }
+        }
+        false
     }
 
     /// The scope a qualified declaration is in, as clang's `CurContext`

@@ -832,6 +832,7 @@ fn join(name: &str, src: &str) -> Option<JoinReport> {
     }
     let walk = written_exprs(ast, &sm, main);
     let (names, opers, rewritten, parent) = (walk.names, walk.opers, walk.rewritten, walk.parent);
+    let allocs = walk.allocs;
     let name_of = |d| {
         let mut s = String::new();
         kiln_ast::types::TypeNames::write_decl_name(ast, d, true, &mut s);
@@ -896,7 +897,10 @@ fn join(name: &str, src: &str) -> Option<JoinReport> {
         };
         bad.push((line_col(&sm, Scope::Main(main), a), what));
     }
-    let (opers, oper_bad) = join_operators(ast, &sm, main, src, &at, &rewritten, &opers);
+    let (mut opers, mut oper_bad) = join_operators(ast, &sm, main, src, &at, &rewritten, &opers);
+    let (n, b) = join_allocs(ast, &sm, main, &allocs);
+    opers += n;
+    oper_bad.extend(b);
     Some(JoinReport { names: checked, bad, opers, oper_bad })
 }
 
@@ -906,6 +910,8 @@ struct WrittenExprs {
     names: Vec<kiln_ast::ExprId>,
     /// `CXXOperatorCallExpr`s.
     opers: Vec<kiln_ast::ExprId>,
+    /// `CXXNewExpr`s and `CXXDeleteExpr`s.
+    allocs: Vec<kiln_ast::ExprId>,
     /// The locations of the rewritten comparisons.
     rewritten: HashSet<Loc>,
     /// Each expression's parent as written.
@@ -923,6 +929,7 @@ fn written_exprs(ast: &kiln_ast::Ast, sm: &SourceManager, main: FileId) -> Writt
     let mut found = WrittenExprs {
         names: Vec::new(),
         opers: Vec::new(),
+        allocs: Vec::new(),
         rewritten: HashSet::new(),
         parent: std::collections::HashMap::new(),
     };
@@ -933,13 +940,14 @@ fn written_exprs(ast: &kiln_ast::Ast, sm: &SourceManager, main: FileId) -> Writt
         match ast.exprs.get(e).kind() {
             ExprKind::DeclRefExpr | ExprKind::MemberExpr => found.names.push(e),
             ExprKind::CXXOperatorCallExpr => found.opers.push(e),
+            ExprKind::CXXNewExpr | ExprKind::CXXDeleteExpr => found.allocs.push(e),
             ExprKind::CXXRewrittenBinaryOperator => {
                 found.rewritten.insert(ast.exprs.get(e).loc());
             }
             _ => {}
         }
     });
-    for v in [&mut found.names, &mut found.opers] {
+    for v in [&mut found.names, &mut found.opers, &mut found.allocs] {
         v.sort_unstable();
         v.dedup();
     }
@@ -1013,6 +1021,47 @@ fn join_operators(
         }
     }
     (oper_checked, oper_bad)
+}
+
+/// The new- and delete-expression half of the operator join (spec/ast.md
+/// §18.13.6, stage 6c): each one of `allocs` that selected an allocation
+/// or deallocation function has an `operator` entry naming it whose
+/// qualified name begins at the expression's location (its `::`, else
+/// its keyword). The deallocation function of a new-expression (called
+/// if the initialization throws) has no entry and is not checked.
+fn join_allocs(
+    ast: &kiln_ast::Ast,
+    sm: &SourceManager,
+    main: FileId,
+    allocs: &[kiln_ast::ExprId],
+) -> (usize, Vec<(String, String)>) {
+    use kiln_ast::expr::ExprKind;
+    use kiln_ast::written_refs::RefRole;
+    let refs = &ast.written_refs;
+    let mut at: std::collections::HashMap<Loc, Vec<kiln_ast::written_refs::WrittenRefId>> =
+        std::collections::HashMap::new();
+    for (id, r) in refs.iter() {
+        if r.role == RefRole::Operator {
+            at.entry(refs.qualified_lo(id)).or_default().push(id);
+        }
+    }
+    let (mut checked, mut bad) = (0, Vec::new());
+    for &e in allocs {
+        let n = ast.exprs.get(e);
+        let f = match n.kind() {
+            ExprKind::CXXNewExpr => ast.exprs.new_extra(e).operator_new,
+            _ => ast.exprs.operator_delete(e),
+        };
+        let Some(f) = f else { continue };
+        let Some(a) = spelled(sm, Scope::Main(main), n.loc()) else { continue };
+        checked += 1;
+        let ids = at.get(&n.loc()).map_or(&[][..], Vec::as_slice);
+        if !ids.iter().any(|&id| refs.get(id).entity == Some(f)) {
+            let what = format!("{:?}: no operator entry naming its function", n.kind());
+            bad.push((line_col(sm, Scope::Main(main), a), what));
+        }
+    }
+    (checked, bad)
 }
 
 /// What [`join`] checked of one file: name expressions and operator

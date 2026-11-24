@@ -253,17 +253,23 @@ impl Sema<'_, '_> {
         if !self.has_unclaimed_closures(after) {
             return;
         }
-        let Some(list) = self.templ.innermost_list() else { return };
+        if let Some(o) = self.template_head_owner(after) {
+            self.claim_closures(after, o);
+        }
+    }
+
+    /// The templated declaration the innermost template head declared,
+    /// among the declarations created since the count was `after`: the
+    /// pattern of the template whose parameter list the head is.
+    pub(crate) fn template_head_owner(&self, after: u32) -> Option<DeclId> {
+        let list = self.templ.innermost_list()?;
         let len = self.decl_count();
         // The template is created right after its templated declaration,
         // near the start of the range.
-        let owner = (after + 1..=len).map(DeclId::new).find_map(|t| {
+        (after + 1..=len).map(DeclId::new).find_map(|t| {
             let i = self.ast.template_info(t)?;
             (i.params == list && i.decl == t).then(|| i.pattern.unwrap_or(t))
-        });
-        if let Some(o) = owner {
-            self.claim_closures(after, o);
-        }
+        })
     }
 
     /// Whether a closure created since the declaration count was `after`

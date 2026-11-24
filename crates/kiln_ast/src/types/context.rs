@@ -283,6 +283,13 @@ pub struct TypeContext {
     /// [`TypeContext::constant_array`] gives their types
     /// `UNEXPANDED_PACK` (WP-2720).
     pub(crate) pack_bounds: kiln_source::fx::FxHashSet<ExprId>,
+    /// The constant array bounds kept on their types that are
+    /// instantiation-dependent (`char[sizeof(sizeof(f(T())))]`):
+    /// [`TypeContext::constant_array`] gives their types
+    /// `INSTANTIATION_DEPENDENT` (WP-2720). Any other bound a declarator
+    /// wrote is kept too, as sugar only (spec/types.md §7.2 "Written
+    /// bounds", WP-3015).
+    pub(crate) inst_bounds: kiln_source::fx::FxHashSet<ExprId>,
     /// For each non-dependent alias template specialization type whose
     /// written arguments differ from its converted ones (a non-type
     /// argument written as an expression, a defaulted argument, a pack):
@@ -365,6 +372,7 @@ impl TypeContext {
             arg_origins: kiln_source::fx::FxHashMap::default(),
             expr_origins: kiln_source::fx::FxHashMap::default(),
             pack_bounds: kiln_source::fx::FxHashSet::default(),
+            inst_bounds: kiln_source::fx::FxHashSet::default(),
             alias_converted: kiln_source::fx::FxHashMap::default(),
             nns: KeyedTable::new(),
             args: ArgTable::new(),
@@ -1533,6 +1541,27 @@ impl TypeContext {
         self.pack_bounds.insert(e);
     }
 
+    /// Records that the constant array bound `e` is
+    /// instantiation-dependent, before its type is built
+    /// ([`TypeContext::constant_array`]; WP-2720, WP-3015).
+    pub fn note_inst_bound(&mut self, e: ExprId) {
+        self.inst_bounds.insert(e);
+    }
+
+    /// Whether `e` is a constant array bound recorded by
+    /// [`Self::note_inst_bound`].
+    pub fn is_inst_bound(&self, e: ExprId) -> bool {
+        self.inst_bounds.contains(&e)
+    }
+
+    /// The bound of constant array `a` when it is kept because it is
+    /// instantiation-dependent (spec/types.md §7.2 "Kept bounds"); `None`
+    /// for a bound kept only as written (§7.2 "Written bounds") and for
+    /// none.
+    pub fn inst_bound(&self, a: &ConstArray) -> Option<ExprId> {
+        a.size_expr.filter(|&e| self.is_inst_bound(e))
+    }
+
     fn has_expr_arg(&self, l: ArgListId) -> bool {
         self.args(l).iter().any(|a| match a.view() {
             ArgView::Expr { profile: Some(_), .. } => true,
@@ -1588,6 +1617,7 @@ impl TypeContext {
         r.push(MemRow::of_map("arg_origins", &self.arg_origins));
         r.push(MemRow::of_map("expr_origins", &self.expr_origins));
         r.push(MemRow::of_set("pack_bounds", &self.pack_bounds));
+        r.push(MemRow::of_set("inst_bounds", &self.inst_bounds));
         r.push(MemRow::of_map("alias_converted", &self.alias_converted));
         self.nns.memory("nns", &mut r);
         self.args.memory(&mut r);

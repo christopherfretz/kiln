@@ -1048,3 +1048,128 @@ fn dependent_operator_entries_through_the_api() {
         }
     });
 }
+
+/// The kinds of the declarations that hold the entries naming `S` (the
+/// first record), in recording order.
+fn s_holders(ast: &kiln_ast::Ast) -> Vec<kiln_ast::decl::DeclKind> {
+    let t = &ast.written_refs;
+    let s = t.iter().find(|(_, r)| r.role == RefRole::Type).and_then(|(_, r)| r.entity);
+    t.iter()
+        .filter(|(_, r)| r.role == RefRole::Type && r.entity == s)
+        .map(|(_, r)| ast.decls.get(r.enclosing.expect("enclosed")).kind())
+        .collect()
+}
+
+/// spec/ast.md §18.3 (WP-3143): an alias, an enumerator, a template's head
+/// and a `static_assert` hold the names written in them, as a typedef
+/// does; `enclosed_by` finds them there.
+#[test]
+fn declarations_without_a_declarator_hold_their_names() {
+    use kiln_ast::decl::DeclKind as K;
+    const SRC: &str = "struct S {};\n\
+                       using A = S;\n\
+                       typedef S T;\n\
+                       enum E { e = sizeof(S) };\n\
+                       template <class U = S> void t() {}\n\
+                       struct C { using I = S; };\n\
+                       static_assert(sizeof(S) == 1);\n";
+    with_ast(SRC, |ast, _| {
+        assert_eq!(
+            s_holders(ast),
+            [K::TypeAlias, K::Typedef, K::EnumConstant, K::Function, K::TypeAlias, K::StaticAssert]
+        );
+        let t = &ast.written_refs;
+        let sa = t.iter().last().and_then(|(_, r)| r.enclosing).expect("the static_assert");
+        assert_eq!(t.enclosed_by(sa).count(), 1);
+        // The template's head and its body share one holder: the function.
+        let f = t.iter().find(|(_, r)| ast.decls.get(r.enclosing.unwrap()).kind() == K::Function);
+        assert!(f.is_some());
+    });
+}
+
+/// spec/ast.md §18.3.1 (WP-3144): a shared decl-specifier-seq is held by
+/// its declarator group: `REF_GROUP` and `holders` give every declaration,
+/// `enclosing` the first; a group of one and a structured binding have
+/// one holder.
+#[test]
+fn a_declarator_group_holds_its_specifier() {
+    use kiln_ast::written_refs::REF_GROUP;
+    const SRC: &str = "struct S { int w; };\n\
+                       S a, b;\n\
+                       struct C { S m, n, o; };\n\
+                       typedef S T1, T2;\n\
+                       S f(), v;\n\
+                       S one;\n\
+                       S arr[2];\n\
+                       auto [x] = S{1};\n";
+    with_ast(SRC, |ast, _| {
+        let t = &ast.written_refs;
+        let s = t.iter().find(|(_, r)| r.role == RefRole::Type).and_then(|(_, r)| r.entity);
+        let sizes: Vec<usize> = t
+            .iter()
+            .filter(|(_, r)| r.role == RefRole::Type && r.entity == s)
+            .map(|(id, r)| {
+                let h = t.holders(id);
+                assert_eq!(h.first().copied(), r.enclosing, "the first holder is `enclosing`");
+                assert_eq!(r.flags & REF_GROUP != 0, h.len() > 1);
+                if h.len() > 1 {
+                    assert_eq!(t.group(h[0]), Some(h));
+                }
+                h.len()
+            })
+            .collect();
+        // `S a, b`, `S m, n, o`, `typedef S T1, T2`, `S f(), v`, `S one`,
+        // `S arr[2]`, then the binding's `S{1}`.
+        assert_eq!(sizes[..6], [2, 3, 2, 2, 1, 1]);
+        assert!(sizes[6..].iter().all(|&n| n == 1), "{sizes:?}");
+        assert_eq!(t.groups().count(), 4);
+    });
+}
+
+const ALLOC_OPS: &str = "using size_t = decltype(sizeof 0);\n\
+                         struct C { static void *operator new(size_t); static void operator delete(void *); };\n\
+                         template <class T> T *make() { return ::new T; }\n\
+                         void use() { C *c = new C; delete c; delete[] new int[2]; delete make<C>(); }\n";
+
+/// spec/ast.md §18.13.6 (stage 6c) through the API: the `new` and
+/// `delete` keywords are `operator` entries naming the allocation and
+/// deallocation functions selected ([expr.new]/12, [expr.delete]/9), the
+/// class's own or the global one, `how=qualified`; `delete[]` one range
+/// over its three tokens; `::new` qualifier GLOBAL with the `::` as its
+/// lead; a dependent `::new T` a DEPENDENT entry with no found set whose
+/// row names what the specialization selected (the global function,
+/// since `::new` skips the class).
+#[test]
+fn alloc_entries_through_the_api() {
+    use kiln_ast::written_refs::{QualLink, REF_DEPENDENT, RefLookup};
+    with_ast(ALLOC_OPS, |ast, sm| {
+        let t = &ast.written_refs;
+        let pos = |d: kiln_ast::DeclId| line_col(sm, ast.decls.get(d).loc());
+        let class_fn = |d: kiln_ast::DeclId| {
+            ast.decls.get(d).ctx().and_then(|c| ast.decls.record(c)).is_some()
+        };
+        let new_c = entry_at(t, sm, (4, 21));
+        let r = t.get(new_c);
+        assert_eq!(r.role, RefRole::Operator);
+        assert_eq!(r.how, RefLookup::Qualified);
+        assert_eq!(pos(r.entity.expect("C::operator new")), (2, 25));
+        let del_c = entry_at(t, sm, (4, 28));
+        assert_eq!(pos(t.get(del_c).entity.expect("C::operator delete")), (2, 59));
+        // `delete[]` over its three tokens, the global `operator delete[]`.
+        let del_arr = entry_at(t, sm, (4, 38));
+        assert_eq!(line_col(sm, t.get(del_arr).range.hi), (4, 46));
+        assert!(!class_fn(t.get(del_arr).entity.expect("the global operator delete[]")));
+        // `::new T`: GLOBAL, `::` the lead, DEPENDENT, no set; its row for
+        // `make<C>` names the global `operator new`, not `C`'s.
+        let gnew = entry_at(t, sm, (3, 41));
+        let g = t.get(gnew);
+        assert_eq!(g.qualifier.link(), QualLink::Global);
+        assert_eq!(t.global_colon(gnew).map(|c| line_col(sm, c)), Some((3, 39)));
+        assert_ne!(g.flags & REF_DEPENDENT, 0);
+        assert!(t.found_at_definition(gnew).is_none());
+        let rows: Vec<_> = t.specs_of(gnew).map(|(_, r)| *r).collect();
+        let [row] = rows.as_slice() else { panic!("one row, make<C>: {rows:?}") };
+        assert!(!class_fn(row.entity.expect("the global operator new")));
+        assert_eq!(row.how, RefLookup::Qualified);
+    });
+}

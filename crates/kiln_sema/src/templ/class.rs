@@ -5,7 +5,7 @@
 //! instantiated when used (`instantiate_function_definition`,
 //! [temp.inst]/4).
 
-use kiln_ast::decl::{DeclFlags, DeclKind, DefinitionBits, TagKind};
+use kiln_ast::decl::{DeclFlags, DeclKind, DefinitionBits, SubstFailedKind, TagKind};
 use kiln_ast::expr::ExprKind;
 use kiln_ast::ids::{ArgListId, TemplateNameId};
 use kiln_ast::names::{DeclName, DeclNameView};
@@ -366,9 +366,9 @@ impl Sema<'_, '_> {
         if let Some(f) = self.inst.stack.frames.last_mut() {
             f.sfinae = Some(true);
         }
-        self.inst.sfinae.borrow_mut().push(crate::templ::stack::SfinaeState::default());
+        self.push_sfinae_state();
         let r = self.default_template_arg(tmpl, depth, p, def, loc, &elems[..i]);
-        let failed = self.inst.sfinae.borrow_mut().pop().is_some_and(|s| s.errors > 0);
+        let failed = self.pop_sfinae_state().errors > 0;
         self.pop_inst_frame();
         let types = &self.ast.types;
         matches!(r, Ok(a) if !failed && types.canonical_arg(a) == types.canonical_arg(elems[i]))
@@ -1226,7 +1226,14 @@ impl Sema<'_, '_> {
                 .arg(u8::from(!implicit))
                 .arg(self.decl_ty_str(t));
             self.emit(d);
-            self.ast.decls.set_flags(spec, DeclFlags::INVALID);
+            // clang `DiagnoseUninstantiableTemplate` never invalidates an
+            // implicit instantiation: when the error was trapped the
+            // failure is the use's, and the specialization instantiates on
+            // its next use once its pattern is complete (WP-3281). A
+            // printed error keeps it invalid, as before.
+            if self.trap_now().is_none() {
+                self.invalidate(spec);
+            }
             self.inst.undefined_diagnosed.set(Some(spec));
         } else {
             self.inst.undefined_diagnosed.set(None);
@@ -1339,7 +1346,13 @@ impl Sema<'_, '_> {
         // [temp.spec.partial.match]: the most specialized matching
         // partial specialization, else the primary template.
         let Ok(matched) = self.select_partial_spec(tmpl, spec, poi) else {
-            self.ast.decls.set_flags(spec, DeclFlags::INVALID);
+            // Ambiguous: never instantiated, it stays a nameable incomplete
+            // type (spec/ast.md §4.1 kind 4 when the error was trapped).
+            if self.inst.fatal {
+                self.invalidate(spec);
+            } else {
+                self.invalidate_as(spec, SubstFailedKind::ClassPartialAmbiguity);
+            }
             self.inst.undefined_diagnosed.set(Some(spec));
             return false;
         };
@@ -1641,7 +1654,14 @@ impl Sema<'_, '_> {
             .spec_info(f)
             .map(|(_, i)| i.kind)
             .or_else(|| self.ast.member_spec_info(f).map(|(_, m)| m.kind));
-        if explicit == Some(SpecKind::ExplicitSpecialization) {
+        // A class-scope explicit specialization redeclared in an
+        // instantiated class ([temp.expl.spec]/2, CWG 727) is the
+        // exception: its definition is the pattern class's, instantiated
+        // with the class's arguments (clang `VisitCXXMethodDecl`).
+        let class_scope = self.ast.instantiated_from(f).is_some_and(|p| {
+            self.ast.spec_info(p).is_some_and(|(_, i)| i.kind == SpecKind::ExplicitSpecialization)
+        });
+        if explicit == Some(SpecKind::ExplicitSpecialization) && !class_scope {
             return;
         }
         // A use inside a ctor-initializer (`B<int>(3)` calling a
@@ -2274,12 +2294,12 @@ impl Sema<'_, '_> {
         };
         let _ = self.inst.deferred_nsdmis.remove(&f);
         if self.inst.fatal {
-            self.ast.decls.set_flags(f, DeclFlags::INVALID);
+            self.invalidate(f);
             return;
         }
         let Some((args, pairs)) = self.inst.nsdmi_ctx.get(&spec).cloned() else { return };
         if !self.push_inst_frame(FrameKind::Nsdmi, f, pattern, poi) {
-            self.ast.decls.set_flags(f, DeclFlags::INVALID);
+            self.invalidate(f);
             return;
         }
         // In an evaluation session's run: a unit of its own, as more than
@@ -2488,7 +2508,7 @@ impl Substituter<'_, '_, '_> {
         if sub.sema.kind_of(f) == DeclKind::CXXConstructor {
             // The pattern's ctor-initializer, substituted and checked
             // as the parser's would be (spec/sema-class.md §4.9).
-            inits_failed = sub.ctor_initializer(f, pdef, lbrace);
+            inits_failed = sub.ctor_initializer(f, pdef);
         }
         let b = sub.body(body);
         let discarded = std::mem::take(&mut sub.discarded);
@@ -2501,7 +2521,7 @@ impl Substituter<'_, '_, '_> {
             // instantiate makes the member specialization invalid (clang
             // `setInvalidDecl`, also in `InstantiateMemInitializers`), as
             // for a function template specialization (funcs.rs).
-            sub.sema.ast.decls.set_flags(f, DeclFlags::INVALID);
+            sub.sema.invalidate(f);
         }
         sub.sema.act_on_finish_function_def(f, b, rbrace);
     }
@@ -2819,7 +2839,7 @@ impl Substituter<'_, '_, '_> {
         }
         sub.sema.act_on_finish_record_definition(spec, anonymous);
         if invalid {
-            sub.sema.ast.decls.set_flags(spec, DeclFlags::INVALID);
+            sub.sema.invalidate(spec);
         }
         if !nsdmis.is_empty() && !invalid {
             sub.class_nsdmis(spec, local.is_some(), nsdmis);
@@ -2916,7 +2936,7 @@ impl Substituter<'_, '_, '_> {
             if self.sema.nsdmi_this.last().is_some_and(|&(f, _)| f == field) {
                 self.sema.nsdmi_this.pop();
             }
-            self.sema.ast.decls.set_flags(field, DeclFlags::INVALID);
+            self.sema.invalidate(field);
         }
     }
 

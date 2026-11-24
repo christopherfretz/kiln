@@ -468,6 +468,18 @@ impl<F: HeaderFs> IncludeResolver for HeaderSearch<F> {
         self.recorder.as_mut().map(Recorder::take)
     }
 
+    fn record_module_probe(&mut self, path: &str, found: bool) {
+        let Some(rec) = self.recorder.as_mut() else { return };
+        rec.add(Lookup {
+            name: path.to_owned(),
+            form: LookupForm::Module,
+            angled: false,
+            includer: None,
+            after: None,
+            found: if found { Found::Absolute } else { Found::Missing },
+        });
+    }
+
     fn suggest_include(
         &self,
         sm: &SourceManager,

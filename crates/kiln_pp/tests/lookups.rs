@@ -582,7 +582,14 @@ fn hostile_logs_are_validated_and_repeat_without_panic() {
                 }
             })
             .collect();
-        let log = LookupLog { dirs, lookups, list, angled_start, embed_dirs: Vec::new() };
+        let log = LookupLog {
+            dirs,
+            lookups,
+            list,
+            angled_start,
+            embed_dirs: Vec::new(),
+            dropped: Vec::new(),
+        };
         if log.validate().is_err() {
             refused += 1;
         } else {

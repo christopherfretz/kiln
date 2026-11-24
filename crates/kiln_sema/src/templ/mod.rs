@@ -963,7 +963,7 @@ impl Sema<'_, '_> {
         };
         self.declarator_type_invalid = false;
         if unexpanded || !self.check_nttp_type(ty, p.loc) {
-            self.ast.decls.set_flags(d, DeclFlags::INVALID);
+            self.invalidate(d);
         } else {
             self.attach_nttp_type_constraint(d, p.ty, p.type_loc, pack);
         }
@@ -1523,12 +1523,24 @@ impl Sema<'_, '_> {
         open
     }
 
-    /// The parameter list of the innermost untaken written head (a
-    /// [temp.friend]/5 friend's member template head, WP-1098).
-    pub(crate) fn innermost_open_head_list(&self) -> Option<TemplateParamListId> {
+    /// The parameter lists of the untaken written heads directly around
+    /// the declaration being declared, outermost first (a [temp.friend]/5
+    /// friend's own heads, its row's `heads`; spec/ast.md §23).
+    pub(crate) fn open_written_head_lists(&self) -> Vec<TemplateParamListId> {
         let floor = self.lambda_head_floor();
-        let (i, h) = self.templ.heads.iter().enumerate().rev().find(|(_, h)| !h.invented)?;
-        (!h.taken && i >= floor).then_some(h.list).flatten()
+        let mut open = Vec::new();
+        for (i, h) in self.templ.heads.iter().enumerate().rev() {
+            if h.taken || i < floor {
+                break;
+            }
+            if !h.invented
+                && let Some(l) = h.list
+            {
+                open.push(l);
+            }
+        }
+        open.reverse();
+        open
     }
 
     /// The parameter list of an untaken invented head innermost around
@@ -1758,6 +1770,13 @@ impl Sema<'_, '_> {
     /// explicitly instantiated) specialization `template<>`. The walk
     /// stops at an explicit specialization, whose members are declared
     /// as those of an ordinary class ([temp.expl.spec]/4).
+    /// Whether the qualifier's class chain holds a class template (or a
+    /// partial specialization) whose head is still to be matched: a
+    /// [`ScopeSlot::Params`] of [`Self::scope_slots`].
+    pub(crate) fn qualifier_names_class_template(&self, qualifier: DeclId) -> bool {
+        self.scope_slots(Some(qualifier)).iter().any(|s| matches!(s, ScopeSlot::Params(_)))
+    }
+
     fn scope_slots(&self, qualifier: Option<DeclId>) -> Vec<ScopeSlot> {
         let Some(mut c) = qualifier else { return Vec::new() };
         let mut slots = Vec::new();
@@ -1911,7 +1930,7 @@ impl Sema<'_, '_> {
         // declarations (`LookupResult::resolveKind`, WP-308).
         if kind == DeclKind::FunctionTemplate && self.ast.decls.get(pattern).has(DeclFlags::INVALID)
         {
-            self.ast.decls.set_flags(t, DeclFlags::INVALID);
+            self.invalidate(t);
         }
         if prev.is_some() {
             self.merge_template_defaults(t);

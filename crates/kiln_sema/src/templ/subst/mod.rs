@@ -99,6 +99,11 @@ pub struct Substituter<'s, 'a, 'sm> {
     /// How many lambda bodies are being rebuilt (a shared expression in
     /// one still captures `this`).
     pub(crate) lambda_bodies: u32,
+    /// How many declaration initializers are being substituted: a
+    /// subexpression shared with the pattern gets copies of the
+    /// temporaries the pattern's declaration extended
+    /// ([`Substituter::unsharing_temporaries`], WP-3271).
+    pub(crate) extending_init: u32,
     /// A statement of the body failed to substitute after an error
     /// (clang's `TransformCompoundStmt` `SubStmtInvalid`: the body, and
     /// so the function template specialization, is invalid; WP-145).
@@ -237,6 +242,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             chunk_loc: None,
             final_subst: false,
             lambda_bodies: 0,
+            extending_init: 0,
             stmt_failed: false,
             discarded: Vec::new(),
             lambda_return_failed: false,
@@ -1450,8 +1456,7 @@ impl Substituter<'_, '_, '_> {
     /// [`Self::find_instantiated_decl`]); a definition later in the
     /// body redeclares it.
     fn local_tag_used_early(&mut self, d: DeclId) -> SubstResult<DeclId> {
-        let held =
-            self.sema.diag_capture.replace(Some((self.sema.inst.stack.len(), Vec::new(), false)));
+        let held = self.sema.open_capture(false);
         let x = if let Some(data) = self.sema.ast.decls.enumeration(d).copied() {
             // Declared only: its definition statement defines it.
             let n = *self.sema.ast.decls.get(d);
@@ -1466,7 +1471,7 @@ impl Substituter<'_, '_, '_> {
         } else {
             Ok(self.local_class(d, None))
         };
-        let _ = self.sema.diag_capture.replace(held);
+        drop(self.sema.close_capture(held));
         let x = x?;
         self.locals.insert(d, DeclOrPack::Decl(x));
         Ok(x)

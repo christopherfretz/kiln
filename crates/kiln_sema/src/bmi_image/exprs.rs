@@ -86,9 +86,12 @@ pub(super) enum ExTy {
     /// (WP-2720): the constant array type keeps it.
     KeptArray { elem: QRef, size: u64, e: u32 },
     /// A parameter type `adjusted` adjusted from `original`, an array
-    /// type whose bound is an instantiation-dependent expression
-    /// (WP-2720).
+    /// type whose bound was written (WP-2720, WP-3101).
     Decayed { original: QRef, adjusted: QRef },
+    /// `T[e]` of a written bound `e` that is not instantiation-dependent,
+    /// of value `size` (spec/types.md §7.2 "Written bounds", WP-3102):
+    /// the constant array type keeps it as sugar, marked as nothing.
+    WrittenArray { elem: QRef, size: u64, e: u32 },
 }
 
 pub(super) fn encode_ex(w: &mut Wr, x: &ExTy) {
@@ -140,6 +143,12 @@ pub(super) fn encode_ex(w: &mut Wr, x: &ExTy) {
             w.q(*original);
             w.q(*adjusted);
         }
+        ExTy::WrittenArray { elem, size, e } => {
+            w.u8(8);
+            w.q(*elem);
+            w.u64(*size);
+            w.u32(*e);
+        }
     }
 }
 
@@ -186,6 +195,7 @@ pub(super) fn decode_ex(r: &mut Rd<'_>) -> Res<ExTy> {
         }
         6 => ExTy::KeptArray { elem: r.q()?, size: r.u64()?, e: r.u32()? },
         7 => ExTy::Decayed { original: r.q()?, adjusted: r.q()? },
+        8 => ExTy::WrittenArray { elem: r.q()?, size: r.u64()?, e: r.u32()? },
         _ => return bad("bad expression type"),
     })
 }
@@ -197,7 +207,8 @@ pub(super) fn ex_refs(x: &ExTy) -> Vec<QRef> {
         ExTy::DepArray { elem, .. }
         | ExTy::DepVector { elem, .. }
         | ExTy::DepSpace { pointee: elem, .. }
-        | ExTy::KeptArray { elem, .. } => vec![*elem],
+        | ExTy::KeptArray { elem, .. }
+        | ExTy::WrittenArray { elem, .. } => vec![*elem],
         ExTy::Decayed { original, adjusted } => vec![*original, *adjusted],
         ExTy::PackN { pattern, .. } => vec![*pattern],
         ExTy::TypeOf { ty, .. } => vec![*ty],
@@ -287,7 +298,8 @@ fn ty_texprs(t: &TyRec) -> Vec<u32> {
             | ExTy::DepArray { e, .. }
             | ExTy::DepVector { e, .. }
             | ExTy::DepSpace { e, .. }
-            | ExTy::KeptArray { e, .. },
+            | ExTy::KeptArray { e, .. }
+            | ExTy::WrittenArray { e, .. },
         ) => out.push(*e),
         TyRec::Func { exc, nx, .. } if *exc >= NX_FALSE => out.push(*nx),
         TyRec::Ex(ExTy::TypeOf { e, .. }) if *e != NONE => out.push(*e),
@@ -412,7 +424,18 @@ impl Writer<'_, '_, '_> {
                 ExTy::PackN { pattern: self.qref(pattern)?, n }
             }
             TypeView::ConstantArray(a) => {
-                let Some(s) = a.size_expr else { return Ok(None) };
+                let Some(s) = types.inst_bound(&a) else {
+                    // A written bound that is not instantiation-dependent
+                    // (WP-3102): its section when the image can hold it,
+                    // else the value alone, as before (the canonical type
+                    // is the same).
+                    let elem = self.qref(a.elem)?;
+                    let Some(s) = a.size_expr else { return Ok(Some(TyRec::CArray(elem, a.size))) };
+                    return Ok(Some(match self.texpr(s) {
+                        Ok(e) => TyRec::Ex(ExTy::WrittenArray { elem, size: a.size, e }),
+                        Err(_) => TyRec::CArray(elem, a.size),
+                    }));
+                };
                 let elem = self.qref(a.elem)?;
                 ExTy::KeptArray { elem, size: a.size, e: self.texpr(s)? }
             }
@@ -707,6 +730,11 @@ impl Sema<'_, '_> {
                 let adjusted = qt(self, adjusted);
                 self.ast.types.decayed(original, adjusted)
             }
+            ExTy::WrittenArray { elem, size, e } => {
+                let elem = qt(self, elem);
+                let Some(e) = self.image_texpr(e) else { return QualType::ERROR };
+                self.ast.types.constant_array(elem, size, Some(e))
+            }
         }
     }
 }
@@ -752,6 +780,7 @@ mod tests {
             ExTy::DepSpace { pointee: q, e: 6, canon: true },
             ExTy::KeptArray { elem: q, size: 8, e: 7 },
             ExTy::Decayed { original: q, adjusted: QRef { ty: 9, quals: 0 } },
+            ExTy::WrittenArray { elem: q, size: 2, e: 8 },
         ] {
             assert_eq!(round(&x), x);
         }

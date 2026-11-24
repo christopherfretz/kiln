@@ -1,0 +1,24 @@
+fn-name 'void ns::dep(typename W<T>::type) [T = ns::S]' of ns::dep<ns::S>@10:25
+  [5,7) scope 'ns' -> ns@7:11
+  [9,12) name 'dep' -> ns::dep<ns::S>@10:25 q
+  [22,23) param 'W' -> ns::W@9:27
+  [24,25) param 'T' -> T@10:17 d=1
+  [28,32) param 'type' -> (dependent) q
+  [35,36) binding 'T' -> T@10:17
+  [39,41) arg 'ns' -> ns@7:11
+  [43,44) arg 'S' -> ns::S@8:8 q
+fn-name '<dependent type> ns::dt(T) [T = ns::S]' of ns::dt<ns::S>@11:25
+  [17,19) scope 'ns' -> ns@7:11
+  [21,23) name 'dt' -> ns::dt<ns::S>@11:25 q
+  [24,25) param 'T' -> T@11:17
+  [28,29) binding 'T' -> T@11:17
+  [32,34) arg 'ns' -> ns@7:11
+  [36,37) arg 'S' -> ns::S@8:8 q
+fn-name 'void ns::mem(typename T::type) [T = ns::S]' of ns::mem<ns::S>@12:25
+  [5,7) scope 'ns' -> ns@7:11
+  [9,12) name 'mem' -> ns::mem<ns::S>@12:25 q
+  [22,23) param 'T' -> T@12:17
+  [25,29) param 'type' -> (dependent) q
+  [32,33) binding 'T' -> T@12:17
+  [36,38) arg 'ns' -> ns@7:11
+  [40,41) arg 'S' -> ns::S@8:8 q

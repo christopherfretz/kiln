@@ -483,7 +483,13 @@ impl Sema<'_, '_> {
                     if self.check_array_element_alignment(elem, bracket) {
                         return self.recover_err(&kids, loc);
                     }
-                    self.ast.types.constant_array(elem, n, None)
+                    // The bound as written (spec/types.md §7.2 "Written
+                    // bounds", WP-3015).
+                    let w = arrays
+                        .get(k + 1)
+                        .and_then(|a| a.0)
+                        .and_then(|e| self.written_array_bound(e, crate::declspec::DeclSite::New));
+                    self.ast.types.constant_array(elem, n, w)
                 }
                 None => self.ast.types.incomplete_array(elem),
             };
@@ -628,7 +634,10 @@ impl Sema<'_, '_> {
                     || self.ast.types.pointee(t).is_some_and(|p| !self.ast.types.is_function(p))
             };
             let name = format!("'{}'", op_spelling(op));
-            if ptr_like {
+            // "include <new>" only when the lookup was not in the class
+            // (clang `resolveAllocationOverload`, `!R.isClassLookup()`): a
+            // class's own `operator new` hides the global placement form.
+            if ptr_like && !alloc.in_class {
                 let msg = self.diag(DiagId::sema_placement_new_no_operator, loc).arg(name);
                 self.emit(msg);
             } else {

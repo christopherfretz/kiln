@@ -1,0 +1,85 @@
+17:20-17:26  type  'size_t' -> size_t@16:7 in=(anonymous)@17:26
+20:29-20:35  type  'size_t' -> size_t@16:7 in=(anonymous)@20:35
+21:31-21:37  type  'size_t' -> size_t@16:7 in=(anonymous)@21:37
+29:20-29:21  type  'T' -> T@29:17 in=make@29:23
+29:43-29:44  type  'T' -> T@29:17 in=make@29:23
+29:39-29:42  operator  'new' -> (dependent) in=make@29:23
+29:39-29:42  operator  'new' -> C::operator new@20:16 spec=make<C>@29:23 how=qualified
+29:39-29:42  operator  'new' -> operator new@? spec=make<int>@29:23 how=qualified
+30:20-30:21  type  'T' -> T@30:17 in=make_n@30:23
+30:30-30:36  type  'size_t' -> size_t@16:7 in=n@30:37
+30:53-30:54  type  'T' -> T@30:17 in=make_n@30:23
+30:55-30:56  expr  'n' -> n@30:37 in=make_n@30:23
+30:49-30:52  operator  'new' -> (dependent) in=make_n@30:23
+30:49-30:52  operator  'new' -> C::operator new[]@21:16 spec=make_n<C>@30:23 how=qualified
+30:49-30:52  operator  'new' -> operator new[]@? spec=make_n<int>@30:23 how=qualified
+31:20-31:21  type  'T' -> T@31:17 in=gmake@31:23
+31:46-31:47  type  'T' -> T@31:17 in=gmake@31:23
+31:42-31:45  operator  'new' -> (dependent) q=::31:40 in=gmake@31:23
+31:42-31:45  operator  'new' -> operator new@? spec=gmake<C>@31:23
+32:30-32:31  type  'T' -> T@32:17 in=p@32:33
+32:45-32:46  expr  'p' -> p@32:33 in=kill@32:25
+32:38-32:44  operator  'delete' -> (dependent) in=kill@32:25
+32:38-32:44  operator  'delete' -> C::operator delete@22:15 spec=kill<C>@32:25 how=qualified
+32:38-32:44  operator  'delete' -> operator delete@? spec=kill<int>@32:25 how=qualified
+33:32-33:33  type  'T' -> T@33:17 in=p@33:35
+33:49-33:50  expr  'p' -> p@33:35 in=kill_n@33:25
+33:40-33:48  operator  'delete[]' -> (dependent) in=kill_n@33:25
+33:40-33:48  operator  'delete[]' -> C::operator delete[]@23:15 spec=kill_n<C>@33:25 how=qualified
+33:40-33:48  operator  'delete[]' -> operator delete[]@? spec=kill_n<int>@33:25 how=qualified
+34:31-34:32  type  'T' -> T@34:17 in=p@34:34
+34:48-34:49  expr  'p' -> p@34:34 in=gkill@34:25
+34:41-34:47  operator  'delete' -> (dependent) q=::34:39 in=gkill@34:25
+34:41-34:47  operator  'delete' -> operator delete@? spec=gkill<C>@34:25
+35:20-35:21  type  'T' -> T@35:17 in=place@35:23
+35:38-35:39  type  'T' -> T@35:17 in=v@35:40
+35:57-35:58  expr  'b' -> b@35:35 in=place@35:23
+35:60-35:61  type  'T' -> T@35:17 in=place@35:23
+35:62-35:63  expr  'v' -> v@35:40 in=place@35:23
+35:52-35:55  operator  'new' -> (dependent) in=place@35:23
+35:52-35:55  operator  'new' -> operator new@17:7 spec=place<Plain>@35:23 how=qualified
+35:52-35:55  operator  'new' -> operator new@17:7 spec=place<int>@35:23 how=qualified
+36:48-36:49  expr  'N' -> N@36:15 in=bound@36:23
+36:40-36:43  operator  'new' -> (dependent) in=bound@36:23
+36:40-36:43  operator  'new' -> operator new[]@? spec=bound<3>@36:23 how=qualified
+37:20-37:21  type  'T' -> T@37:17 in=never@37:23
+37:44-37:45  type  'T' -> T@37:17 in=never@37:23
+37:40-37:43  operator  'new' -> (dependent) in=never@37:23
+38:33-38:34  type  'T' -> T@38:17 in=p@38:36
+39:24-39:25  type  'T' -> T@38:17 in=discard@38:25
+40:12-40:13  expr  'p' -> p@38:36 in=discard@38:25
+40:5-40:11  operator  'delete' -> (dependent) in=discard@38:25
+43:3-43:4  type  'T' -> T@42:17 in=Box::p@43:6
+44:11-44:12  mem-init  'p' -> Box::p@43:6 in=Box::Box<T>@44:3
+44:17-44:18  type  'T' -> T@42:17 in=Box::Box<T>@44:3
+44:13-44:16  operator  'new' -> (dependent) in=Box::Box<T>@44:3
+44:13-44:16  operator  'new' -> C::operator new@20:16 spec=Box<C>::Box@44:3 how=qualified
+44:13-44:16  operator  'new' -> operator new@? spec=Box<int>::Box@44:3 how=qualified
+45:19-45:20  expr  'p' -> Box::p@43:6 in=Box::~Box<T>@45:3
+45:12-45:18  operator  'delete' -> (dependent) in=Box::~Box<T>@45:3
+45:12-45:18  operator  'delete' -> C::operator delete@22:15 spec=Box<C>::~Box@45:3 how=qualified
+45:12-45:18  operator  'delete' -> operator delete@? spec=Box<int>::~Box@45:3 how=qualified
+49:3-49:7  expr  'kill' -> kill<C>@32:25 found=kill@32:25 in=use@48:6 how=both adl-ns=:: adl-cls=C@19:8
+49:13-49:14  type  'C' -> C@19:8 in=use@48:6
+49:8-49:12  expr  'make' -> make<C>@29:23 found=make@29:23 in=use@48:6 adl-ns=
+50:3-50:7  expr  'kill' -> kill<int>@32:25 found=kill@32:25 in=use@48:6 adl-ns=
+50:8-50:12  expr  'make' -> make<int>@29:23 found=make@29:23 in=use@48:6 adl-ns=
+51:3-51:9  expr  'kill_n' -> kill_n<C>@33:25 found=kill_n@33:25 in=use@48:6 how=both adl-ns=:: adl-cls=C@19:8
+51:17-51:18  type  'C' -> C@19:8 in=use@48:6
+51:10-51:16  expr  'make_n' -> make_n<C>@30:23 found=make_n@30:23 in=use@48:6 adl-ns=
+52:3-52:9  expr  'kill_n' -> kill_n<int>@33:25 found=kill_n@33:25 in=use@48:6 adl-ns=
+52:10-52:16  expr  'make_n' -> make_n<int>@30:23 found=make_n@30:23 in=use@48:6 adl-ns=
+53:3-53:8  expr  'gkill' -> gkill<C>@34:25 found=gkill@34:25 in=use@48:6 how=both adl-ns=:: adl-cls=C@19:8
+53:15-53:16  type  'C' -> C@19:8 in=use@48:6
+53:9-53:14  expr  'gmake' -> gmake<C>@31:23 found=gmake@31:23 in=use@48:6 adl-ns=
+54:3-54:8  expr  'place' -> place<int>@35:23 found=place@35:23 in=use@48:6 adl-ns=
+54:9-54:12  expr  'buf' -> buf@48:16 in=use@48:6
+55:3-55:8  expr  'place' -> place<Plain>@35:23 found=place@35:23 in=use@48:6 how=both adl-ns=:: adl-cls=Plain@25:8
+55:9-55:12  expr  'buf' -> buf@48:16 in=use@48:6
+55:14-55:19  type  'Plain' -> Plain@25:8 in=use@48:6
+56:12-56:17  expr  'bound' -> bound<3>@36:23 found=bound@36:23 in=use@48:6 adl-ns=
+56:3-56:11  operator  'delete[]' -> operator delete[]@? in=use@48:6 how=qualified
+57:3-57:10  expr  'discard' -> discard<int>@38:25 found=discard@38:25 in=use@48:6 adl-ns=
+58:7-58:8  type  'C' -> C@19:8 in=bc@58:10
+58:3-58:6  template  'Box' -> Box@42:27 in=bc@58:10
+59:3-59:6  template  'Box' -> Box@42:27 in=bi@59:12

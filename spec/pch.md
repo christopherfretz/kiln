@@ -127,7 +127,7 @@ block holding them is read and they are ignored.
 
 ```
 "KILNSNAP"                              8 bytes, the magic
-u32 FORMAT_VERSION                      little-endian (now 168)
+u32 FORMAT_VERSION                      little-endian (now 178)
 kiln_snap stream: u64 SCHEMA_HASH, identity, lookup log
 kiln_snap stream: the roots
 ```
@@ -155,7 +155,9 @@ Version 1 (WP-1392) had no lookup log; version 2 (WP-1403) added it;
 version 3 (WP-1411) is a new diagnostic id, which changes `DiagId`'s
 schema hash; version 4 (WP-1417) is two more diagnostic ids and the
 `Sema` target-feature configuration (`target_features`,
-`target_attr_features`).
+`target_attr_features`). Version 174 (WP-3275, WP-3276) is the lookup
+log's dropped search directories and module probes; from it the schema
+hash covers the head's lookup log as well as the roots.
 
 ### SCHEMA_HASH and SHAPE_HASH
 
@@ -244,7 +246,7 @@ same state agree (`tests/pch_snapshot.rs` `identity_components`;
 
 | component | what it is | covers |
 |---|---|---|
-| (schema hash) | checked first, before the identity is decoded | the layout of every root |
+| (schema hash) | checked first, before the identity is decoded | the layout of every root and of the lookup log |
 | kiln build | `kiln <version> <commit>` | the build that wrote it |
 | working directory | the current directory; not compared when the prefix does not depend on it (below) | relative paths: the header, `-I`, `__FILE__` |
 | language | the resolved standard (`LangStd`: C or C++, the standard, GNU or not; a C header's snapshot is refused by a C++ consumer and by another C standard) | `-std=`, `-ansi`, `-x`, the driver mode's default |
@@ -342,6 +344,14 @@ log that passes is repeated as written; its names and directories are
 only joined into paths and asked about, so an empty, `..`, absolute, NUL
 or very long name is a file that is not there, or another file
 (`tests/pch_snapshot_fuzz.rs` `snapshot_corruption_fuzz`).
+
+**Silent-failure marks** (WP-3281, version 176). The snapshot carries
+`DeclArena::subst_failed` (spec/ast.md §4.1) with the other cold maps;
+Sema's trap ledger is flushed before the snapshot is taken, so a prefix
+has no entry in flight. A kind is its variant's tag: a value outside the
+six kinds is `BadTag`, a decoding error, so the snapshot is refused
+(`kiln_ast` `decl::tests::subst_failed_unknown_kind_is_bad_tag`;
+`tests/pch_snapshot.rs` `subst_failed_marks_round_trip`).
 
 **Soundness.** (1) The prefix's tokens depend on the search path only
 through its lookups' results (the predefines and the feature queries,

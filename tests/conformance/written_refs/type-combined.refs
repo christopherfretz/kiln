@@ -1,6 +1,6 @@
 14:20-14:21  mem-init  'n' -> lib::Rec::n@13:7 in=lib::Rec::Rec@14:3
 14:22-14:23  expr  'v' -> v@14:11 in=lib::Rec::Rec@14:3
-16:21-16:24  type  'Rec' -> lib::Rec@12:8 in=lib@11:11
+16:21-16:24  type  'Rec' -> lib::Rec@12:8 in=lib::Box@16:33
 17:3-17:4  type  'T' -> T@16:17 in=lib::Box::v@17:5
 17:9-17:10  type  'T' -> T@16:17 in=lib::Box::v@17:5
 24:7-24:10  nns  'lib' -> lib@11:11 in=Rec@24:12
@@ -73,5 +73,5 @@
 50:57-50:58  member  'n' -> lib::Rec::n@13:7 spec=HasN@50:9
 50:51-50:52  operator  '+' -> (dependent) in=HasN@50:9 def=0+adl
 50:51-50:52  operator  '+' -> (builtin) spec=HasN@50:9 how=builtin
-51:20-51:23  type  'Rec' -> lib::Rec@12:8 found=Rec@24:12 in=(tu)
-51:15-51:19  concept  'HasN' -> HasN@50:9 in=(tu)
+51:20-51:23  type  'Rec' -> lib::Rec@12:8 found=Rec@24:12 in=static_assert@51:1
+51:15-51:19  concept  'HasN' -> HasN@50:9 in=static_assert@51:1

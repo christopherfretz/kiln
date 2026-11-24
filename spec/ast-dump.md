@@ -174,11 +174,18 @@ type   := "'" printed-type "'" [":'" desugared "'"]     -- only when the strings
 
 ## 3. M2 node lines (normative)
 Every decl line starts `Class [parent] [implicit] [used|referenced]
-[invalid]` (`parent`: the semantic context differs from the lexical one —
+[invalid [subst-failed=<kind>]]` (`parent`: the semantic context differs from the lexical one —
 an out-of-line member definition, a befriended declaration; with `ids`
 `parent=#dN`; clang's `isImplicit`, `isUsed` (of the first declaration),
 `isThisDeclarationReferenced`, `isInvalidDecl`; `used`
 wins); this is `<head>` below, after the §2 ids and location.
+`subst-failed=<kind>` (kiln only, WP-3281) follows `invalid` on a
+declaration that failed silently (spec/ast.md §4.1 "Silent failures"):
+`function-signature`, `explicit-specifier`, `variable-partial-ambiguity`,
+`class-partial-ambiguity`, `local-of-failed-signature`, `other-trapped`.
+clang prints no such token, and the declarations that carry it are
+specializations clang's dump does not print, so goldens compared with
+clang never see it.
 Dependence flags are not printed (clang prints them only on dependent
 expressions, M3). Every expression
 line starts `Class 'type' [lvalue|xvalue [bitfield]]` (§2; prvalues print

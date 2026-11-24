@@ -470,14 +470,16 @@ impl Sema<'_, '_> {
                 ));
             }
         }
+        // The constructor taking the arguments is tried without a
+        // declaration (WP-3282): a failed trial leaves no `__promise`
+        // behind, only the default-initialized one.
         if !args.is_empty() {
-            let v = self.coro_var("__promise", ty, floc, InitStyle::Call);
-            let ((), stash) =
-                self.capturing(|s| s.act_on_init(v, Initializer::Paren(args, floc, floc)));
-            let failed =
-                self.stash_has_error(&stash) || self.ast.decls.get(v).has(DeclFlags::INVALID);
-            if !failed {
-                self.release(stash, Vec::new());
+            let (x, stash) = self.capturing(|s| {
+                s.perform_init(ty, Initializer::Paren(args.clone(), floc, floc), floc, false)
+            });
+            if !self.is_err_expr(x) && !self.stash_has_error(&stash) {
+                let v = self.coro_var("__promise", ty, floc, InitStyle::Call);
+                self.act_on_init(v, Initializer::Paren(args, floc, floc));
                 return Some(v);
             }
         }
@@ -1164,11 +1166,11 @@ impl Sema<'_, '_> {
         self.check_coroutine_post_params(f);
         let Some(coro) = self.coro_state().cloned() else { return body };
         let Some(promise) = coro.promise else {
-            self.ast.decls.set_flags(f, DeclFlags::INVALID);
+            self.invalidate(f);
             return body;
         };
         let Some(Some((init_suspend, final_suspend))) = coro.suspends else {
-            self.ast.decls.set_flags(f, DeclFlags::INVALID);
+            self.invalidate(f);
             return body;
         };
         let built = self.coro_isolated(|s| {
@@ -1177,7 +1179,7 @@ impl Sema<'_, '_> {
         if let Some(s) = built {
             s
         } else {
-            self.ast.decls.set_flags(f, DeclFlags::INVALID);
+            self.invalidate(f);
             body
         }
     }

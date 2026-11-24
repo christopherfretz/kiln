@@ -277,8 +277,13 @@ impl Sema<'_, '_> {
     /// (the parser passes none). Checks the list (duplicates, delegation),
     /// completes it with the implicit initializers and stores it. The
     /// parser calls it for every constructor definition, with the `:`
-    /// location, or the body's `{` when there is no ctor-initializer.
-    pub fn act_on_mem_initializers(&mut self, ctor: DeclId, inits: &[MemInitInfo], colon_loc: Loc) {
+    /// location, or `None` when there is no ctor-initializer.
+    pub fn act_on_mem_initializers(
+        &mut self,
+        ctor: DeclId,
+        inits: &[MemInitInfo],
+        colon: Option<Loc>,
+    ) {
         self.note_init_fp(ctor);
         for info in inits {
             self.act_on_mem_initializer(ctor, info);
@@ -290,18 +295,15 @@ impl Sema<'_, '_> {
         };
         if st.skip {
             // A template: the list goes on the `Ast` as written
-            // (spec/ast.md §8.6); the instantiation substitutes into it
-            // (`Substituter::ctor_initializer`). An invalid constructor
-            // keeps only the failure.
+            // (spec/ast.md §8.6), the empty list included (`colon` None:
+            // no ctor-initializer written); the instantiation substitutes
+            // into it (`Substituter::ctor_initializer`). An invalid
+            // constructor keeps only the failure.
             let d = self.ast.decls.get(ctor);
-            let inits =
-                if d.flags().contains(DeclFlags::INVALID) { Vec::new() } else { st.pattern };
-            if d.kind() == DeclKind::CXXConstructor && (st.pattern_failed || !inits.is_empty()) {
-                let rec = PatternMemInits {
-                    colon: colon_loc,
-                    failed: st.pattern_failed,
-                    inits: inits.into(),
-                };
+            let invalid = d.flags().contains(DeclFlags::INVALID);
+            if d.kind() == DeclKind::CXXConstructor && (st.pattern_failed || !invalid) {
+                let inits = if invalid { Vec::new() } else { st.pattern };
+                let rec = PatternMemInits { colon, failed: st.pattern_failed, inits: inits.into() };
                 let _ = self.builder().set_pattern_mem_inits(ctor, rec);
             }
             return;
@@ -1336,7 +1338,7 @@ impl Sema<'_, '_> {
             self.delegation_cycle(ctor, &list, &mut valid, &mut invalid, &mut current, 0);
         }
         for c in invalid {
-            self.ast.decls.set_flags(c, DeclFlags::INVALID);
+            self.invalidate(c);
         }
         self.delegating = list;
     }

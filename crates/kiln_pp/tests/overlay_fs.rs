@@ -258,10 +258,8 @@ fn lookups<F: HeaderFs>(
     dirs: &[&str],
     names: &[&str],
 ) -> (Vec<Option<String>>, Vec<String>) {
-    let specs: Vec<SearchDirSpec> = dirs
-        .iter()
-        .map(|d| SearchDirSpec { path: (*d).to_owned(), group: DirGroup::Angled })
-        .collect();
+    let specs: Vec<SearchDirSpec> =
+        dirs.iter().map(|d| SearchDirSpec::new(*d, DirGroup::Angled)).collect();
     let mut fs = fs;
     let list = SearchList::build(&specs, true, &mut fs);
     let messages = list.messages().to_vec();
@@ -327,8 +325,7 @@ fn a_miss_the_overlay_cannot_have_is_answered_at_once() {
 
 /// The search list of `-Iinc1 -Iinc2` over `fs`.
 fn two_dirs(fs: &mut dyn HeaderFs) -> SearchList {
-    let specs =
-        ["inc1", "inc2"].map(|d| SearchDirSpec { path: d.to_owned(), group: DirGroup::Angled });
+    let specs = ["inc1", "inc2"].map(|d| SearchDirSpec::new(d, DirGroup::Angled));
     SearchList::build(&specs, true, fs)
 }
 

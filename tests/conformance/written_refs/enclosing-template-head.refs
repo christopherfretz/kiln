@@ -1,0 +1,40 @@
+18:21-18:24  nns  'lib' -> lib@13:11 in=make@18:38
+18:26-18:31  type  'Shape' -> lib::Shape@14:8 q=18:21 in=make@18:38
+19:11-19:14  nns  'lib' -> lib@13:11 in=point@19:41
+19:16-19:21  type  'Shape' -> lib::Shape@14:8 q=19:11 in=point@19:41
+21:19-21:22  nns  'lib' -> lib@13:11 in=constrained@22:6
+21:24-21:29  type  'Shape' -> lib::Shape@14:8 q=21:19 in=constrained@22:6
+23:29-23:32  nns  'lib' -> lib@13:11 in=Takes@23:58
+23:34-23:39  type  'Shape' -> lib::Shape@14:8 q=23:29 in=Takes@23:58
+24:21-24:24  nns  'lib' -> lib@13:11 in=Alias@24:39
+24:26-24:31  type  'Shape' -> lib::Shape@14:8 q=24:21 in=Alias@24:39
+24:47-24:50  nns  'lib' -> lib@13:11 in=Alias@24:39
+24:56-24:57  type  'T' -> T@24:17 in=Alias@24:39
+24:52-24:55  template  'Box' -> lib::Box@15:27 q=24:47 in=Alias@24:39
+25:21-25:24  nns  'lib' -> lib@13:11 in=var@25:37
+25:26-25:31  type  'Shape' -> lib::Shape@14:8 q=25:21 in=var@25:37
+26:21-26:24  nns  'lib' -> lib@13:11 in=Any@26:41
+26:26-26:31  type  'Shape' -> lib::Shape@14:8 q=26:21 in=Any@26:41
+27:42-27:45  nns  'lib' -> lib@13:11 in=(lambda)::operator()@27:30
+27:47-27:52  type  'Shape' -> lib::Shape@14:8 q=27:42 in=(lambda)::operator()@27:30
+27:57-27:58  operator  '(' -> (dependent) close=27:58 in=lam@27:67
+29:21-29:24  nns  'lib' -> lib@13:11 in=Outer@29:40
+29:26-29:31  type  'Shape' -> lib::Shape@14:8 q=29:21 in=Outer@29:40
+30:23-30:26  nns  'lib' -> lib@13:11 in=Outer::member@30:41
+30:32-30:33  type  'T' -> T@29:17 in=Outer::member@30:41
+30:28-30:31  template  'Box' -> lib::Box@15:27 q=30:23 in=Outer::member@30:41
+35:19-35:22  nns  'lib' -> lib@13:11 in=Spec@36:8
+35:24-35:29  type  'Shape' -> lib::Shape@14:8 q=35:19 in=Spec@36:8
+40:19-40:22  nns  'lib' -> lib@13:11 in=Spec::out@41:15
+40:24-40:29  type  'Shape' -> lib::Shape@14:8 q=40:19 in=Spec::out@41:15
+41:11-41:12  type  'T' -> T@39:17 in=Spec::out@41:15
+41:6-41:10  nns  'Spec' -> Spec@36:8 in=Spec::out@41:15
+41:15-41:18  redecl  'out' -> Spec::out@37:8 q=41:6 in=Spec::out@41:15
+45:19-45:22  nns  'lib' -> lib@13:11 in=Part@46:8
+45:24-45:29  type  'Shape' -> lib::Shape@14:8 q=45:19 in=Part@46:8
+46:13-46:14  type  'T' -> T@44:17 in=Part@46:8
+46:8-46:12  spec-target  'Part' -> Part@43:27 in=Part@46:8
+49:19-49:22  nns  'lib' -> lib@13:11 in=pvar@50:5
+49:24-49:29  type  'Shape' -> lib::Shape@14:8 q=49:19 in=pvar@50:5
+50:10-50:11  type  'T' -> T@48:17 in=pvar@50:5
+50:5-50:9  spec-target  'pvar' -> pvar@47:24 in=pvar@50:5

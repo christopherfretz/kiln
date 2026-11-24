@@ -524,7 +524,9 @@ impl Sema<'_, '_> {
 
     /// Records a declarative name (stage 3, spec/ast.md §18.4) written at
     /// `range` with qualifier `q`, naming `entity`: `None` is a dependent
-    /// name when `dependent`, else an unresolved one.
+    /// name when `dependent`, else an unresolved one; an entity with
+    /// `dependent` is a candidate decided per specialization (a friend's
+    /// row entity, spec/ast.md §23.3).
     pub fn note_written_decl_name(
         &mut self,
         range: Span,
@@ -537,8 +539,8 @@ impl Sema<'_, '_> {
             return None;
         }
         let flags = match entity {
+            _ if dependent => REF_DEPENDENT,
             Some(_) => 0,
-            None if dependent => REF_DEPENDENT,
             None => REF_UNRESOLVED,
         };
         self.push_written_ref(range, entity, None, role, q, flags)
@@ -564,12 +566,13 @@ impl Sema<'_, '_> {
     }
 
     /// What the qualified friend `fd` written with declarator `d` names
-    /// when sema kept it with its type only (`FriendTarget::Type`): for a
-    /// [temp.friend]/5 friend (`template<class T> friend void
-    /// A<T>::f();`) the member of the class template pattern its
-    /// qualifier names ([`Sema::member_friend_pattern_member`]), else
-    /// nothing; and whether the name is dependent (no entity, a dependent
-    /// qualifier: spec/ast.md §18.4).
+    /// when sema kept it with its type only (`FriendTarget::Type`): its
+    /// row's entity and `DEPENDENT` flag (spec/ast.md §23.3, one source
+    /// of truth); without a row, for a [temp.friend]/5 friend
+    /// (`template<class T> friend void A<T>::f();`) the member of the
+    /// class template pattern its qualifier names
+    /// ([`Sema::member_friend_pattern_member`]), else nothing; and
+    /// whether the name is dependent (spec/ast.md §18.4).
     pub fn written_friend_type_target(
         &mut self,
         fd: DeclId,
@@ -577,6 +580,10 @@ impl Sema<'_, '_> {
     ) -> (Option<DeclId>, bool) {
         if !self.records_written_refs() {
             return (None, false);
+        }
+        if let Some(r) = self.ast.decls.friend_form_row(fd) {
+            let dep = r.flags.contains(kiln_ast::friend_form::FriendFormFlags::DEPENDENT);
+            return (r.entity, dep);
         }
         let e = self.member_friend_pattern_member(fd);
         let dep = e.is_none()
@@ -607,8 +614,10 @@ impl Sema<'_, '_> {
         if !self.records_written_refs() || !self.inst.stack.is_empty() {
             return;
         }
+        // The row's candidate (the one template found), spec/ast.md §23.3.
+        let entity = self.ast.decls.friend_form_row(fd).and_then(|r| r.entity);
         let refs = &mut self.ast.written_refs;
-        refs.set_target(id, None, None, REF_DEPENDENT);
+        refs.set_target(id, entity, None, REF_DEPENDENT);
         refs.set_how(id, RefLookup::None);
         if refs.using_directive(id).is_some() {
             refs.set_using_directive(id, None);
@@ -1151,9 +1160,21 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Declaration `d` claims the names recorded since `m`, not the
+    /// closures: an enumerator and a `static_assert`, whose closures keep
+    /// the lexical context (spec/ast.md §5.9, §18.3).
+    #[inline]
+    pub fn claim_written_names(&mut self, m: Option<RefMark>, d: Option<DeclId>) {
+        if let (Some(m), Some(d)) = (m, d)
+            && self.records_written_refs()
+        {
+            self.ast.written_refs.claim(m, d);
+        }
+    }
+
     /// [`claim_written_refs`](Self::claim_written_refs) by the template
-    /// parameter just parsed since `m` (closures only: template parameters
-    /// do not claim names yet, spec/ast.md §18.3).
+    /// parameter just parsed since `m` (closures only: a template
+    /// parameter's names are its template's, spec/ast.md §18.3).
     #[inline]
     pub fn claim_template_param(&mut self, m: Option<RefMark>) {
         if let Some(m) = m {
@@ -1161,22 +1182,28 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// The alias-declaration `d`, whose type-id was parsed since `m`,
-    /// claims its closures (spec/ast.md §5.9; its names stay enclosed by
-    /// the context, §18.3).
+    /// The innermost template head opened since `m` is closed: the
+    /// templated declaration it declared claims the head's names (its
+    /// parameters' types and default arguments, its requires-clause;
+    /// spec/ast.md §18.3) and the closures of its requires-clause (§5.9).
+    /// The names go to `parsed` (the declaration the head's
+    /// simple-declaration declared, its pattern for a template) when no
+    /// template owns the head's parameter list: a class template partial
+    /// specialization, an out-of-line member of a class template.
     #[inline]
-    pub fn claim_alias_closures(&mut self, m: Option<RefMark>, d: DeclId) {
-        if let Some(m) = m {
-            self.claim_closures(m.decls, d);
-        }
-    }
-
-    /// The closures of the innermost template head opened since `m`
-    /// (its requires-clause) go to the templated declaration it declared.
-    #[inline]
-    pub fn claim_template_head(&mut self, m: Option<RefMark>) {
+    pub fn claim_template_head(&mut self, m: Option<RefMark>, parsed: Option<DeclId>) {
         if let Some(m) = m {
             self.claim_template_head_closures(m.decls);
+            if self.records_written_refs() && self.ast.written_refs.has_unclaimed(m) {
+                let templated = |d: DeclId| match self.ast.template_info(d) {
+                    Some(i) => i.pattern.unwrap_or(d),
+                    None => d,
+                };
+                let o = self.template_head_owner(m.decls).or_else(|| parsed.map(templated));
+                if let Some(o) = o {
+                    self.ast.written_refs.claim(m, o);
+                }
+            }
         }
     }
 

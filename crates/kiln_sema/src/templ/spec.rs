@@ -268,7 +268,10 @@ impl Sema<'_, '_> {
                 let r = self.act_on_partial_spec(keyword, tmpl, args, &locs, use_, range);
                 self.templ.cur = None;
                 let p = r?;
+                // Its value arguments profiled as any dependent
+                // template-id's are (WP-3270).
                 let list = self.ast.types.arg_list(args);
+                let list = self.profile_value_args(list);
                 let t = self.ast.types.template_specialization(name, list, None, false);
                 Ok((Some(p), self.ast.types.elaborated(keyword, None, t)))
             }
@@ -312,8 +315,14 @@ impl Sema<'_, '_> {
                 // [temp.friend]) stays a dependent type in the pattern's
                 // `FriendDecl`; each instantiation of the class befriends
                 // the substituted specialization (§4.8).
+                // Formed as the same template-id written as a
+                // simple-type-specifier is (`act_template_id`), so
+                // `friend class It<T, true>;` befriends the type a member's
+                // `It<T, true>` names ([temp.type]/1, WP-3270).
                 if dependent {
-                    let t = self.ast.types.template_specialization(name, list, None, false);
+                    let converted = self.injected_template_args(name, args);
+                    let args = converted.as_deref().unwrap_or(args);
+                    let t = self.dependent_class_spec_type(name, tmpl, args, name_loc);
                     return Ok((None, self.ast.types.elaborated(keyword, None, t)));
                 }
                 let spec = self.get_class_spec(tmpl, args, &locs, name_loc)?;
@@ -636,6 +645,11 @@ impl Sema<'_, '_> {
         }
         let tag = Self::tag_kind_of(keyword);
         let p = self.builder().class_partial_spec(h, tmpl, head, conv.sugared, tag);
+        // The arguments as written (`f(1)`, not its value), beside the
+        // converted ones matching and ordering use (spec/ast.md §8.3,
+        // WP-3016).
+        let w = self.ast.types.arg_list(args);
+        self.ast.templates.set_args_as_written(p, w, false);
         // [basic.link]/14: what its head names (WP-1855).
         self.module_check_head_exposure(p, head);
         if self.kind_of(self.ctx) == DeclKind::CXXRecord {
@@ -820,9 +834,9 @@ impl Sema<'_, '_> {
         let mut d = DeducedArgs::new(list.depth, params.len());
         d.expansions = true;
         d.self_deduce = true;
-        self.inst.sfinae.borrow_mut().push(crate::templ::stack::SfinaeState::default());
+        self.push_sfinae_state();
         let r = self.deduce_args(&args, &args, true, &mut d, loc);
-        let failed = self.inst.sfinae.borrow_mut().pop().is_some_and(|s| s.errors > 0);
+        let failed = self.pop_sfinae_state().errors > 0;
         if r != Tdk::Success || failed {
             return;
         }
