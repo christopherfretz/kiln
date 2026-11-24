@@ -29,6 +29,7 @@ use kiln_ast::{DeclId, ExprId};
 use kiln_source::{Loc, Span};
 
 use crate::Sema;
+use crate::written_keys::RowKeys;
 
 /// What one dependent operator token selected in one specialization
 /// (spec/ast.md §18.13.6): the rows it gets.
@@ -553,7 +554,9 @@ impl Sema<'_, '_> {
         };
         let ws = self.written_oper_entries(pattern);
         let Some(w) = ws[0] else { return };
-        let Some(spec) = self.written_spec_key() else { return };
+        let Some(keys) = self.written_row_keys(w, Some(PatternNode::Oper(pattern, 0))) else {
+            return;
+        };
         let picks = if arrow {
             let at = self.ast.written_refs.get(w).range.lo;
             self.written_arrow_sels(rebuilt, at)
@@ -562,7 +565,7 @@ impl Sema<'_, '_> {
         };
         for (slot, w) in (0u8..).zip(ws) {
             if let Some(w) = w {
-                self.push_written_oper_rows(w, slot, spec, rebuilt, &picks);
+                self.push_written_oper_rows(w, slot, keys, pattern, rebuilt, &picks);
             }
         }
     }
@@ -573,10 +576,10 @@ impl Sema<'_, '_> {
     /// resolution (rows are kept once, §18.9.1).
     pub(crate) fn note_written_spec_fold(&mut self, pattern: ExprId, r: ExprId) {
         let ws = self.written_oper_entries(pattern);
-        if ws[0].is_none() {
+        let Some(w0) = ws[0] else { return };
+        let Some(keys) = self.written_row_keys(w0, Some(PatternNode::Oper(pattern, 0))) else {
             return;
-        }
-        let Some(spec) = self.written_spec_key() else { return };
+        };
         let picks = if self.ast.exprs.get(r).kind() == ExprKind::CXXFoldExpr {
             vec![OperSel::Dependent]
         } else {
@@ -584,7 +587,7 @@ impl Sema<'_, '_> {
         };
         for (slot, w) in (0u8..).zip(ws) {
             if let Some(w) = w {
-                self.push_written_oper_rows(w, slot, spec, r, &picks);
+                self.push_written_oper_rows(w, slot, keys, pattern, r, &picks);
             }
         }
     }
@@ -595,43 +598,53 @@ impl Sema<'_, '_> {
     /// nothing, a `SPEC_BUILTIN` row.
     pub(crate) fn note_written_spec_fold_none(&mut self, pattern: ExprId) {
         let ws = self.written_oper_entries(pattern);
-        if ws[0].is_none() {
+        let Some(w0) = ws[0] else { return };
+        let Some(keys) = self.written_row_keys(w0, Some(PatternNode::Oper(pattern, 0))) else {
             return;
-        }
-        let Some(spec) = self.written_spec_key() else { return };
+        };
         for (slot, w) in (0u8..).zip(ws) {
             if let Some(w) = w {
-                self.push_written_oper_rows(w, slot, spec, pattern, &[OperSel::Builtin]);
+                self.push_written_oper_rows(w, slot, keys, pattern, pattern, &[OperSel::Builtin]);
             }
         }
     }
 
-    /// The rows of entry `w` (token `slot` of its node) for `picks` in
-    /// `spec`; a still-dependent `rebuilt` becomes a further pattern node
-    /// of the entry (§18.9.4), and a failure inside a SFINAE context
-    /// records nothing (§18.9.3).
+    /// The rows of entry `w` (token `slot` of `pattern`'s node) for
+    /// `picks` under `keys`; a still-dependent `rebuilt` becomes a further
+    /// pattern node of the entry (§18.9.4), and a failure inside a SFINAE
+    /// context records nothing (§18.9.3) and fails a key scope's
+    /// substitution (§18.14.3).
     fn push_written_oper_rows(
         &mut self,
         w: WrittenRefId,
         slot: u8,
-        spec: DeclId,
+        keys: RowKeys,
+        pattern: ExprId,
         rebuilt: ExprId,
         picks: &[OperSel],
     ) {
+        let node = PatternNode::Oper(pattern, slot);
+        let keys = if slot == 0 { keys } else { self.rekey(keys, w, node) };
         for &sel in picks {
             match sel {
                 OperSel::Fn((d, f), flags, how) => {
-                    self.push_written_spec_with(w, spec, Some(d), f, flags, how);
+                    self.push_written_spec_with(w, keys, Some(d), f, flags, how);
                 }
                 OperSel::Builtin => {
-                    self.push_written_spec_with(w, spec, None, None, SPEC_BUILTIN, None);
+                    self.push_written_spec_with(w, keys, None, None, SPEC_BUILTIN, None);
                 }
-                OperSel::Unresolved if self.inst.stack.is_sfinae() => {}
+                OperSel::Unresolved if self.inst.stack.is_sfinae() => {
+                    if let Some(k) = keys.key {
+                        self.key_scope_poison(k);
+                    }
+                }
                 OperSel::Unresolved => {
-                    self.push_written_spec_with(w, spec, None, None, 0, None);
+                    self.push_written_spec_with(w, keys, None, None, 0, None);
                 }
                 OperSel::Dependent => {
-                    self.ast.written_refs.note_pattern_node(PatternNode::Oper(rebuilt, slot), w);
+                    let new = PatternNode::Oper(rebuilt, slot);
+                    self.ast.written_refs.note_pattern_node(new, w);
+                    self.note_keyed_still_dependent(w, keys.key, node, new);
                 }
             }
         }

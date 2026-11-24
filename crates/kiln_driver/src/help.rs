@@ -338,6 +338,8 @@ KILN DEVELOPMENT:
                           it denotes
   -fkiln-written-refs     [kiln] Record the written names (for tooling
                           clients; carried in PCHs and module files)
+  -fkiln-written-ref-keys [kiln] With the written names, record what each
+                          dependent name bound to per substitution
   -fkiln-decl-extents     [kiln] Record the source extents of every
                           declaration as written (for tooling clients)
   -fkiln-dump-decl-extents

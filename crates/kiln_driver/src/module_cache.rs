@@ -227,6 +227,10 @@ pub(crate) fn for_job(
     if a.written_refs {
         config.push_str("written-refs\n");
     }
+    // With its substitution keys or without them (spec/ast.md §18.14.5).
+    if a.written_ref_keys {
+        config.push_str("written-ref-keys\n");
+    }
     let cache = StdCache {
         root,
         config,
@@ -423,8 +427,9 @@ impl StdCache {
         // A module file carries no function-name spans (stage A).
         a.fn_names = false;
         a.dump_fn_names = false;
-        // `written_refs` stays: the module file carries the table its
-        // build records (spec/ast.md §18.10.2), keyed apart below.
+        // `written_refs` and `written_ref_keys` stay: the module file
+        // carries the table its build records (spec/ast.md §18.10.2,
+        // §18.14.5), keyed apart below.
         // `decl_extents` stays: the module file carries the extents its
         // build records (spec/ast.md §19.6), keyed apart below.
         a.dump_decl_extents = false;

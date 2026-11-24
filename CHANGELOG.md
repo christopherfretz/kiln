@@ -33,6 +33,25 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   specialization of a template. A cold map holds a row only for a shadow
   that found a shadow. PCH snapshots and module images carry it (a fourth
   word in an image's shadow records).
+- Substitution keys of the written-reference table, stage 0 (WP-3540,
+  spec/ast.md §18.14), for tooling clients: an opt-in sub-switch
+  `-fkiln-written-ref-keys` (`ParseOptions::written_ref_keys`,
+  `FrontEndOptions::written_ref_keys`; implies `-fkiln-written-refs`)
+  and a second table beside `specs()`, keyed by a completed substitution
+  of a template pattern (a partial specialization match, a satisfaction
+  check, a default template argument, an alias template: kind, template,
+  canonical arguments, payload), with what each dependent entry bound to
+  under it (`WrittenRefs::subst_keys`, `subst_rows`, `subst_key_of`,
+  `subst_rows_of`, `subst_rows_naming`, `SUBST_DEPENDENT`,
+  `SUBST_EXPANDED`). The substituter's key scopes buffer rows privately
+  and commit them once per identity at a completed close. The table is
+  carried in PCH snapshots and module images, and a prefix or unit made
+  without keys, or keys an image left out, are listed
+  (`Unrecorded::PrefixKeys`, `ModuleKeys`, `ModuleKeysLeftOut`;
+  `subst_keys_complete()`); the dump prints keyed rows and the memory
+  report a `written_refs.subst` row. No compiler path opens a key yet;
+  `specs()` and every dump are unchanged with the sub-switch on or off.
+  PCH `FORMAT_VERSION` 184, `IMAGE_VERSION` 98.
 - What a using-declaration names, for tooling clients (WP-3403,
   spec/ast.md §4.2): total accessors `Ast::using_named(u)` (each shadow
   with its target and the member that hides it, `UsingNamed`),

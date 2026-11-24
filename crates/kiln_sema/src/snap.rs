@@ -85,6 +85,7 @@
 //! | `vararg_copying` | transient | the variadic argument being copied (`Sema::check_variadic_args`) |
 //! | `inst_outer_anchor` | transient | set inside `Sema::in_inst_context` only |
 //! | `eval_replay` | transient | set inside `EvalSession::run` only (spec/eval-session.md §5.1) |
+//! | `key_scopes` | transient | the substitutions whose written-reference keys are being recorded (spec/ast.md §18.14.3); its buffer pool is scratch |
 //! | `subst_expr_depth`, `subst_template_id`, `expansion_element_init`, `expansion_vars`, `in_typedef_instantiation`, `instantiating_friend_template`, `friend_cmp_constraints`, `friend_template_apart`, `range_for_outer_depth` | transient | set while one substitution runs |
 //! | `unevaluated`, `immediate`, `constant_full_expr`, `capture_reads_variable`, `discarding_init`, `address_operand`, `deref_after_amp`, `decltype_calls`, `typeid_operands`, `pending_odr`, `ref_odr_at_build`, `potential_caps`, `misaligned`, `deferred_call_refs`, `deferring_call_ref`, `extend_collector` | transient | the expression or full-expression being built |
 //! | `agg_error_mark`, `agg_excess`, `agg_list_end`, `designator_pending`, `designated_depth`, `written_lists`, `init_entity`, `init_var`, `ctor_entity`, `ctor_diag_ty`, `direct_list_entity`, `list_param_note`, `list_ctor_active`, `ref_temp_note`, `mem_inits`, `initializing` | transient | the initialization being checked |
@@ -195,7 +196,8 @@ macro_rules! sema_fields {
                 pending_friend_class_head, pending_friend_class_qual,
                 friend_class_template, extraneous_tag_head, nested_tag, inst_enable_if,
                 declspec_nulls, image_texprs, bmi, extensions_silenced,
-                temp_copy_second_step, vararg_copying, inst_outer_anchor, eval_replay],
+                temp_copy_second_step, vararg_copying, inst_outer_anchor, eval_replay,
+                key_scopes],
             scratch: [cfg_body, uninit_scratch, walk_stack, conv_walk_stack, equiv_scratch,
                 cand_scratch, deduce_scratch, complex_div_unmet],
             rebuilt: [spare_oven, classify_memo, begin_memo, imported_bodies_walked],
@@ -282,6 +284,12 @@ impl<T: AtRest + Copy> AtRest for Cell<T> {
 impl<T: AtRest> AtRest for RefCell<T> {
     fn at_rest(&self) -> bool {
         self.try_borrow().is_ok_and(|v| v.at_rest())
+    }
+}
+
+impl AtRest for crate::written_keys::KeyScopes {
+    fn at_rest(&self) -> bool {
+        crate::written_keys::KeyScopes::at_rest(self)
     }
 }
 
@@ -385,7 +393,7 @@ fn get_ast(r: &mut Reader<'_>, into: &mut Ast, files: u32) -> Result<(), SnapErr
             "the AST's interner is not the consumer's (read the interner first, in the same stream)",
         ));
     }
-    ast.get_written_refs(r, into.written_refs.is_on(), files)?;
+    ast.get_written_refs(r, (into.written_refs.is_on(), into.written_refs.subst_keys_on()), files)?;
     *into = ast;
     Ok(())
 }

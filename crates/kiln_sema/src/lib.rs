@@ -167,6 +167,7 @@ mod vexing;
 mod visibility;
 mod vla;
 mod weak_import;
+mod written_keys;
 mod written_refs;
 mod written_refs_oper;
 mod written_specs;
@@ -995,6 +996,9 @@ pub struct Sema<'a, 'sm> {
     /// An evaluation session's records while one of its runs runs
     /// (spec/eval-session.md §5.1, §7); `None` otherwise.
     pub(crate) eval_replay: Option<Box<session::Replay>>,
+    /// The open key scopes of the written-reference table's substitution
+    /// keys (spec/ast.md §18.14.3); empty with the keys off.
+    pub(crate) key_scopes: written_keys::KeyScopes,
     /// Overload resolution's pooled candidate sets and counters
     /// (spec/sema-overload.md §1.4).
     pub(crate) ovl: overload::OverloadScratch,
@@ -1801,6 +1805,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             meta_subst: meta::SubstMemo::default(),
             spare_oven: None,
             eval_replay: None,
+            key_scopes: written_keys::KeyScopes::default(),
             ovl: overload::OverloadScratch::default(),
             trailing_notes: std::cell::RefCell::new(Vec::new()),
             omitted_inits: Vec::new(),

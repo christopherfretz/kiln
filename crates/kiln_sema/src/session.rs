@@ -785,6 +785,7 @@ impl Sema<'_, '_> {
                     start_nodes: 0,
                     child_ns: 0,
                     trace: None,
+                    key_scope: 0,
                 });
                 let ctx = self.sess_context();
                 let _ = self.inst.stack.pop();

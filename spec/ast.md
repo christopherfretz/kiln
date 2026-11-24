@@ -4198,6 +4198,9 @@ The dump prints each row first, `unrecorded  precompiled prefix (<n>
 files)` and `unrecorded  module <key> (<main file's base name>, <n>
 files)`. A table with an unrecorded row is still carried by a later
 snapshot (the rows with it); a module unit with one fails its image.
+The substitution keys' own gaps (`PrefixKeys`, `ModuleKeys`,
+`ModuleKeysLeftOut`, §18.14.5) are listed the same way and do not fail
+an image.
 
 #### 18.10.4 Cost
 
@@ -5252,6 +5255,295 @@ goldens (`Inputs/refs_pch.h`, `Inputs/refs_mod.cppm`: a class's own
 image). The entries reuse the role, qualifier, lead and pattern-node
 shapes of stages 1 to 6b, so neither carriage changes (no
 `FORMAT_VERSION` or `IMAGE_VERSION` bump).
+
+### 18.14 Substitution keys (WP-3540)
+
+A per-specialization row (§18.9) says what a dependent name resolved to
+when a *specialization* was instantiated. Four substitutions of a
+template pattern form no specialization of their own, and their rows
+are keyed by the template today (§18.9.2): matching a class or variable
+template partial specialization against a specialization's arguments
+([temp.spec.partial.match]), checking associated constraints or a
+concept-id for satisfaction ([temp.constr.constr]), substituting a
+default template argument ([temp.param]/10) and substituting an alias
+template's type-id ([temp.alias]/2). Tooling clients need, for each such
+substitution that completed, what each dependent name of the pattern
+bound to under it. The keyed table records that beside `specs()`, opt-in
+under the table: `-fkiln-written-ref-keys` (driver),
+`ParseOptions::written_ref_keys`, `FrontEndOptions::written_ref_keys`;
+it implies `-fkiln-written-refs`.
+
+`specs()`, its rows, their ids and their dump lines are not changed by
+the keyed table, with the sub-switch on or off.
+
+Stage 0 (WP-3540) builds the table, its key scopes, its carriage and
+its dump. **No compiler path opens a key scope yet**, so a compilation
+commits no key; each later stage opens the scopes of one kind at the
+sites of §18.14.3's table and states which completed substitutions of
+that kind get a key.
+
+#### 18.14.1 The key
+
+`WrittenRefs::subst_keys()` yields the keys (`SubstKey`, 24 bytes, a
+`size_of` unit test), in commit order (not part of the contract: compare
+sorted):
+
+| field | type | meaning |
+|---|---|---|
+| `kind` | `SubstKind` (1) | `PartialMatch` (1), `Satisfaction` (2), `DefaultArg` (3), `Alias` (4) |
+| `outcome` | `SubstOutcome` (1) | `Substituted` (1): matched, satisfied or substituted; `Unsatisfied` (2), on a `Satisfaction` key only: the check completed with the answer "not satisfied" |
+| `template` | `DeclId` (4) | first declaration: the partial specialization; the concept or the constrained declaration as the satisfaction check gets it (a template, a partial specialization, a member of a class template specialization as itself); the template whose parameter has the default; the alias template |
+| `args` | `ArgListId` (4) | the canonical arguments (`Types::canonical_args`): the specialization's being matched; the check's; the arguments before the defaulted parameter; the alias template's converted arguments |
+| `extra` | `u32` (4) | `PartialMatch`: the deduced argument list (`SubstKey::deduced`, a payload); `DefaultArg`: the parameter (`SubstKey::parameter`); else 0 |
+| (rows) | `(u32, u32)` (8) | the key's run of rows: start and length, which may be 0 |
+
+A key's **identity** is (kind, template, arguments, and the parameter of
+a `DefaultArg`); `outcome` and a `PartialMatch`'s deduced list are not
+part of it. One identity has one key. Keys are formed for **concrete
+arguments only**: a substitution with a dependent argument is part of
+parsing the enclosing pattern, and its names are resolved again by a
+later substitution with a key of its own. A key exists for a
+substitution that **completed**, whether or not any row was recorded
+under it, and for no substitution that failed: a satisfaction check that
+completed unsatisfied has a key (`Unsatisfied`), a partial specialization
+that did not match has none.
+
+Read side: `subst_key(id)`, `subst_key_len()`, `subst_key_of(kind,
+template, args, extra)` (the identity index), `subst_rows(id)` (the run,
+contiguous), `subst_rows_of(entry)`, `subst_rows_naming(decl)` (as
+`entity` or `found`), `subst_adl_set(row)`, `subst_keys_on()`,
+`subst_keys_complete()` (§18.14.5). A `DefaultArg`'s parameter and a
+`PartialMatch`'s deduced list are read through `SubstKey::parameter()`
+and `SubstKey::deduced()`; the partial specialization's primary template
+through `Ast::partial_spec_info(key.template)`.
+
+#### 18.14.2 The row
+
+`subst_rows(key)` yields the key's rows (`SubstRef`, 24 bytes, a
+`size_of` unit test): a `SpecRef` (§18.9.1) without `spec`, with the
+same fields and meanings.
+
+A keyed row carries what a per-specialization row (§18.9.1) carries:
+the pattern's entry (`entry`); the entity the name denotes under the key
+(`entity`), with `found` when lookup found something else; for an
+unqualified call the lookup facts of the key's substitution, `how` and
+the associated set (`adl`), the definition-time found set being the
+entry's (`found_at_definition(entry)`, §18.12) and the row one selection
+from it (§18.12.4); `udir`; and, for an entry that was substituted and
+is still dependent, `SUBST_DEPENDENT` with no entity.
+
+`flags` holds `SpecRef::flags`' bits and two of its own, in bits
+`SpecRef` does not use:
+
+- `SUBST_DEPENDENT` (1): the entry was substituted under the key and is
+  still dependent; its name is resolved by a later substitution. No
+  entity, `how` `None`.
+- `SUBST_EXPANDED` (64): the row's entry is not written in the key's own
+  template. It was reached through an alias template-id that the key's
+  pattern keeps only as its expansion ([temp.alias]/2). The table notes
+  the pattern nodes so reached (`expanded_nodes`, filled only with keys
+  on): a node a rebuild leaves dependent while the innermost frame is an
+  alias template's, or one rebuilt from such a node. A row made from one
+  gets the flag unless its key is the `Alias` key of the template that
+  holds the entry.
+
+Under a key, an entry has a row when its name bound during the key's
+substitution; an entry the substitution did not reach, or whose name
+did not bind, has none. A name that resolves to nothing fails the
+substitution (§18.14.3), so a committed key of the kinds other than
+`Satisfaction` has no unresolved row.
+
+#### 18.14.3 Key scopes
+
+The substituter keeps a stack of **key scopes** (`Sema::key_scopes`,
+transient, empty at rest and at a snapshot point), one per keyed
+substitution in progress, each with a private row buffer
+(`kiln_sema::written_keys`):
+
+- **Opening** (`key_scope_open(kind, template, args, extra, payload)`), where
+  the substitution's frame has its arguments. The scope is owned by the
+  innermost instantiation frame (`InstFrame::key_scope`). It records
+  (`Record`) unless its identity is already committed or already open
+  further out (`Skip`: the outer run substitutes everything itself).
+  With the sub-switch off it returns `None` after one bool test.
+- **Attribution** (`Sema::written_row_keys`). A name resolved now has up
+  to two row targets: the specialization `written_spec_key()` gives
+  (§18.9.2, unchanged) and the key scope found by one walk from the
+  innermost frame: a lambda substitution, a structured binding's
+  initializer and a requirement's instantiation are transparent; a frame
+  that owns a scope gives it; a constraint substitution continues
+  outward only to the satisfaction check of the same entity; any other
+  frame, every real instantiation included, ends the walk with none. A
+  nested real instantiation therefore records in `specs()` under its own
+  specialization and nothing in the enclosing key. Every recording site
+  of §18.9.4 and §18.13.7 builds the row once and gives it to each
+  target. With no scope open the walk is one test of an empty stack.
+- **Kept once.** A row equal to one already in the buffer is not added.
+  An overload set resolved later (§18.9.4's deferred resolution) patches
+  its buffered row while the scope is open; if the scope closed
+  meanwhile the keyed half is dropped.
+- **Failure inside.** Under a scope, a name that resolves to nothing (an
+  unresolved name, a failed call, a substitution failure the table
+  records nothing for, §18.9.3) adds no row and *poisons* the scope.
+- **Closing** (`key_scope_close(id, completed)`), in stack order, where
+  the outcome is known. The buffer is committed as the key's run, also
+  when empty, when the substitution completed, the scope records, it is
+  not poisoned and no error was diagnosed since the open; otherwise the
+  buffer is dropped and nothing is written to the table. A committed
+  identity is never recorded again: later runs open `Skip`.
+- **Suspended** (`key_scope_suspend`/`resume`): a check run inside a
+  substitution that is not part of it records into no scope.
+- **The context of a scope.** For a row whose only target is a key scope,
+  the declaration context the scope was opened in is the substitution's
+  own, not a template pattern of its own (`written_ctx_dependent`); for
+  a row with a specialization the test is §18.9.4's.
+
+A key's outcome and rows are those of its first completed run, first in
+translation order: the earliest point in the translation of the unit at
+which the substitution is performed. Two parses of the same text
+therefore give the same keys, outcomes and rows.
+
+Where each kind's scope opens and closes (stage 0 opens none):
+
+| kind | open | completed |
+|---|---|---|
+| `PartialMatch` | after the deduced arguments are set in `deduce_partial` (`templ/order.rs`) | the substituted arguments equal the specialization's, no substitution failure, the partial's constraints satisfied |
+| `Satisfaction` | after the check's arguments are set in `satisfy` (`templ/concepts/sat.rs`), not for dependent levels, a partly failed parameter mapping or a translation-unit entity | the check produced an answer, satisfied or not |
+| `DefaultArg` | after the prior arguments are set in `default_template_arg_in` (`templ/args.rs`) | substituted, and converted where the site checks |
+| `Alias` | after the alias template's frame is pushed in `alias_template_type` (`templ/class.rs`), arguments not dependent | the type-id substituted |
+
+#### 18.14.4 Row order
+
+`subst_rows(key)` is in the order the key's own substitution reached the
+names, an atomic constraint answered from the cache contributing its
+rows at the atom's position in the order its evaluation recorded them.
+The order depends on the key's pattern and arguments only: not on other
+keys, not on the order of instantiations, not on which answers came from
+a cache. (A buffer holds one key's rows in recording order.) The order
+*of keys* is commit order and is not part of the contract.
+
+#### 18.14.5 Rollback, carriage and gaps
+
+**Rollback.** `WrittenRefs::truncate` drops every key with a row of a
+dropped entry, whole, and compacts the rows; the other keys keep their
+order and are found again by identity. Expanded nodes of dropped entries
+go. No key is committed inside a tentative parse that is then rolled
+back past its template (debug-asserted).
+
+**PCH snapshot.** The section (§18.10.1) carries `keys_on` (whether the
+producer recorded keys), the keys and rows as they are, and the expanded
+nodes (sorted); the identity index is rebuilt. A restore checks, each an
+`Invalid` error: the keys' runs tile the rows in order (an empty run
+starts where the next one does), no identity twice, `Unsatisfied` only
+on a `Satisfaction` key, every row's entry in range and `DEPENDENT`,
+every set in range, every expanded node a pattern node, and the typed
+ids against the restored arenas (a `DefaultArg`'s parameter a
+declaration, a `PartialMatch`'s deduced list 0 or an argument list, the
+other kinds' `extra` 0). A consumer without keys drops what was carried;
+a consumer with keys continues the prefix's keys (their ids kept, the
+main file's appended).
+
+**Module images.** The `refs` section (spec/modules.md §11.11) carries
+`keys_on`, the keys (kind, outcome, template record, arguments,
+parameter record or deduced list) and their rows, under the rules of
+`specs`, and the counts of the keys it left out. A key is carried whole
+or not at all: one whose template, parameter, arguments, or a row's
+entry, entity, set or using-directive the image cannot carry is left out
+and counted. An importer that records keys maps each key and commits it
+(an identity it already has is kept as it is); one it cannot map is
+counted with the left-out ones. Off, the section is skipped undecoded.
+
+**Key gaps.** `WrittenRefs::unrecorded()` (§18.10.3) gains three variants,
+listed only when the consumer records keys:
+
+- `Unrecorded::PrefixKeys { files }`: the snapshot was made with the
+  table but without keys. Nothing the prefix substituted has a key.
+- `Unrecorded::ModuleKeys { module, files }`: the unit's image was made
+  with the table but without keys.
+- `Unrecorded::ModuleKeysLeftOut { module, keys, rows }`: the unit's
+  image was made with keys and left `keys` keys out, holding `rows`
+  rows.
+
+`Prefix` and `Module` already imply the key gap and are not doubled.
+The three do not fail a module unit's image (`Unrecorded::keys_only()`).
+`subst_keys_complete()` is true when no gap of either kind is listed.
+
+#### 18.14.6 The dump
+
+With keys on, after an entry's `spec=` lines (§18.9.5), its keyed rows,
+sorted and without duplicates, each printed as a `spec=` line with
+`key=` in its place:
+
+```
+key=partial:can_swap@4:30<n::S, void>     the primary template's name, the partial specialization's position, the specialization's arguments
+key=sat:Sw@3:28<n::S>
+key=default:call@2:40<n::S>#1             #<parameter index>
+key=alias:A@2:26<n::S>
+```
+
+`-> (dependent)` for a `SUBST_DEPENDENT` row, ` unsatisfied` after a row
+of an `Unsatisfied` key and a trailing ` expanded` for `SUBST_EXPANDED`.
+Arguments print canonical, as §18.9.5's. A key without rows prints once,
+after the entries, in the `keys` block: `keys  key=<...> rows=0`, sorted.
+The gaps print first, with §18.10.3's: `unrecorded  precompiled prefix
+keys (<n> files)`, `unrecorded  module <key> keys (<main file's base
+name>, <n> files)`, `unrecorded  module <key> keys left out (<k> keys,
+<r> rows)`. With keys off the dump is byte-identical to the dump without
+the keyed table, and with keys on it differs only by these lines.
+
+#### 18.14.7 The switch and cost
+
+Off (the table on, keys off), nothing is kept: the keyed table allocates
+nothing (`subst_mem() == (0, 0)`), the memory report has no new row, and
+every recording site pays one bool test or one test of the empty scope
+stack. Fixed costs that exist whatever the switch: `InstFrame` grows by
+4 bytes (frames are transient), the snapshot section by one byte and
+three empty lengths, the image's section by one byte, two empty lengths
+and two `u32` counts. The sub-switch is outside a precompiled header's
+identity, like `-fkiln-written-refs`, and part of an implicit module's
+cache key (`written-ref-keys`).
+
+On, a key is 24 bytes plus its identity-index slot, a row 24 bytes. The
+memory report's `written_refs.subst` row (count: keyed rows; bytes: keys,
+rows, the identity index, the expanded nodes and the pending overload
+sets) is shown only with keys on, and its bytes are not in the
+`written_refs` row. Every stage that opens a kind's scopes reports that
+row on `<bits/stdc++.h>`.
+
+Versions: PCH `FORMAT_VERSION` 184, `IMAGE_VERSION` 98.
+
+#### 18.14.8 Changes to `specs()`
+
+A change that adds, removes or re-keys rows of `specs()` lists, with the
+change, the new rows a `specs()` reader sees: per changed golden of
+`tests/conformance/written_refs/`, the added and removed `spec=` lines,
+and a one-line rule saying which names gain or lose rows. A change to
+the keyed table alone shows the opposite: the `spec=` lines of the
+whole corpus unchanged.
+
+#### 18.14.9 Tests
+
+`crates/kiln_ast/src/written_refs_subst.rs` (both sizes; a commit makes
+one contiguous run, an empty run is a key between two keys and as the
+last, an identity is committed once and a `PartialMatch`'s deduced list
+is no part of it; truncation drops whole keys; keys off allocates
+nothing and has no memory row; the gaps), `written_refs_carry.rs` (keys,
+rows and expanded nodes round trip through the section and the index is
+rebuilt; each validation; a consumer without keys keeps none; a section
+made without keys is `PrefixKeys`), `crates/kiln_sema/src/written_keys.rs`
+(the scope API driven directly: a completed close commits, with rows and
+without; nothing on failure, on poison, on an error diagnosed inside;
+`Skip` for a committed and for a re-entrant identity; kept once;
+suspended scopes record nothing; the innermost frame decides),
+`crates/kiln_sema/src/bmi_image/refs.rs` (keys round trip, every
+validation, a unit without keys), `crates/kiln_parse/tests/written_refs.rs`
+(keys off allocates nothing after a parse; keys on, the same dump and a
+`written_refs.subst` row of 0 rows) and
+`crates/kiln_driver/tests/written_refs_carry.rs` (every compiling file of
+`tests/conformance/written_refs/` dumps the same with the sub-switch; a
+snapshot made without keys is a `PrefixKeys` gap and one made with keys
+is none; a module unit compiled without keys is a `ModuleKeys` gap and
+one compiled with them is none).
 
 ## 19. The declaration-extent table (WP-2090)
 

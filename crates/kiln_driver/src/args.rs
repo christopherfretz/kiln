@@ -701,6 +701,11 @@ pub struct Args {
     /// producer whose consumers record (§18.10); `-fkiln-dump-written-refs`
     /// sets it too. Not part of either identity.
     pub written_refs: bool,
+    /// `-fkiln-written-ref-keys`: record the written-reference table's
+    /// substitution keys (spec/ast.md §18.14) too; sets `written_refs`.
+    /// Outside a precompiled header's identity, part of an implicit
+    /// module's cache key.
+    pub written_ref_keys: bool,
     /// `-fkiln-decl-extents`: record the declaration-extent table
     /// (spec/ast.md §19) for a tooling client; `-fkiln-dump-decl-extents`
     /// sets it too. Part of a precompiled header's identity (a snapshot
@@ -2165,6 +2170,10 @@ impl Args {
                 self.dump_written_refs = true;
             }
             "-fkiln-written-refs" => self.written_refs = true,
+            "-fkiln-written-ref-keys" => {
+                self.written_refs = true;
+                self.written_ref_keys = true;
+            }
             "-fkiln-fn-names" => self.fn_names = true,
             "-fkiln-dump-fn-names" => {
                 self.fn_names = true;

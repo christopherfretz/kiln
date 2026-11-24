@@ -1290,3 +1290,43 @@ fn default_template_arguments_and_one_candidate_calls() {
         assert_eq!(classes, [(1, 22)], "n::S's set");
     });
 }
+
+/// Parses `src` with the table on and the substitution keys `keys`, and
+/// returns the dump, the keyed table's bytes and its memory row.
+fn run_keys(src: &str, keys: bool) -> (String, (u64, u64), Option<kiln_ast::mem::MemRow>) {
+    let sm = SourceManager::new();
+    let file = sm.add_virtual("t.cpp", src.to_owned()).expect("location space");
+    let interner = Arc::new(Interner::new());
+    let engine = DiagEngine::new(&sm, &DiagOptions::default(), MemorySink::new());
+    let opts =
+        ParseOptions { written_refs: true, written_ref_keys: keys, ..ParseOptions::default() };
+    let target = Target::for_arch(Arch::X86_64);
+    let tu = parse_tu(&sm, &interner, file, &engine, target, &opts, ConstexprLimits::default());
+    let t = &tu.ast.written_refs;
+    assert_eq!(t.subst_keys_on(), keys);
+    let row = tu.ast.memory().rows.into_iter().find(|r| r.name == "written_refs.subst");
+    (t.dump(&tu.ast, &sm, Some(file)), t.subst_mem(), row)
+}
+
+/// Substitution keys, stage 0 (spec/ast.md §18.14.7): with the table on
+/// and keys off, a parse that instantiates templates, satisfies
+/// constraints and expands an alias template allocates nothing for keys
+/// and reports no memory row; with keys on (no compiler path opens a key
+/// scope yet) the dump is the same and the `written_refs.subst` row
+/// counts 0 rows.
+#[test]
+fn keys_off_allocate_nothing_and_keys_on_change_no_dump() {
+    let sat = SAT.replace("int run()", "int run_sat()");
+    let src = format!(
+        "{SPECS}{sat}template <class T> using Size = decltype(T{{}}.size());\n\
+                       Size<V> s = 0;\n"
+    );
+    let (off, mem, row) = run_keys(&src, false);
+    assert_eq!(mem, (0, 0));
+    assert!(row.is_none(), "no row with keys off");
+    assert!(off.contains("spec="), "{off}");
+    let (on, _, row) = run_keys(&src, true);
+    assert_eq!(on, off);
+    let row = row.expect("a row with keys on");
+    assert_eq!(row.count, 0);
+}

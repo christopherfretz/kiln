@@ -79,6 +79,11 @@ pub struct FrontEndOptions {
     /// `fe.ast.written_refs`, with the content `-fkiln-dump-written-refs`
     /// prints for the same input. Off by default (WP-2320).
     pub written_refs: bool,
+    /// Record the table's substitution keys too
+    /// (`ParseOptions::written_ref_keys`, spec/ast.md §18.14), as
+    /// `-fkiln-written-ref-keys` on the command line does; implies
+    /// `written_refs`. Off by default (WP-3540).
+    pub written_ref_keys: bool,
     /// Record the function-name span table (`ParseOptions::fn_names`,
     /// spec/ast.md §24), as `-fkiln-fn-names` on the command line does,
     /// and print nothing: the closure reads it as `fe.ast.fn_names`
@@ -129,6 +134,7 @@ impl Default for FrontEndOptions {
             environment: Environment::process(),
             pp_record: false,
             written_refs: false,
+            written_ref_keys: false,
             fn_names: false,
             builtin_literals: false,
             token_table: false,
@@ -149,6 +155,7 @@ impl std::fmt::Debug for FrontEndOptions {
             .field("environment", &self.environment)
             .field("pp_record", &self.pp_record)
             .field("written_refs", &self.written_refs)
+            .field("written_ref_keys", &self.written_ref_keys)
             .field("fn_names", &self.fn_names)
             .field("builtin_literals", &self.builtin_literals)
             .field("token_table", &self.token_table)
@@ -670,7 +677,8 @@ fn run_here<R>(
     // The command line's `-fkiln-written-refs`: the parser's option, and
     // the module cache's key of a module built in process (a module file
     // carries the table its producer recorded, spec/ast.md §18.10.2).
-    args.written_refs |= options.written_refs;
+    args.written_refs |= options.written_refs || options.written_ref_keys;
+    args.written_ref_keys |= options.written_ref_keys;
     args.fn_names |= options.fn_names;
     args.builtin_literals |= options.builtin_literals;
     structural_checks(&args)?;

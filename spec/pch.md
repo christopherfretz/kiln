@@ -127,7 +127,7 @@ block holding them is read and they are ignored.
 
 ```
 "KILNSNAP"                              8 bytes, the magic
-u32 FORMAT_VERSION                      little-endian (now 183)
+u32 FORMAT_VERSION                      little-endian (now 184)
 kiln_snap stream: u64 SCHEMA_HASH, identity, lookup log
 kiln_snap stream: the roots
 ```
@@ -286,6 +286,7 @@ change the state at the end of the prefix:
 | `-v`, `--version`, `--help`, `-print-*`, `-###` | reports |
 | `-fdump-*`, `-fkiln-dump-cfg`, `-fkiln-cfg-stats`, `-fkiln-memory-report`, `-ftime-trace*`, `-fkiln-bmi-image-census*` | reports about the main file's compile |
 | `-fkiln-written-refs` (and the recording part of `-fkiln-dump-written-refs`) | the snapshot carries the written-reference table when the producer recorded it and the consumer reads it when it records; a consumer that records and restores a snapshot without the table lists the prefix as unrecorded (spec/ast.md §18.10.1) |
+| `-fkiln-written-ref-keys` | the snapshot carries the table's substitution keys when the producer recorded them; a consumer that records keys and restores a snapshot made with the table but without keys lists the prefix as `PrefixKeys` (spec/ast.md §18.14.5); a consumer without keys drops them |
 | `-fkiln-pp-record` (and the recording part of `-fkiln-dump-pp-record`) | the snapshot carries the preprocessing record when the producer recorded it (written last, after every root; nothing when off) and the consumer goes on from it when it records; a consumer that records and restores a snapshot without the record is `RESTORED`, with a `-v` note (spec/pp.md "Preprocessing record", stage 4) |
 | `-verify`, `-verify=`, `-verify-ignore-unexpected` | they check the diagnostics the job emits; when a `-verify` consumer restores is in "Consumer" |
 | how diagnostics are shown: colour, `-fdiagnostics-*`, `-ferror-limit=`, `-fmacro-backtrace-limit=`, `-ftabstop=`, carets, columns | a prefix with errors gets no snapshot, so the limit cannot have stopped it, and the rest only formats text |

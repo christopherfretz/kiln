@@ -154,7 +154,9 @@ pub(crate) const MAGIC: [u8; 8] = *b"KILNSNAP";
 /// version 183 (WP-3520) the parked written references of one-candidate
 /// calls (`OverloadScratch::single_specs`, not written, named by the
 /// schema).
-pub(crate) const FORMAT_VERSION: u32 = 183;
+/// version 184 (WP-3540) the written-reference table's substitution keys
+/// and the key scopes (transient).
+pub(crate) const FORMAT_VERSION: u32 = 184;
 /// The length of the magic and the format version.
 pub(crate) const HEADER_LEN: usize = 12;
 
@@ -195,6 +197,7 @@ fn excluded(args: &Args) -> Args {
         // recorded it and read when the consumer does (spec/ast.md
         // §18.10.1): either side may differ.
         written_refs: d.written_refs,
+        written_ref_keys: d.written_ref_keys,
         // The function-name span table is not carried (stage A): a
         // consumer recording it marks the prefix unrecorded
         // (spec/ast.md §24.6).

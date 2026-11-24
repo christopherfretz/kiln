@@ -347,13 +347,18 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             return;
         }
         let at = self.pattern_loc(q, self.written_peek(WrittenKey::Type(q), loc));
-        let Some(w) =
-            self.sema.ast.written_refs.pattern_entry(PatternNode::Type(q.without_quals(), at))
-        else {
+        let old = PatternNode::Type(q.without_quals(), at);
+        let Some(w) = self.sema.ast.written_refs.pattern_entry(old) else {
             return;
         };
         let at = self.pattern_loc(r, self.written_peek(WrittenKey::Type(r), loc));
-        self.sema.ast.written_refs.note_pattern_node(PatternNode::Type(r.without_quals(), at), w);
+        let new = PatternNode::Type(r.without_quals(), at);
+        self.sema.ast.written_refs.note_pattern_node(new, w);
+        // Its keyed row and expanded mark (spec/ast.md §18.14.2).
+        if self.sema.ast.written_refs.subst_keys_on() {
+            let key = self.sema.written_row_keys(w, Some(old)).and_then(|k| k.key);
+            self.sema.note_keyed_still_dependent(w, key, old, new);
+        }
     }
 
     /// [`Self::written`] without remembering the occurrence it returns.

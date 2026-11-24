@@ -11,14 +11,23 @@ use kiln_ast::expr::ExprKind;
 use kiln_ast::types::Nns;
 use kiln_ast::written_refs::{
     PatternNode, QualLink, REF_DEPENDENT, REF_MEMBER, REF_UNRESOLVED, RefLookup, SPEC_BUILTIN,
-    SpecRef, SpecRefId, WrittenRefId,
+    ScopeRef, SpecRef, SpecRefId, SubstRef, WrittenRefId,
 };
 use kiln_ast::{DeclId, ExprId, NnsId, QualType};
 use kiln_source::Loc;
 
 use crate::Sema;
 use crate::templ::stack::FrameKind;
+use crate::written_keys::RowKeys;
 use crate::written_refs::Target;
+
+/// What [`Sema::push_written_spec_with`] recorded: the per-specialization
+/// row and the key scope's buffered row (scope, index), either or both.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct WrittenPush {
+    pub(crate) spec: Option<SpecRefId>,
+    pub(crate) key: Option<(ScopeRef, u32)>,
+}
 
 impl Sema<'_, '_> {
     /// The specialization the lookups running now resolve names for
@@ -93,40 +102,53 @@ impl Sema<'_, '_> {
         if r.flags & REF_DEPENDENT == 0 {
             return;
         }
-        let Some(spec) = self.written_spec_key() else { return };
+        let node = PatternNode::Expr(pattern);
+        let Some(keys) = self.written_row_keys(w, Some(node)) else { return };
         match self.written_target(rebuilt) {
             // Still dependent (a generic lambda's body, a member template
             // substituted with the outer arguments only): the rebuilt node
             // stands for the entry in the next instantiation.
             Target::Dependent(x) => {
                 self.ast.written_refs.note_pattern_node(PatternNode::Expr(x), w);
+                self.note_keyed_still_dependent(w, keys.key, node, PatternNode::Expr(x));
                 return;
             }
             Target::Overloaded(x) => {
-                if self.written_ctx_dependent() {
+                if self.written_ctx_dependent(keys) {
                     self.ast.written_refs.note_pattern_node(PatternNode::Expr(x), w);
                 } else {
-                    self.ast.written_refs.defer_spec(x, w, spec);
+                    if let Some(spec) = keys.spec {
+                        self.ast.written_refs.defer_spec(x, w, spec);
+                    }
+                    if let Some(k) = keys.key {
+                        self.ast.written_refs.defer_subst(x, w, k);
+                    }
                 }
             }
             Target::Decl(d, f) => {
-                self.push_written_spec(w, spec, Some(d), f);
+                self.push_written_spec(w, keys, Some(d), f);
             }
             Target::Concept(c) => {
-                self.push_written_spec(w, spec, Some(c), None);
+                self.push_written_spec(w, keys, Some(c), None);
             }
             Target::Type(t) => {
                 let e = self.written_type_entity(t, 0);
-                self.push_written_spec(w, spec, e.map(|x| x.0), e.and_then(|x| x.1));
+                self.push_written_spec(w, keys, e.map(|x| x.0), e.and_then(|x| x.1));
             }
-            // A substitution failure records nothing (§18.9.3).
-            Target::Unresolved if self.inst.stack.is_sfinae() => return,
+            // A substitution failure records nothing (§18.9.3); the
+            // substitution a key scope records fails.
+            Target::Unresolved if self.inst.stack.is_sfinae() => {
+                if let Some(k) = keys.key {
+                    self.key_scope_poison(k);
+                }
+                return;
+            }
             Target::Unresolved => {
-                self.push_written_spec(w, spec, None, None);
+                self.push_written_spec(w, keys, None, None);
             }
         }
         let nns = self.written_expr_qualifier(rebuilt);
-        self.note_written_spec_qualifiers(w, spec, nns);
+        self.note_written_spec_qualifiers(w, keys, nns);
     }
 
     /// Before the substituter rebuilds a pattern expression: the errors
@@ -158,8 +180,10 @@ impl Sema<'_, '_> {
         if self.ast.written_refs.get(w).flags & REF_DEPENDENT == 0 {
             return;
         }
-        let Some(spec) = self.written_spec_key() else { return };
-        self.push_written_spec(w, spec, None, None);
+        let Some(keys) = self.written_row_keys(w, Some(PatternNode::Expr(pattern))) else {
+            return;
+        };
+        self.push_written_spec(w, keys, None, None);
     }
 
     /// The substituter resolved the dependent type `q`, written with its
@@ -173,18 +197,20 @@ impl Sema<'_, '_> {
         found: Option<DeclId>,
         nns: Option<NnsId>,
     ) {
-        let Some(w) =
-            self.ast.written_refs.pattern_entry(PatternNode::Type(q.without_quals(), loc))
-        else {
+        let node = PatternNode::Type(q.without_quals(), loc);
+        let Some(w) = self.ast.written_refs.pattern_entry(node) else {
             return;
         };
-        let Some(spec) = self.written_spec_key() else { return };
+        let Some(keys) = self.written_row_keys(w, Some(node)) else { return };
         // A substitution failure records nothing (§18.9.3).
         if entity.is_none() && self.inst.stack.is_sfinae() {
+            if let Some(k) = keys.key {
+                self.key_scope_poison(k);
+            }
             return;
         }
-        self.push_written_spec(w, spec, entity, found);
-        self.note_written_spec_qualifiers(w, spec, nns);
+        self.push_written_spec(w, keys, entity, found);
+        self.note_written_spec_qualifiers(w, keys, nns);
     }
 
     /// The class template specialization's instantiation redid the
@@ -224,9 +250,11 @@ impl Sema<'_, '_> {
             None if self.inst.stack.is_sfinae() || self.diags.error_count() <= errors => return,
             None => None,
         };
-        let Some(spec) = self.written_spec_key() else { return };
-        self.push_written_spec(w, spec, entity, None);
-        self.note_written_spec_qualifiers(w, spec, scope.map(|s| s.0));
+        let Some(keys) = self.written_row_keys(w, Some(PatternNode::Decl(pattern))) else {
+            return;
+        };
+        self.push_written_spec(w, keys, entity, None);
+        self.note_written_spec_qualifiers(w, keys, scope.map(|s| s.0));
     }
 
     /// The friend function template specialization `pattern` of a class
@@ -254,65 +282,112 @@ impl Sema<'_, '_> {
             None if self.inst.stack.is_sfinae() || self.diags.error_count() <= errors => return,
             None => (None, None),
         };
-        let Some(spec) = self.written_spec_key() else { return };
-        self.push_written_spec(w, spec, entity, found);
+        let Some(keys) = self.written_row_keys(w, Some(PatternNode::Decl(pattern))) else {
+            return;
+        };
+        self.push_written_spec(w, keys, entity, found);
     }
 
     /// Overload resolution chose `d` (found as `found`; `None`: it failed)
     /// for the rebuilt overload set `x` of an instantiation: its
-    /// per-specialization entry (§18.9.4).
+    /// per-specialization entry (§18.9.4) and its key scope's row
+    /// (§18.14.3; dropped when the scope closed meanwhile).
     pub(crate) fn resolve_written_spec(
         &mut self,
         x: ExprId,
         d: Option<DeclId>,
         found: Option<DeclId>,
-    ) -> Option<SpecRefId> {
-        let (w, spec) = self.ast.written_refs.take_spec_pending(x)?;
-        let id = self.push_written_spec(w, spec, d, found);
-        self.ast.written_refs.set_spec_last(x, id);
-        Some(id)
+    ) -> Option<WrittenPush> {
+        let spec = self.ast.written_refs.take_spec_pending(x);
+        let key = self.ast.written_refs.take_subst_pending(x);
+        let w = spec.map(|p| p.0).or(key.map(|p| p.0))?;
+        let keys = RowKeys {
+            spec: spec.map(|p| p.1),
+            key: key.map(|p| p.1).filter(|&k| self.key_scopes.records(k)),
+        };
+        let p = self.push_written_spec(w, keys, d, found);
+        if let Some(id) = p.spec {
+            self.ast.written_refs.set_spec_last(x, id);
+        }
+        if let Some((k, i)) = p.key {
+            self.ast.written_refs.set_subst_last(x, k, i);
+        }
+        Some(p)
+    }
+
+    /// The pending rows of the rebuilt overload set `x` are dropped: a
+    /// substitution failure records nothing (§18.9.3), and fails the
+    /// substitution a key scope records.
+    fn drop_written_spec_pending(&mut self, x: ExprId) {
+        let _ = self.ast.written_refs.take_spec_pending(x);
+        if let Some((_, k)) = self.ast.written_refs.take_subst_pending(x) {
+            self.key_scope_poison(k);
+        }
     }
 
     /// The call whose rebuilt callee `x` stands for pattern entry `w` in
     /// `spec` was resolved (or failed), after argument-dependent lookup
     /// saw `facts`: the entry gets `Adl`/`Both` and the associated set
-    /// (§18.7.4, §18.9.4).
+    /// (§18.7.4, §18.9.4), in its key scope's row as well.
     pub(crate) fn note_written_spec_call(
         &mut self,
         x: ExprId,
         facts: Option<crate::overload::adl::AdlFacts>,
     ) {
-        let id = match self.ast.written_refs.take_spec_last(x) {
-            Some(id) => id,
+        let mut p = WrittenPush {
+            spec: self.ast.written_refs.take_spec_last(x),
+            key: self.ast.written_refs.take_subst_last(x),
+        };
+        if p.spec.is_none() && p.key.is_none() {
             // Overload resolution failed: the name stays unresolved, but
             // a substitution failure records nothing (§18.9.3).
-            None if self.inst.stack.is_sfinae() => {
-                let _ = self.ast.written_refs.take_spec_pending(x);
+            if self.inst.stack.is_sfinae() {
+                self.drop_written_spec_pending(x);
                 return;
             }
-            None => match self.resolve_written_spec(x, None, None) {
-                Some(id) => {
-                    let _ = self.ast.written_refs.take_spec_last(x);
-                    id
-                }
+            let Some(q) = self.resolve_written_spec(x, None, None) else { return };
+            let _ = self.ast.written_refs.take_spec_last(x);
+            let _ = self.ast.written_refs.take_subst_last(x);
+            p = q;
+        }
+        let Some(f) = facts else { return };
+        let (entity, found) = match (p.spec, p.key) {
+            (Some(id), _) => {
+                let r = self.ast.written_refs.spec(id);
+                (r.entity, r.found)
+            }
+            (None, Some((k, i))) => match self.key_scopes.row(k, i) {
+                Some(r) => (r.entity, r.found),
                 None => return,
             },
+            (None, None) => return,
         };
-        let Some(f) = facts else { return };
-        let r = *self.ast.written_refs.spec(id);
-        let Some((how, set)) = self.written_call_lookup(r.entity, r.found, &f) else { return };
+        let Some((how, set)) = self.written_call_lookup(entity, found, &f) else { return };
         let set = self.ast.written_refs.intern_adl(set);
-        self.ast.written_refs.update_spec(id, |r| {
-            if let Some(h) = how {
-                r.how = h;
-                // Found only by argument-dependent lookup, which ignores
-                // using-directives ([basic.lookup.argdep]/4).
-                if h == RefLookup::Adl {
-                    r.udir = None;
+        if let Some(id) = p.spec {
+            self.ast.written_refs.update_spec(id, |r| {
+                if let Some(h) = how {
+                    r.how = h;
+                    // Found only by argument-dependent lookup, which
+                    // ignores using-directives ([basic.lookup.argdep]/4).
+                    if h == RefLookup::Adl {
+                        r.udir = None;
+                    }
                 }
-            }
-            r.adl = Some(set);
-        });
+                r.adl = Some(set);
+            });
+        }
+        if let Some((k, i)) = p.key {
+            let _ = self.key_scope_update(k, i, |r| {
+                if let Some(h) = how {
+                    r.how = h;
+                    if h == RefLookup::Adl {
+                        r.udir = None;
+                    }
+                }
+                r.adl = Some(set);
+            });
+        }
     }
 
     /// The one-candidate call whose callee became `callee` was checked:
@@ -350,24 +425,25 @@ impl Sema<'_, '_> {
     pub(crate) fn fail_written_spec(&mut self, x: ExprId) {
         if self.ast.written_refs.has_spec_pending() {
             if self.inst.stack.is_sfinae() {
-                let _ = self.ast.written_refs.take_spec_pending(x);
+                self.drop_written_spec_pending(x);
                 return;
             }
             let _ = self.resolve_written_spec(x, None, None);
             let _ = self.ast.written_refs.take_spec_last(x);
+            let _ = self.ast.written_refs.take_subst_last(x);
         }
     }
 
     /// Records that pattern entry `w` named `entity` (found as `found`)
-    /// in `spec`.
+    /// for `keys`.
     fn push_written_spec(
         &mut self,
         w: WrittenRefId,
-        spec: DeclId,
+        keys: RowKeys,
         entity: Option<DeclId>,
         found: Option<DeclId>,
-    ) -> SpecRefId {
-        self.push_written_spec_with(w, spec, entity, found, 0, None)
+    ) -> WrittenPush {
+        self.push_written_spec_with(w, keys, entity, found, 0, None)
     }
 
     /// [`Self::push_written_spec`] with a dependent operator's facts
@@ -375,16 +451,19 @@ impl Sema<'_, '_> {
     /// `SPEC_BUILTIN`, which makes the row entity-less and `how`
     /// `Builtin`) and the `how` its call's facts give (`Member` for a
     /// member function, `Adl` for a candidate argument-dependent lookup
-    /// alone found; `None`: as for a name).
+    /// alone found; `None`: as for a name). The row goes to the
+    /// per-specialization table under `keys.spec` and to the key scope
+    /// `keys.key` (spec/ast.md §18.14.3), where an unresolved name fails
+    /// the substitution instead.
     pub(crate) fn push_written_spec_with(
         &mut self,
         w: WrittenRefId,
-        spec: DeclId,
+        keys: RowKeys,
         entity: Option<DeclId>,
         found: Option<DeclId>,
         flags: u8,
         how: Option<RefLookup>,
-    ) -> SpecRefId {
+    ) -> WrittenPush {
         let r = *self.ast.written_refs.get(w);
         let builtin = flags & SPEC_BUILTIN != 0;
         let (entity, found) = if builtin { (None, None) } else { (entity, found) };
@@ -393,7 +472,8 @@ impl Sema<'_, '_> {
             | if entity.is_none() && !builtin { REF_UNRESOLVED } else { 0 };
         let mut row = SpecRef {
             entry: w,
-            spec,
+            // A keyed row alone drops the specialization (`SubstRef::of_spec`).
+            spec: keys.spec.unwrap_or(self.ast.tu),
             entity,
             found: found.filter(|&f| Some(f) != entity),
             adl: None,
@@ -421,13 +501,22 @@ impl Sema<'_, '_> {
             let key = self.ast.first(self.ast.strip_shadow(row.found.unwrap_or(e)));
             row.udir = self.ast.written_refs.pattern_udir(w, key);
         }
-        self.ast.written_refs.push_spec(row)
+        let key = match keys.key {
+            Some(k) if entity.is_none() && !builtin => {
+                self.key_scope_poison(k);
+                None
+            }
+            Some(k) => self.key_scope_push(k, SubstRef::of_spec(&row)).map(|i| (k, i)),
+            None => None,
+        };
+        let spec = keys.spec.map(|_| self.ast.written_refs.push_spec(row));
+        WrittenPush { spec, key }
     }
 
     /// The dependent components of entry `w`'s qualifier, paired from the
     /// right with the components of the substituted `nns`: each names
     /// what its substituted component names (§18.9.4).
-    fn note_written_spec_qualifiers(&mut self, w: WrittenRefId, spec: DeclId, nns: Option<NnsId>) {
+    fn note_written_spec_qualifiers(&mut self, w: WrittenRefId, keys: RowKeys, nns: Option<NnsId>) {
         let mut link = self.ast.written_refs.get(w).qualifier;
         let mut cur = nns;
         for _ in 0..64 {
@@ -451,7 +540,7 @@ impl Sema<'_, '_> {
                     Nns::Global => None,
                 };
                 if !relooked || q.flags & REF_DEPENDENT != 0 || entity != q.entity {
-                    self.push_written_spec(qid, spec, entity, None);
+                    self.push_written_spec(qid, keys, entity, None);
                 }
             }
             link = q.qualifier;
@@ -481,9 +570,17 @@ impl Sema<'_, '_> {
 
     /// True when the context being built is itself a template pattern (a
     /// generic lambda's call operator rebuilt inside an instantiation),
-    /// whose overload sets are resolved by its own instantiations.
-    fn written_ctx_dependent(&self) -> bool {
+    /// whose overload sets are resolved by its own instantiations. For a
+    /// key scope alone (no per-specialization key) the context the scope
+    /// opened in is the substitution's own (spec/ast.md §18.14.3).
+    pub(crate) fn written_ctx_dependent(&self, keys: RowKeys) -> bool {
         let c = self.ctx;
+        if keys.spec.is_none()
+            && let Some(k) = keys.key
+            && self.key_scopes.home_ctx(k) == Some(c)
+        {
+            return false;
+        }
         self.ast.decls.get(c).flags().contains(DeclFlags::DEPENDENT_CTX)
             || self.ast.described_template(c).is_some()
             || matches!(self.kind_of(c), DeclKind::FunctionTemplate)
