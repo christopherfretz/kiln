@@ -135,6 +135,10 @@ pub enum Status {
     /// A process of the test exceeded its address-space cap (`--mem-limit`
     /// or `mem<=N`); never masked by `xfail`.
     Killed,
+    /// Both runs of the test failed for want of file descriptors on the
+    /// host (EMFILE/ENFILE, `spec/harness.md` "Host errors"): no verdict on
+    /// the test; a failure of the run, never masked by `xfail`.
+    Host,
 }
 
 impl Status {
@@ -147,12 +151,13 @@ impl Status {
             Self::Skip => "SKIP",
             Self::Error => "ERROR",
             Self::Killed => "KILLED",
+            Self::Host => "HOST",
         }
     }
 
     /// Does this outcome make the run fail?
     pub fn is_failure(self) -> bool {
-        matches!(self, Self::Fail | Self::XPass | Self::Error | Self::Killed)
+        matches!(self, Self::Fail | Self::XPass | Self::Error | Self::Killed | Self::Host)
     }
 }
 
@@ -175,6 +180,10 @@ pub struct TestResult {
     /// compared with kiln's (not dropped as advisory); the summary counts
     /// these (`spec/harness.md` "Output").
     pub gcc_compared: bool,
+    /// The test's first run failed for want of file descriptors on the
+    /// host and it was run again (`spec/harness.md` "Host errors"): that
+    /// run's host-error line. The status is the second run's.
+    pub host_retry: Option<String>,
     pub elapsed: Duration,
 }
 
@@ -230,6 +239,7 @@ pub fn run_test(cfg: &Config, case: &TestCase, index: usize) -> TestResult {
         updated: t.updated,
         advisory: t.advisory,
         gcc_compared: t.gcc_compared,
+        host_retry: None,
         elapsed: start.elapsed(),
     }
 }

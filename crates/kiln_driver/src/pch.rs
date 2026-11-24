@@ -744,6 +744,13 @@ pub(crate) fn consumer(
 ///   directive of one of its prefixes: a replay lexes the header, and its
 ///   directives count; a restore does not.
 fn snapshot_refused(args: &Args, rec: &Record, inputs: &[&Input]) -> Option<String> {
+    // The consumer's `-imacros` come before the PCH (clang), so a replay
+    // reads them first; a restore would start after the PCH.
+    if let Some(m) = args.imacros.first() {
+        return Some(format!(
+            "-imacros '{m}' comes before the precompiled header, which a replay reads after it"
+        ));
+    }
     if let Some(i) = inputs.iter().find(|i| {
         std::fs::read(args.fs_path(&i.path))
             .is_ok_and(|t| starts_as_module_unit(&String::from_utf8_lossy(&t)))

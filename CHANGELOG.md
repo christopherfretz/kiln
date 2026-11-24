@@ -10,6 +10,16 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- The unit's tokens as a table (WP-2825, spec/parse.md §2.6): with
+  `FrontEndOptions::token_table` (`ParseOptions::token_table`) a tooling
+  client reads `FrontEnd::token_table` (`ParsedTu::token_table`): every
+  token the preprocessor delivered to the parser, in order, with its
+  kind, location, spelling length and macro / macro-argument flags in
+  16 bytes; a `>>`, `>=` or `>>=` the parser split to close a template
+  argument list is the tokens it consumed; `starts_token(file, offset)`
+  and `token_at(file, offset)` answer per file in O(log n), with no
+  second lex (a skipped group starts no token). Off by default, one
+  branch per token when off.
 - A refused evaluation session's diagnostics as data (WP-2827,
   spec/eval-session.md §2, spec/diag.md §10.4):
   `SessionRefused::TuHasErrors` and `Stopped` carry `records`
@@ -32,6 +42,44 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   stringized into the literal, any piece of a concatenated string
   included. `-fdump-ast` appends ` from <name>` to such a literal. Off
   by default and free when off.
+- `ExprArena::predefined_function` (WP-2823, spec/ast.md §16): a
+  `PredefinedExpr` (`__func__`, `__FUNCTION__`, `__PRETTY_FUNCTION__`)
+  records the function it names, as clang's `getPredefinedExprDecl`
+  finds it: a lambda's call operator, the constructor of a member
+  initializer, a coroutine, the pattern's function in a template and the
+  specialization in an instantiation; `None` at namespace scope, in a
+  default argument, a default member initializer or a requires-clause
+  (where clang warns). Always on, in a word the node already had; module
+  image version 87, PCH snapshot format 161.
+- Written references (WP-2828, spec/ast.md §18.11.2): the name after a
+  `decltype(...)::` or splice specifier (`[: r :]::`,
+  `template [: r :]<A>::`, `typename [: r :]<A>::`) has the qualifier
+  `RefQualifier::SPECIFIER` (it was `NONE`) and the specifier's first
+  token as `WrittenRefs::specifier_lo`, so `qualified_lo` gives where
+  `decltype(s)::m` begins; the dump prints `q=specifier:L:C`. Expression
+  extents already began such a name at its specifier, as clang does; a
+  test pins it.
+- `-imacros <file>` (WP-2822; also `--imacros`, `--imacros=`): the
+  file's directives run and its text is discarded, every `-imacros`
+  before every `-include`, as clang (`#__include_macros` in the
+  predefines; the directive elsewhere is an error); in the dependency
+  output and the lookup log. `-iprefix`, `-iwithprefix` and
+  `-iwithprefixbefore`, with GCC's `--include-prefix`,
+  `--include-with-prefix[-after|-before]` aliases, in clang's search
+  order (spec/driver.md "Options"). `-MJ` splits a joined value that
+  starts with `=` (`-I=inc` as `-I`, `=inc`), as clang.
+- Response files (WP-2826): `rsp::expand_with` reads each `@file`
+  through a caller's hook and reports the files read; one that exists
+  but cannot be read (`cannot not open file '<path>': <reason>`) or
+  that names itself (`recursive expansion of: '<path>'`) stops the
+  driver with exit 1, as clang, and is `FrontEndError::ResponseFile` in
+  the front-end library entry (spec/driver.md "Response files").
+- The lookup log (WP-2829) records the `--embed-dir` list and an
+  `#embed` found in one (`Found::EmbedDir`); `LookupLog::tried` names
+  the directories each lookup searched, and `check` trusts the
+  producer's misses for `#embed` as for `#include` (spec/pp.md "Lookup
+  log").
+
 - `Ast::exception_spec_computed` (WP-2505, spec/ast.md §4.2): a tooling
   client tells an explicitly defaulted function's written exception
   specification (`S() noexcept(false) = default;`) from one computed
@@ -853,6 +901,19 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   each use of a `long double` declaration is "requires  'long double'
   type support". The predefined macros and `"target-features"` follow.
   The flag was an unknown argument.
+- Embedders can import a named module (or partition) whose interface
+  source is a buffer already in the source manager (WP-2824,
+  spec/modules.md §2 item 0): `ModuleOptions::module_buffers` names
+  `(module, FileId)` pairs, asked before every other lookup step. The
+  unit is built as from a source named by `-fmodule-file=<name>=<path>`
+  (the same `ModuleTable`, owners and diagnostics, with the buffer's
+  name as the file name), and nothing of the host's file system is
+  asked for it. A buffer is always a source, never read as a module
+  file whatever its name or first bytes; recording a module file of a
+  unit that imports one is the error `module 'M' is built from the
+  in-memory buffer 'B', which a module file cannot record as its
+  import`. The driver never sets the field. (An in-memory header's
+  header-unit key is computed with no file-system call since WP-2621.)
 
 ### Changed
 
@@ -1020,6 +1081,16 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- xtask (harness): no `core` dumps and honest host errors (WP-2762,
+  WP-2780). xtask turns core dumps off for itself at startup, so no
+  compiler, oracle, test binary, cargo test or extents clang it starts
+  leaves a `core` file in the working tree. Bursts of "Too many open
+  files" (EMFILE) in CI came from the host's shared file server, not from
+  a descriptor leak in the harness (its process holds at most about
+  twenty throughout a corpus run): a test that fails that way now runs
+  once more after a pause, a second such failure is the new status HOST
+  instead of the test's FAIL or ERROR, the summary counts both, and the
+  module-file lanes no longer drop a test they could not read.
 - An array bound whose value is known but whose expression is
   instantiation-dependent (`char (*)[sizeof(sizeof(f(T())))]`) keeps its
   expression on the constant array type (WP-2720, spec/types.md §7.2

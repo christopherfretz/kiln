@@ -2800,6 +2800,7 @@ unit tests/conformance/written_refs/concepts-decl.cpp c435b4733ec2a433 CXXFoldEx
 unit tests/conformance/written_refs/decl-dependent.cpp 70c55d137df7bce8 CXXConstructExpr=1/1
 unit tests/conformance/written_refs/decl-macros.cpp 3751b6d4a5e67db8 ConceptSpecializationExpr=1/1 DeclRefExpr=1/1 ImplicitCastExpr=2/2
 unit tests/conformance/written_refs/decl-tentative.cpp f286d0e33e63d8c2 CXXConstructExpr=1/2
+unit tests/conformance/written_refs/decltype-qualifiers.cpp 8c34eb2bac220ce9 CXXConstructExpr=1/2
 unit tests/conformance/written_refs/dependent.cpp 7d0c506809808567 CXXThisExpr=1/1 ImplicitValueInitExpr=1/1 InitListExpr=1/4
 unit tests/conformance/written_refs/designators.cpp 7debabad3f65b583 ImplicitValueInitExpr=6/6 InitListExpr=7/14
 unit tests/conformance/written_refs/elaborated.cpp d9aa5485b22a33fd

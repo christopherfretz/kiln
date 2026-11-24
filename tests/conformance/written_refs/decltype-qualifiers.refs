@@ -1,0 +1,35 @@
+19:54-19:55  type  'T' -> T@19:19 in=S::tm@19:33
+21:1-21:2  type  'S' -> S@11:8 in=s@21:3
+22:18-22:19  expr  's' -> s@21:3 in=y@22:5
+22:22-22:23  expr  'm' -> S::m@12:14 q=specifier:22:9 in=y@22:5
+23:18-23:19  expr  's' -> s@21:3 in=z@23:5
+23:22-23:23  nns  'N' -> S::N@14:10 q=specifier:23:9 in=z@23:5
+23:25-23:26  expr  'k' -> S::N::k@15:16 q=23:22 in=z@23:5
+24:10-24:11  expr  's' -> s@21:3 in=w@24:19
+24:14-24:18  type  'type' -> S::type@18:9 q=specifier:24:1 in=w@24:19
+25:10-25:11  expr  's' -> s@21:3 in=x@25:22
+25:14-25:15  nns  'N' -> S::N@14:10 q=specifier:25:1 in=x@25:22
+25:17-25:21  type  'type' -> S::N::type@16:11 q=25:14 in=x@25:22
+26:25-26:26  expr  's' -> s@21:3 in=pf@26:7
+26:29-26:30  expr  'f' -> S::f@13:14 q=specifier:26:16 in=pf@26:7
+27:18-27:19  expr  's' -> s@21:3 in=c@27:5
+27:22-27:23  expr  'f' -> S::f@13:14 q=specifier:27:9 in=c@27:5
+27:37-27:38  expr  's' -> s@21:3 in=c@27:5
+27:50-27:52  expr  'tm' -> S::tm<char>@19:33 found=S::tm@19:33 q=specifier:27:28 in=c@27:5
+28:21-28:22  expr  's' -> s@21:3 in=d@29:5 exp=29:9
+29:13-29:14  expr  'm' -> S::m@12:14 q=specifier:28:12 in=d@29:5
+30:26-30:27  type  'T' -> T@30:17 in=t@30:28
+31:21-31:22  expr  't' -> t@30:28 in=v@31:30
+31:25-31:29  type  'type' -> (dependent) q=specifier:31:12 in=v@31:30
+31:25-31:29  type  'type' -> S::type@18:9 spec=g<S>@30:24
+32:19-32:20  expr  't' -> t@30:28 in=g@30:24
+32:23-32:24  expr  'm' -> (dependent) q=specifier:32:10 in=g@30:24
+32:23-32:24  expr  'm' -> S::m@12:14 spec=g<S>@30:24
+32:36-32:37  expr  't' -> t@30:28 in=g@30:24
+32:40-32:41  nns  'N' -> (dependent) q=specifier:32:27 in=g@30:24
+32:40-32:41  nns  'N' -> S::N@14:10 spec=g<S>@30:24
+32:43-32:44  expr  'k' -> (dependent) q=32:40 in=g@30:24
+32:43-32:44  expr  'k' -> S::N::k@15:16 spec=g<S>@30:24
+32:47-32:48  expr  'v' -> v@31:30 in=g@30:24
+34:9-34:10  expr  'g' -> g<S>@30:24 found=g@30:24 in=u@34:5 how=both adl-ns=:: adl-cls=S@11:8
+34:11-34:12  expr  's' -> s@21:3 in=u@34:5

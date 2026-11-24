@@ -44,6 +44,39 @@ fn scratch(name: &str) -> PathBuf {
     d
 }
 
+/// WP-2826: an `@file` that exists but cannot be read stops the driver
+/// with clang's bare `cannot not open file` (its typo kept), one that
+/// names itself with `recursive expansion of`, both exit 1; a missing one
+/// stays an input that does not exist; an empty one expands to nothing
+/// (spec/driver.md "Response files").
+#[test]
+fn response_file_errors_like_clang() {
+    let d = scratch("rsp-errors");
+    std::fs::create_dir_all(d.join("dir")).unwrap();
+    std::fs::write(d.join("self.rsp"), format!("-c\n@{}\n", d.join("self.rsp").display())).unwrap();
+    std::fs::write(d.join("empty.rsp"), "").unwrap();
+    let at = |n: &str| format!("@{}", d.join(n).display());
+    let o = kiln(&["-fsyntax-only", &at("dir")], "");
+    assert_eq!(o.code, 1);
+    assert_eq!(
+        o.stderr,
+        format!("cannot not open file '{}': Is a directory\n", d.join("dir").display())
+    );
+    let o = kiln(&["-fsyntax-only", &at("self.rsp")], "");
+    assert_eq!(o.code, 1);
+    assert_eq!(o.stderr, format!("recursive expansion of: '{}'\n", d.join("self.rsp").display()));
+    let o = kiln(&["-fsyntax-only", &at("nope.rsp")], "");
+    assert_eq!(o.code, 1);
+    assert!(
+        o.stderr.contains(&format!("no such file or directory: '{}'", at("nope.rsp"))),
+        "{}",
+        o.stderr
+    );
+    let o = kiln(&[&at("empty.rsp"), "--version"], "");
+    assert_eq!((o.code, o.stderr.as_str()), (0, ""));
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
 #[test]
 fn version_and_no_inputs() {
     let o = kiln(&["--version"], "");

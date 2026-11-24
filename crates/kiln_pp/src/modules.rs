@@ -31,6 +31,16 @@ pub struct ModuleOptions {
     /// `-fmodule-file=<name>=<path>`: the source or module file of module
     /// `<name>` (`M:P` for a partition).
     pub module_files: Vec<(String, PathBuf)>,
+    /// Interface sources already in the source manager (WP-2824,
+    /// spec/modules.md §2 item 0): module `<name>` (`M:P` for a
+    /// partition) is built from buffer `FileId` (typically one
+    /// [`SourceManager::add_virtual`](kiln_source::SourceManager::add_virtual)
+    /// made), as a source named by [`module_files`](Self::module_files)
+    /// would be. Looked up before every other step; the last entry of a
+    /// name wins. A buffer is always a source, never read as a module
+    /// file, and nothing of the host's file system is asked for it. For
+    /// embedders (tooling clients); the driver never sets it.
+    pub module_buffers: Vec<(String, FileId)>,
     /// `-fprebuilt-module-path=<dir>`, in order: `<dir>/<name>.pcm`, then
     /// `.cppm`, `.ixx`, `.cpp` (`M-P.*` for partition `M:P`).
     pub prebuilt_paths: Vec<PathBuf>,
@@ -858,6 +868,10 @@ impl Preprocessor<'_, '_> {
         if self.already_built(key, span) {
             return;
         }
+        if let Some(file) = self.module_buffer(key) {
+            self.import_module_buffer(key, file, span);
+            return;
+        }
         let Some((source, found)) = self.find_module_where(key) else {
             self.emit(Diag::new(DiagId::pp_module_not_found, span).arg(key));
             return;
@@ -914,6 +928,29 @@ impl Preprocessor<'_, '_> {
                 }
             }
         }
+    }
+
+    /// The buffer [`ModuleOptions::module_buffers`] gives for module (or
+    /// partition) `key`, the last entry of that name (spec/modules.md §2
+    /// item 0).
+    fn module_buffer(&self, key: &str) -> Option<FileId> {
+        let m = self.modules.as_ref()?;
+        m.opts.module_buffers.iter().rev().find(|(n, _)| n == key).map(|&(_, f)| f)
+    }
+
+    /// Imports module `key` from the in-memory buffer `file` (WP-2824,
+    /// spec/modules.md §2 item 0): a source, never sniffed or loaded, no
+    /// path asked of the host. A module file being recorded for the main
+    /// unit would name the buffer as the import's path, which no importer
+    /// of that module file can find (and a host file of that name could
+    /// stand for it): the import is refused there, the unit still built.
+    fn import_module_buffer(&mut self, key: &str, file: FileId, span: Span) {
+        if self.unit_ctx() == Ctx::Main && self.modules.as_ref().is_some_and(|m| m.record.is_some())
+        {
+            let name = self.sm.file_name(file).to_owned();
+            self.emit(Diag::new(DiagId::pp_module_buffer_recorded, span).arg(key).arg(name));
+        }
+        self.begin_unit(key.to_owned(), false, file, false, span, None);
     }
 
     /// Checks the module file `path` as read (`read`), expected to hold

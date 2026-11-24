@@ -20,7 +20,7 @@ use std::path::Path;
 use kiln_diag::{Diag, DiagEngine, DiagId};
 use kiln_source::Span;
 
-use crate::args::{Args, DriverMode, Input, Lang, Valued, split_valued};
+use crate::args::{Args, DriverMode, Input, Lang, SEPARATE_OR_EQ, Valued, split_valued};
 use crate::toolchain::Toolchain;
 
 /// One frontend job of the fragment: its input and output (`None` under
@@ -180,8 +180,12 @@ fn render_args(argv: &[String]) -> Vec<String> {
             "-o" | "-x" | "-MF" | "-MJ" | "-MQ" | "-MT" => {}
             "-target" | "--target" => v.push(format!("--target={value}")),
             "-L" | "-l" => v.push(format!("{opt}{value}")),
-            // `--sysroot=`, `-std=`, ... stay as written.
-            _ if joined && arg.len() > opt.len() && arg.as_bytes()[opt.len()] == b'=' => {
+            // `--sysroot=`, `-std=`, ... stay as written; a joined value
+            // that starts with `=` (`-I=inc`, `-iprefix=p`) is split off.
+            _ if joined
+                && SEPARATE_OR_EQ.contains(&opt)
+                && arg.strip_prefix(opt).is_some_and(|r| r.starts_with('=')) =>
+            {
                 v.push(arg.to_owned());
             }
             _ => {
@@ -239,6 +243,35 @@ mod tests {
         assert_eq!(
             r("-std=c++20 --sysroot=/s -xc++ -Xclang -fno-rtti -MJ f.json"),
             ["-std=c++20", "--sysroot=/s", "-Xclang", "-fno-rtti"]
+        );
+        // WP-2822: as clang 22, aliases by the option they stand for and
+        // a value starting with `=` split off.
+        assert_eq!(
+            r("--imacros=m.h --imacros m.h -imacrosm.h -iprefix=p --include-prefix=r \
+               --include-with-prefix s --include-with-prefix-after=t \
+               --include-with-prefix-before u -iwithprefixv -I=inc"),
+            [
+                "-imacros",
+                "m.h",
+                "--imacros",
+                "m.h",
+                "-imacros",
+                "m.h",
+                "-iprefix",
+                "=p",
+                "-iprefix",
+                "r",
+                "-iwithprefix",
+                "s",
+                "-iwithprefix",
+                "t",
+                "-iwithprefixbefore",
+                "u",
+                "-iwithprefix",
+                "v",
+                "-I",
+                "=inc"
+            ]
         );
     }
 

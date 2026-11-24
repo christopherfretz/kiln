@@ -139,19 +139,24 @@ impl Job<'_> {
         header_sysroot: &str,
         cplusplus: bool,
     ) -> Vec<SearchDirSpec> {
-        let mut specs: Vec<SearchDirSpec> = args
-            .dirs
-            .iter()
-            .map(|(g, d)| {
-                // `-I=dir` is relative to the sysroot (clang `AddPath` with
-                // `IsSysrootSpecified`).
-                let path = match d.strip_prefix('=') {
-                    Some(rest) if !header_sysroot.is_empty() => format!("{header_sysroot}{rest}"),
-                    _ => d.clone(),
-                };
-                SearchDirSpec::new(path, *g)
-            })
-            .collect();
+        let user = |(g, d): &(DirGroup, String)| {
+            // `-I=dir` is relative to the sysroot (clang `AddPath` with
+            // `IsSysrootSpecified`).
+            let path = match d.strip_prefix('=') {
+                Some(rest) if !header_sysroot.is_empty() => format!("{header_sysroot}{rest}"),
+                _ => d.clone(),
+            };
+            SearchDirSpec::new(path, *g)
+        };
+        // Within a group the order is clang's `cc1` order: every `-I`,
+        // then the `-iwithprefix[before]` directories (never relative to
+        // the sysroot), then every `-idirafter`; the groups themselves are
+        // ordered by `SearchList::build`.
+        let after = |(g, _): &&(DirGroup, String)| *g == DirGroup::After;
+        let mut specs: Vec<SearchDirSpec> =
+            args.dirs.iter().filter(|d| !after(d)).map(user).collect();
+        specs.extend(args.prefixed_dirs.iter().map(|(g, d)| SearchDirSpec::new(d.clone(), *g)));
+        specs.extend(args.dirs.iter().filter(after).map(user));
         let sys = SystemIncludes {
             nostdinc: args.nostdinc,
             nostdincxx: args.nostdincxx,
@@ -218,6 +223,7 @@ impl Job<'_> {
         cfg.no_inline = p.no_inline;
         cfg.gnu89_inline = p.gnu89_inline;
         cfg.implicit_includes.clone_from(&self.args.includes);
+        cfg.implicit_macro_includes.clone_from(&self.args.imacros);
         cfg.exceptions = p.exceptions.unwrap_or(cplusplus);
         cfg.rtti = p.rtti.unwrap_or(cplusplus);
         cfg.char8_t = p.char8_t;
@@ -567,6 +573,8 @@ impl Job<'_> {
         });
         Some(kiln_pp::ModuleOptions {
             module_files,
+            // For embedders only (spec/modules.md §2 item 0).
+            module_buffers: Vec::new(),
             prebuilt_paths: a.prebuilt_module_paths.iter().map(Into::into).collect(),
             std_dir: Some(self.toolchain.libcxx_module_dir()),
             std_cache,

@@ -34,7 +34,7 @@
 //! | `module_lines` | rebuilt | by the next main file's entry |
 //! | `pool`, `arg_pool`, `paste_buf`, `dir_hash`, `dir_end` | transient | recycled buffers and the last directive's `#` and end: reset |
 //! | `frames`, `markers`, `pending`, `include_depth` | transient, at rest | no file open, nothing queued |
-//! | `if_ndef`, `disable_expand`, `in_args`, `arg_preexpand`, `parsing_if`, `va_scope`, `in_directive`, `dir_eod`, `quiet_lex` | transient, at rest | no directive, argument or `#if` being read |
+//! | `if_ndef`, `disable_expand`, `in_args`, `arg_preexpand`, `parsing_if`, `va_scope`, `in_directive`, `dir_eod`, `quiet_lex`, `imacros_discard` | transient, at rest | no directive, argument, `#if` or `-imacros` file being read |
 //! | `name_gate` | at rest | must be off (`-fkiln-bmi-image` is not supported with snapshots) |
 //! | `record` | carried apart | not a field of this root: the driver writes it after every root ([`Preprocessor::snap_put_record`], spec/pp.md "Preprocessing record", stage 4) when the producer recorded; a restore marks the consumer's record `RESTORED` until [`Preprocessor::snap_restore_record`] replaces it |
 //! | `rec_cur`, `rec_builtin`, `rec_pragma`, `rec_inc`, `rec_import_at`, `rec_hu` | transient, at rest | the row being built: none between files |
@@ -230,6 +230,7 @@ impl Preprocessor<'_, '_> {
             ("in_directive", self.in_directive),
             ("dir_eod", self.dir_eod.is_some()),
             ("quiet_lex", self.quiet_lex),
+            ("imacros_discard", self.imacros_discard),
             ("name_gate", self.name_gate.is_some()),
         ];
         if let Some((field, _)) = busy.iter().find(|b| b.1) {
@@ -300,6 +301,7 @@ impl Preprocessor<'_, '_> {
             in_directive: _,
             dir_eod: _,
             quiet_lex: _,
+            imacros_discard: _,
             dir_hash: _,
             diag_pushes,
             embed_bufs,

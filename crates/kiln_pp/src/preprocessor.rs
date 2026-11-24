@@ -356,6 +356,10 @@ pub struct Preprocessor<'a, 'd> {
     /// is not re-entered, so an include cycle with two back edges ends
     /// instead of walking every path to the limit.
     pub(crate) include_limit_reached: bool,
+    /// An `-imacros` file is being read (`#__include_macros`): every
+    /// token up to the next `##` is discarded, and so are the pragmas the
+    /// parser would see (clang `HandleIncludeMacrosDirective`).
+    pub(crate) imacros_discard: bool,
     /// The first directive's `#` in the current unit's own file, and
     /// whether a directive that P3868R1 does not allow before a module
     /// directive was seen there (`note_unit_directive`).
@@ -501,6 +505,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             gcc_dirs: FxHashMap::default(),
             include_depth: 0,
             include_limit_reached: false,
+            imacros_discard: false,
             unit_first_hash: None,
             unit_pre_directive: false,
             main_file: None,
@@ -875,6 +880,29 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
     /// The next token or marker. Markers come before the token that
     /// follows them in the source.
     pub fn next_item(&mut self) -> PpItem {
+        loop {
+            let item = self.next_item_kept();
+            if !self.imacros_discard {
+                return item;
+            }
+            // An `-imacros` file: its tokens and the `##` after it go; its
+            // file changes stay (clang's `-E` marks them), and so do its
+            // pragmas under `-E`, which prints them as it reads them.
+            match item {
+                PpItem::Token(t) if t.kind == TokKind::Eof => return PpItem::Token(t),
+                PpItem::Token(t) => {
+                    if t.kind == TokKind::Punct(Punct::HashHash) {
+                        self.imacros_discard = false;
+                    }
+                }
+                PpItem::Marker(Marker::Pragma { .. }) if self.opts.parser_pragmas => {}
+                m @ PpItem::Marker(_) => return m,
+            }
+        }
+    }
+
+    /// [`Self::next_item`] before `-imacros` discards.
+    fn next_item_kept(&mut self) -> PpItem {
         if let Some(m) = self.markers.pop_front() {
             self.marker_out(&m);
             return PpItem::Marker(m);

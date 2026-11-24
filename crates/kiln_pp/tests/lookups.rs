@@ -9,8 +9,8 @@ use std::fmt::Write as _;
 use kiln_diag::{DiagEngine, DiagOptions, MemorySink};
 use kiln_lex::{Interner, Std};
 use kiln_pp::{
-    DirGroup, HeaderFs, HeaderSearch, LookupLog, MemoryFs, PpOptions, Preprocessor, PrintOptions,
-    SearchDirSpec, SearchList, Trust, print_preprocessed,
+    DirGroup, Found, HeaderFs, HeaderSearch, LookupLog, MemoryFs, PpOptions, Preprocessor,
+    PrintOptions, SearchDirSpec, SearchList, Trust, print_preprocessed,
 };
 use kiln_source::SourceManager;
 
@@ -20,7 +20,17 @@ fn list(fs: &mut MemoryFs, dirs: &[(&str, DirGroup)]) -> SearchList {
 }
 
 /// Preprocesses `main` of `fs` over `dirs`, recording; the log.
-fn record(mut fs: MemoryFs, main: &str, dirs: &[(&str, DirGroup)]) -> LookupLog {
+fn record(fs: MemoryFs, main: &str, dirs: &[(&str, DirGroup)]) -> LookupLog {
+    record_with(fs, main, dirs, &["/res"])
+}
+
+/// [`record`] with the `--embed-dir`s `embed`.
+fn record_with(
+    mut fs: MemoryFs,
+    main: &str,
+    dirs: &[(&str, DirGroup)],
+    embed: &[&str],
+) -> LookupLog {
     let interner = Interner::new();
     let sm = SourceManager::new();
     let l = list(&mut fs, dirs);
@@ -28,7 +38,8 @@ fn record(mut fs: MemoryFs, main: &str, dirs: &[(&str, DirGroup)]) -> LookupLog 
     let sink = MemorySink::new();
     let engine = DiagEngine::new(&sm, &DiagOptions::default(), sink.clone());
     let mut pp = Preprocessor::new(&sm, &engine, &interner, PpOptions::new(Std::Cxx26));
-    let mut hs = HeaderSearch::new(fs, l).with_embed_dirs(vec!["/res".into()]);
+    let embed = embed.iter().map(|&d| d.to_owned()).collect();
+    let mut hs = HeaderSearch::new(fs, l).with_embed_dirs(embed);
     hs.record_lookups();
     pp.set_include_resolver(Box::new(hs));
     pp.enter_main_file(main);
@@ -188,6 +199,11 @@ fn embed_lookups_are_repeated() {
         .with_file("/res/d.bin", "Z")
         .with_dir("/extra");
     let log = record(fs.clone(), "/p/h.h", &[]);
+    // WP-2829: the `--embed-dir` list is in the log, and the hit names
+    // its position there.
+    assert_eq!(log.embed_dir_names(), ["/res"]);
+    assert_eq!(log.lookups[0].found, Found::EmbedDir { index: 0 });
+    assert!(log.tried(&log.lookups[0]).is_empty());
     let mut f = fs.clone();
     assert_eq!(check(&log, &mut f, &[("/extra", A)]), Ok(()));
     let mut f = fs;
@@ -197,6 +213,74 @@ fn embed_lookups_are_repeated() {
         log.check(&l, &["/other".to_owned(), "/res".to_owned()], &mut f, &|_| false, SAME_CWD),
         Err("lookup of #embed <d.bin> now finds '/other/d.bin' (was '/res/d.bin')".to_owned())
     );
+}
+
+/// WP-2829 ([cpp.embed]/3, spec/pp.md "Lookup log"): the `--embed-dir`
+/// list is recorded, and each `#embed` / `__has_embed` lookup names what
+/// it tried before its result: a `"..."` name beside its includer tries
+/// nothing before, one in the first `--embed-dir` tries the includer's
+/// and the working directory, `<...>` in the second tries the first, and
+/// a miss tries everything. `check` repeats them from the log, not asking
+/// again where the producer missed when that is trusted.
+#[test]
+fn embed_dirs_and_tries_are_logged() {
+    let main = "const char a[] = {\n#embed \"near.bin\"\n};\n\
+                const char b[] = {\n#embed <two.bin>\n};\n\
+                #if __has_embed(\"none.bin\")\n#endif\n\
+                const char c[] = {\n#embed \"one.bin\"\n};\n";
+    let fs = MemoryFs::new()
+        .with_file("/p/h.h", main)
+        .with_file("/p/near.bin", "N")
+        .with_file("/e1/one.bin", "1")
+        .with_file("/e2/two.bin", "2");
+    let log = record_with(fs.clone(), "/p/h.h", &[], &["/e1", "/e2"]);
+    assert_eq!(log.embed_dir_names(), ["/e1", "/e2"]);
+    let got: Vec<(&str, &Found, Vec<&str>)> =
+        log.lookups.iter().map(|l| (l.name.as_str(), &l.found, log.tried(l))).collect();
+    let near = Found::Embed { path: "/p/near.bin".to_owned() };
+    assert_eq!(
+        got,
+        [
+            ("near.bin", &near, vec![]),
+            ("two.bin", &Found::EmbedDir { index: 1 }, vec!["/e1"]),
+            ("none.bin", &Found::Missing, vec!["/p", ".", "/e1", "/e2"]),
+            ("one.bin", &Found::EmbedDir { index: 0 }, vec!["/p", "."]),
+        ]
+    );
+    assert!(log.absolute() && log.validate().is_ok());
+    let embed = ["/e1".to_owned(), "/e2".to_owned()];
+    let l = list(&mut fs.clone(), &[]);
+    // Unchanged: only the three hits are asked; the misses are trusted.
+    let mut f = fs.clone();
+    let before = f.queries();
+    assert_eq!(log.check(&l, &embed, &mut f, &|_| false, SAME_CWD), Ok(()));
+    let (o, s, n) = f.queries();
+    assert_eq!((o - before.0) + (s - before.1) + (n - before.2), 3);
+    // A `two.bin` that appears in `/e1` is a producer's miss: trusted, it
+    // is not asked; trusting nothing, it is found.
+    let mut f = fs.clone().with_file("/e1/two.bin", "X");
+    assert_eq!(log.check(&l, &embed, &mut f, &|_| false, SAME_CWD), Ok(()));
+    assert_eq!(
+        log.check(&l, &embed, &mut f, &|_| false, Trust::Nothing),
+        Err("lookup of #embed <two.bin> now finds '/e1/two.bin' (was '/e2/two.bin')".to_owned())
+    );
+    // A consumer whose `--embed-dir` list lacks `/e2`, or now has
+    // `none.bin` in one of its directories.
+    let mut f = fs.clone();
+    assert_eq!(
+        log.check(&l, &["/e1".to_owned()], &mut f, &|_| false, SAME_CWD),
+        Err("lookup of #embed <two.bin> now finds nothing (was '/e2/two.bin')".to_owned())
+    );
+    let mut f = fs.clone().with_file("/e3/none.bin", "?");
+    let more = ["/e1".to_owned(), "/e2".to_owned(), "/e3".to_owned()];
+    assert_eq!(
+        log.check(&l, &more, &mut f, &|_| false, SAME_CWD),
+        Err("lookup of #embed \"none.bin\" now finds '/e3/none.bin' (was not found)".to_owned())
+    );
+    // A decoded log whose hit is past its list is refused.
+    let mut bad = log.clone();
+    bad.embed_dirs.pop();
+    assert_eq!(bad.validate(), Err("its lookup log names --embed-dir 1 of 1".to_owned()));
 }
 
 /// The absolute names of [`absolute_tree`]'s `/p/h.h`, each form found
@@ -498,7 +582,7 @@ fn hostile_logs_are_validated_and_repeat_without_panic() {
                 }
             })
             .collect();
-        let log = LookupLog { dirs, lookups, list, angled_start };
+        let log = LookupLog { dirs, lookups, list, angled_start, embed_dirs: Vec::new() };
         if log.validate().is_err() {
             refused += 1;
         } else {

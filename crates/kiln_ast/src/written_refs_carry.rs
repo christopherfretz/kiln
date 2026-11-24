@@ -95,12 +95,15 @@ impl WrittenRefs {
                 return Err("a written-reference qualifier that does not precede its entry");
             }
         }
-        // Leads: by entry, once each, a `::` only on a global qualifier.
+        // Leads: by entry, once each, a `::` only on a global qualifier,
+        // a specifier's first token only on a specifier qualifier.
         let leads_ok = s.leads.windows(2).all(|w| w[0].entry < w[1].entry)
             && s.leads.iter().all(|l| {
-                entry_ok(l.entry)
-                    && (!l.colon.is_valid()
-                        || s.entries[l.entry.index()].qualifier.link() == QualLink::Global)
+                entry_ok(l.entry) && {
+                    let link = s.entries[l.entry.index()].qualifier.link();
+                    (!l.colon.is_valid() || link == QualLink::Global)
+                        && (!l.spec.is_valid() || link == QualLink::Specifier)
+                }
             });
         if !leads_ok {
             return Err("a written-reference lead out of order or on the wrong entry");
@@ -372,6 +375,32 @@ mod tests {
         bad.written_refs.set_on(true);
         let ec = bad.written_refs.push(entry(RefQualifier::NONE)).unwrap();
         bad.written_refs.set_lead(ec, Some(Loc::from_raw(3)), None);
+        let bytes = put(&bad);
+        let mut rd = Reader::new(&bytes);
+        assert!(new_ast().get_written_refs(&mut rd, true, 0).is_err());
+    }
+
+    /// WP-2828: `decltype(s)::m`, the specifier's first token round
+    /// trips with its `SPECIFIER` qualifier; one on an entry with another
+    /// qualifier is rejected.
+    #[test]
+    fn a_specifier_lead_round_trips_and_one_off_a_specifier_is_rejected() {
+        let mut ast = new_ast();
+        ast.written_refs.set_on(true);
+        let link = ast.written_refs.specifier_link(Loc::from_raw(3));
+        let em = ast.written_refs.push(entry(link)).unwrap();
+        let bytes = put(&ast);
+        let mut back = new_ast();
+        let mut rd = Reader::new(&bytes);
+        back.get_written_refs(&mut rd, true, 0).expect("read");
+        assert_eq!(back.written_refs.leads(), ast.written_refs.leads());
+        assert_eq!(back.written_refs.get(em).qualifier, RefQualifier::SPECIFIER);
+        assert_eq!(back.written_refs.specifier_lo(em), Some(Loc::from_raw(3)));
+        let mut bad = new_ast();
+        bad.written_refs.set_on(true);
+        let link = bad.written_refs.global_link(Loc::from_raw(2));
+        let ec = bad.written_refs.push(entry(link)).unwrap();
+        bad.written_refs.set_specifier_lo(ec, Loc::from_raw(3));
         let bytes = put(&bad);
         let mut rd = Reader::new(&bytes);
         assert!(new_ast().get_written_refs(&mut rd, true, 0).is_err());

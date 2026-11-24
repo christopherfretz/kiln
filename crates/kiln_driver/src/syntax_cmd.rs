@@ -536,7 +536,10 @@ impl SyntaxJob<'_> {
             else {
                 return;
             };
-            let (sema, mut pp, deps, popts) = parts;
+            let (sema, mut pp, deps, mut popts) = parts;
+            // The library entry's token table (spec/parse.md §2.6): the
+            // main file's tokens, after the prefix.
+            popts.token_table = hooks.as_ref().is_some_and(|h| h.token_table);
             if let Some(v) = verify {
                 // Nothing is lexed yet: the main file's comments (and the
                 // `-include`s' after the PCH) reach the verifier.
@@ -566,7 +569,11 @@ impl SyntaxJob<'_> {
             let v = Rc::clone(v);
             pp.set_comment_handler(Box::new(move |c| v.borrow_mut().handle_comment(c, engine)));
         }
-        let popts = self.parse_options();
+        let popts = ParseOptions {
+            // The library entry's token table (spec/parse.md §2.6).
+            token_table: hooks.as_ref().is_some_and(|h| h.token_table),
+            ..self.parse_options()
+        };
         let limits = a.constexpr.limits();
         let main_id = pp.main_file();
         let (tu, pp) = parse_preprocessed_with_host(

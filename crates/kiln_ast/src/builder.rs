@@ -1524,12 +1524,14 @@ impl<'a> AstBuilder<'a> {
     /// ([dcl.fct.def.general]/8): `PredefinedExpr`, an lvalue of type `ty`
     /// (`const char[N]`, or the dependent type in a dependent context,
     /// where `name` is `None`); `name` is the `StringLiteral` holding the
-    /// value (its child).
+    /// value (its child), `func` the function it names (`None` outside
+    /// one; [`crate::expr::ExprArena::predefined_function`]).
     pub fn predefined_expr(
         &mut self,
         kind: crate::expr::PredefinedKind,
         ty: QualType,
         name: Option<ExprId>,
+        func: Option<DeclId>,
         loc: Loc,
     ) -> ExprId {
         let deps = self.type_deps(ty);
@@ -1541,7 +1543,7 @@ impl<'a> AstBuilder<'a> {
             ty,
             loc,
             name.map_or(0, ExprId::raw),
-            0,
+            func.map_or(0, DeclId::raw),
         )
     }
 

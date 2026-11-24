@@ -983,6 +983,22 @@ fn response_files_can_be_turned_off() {
     assert_eq!(r.value, Some(true));
 }
 
+/// WP-2826: a response file that cannot be read, or that names itself,
+/// is `FrontEndError::ResponseFile`, with clang's text; the names are
+/// joined onto the working directory.
+#[test]
+fn response_file_errors() {
+    let s = Scratch::new("rsp-err");
+    std::fs::create_dir_all(s.0.join("dir")).unwrap();
+    s.write("self.rsp", b"-fsyntax-only @self.rsp\n");
+    let r = run_front_end("kiln++", &argv(&["@dir"]), in_dir(&s.0), |_| ());
+    let Err(FrontEndError::ResponseFile(e)) = r else { panic!("{r:?}") };
+    assert_eq!(e.to_string(), format!("cannot not open file '{}': Is a directory", s.path("dir")));
+    let r = run_front_end("kiln++", &argv(&["@self.rsp"]), in_dir(&s.0), |_| ());
+    let Err(e @ FrontEndError::ResponseFile(_)) = r else { panic!("{r:?}") };
+    assert_eq!(e.to_string(), format!("recursive expansion of: '{}'", s.path("self.rsp")));
+}
+
 /// WP-2121: the executable's `-working-directory`: inputs, `-I`, `-o`
 /// and `-MF` resolve against it, the dependency file and the line
 /// markers keep the names as written, and nothing appears in the
@@ -1155,4 +1171,115 @@ fn exception_spec_computed_vs_written() {
     ]);
     let r = run_front_end("kiln++", &cl, quiet(), |fe| check_exc_spec_computed(fe.ast)).unwrap();
     assert_eq!((r.value, r.errors), (Some(()), 0), "{:?}", r.first_error);
+}
+
+/// `FrontEndOptions::token_table` (spec/parse.md §2.6, WP-2825): the
+/// tokens of the main file and of an included one, the split `>>` of the
+/// header as two `>`s, nothing in a skipped group; off, no table.
+#[test]
+fn token_table_of_two_files() {
+    let s = Scratch::new("token-table");
+    let h_src = "template <class T> struct A {};\nA<A<int>> in_header;\n";
+    let main_src = "#include \"h.h\"\nint m = 1;\n#if 0\nint skipped;\n#endif\n";
+    s.write("h.h", h_src.as_bytes());
+    let main = s.write("main.cpp", main_src.as_bytes());
+    let cl = argv(&["-std=c++26", "-fsyntax-only", &main]);
+    let off = run_front_end("kiln++", &cl, quiet(), |fe| {
+        assert!(!fe.parse_options.token_table);
+        (fe.token_table.is_none(), fe.tokens)
+    })
+    .unwrap();
+    assert_eq!((off.errors, off.value), (0, Some((true, 23))), "{:?}", off.first_error);
+    let mut on = quiet();
+    on.token_table = true;
+    let r = run_front_end("kiln++", &cl, on, |fe| {
+        assert!(fe.parse_options.token_table);
+        let t = fe.token_table.expect("the table");
+        assert_eq!(t.delivered(), fe.tokens);
+        assert_eq!(t.len() as u64, fe.tokens + 1, "the header's `>>` is two rows");
+        let file = |name: &str| {
+            fe.sm.file_ids().find(|&f| fe.sm.file_name(f).ends_with(name)).expect(name)
+        };
+        let (h, m) = (file("/h.h"), file("/main.cpp"));
+        let at = |src: &str, n: &str| u32::try_from(src.find(n).unwrap()).unwrap();
+        let gg = at(h_src, ">> in_header");
+        for o in [0, at(h_src, "A<A"), at(h_src, "<A<"), gg, gg + 1, at(h_src, "in_header")] {
+            assert!(t.starts_token(h, o), "h.h:{o}");
+        }
+        assert!(!t.starts_token(h, at(h_src, "in_header") + 1));
+        assert!(!t.starts_token(m, gg), "the query is per file");
+        for o in [at(main_src, "int m"), at(main_src, "m ="), at(main_src, "1;")] {
+            assert!(t.starts_token(m, o), "main.cpp:{o}");
+        }
+        for o in [0, 1, at(main_src, "\"h.h\""), at(main_src, "int skipped")] {
+            assert!(!t.starts_token(m, o), "main.cpp:{o}: a directive or a skipped group");
+        }
+        (t.file_tokens(h).count(), t.file_tokens(m).count())
+    })
+    .unwrap();
+    assert_eq!(r.errors, 0, "{:?}", r.first_error);
+    // `template < class T > struct A { } ;` (10) and `A < A < int > > in_header ;`
+    // (9, the `>>` split) in h.h; `int m = 1 ;` (5) in main.cpp.
+    assert_eq!(r.value, Some((19, 5)));
+}
+
+/// `#embed` data (spec/parse.md §2.6): the bytes are delivered to the
+/// parser as numbers and commas spelled in a scratch buffer behind an
+/// `#embed` expansion entry, so they are rows, from a macro expansion,
+/// and no file token of the file holding the directive.
+#[test]
+fn token_table_embed_data_are_macro_rows() {
+    let s = Scratch::new("token-table-embed");
+    s.write("d.bin", b"\x01\x02\x03");
+    let main_src = "const unsigned char e[] = {\n#embed \"d.bin\"\n};\n";
+    let main = s.write("main.cpp", main_src.as_bytes());
+    let cl = argv(&["-std=c++26", "-fsyntax-only", &main]);
+    let mut on = quiet();
+    on.token_table = true;
+    let r = run_front_end("kiln++", &cl, on, |fe| {
+        let t = fe.token_table.expect("the table");
+        assert_eq!(t.len() as u64, fe.tokens);
+        let m = fe.main_file.unwrap();
+        let embed: Vec<_> = t.rows().iter().filter(|r| r.from_macro()).collect();
+        let lens: Vec<u32> = embed.iter().map(|r| r.len()).collect();
+        assert_eq!(lens, [1, 1, 1, 1, 1], "`1 , 2 , 3`");
+        assert!(embed.iter().all(|r| !r.from_macro_arg()));
+        let at = |n: &str| u32::try_from(main_src.find(n).unwrap()).unwrap();
+        assert!(!t.starts_token(m, at("#embed")));
+        assert!(!t.starts_token(m, at("\"d.bin\"")));
+        assert!(t.starts_token(m, at("};")));
+        t.file_tokens(m).count()
+    })
+    .unwrap();
+    assert_eq!(r.errors, 0, "{:?}", r.first_error);
+    // `const unsigned char e [ ] = {` (8) and `} ;` (2).
+    assert_eq!(r.value, Some(10));
+}
+
+/// The token table's cost on one large unit (spec/parse.md §2.6 "Cost"):
+/// six libstdc++ headers at `-std=c++26`. A measurement, not a check:
+/// `cargo test -p kiln_driver --test front_end token_table_cost --
+/// --ignored --nocapture` prints the tokens, the rows, the file tokens
+/// and the bytes.
+#[test]
+#[ignore = "a measurement; needs the system's libstdc++"]
+fn token_table_cost() {
+    let s = Scratch::new("token-table-cost");
+    let main = s.write(
+        "main.cpp",
+        b"#include <algorithm>\n#include <vector>\n#include <string>\n#include <map>\n\
+          #include <memory>\n#include <iostream>\nint main() {}\n",
+    );
+    let cl = argv(&["-std=c++26", "-fsyntax-only", &main]);
+    let mut on = quiet();
+    on.token_table = true;
+    let r = run_front_end("kiln++", &cl, on, |fe| {
+        let t = fe.token_table.expect("the table");
+        let files: usize = fe.sm.file_ids().map(|f| t.file_tokens(f).count()).sum();
+        (fe.tokens, t.len(), files, t.heap_bytes())
+    })
+    .unwrap();
+    assert_eq!(r.errors, 0, "{:?}", r.first_error);
+    let (tokens, rows, files, bytes) = r.value.unwrap();
+    eprintln!("tokens {tokens} rows {rows} file-tokens {files} bytes {bytes}");
 }

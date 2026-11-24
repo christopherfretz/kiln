@@ -15,7 +15,11 @@ impl Sema<'_, '_> {
     /// A predefined identifier at `loc` (clang `BuildPredefinedExpr`):
     /// names the innermost enclosing function; outside one, warns and
     /// names the translation unit. In a dependent context the type is
-    /// dependent and the name is computed at instantiation.
+    /// dependent and the name is computed at instantiation. The node
+    /// records the function it names (`ExprArena::predefined_function`,
+    /// spec/ast.md §16, WP-2823): the pattern's function in a template,
+    /// the specialization when an instantiation rebuilds it here, none
+    /// outside a function.
     pub fn act_on_predefined_expr(&mut self, kind: PredefinedKind, loc: Loc) -> ExprId {
         let func = self.enclosing_function(self.ctx);
         if func.is_none() {
@@ -25,7 +29,7 @@ impl Sema<'_, '_> {
         if let Some(f) = func
             && self.ctx_template_levels(f) > 0
         {
-            return self.builder().predefined_expr(kind, QualType::DEPENDENT, None, loc);
+            return self.builder().predefined_expr(kind, QualType::DEPENDENT, None, Some(f), loc);
         }
         let name = match func {
             Some(f) => self.compute_predefined_name(kind, f),
@@ -39,7 +43,7 @@ impl Sema<'_, '_> {
             name.len() as u64 + 1,
         );
         let sl = self.builder().string_literal(ty, StringKind::Ordinary, lit, loc);
-        self.builder().predefined_expr(kind, ty, Some(sl), loc)
+        self.builder().predefined_expr(kind, ty, Some(sl), func, loc)
     }
 
     /// The innermost function enclosing context `ctx` (clang

@@ -1794,7 +1794,30 @@ asm-declaration is `DeclKind::FileScopeAsm` (`AstBuilder::file_scope_asm`,
 `Exprs::predefined_kind`), `a` the `StringLiteral` holding the name
 (`Exprs::predefined_name`, its only child). An lvalue of `const char[N]`;
 in a dependent context it has type `QualType::DEPENDENT` and no child.
-Built by `AstBuilder::predefined_expr(kind, ty, name, loc)`.
+Built by `AstBuilder::predefined_expr(kind, ty, name, func, loc)`.
+
+**The function it names (WP-2823).** `b` is the function the name is
+computed from, `Option<DeclId>` (`ExprArena::predefined_function`, role
+`Opt(Decl)` in §20), so a tooling client finds it without searching by
+extents. It is the innermost enclosing function of the expression's
+context, as clang's `getPredefinedExprDecl` finds it
+(`Sema::enclosing_function`), and always recorded (one word the node
+already had, no table):
+
+| written in | `predefined_function` | the name (clang 19 and 22, `-ast-dump`) |
+|---|---|---|
+| a function body, a constructor's member initializer, a coroutine | that function (the constructor, the coroutine) | `f`, `C::C()`, `co` |
+| a lambda body | the closure's call operator (a generic lambda: its pattern, then each specialization) | `operator()` |
+| a template pattern (a function template, a member of a class template) | the pattern's function; the node is type-dependent with no literal | none until instantiation |
+| an instantiation | the specialization: instantiation rebuilds the node in the specialization (`TransformPredefinedExpr`) | `t`, `f` |
+| namespace scope, a default argument, a default member initializer, a template head's requires-clause | `None`; `-Wpredefined-identifier-outside-function` (clang names the translation unit) | `""`, `top level` for `__PRETTY_FUNCTION__` |
+
+clang's other contexts (a block, a captured statement, an Objective-C
+method) do not exist in kiln. The module image carries the word (an
+optional context declaration, `IMAGE_VERSION` 87) and the PCH snapshot
+carries it as the node's word (`FORMAT_VERSION` 161, the roles row
+changed). Tests: `crates/kiln_parse/tests/predefined.rs`, one case per
+row.
 `ExprArena::mark_instantiation_dependent(e)` sets
 `ExprDeps::INSTANTIATION` on a `SourceLocExpr` or `CXXDefaultArgExpr`
 whose function name changes per specialization (sema, §5.8).
@@ -1916,7 +1939,7 @@ field `Ast::written_refs`. Built in five stages:
 | `entity` | `Option<DeclId>` (4) | the declaration the name denotes after resolution: for an overloaded name, the function overload resolution selected (a function template specialization when it selected one); through a using-shadow, the underlying declaration. `None` for a dependent name in a template pattern and for a name whose resolution failed (flags tell which) |
 | `found` | `Option<DeclId>` (4) | what lookup found when it differs from `entity`: the using-shadow (`found_decl` of the reference), or the function or variable template whose specialization `entity` is |
 | `enclosing` | `Option<DeclId>` (4) | the innermost declaration whose source extent contains the name's first token (§18.3); `None` only when the table was filled without a TU |
-| `qualifier` | `RefQualifier` (4) | for a name written after `::`: the entry of the component immediately to its left, or `GLOBAL` for a leading `::`; `NONE` for an unqualified name |
+| `qualifier` | `RefQualifier` (4) | for a name written after `::`: the entry of the component immediately to its left, `GLOBAL` for a leading `::`, or `SPECIFIER` after a `decltype(...)::` or splice specifier, which has no entry (§18.11.2, WP-2828); `NONE` for an unqualified name |
 | `role` | `RefRole` (1) | the syntactic role (§18.4) |
 | `flags` | `u8` (1) | `DEPENDENT` (a dependent name in a template pattern: no entity until instantiation), `UNRESOLVED` (lookup or overload resolution failed), `MEMBER` (a member or member template name written after `.` or `->`, §18.7) |
 | `how` | `RefLookup` (1) | how lookup found the name (§18.7, WP-2130) |
@@ -2064,7 +2087,13 @@ Stage-1 recording sites (all in `kiln_parse` unless noted):
   typedef, template-id and dependent components, each with its own
   entry and `qualifier` link; a `decltype(...)::` component has no
   entry (its operand's names have their own) and the component after it
-  has no `qualifier` link;
+  has the `qualifier` `SPECIFIER`, with the `decltype` keyword as its
+  `specifier_lo` (WP-2828, §18.11.2); so has the component after a
+  splice-scope-specifier `[: r :]::` (the `[:`) or a
+  splice-specialization-specifier `template [: r :]<...>::` and
+  `typename [: r :]<...>::` (the `template` or the `[:`); a
+  pack-index-specifier `Ts...[0]::` is a component: the pack's name is
+  an `nns` entry that qualifies the next one (WP-1934);
 - lambda captures (`kiln_sema::lambda::capture`, parse path only):
   `[x]`, `[&x]`, `[x...]`, enclosed by the declaration containing the
   lambda-expression (the closure type is not a written declaration); an
@@ -2334,7 +2363,7 @@ stage 1.
 prints, after diagnostics' end of the TU, one line per entry:
 
 ```
-<line>:<col>-<line>:<col>  <role>  '<spelling>' -> <entity> [found=<decl>] [q=<line>:<col>|q=::[<line>:<col>]] [tilde=<line>:<col>] [in=<enclosing>] [dep] [exp=<line>:<col>] [how=<how>] [udir=<ns>@<line>:<col>] [adl-ns=<ns>,...] [adl-cls=<class>,...] [adl-enum=<enum>,...]
+<line>:<col>-<line>:<col>  <role>  '<spelling>' -> <entity> [found=<decl>] [q=<line>:<col>|q=::[<line>:<col>]|q=specifier[:<line>:<col>]] [tilde=<line>:<col>] [in=<enclosing>] [dep] [exp=<line>:<col>] [how=<how>] [udir=<ns>@<line>:<col>] [adl-ns=<ns>,...] [adl-cls=<class>,...] [adl-enum=<enum>,...]
 ```
 
 Positions are the spelling locations of `lo` and `hi` (the end column
@@ -2346,8 +2375,9 @@ qualified name (lambdas as `(lambda)`; a function or template
 parameter unqualified) and `@<line>:<col>` of its location; no entity prints `(dependent)` or `(unresolved)`; `in=(tu)`
 for the translation unit. `q=` names the qualifier entry by its start
 position; `q=::` is followed by the position of the leading `::` when
-it was recorded (always, since WP-2326; §18.11.2), and `tilde=` gives
-the `~` of a destructor name. `exp=` is the outermost expansion point of a name written in
+it was recorded (always, since WP-2326; §18.11.2), `q=specifier:` by
+the first token of a `decltype(...)::` or splice specifier (WP-2828),
+and `tilde=` gives the `~` of a destructor name. `exp=` is the outermost expansion point of a name written in
 a macro. The harness directive `written-refs: <golden>`
 (spec/harness.md) compares this dump with a golden file. The developer
 switch `KILN_WREF_RAW`, read from the run's environment (spec/driver.md
@@ -3395,24 +3425,48 @@ tool that reports on a call) finds the entry of its name by location.
   `KILN_REFS_STRICT` set. `tests/conformance/written_refs/join.cpp` has
   one of each row of the table above.
 
-#### 18.11.2 The leading `::` and the `~`
+#### 18.11.2 The leading `::`, the `~` and the specifier
 
-`RefLead { entry, colon, tilde }` (12 bytes) gives the tokens of an
+`RefLead { entry, colon, tilde, spec }` (16 bytes) gives the tokens of an
 entry's name outside its `range`: the leading `::` of a name whose
-`qualifier` is `GLOBAL`, and the `~` of a destructor name (an
+`qualifier` is `GLOBAL`, the `~` of a destructor name (an
 expression, a pseudo-destructor's type name, or a destructor's
-declarator-id), each `Loc::INVALID` when absent. A cold side table,
-sorted by entry, holds a row only for the entries that have one:
+declarator-id), and the first token of the specifier before a name whose
+`qualifier` is `SPECIFIER` (WP-2828), each `Loc::INVALID` when absent.
+A cold side table, sorted by entry, holds a row only for the entries
+that have one:
 
 - `global_colon(id)`: the `::` of entry `id`, whose qualifier is
   `GLOBAL` (the first component of `::a::b`, or `f` of `::f`);
 - `tilde(id)`: the `~` of a destructor name;
+- `specifier_lo(id)`: the first token of the specifier before entry
+  `id`, whose qualifier is `SPECIFIER`: the `decltype` keyword of
+  `decltype(s)::m`, the `[:` of `[: r :]::m` and of
+  `typename [: r :]<A>::m`, the `template` of `template [: r :]<A>::m`;
 - `name_lo(id)`: the `~` or `range.lo`, the join location (§18.11.1);
 - `qualified_lo(id)`: where the qualified name ending in `id` begins,
-  following `qualifier` to the first component: its `::`, else its
-  `range.lo` (a `decltype(...)::` component has no entry and is not
-  included);
+  following `qualifier` to the first component: its `::`, its
+  specifier's first token, else its `range.lo`; for
+  `decltype(s)::N::k` that is the `decltype`, for `Ts...[0]::v` the
+  pack's name;
 - `lead(id)`, `leads()`: the rows.
+
+**The specifier (WP-2828).** A `decltype(...)::` or splice specifier is
+not a name: the names of its operand have their own entries, and the
+scope it denotes is a type, not a declaration a component entry could
+link. Rather than an entry for the specifier (a new kind of entry, which
+the identifier accounting of §18.8 and every client's "one entry per
+written name" would have to except), the component after it records the
+specifier in two places: its `qualifier` is `SPECIFIER`, so a client
+sees that the name is qualified (before WP-2828 it was `NONE`, and its
+lookup provenance re-ran an unqualified walk; a `SPECIFIER` entry has
+none, as the scope is not kept), and its row's `spec` is the
+specifier's first token, so `qualified_lo` reaches it. The parser takes
+the link from `WrittenRefs::specifier_link(first)` where it parses the
+specifier ahead (`Parser::annotate_decltype_scope`,
+`set_decltype_scope`), through the scratch list of the leading `::`
+(bit 30 of the in-flight link marks a specifier). A pack-index-specifier
+needs neither: its pack's name is a component entry already.
 
 The locations are kiln token locations, as `range`'s are: a `::`
 spelled by a macro (`#define G ::`, `G a::f()`) is the macro's token,
@@ -3454,16 +3508,25 @@ libstdc++, `-std=c++26 -fsyntax-only`) the table has 209,806 entries,
 8,367,460 live bytes; 641 are globally qualified and 60 are destructor
 names, 701 rows (8,412 bytes) and at least 641 scratch locations (2,564
 bytes): about 11 KB, 0.13% of the table. Every `q=::` of its dump has
-its position.
+its position. WP-2828: `specifier_link` is the same one branch off;
+on, a specifier costs 4 bytes of scratch and its entry a row, and a row
+is 16 bytes (the `spec` word). On the same header (WP-2828's tree, the
+same build and flags) the table has 254,158 entries; 3 are qualified by
+a `decltype(...)::` specifier, 641 globally and 60 are destructor names,
+704 rows (11,264 bytes); every `q=specifier` of its dump has its
+position.
 
 **Carriage.** The PCH section (§18.10.1) carries the rows as
-`WrittenRefsSection::leads`, validated sorted, in range, and each `::`
-on an entry whose qualifier is `GLOBAL`; the scratch list is never
+`WrittenRefsSection::leads`, validated sorted, in range, each `::`
+on an entry whose qualifier is `GLOBAL` and each specifier token on one
+whose qualifier is `SPECIFIER`; the scratch list is never
 carried (no in-flight link outlives its name). The image's `refs`
-section (spec/modules.md §11.11) ends with them, (entry, colon, tilde)
-as three words with `NONE` for an absent location, its locations in the
-offset check, validated as the snapshot's. PCH `FORMAT_VERSION` 147,
-`IMAGE_VERSION` 80 (146 and 79 are WP-2091's).
+section (spec/modules.md §11.11) ends with them, (entry, colon, tilde,
+spec) as four words with `NONE` for an absent location, its locations
+in the offset check, validated as the snapshot's; a `SPECIFIER`
+qualifier is the word `Q_SPEC`. PCH `FORMAT_VERSION` 147,
+`IMAGE_VERSION` 80 (146 and 79 are WP-2091's); the `spec` word and
+`SPECIFIER`: `FORMAT_VERSION` 161, `IMAGE_VERSION` 87 (WP-2828).
 
 **Tests.** `crates/kiln_ast/src/written_refs.rs`
 (`leading_colons_and_tildes_are_kept_beside_the_entry`: the link,
@@ -4254,6 +4317,16 @@ This section is the promise kiln makes, and where it makes none.
   that list's construction (`ExprArena::set_construct_list_braces`);
   and a member variable template's template arguments are recorded
   outside a template too, so `d.twice<7>` ends at its `>` from them.
+- WP-2828 checked, and pins (`a_specifier_begins_the_name_it_qualifies`
+  in `crates/kiln_parse/tests/expr_extents.rs`), that a name qualified
+  by a `decltype(...)::` or splice specifier begins at the specifier's
+  first token, as clang's `getBeginLoc` (19 and 22) begins
+  `decltype(s)::m` at the `decltype`: `decltype(s)::N::k`,
+  `&decltype(s)::f`, the dependent `decltype(t)::m`, `[:^^S:]::m` (the
+  `[:`) and `template [:^^X:]<int>::v` (the `template`). The begin is
+  the qualifier begin sema already records (`templates.expr_begin`, from
+  the parser's `nns_start`); nothing changed. The written-reference
+  entry of such a name now reaches the same token (§18.11.2).
 
 ### 21.2 Decisions
 

@@ -127,6 +127,10 @@ impl<'a> Preprocessor<'a, '_> {
         let read_before = self.cur_file_ref().is_none_or(|f| f.mi.read_any);
         let name = self.lex_unexpanded();
         let dir = self.dir_of(&name);
+        // `-imacros` (clang's `tok::pp___include_macros`); not in the
+        // directive table, which every unit interns.
+        let imacros = dir.is_none()
+            && name.ident().is_some_and(|s| self.interner.as_str(s) == "__include_macros");
         if self.modules.is_some() && self.include_depth == 0 {
             let exempt = matches!(name.kind(), TokKind::Eod | TokKind::PpNumber);
             self.note_unit_directive(hash.span.lo, dir, exempt);
@@ -159,7 +163,7 @@ impl<'a> Preprocessor<'a, '_> {
             }
             self.emit(Diag::new(DiagId::pp_embedded_directive_ext, name.tok.span));
         }
-        if self.opts.asm && self.asm_passthrough(&name, dir) {
+        if self.opts.asm && !imacros && self.asm_passthrough(&name, dir) {
             self.asm_reinject(hash, name);
             return;
         }
@@ -188,6 +192,7 @@ impl<'a> Preprocessor<'a, '_> {
                 Some(Dir::Warning) => self.do_error_warning(name, false),
                 Some(Dir::Pragma) => self.handle_pragma_directive(hash.span.lo, name),
                 Some(Dir::Ident | Dir::Sccs) => self.do_ident(name),
+                None if imacros => self.do_include_macros(name),
                 None => {
                     self.emit(Diag::new(DiagId::pp_invalid_directive, name.tok.span));
                 }
@@ -1734,6 +1739,20 @@ impl Preprocessor<'_, '_> {
             MetaHintLib::NoGcc => Diag::new(DiagId::note_pp_meta_no_gcc, Span::INVALID),
         };
         d.with_note(note.arg(found))
+    }
+
+    /// `#__include_macros "file"`, which the predefines hold for each
+    /// `-imacros` (clang `HandleIncludeMacrosDirective`): the file is
+    /// included, and everything but its directives is discarded up to the
+    /// `##` the predefines put after it ([`Self::next_item`]). Elsewhere
+    /// it is an error.
+    fn do_include_macros(&mut self, name: PpTok) {
+        if !self.in_predefines() {
+            self.emit(Diag::new(DiagId::pp_include_macros_out_of_predefines, name.tok.span));
+            return;
+        }
+        self.imacros_discard = true;
+        self.do_include(name, Dir::Include);
     }
 
     fn do_include(&mut self, name: PpTok, d: Dir) {

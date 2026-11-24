@@ -1078,6 +1078,7 @@ fn ci_gate_honours_failure_counts() {
         updated: false,
         advisory: None,
         gcc_compared: false,
+        host_retry: None,
         elapsed: Duration::ZERO,
     };
     let ran = |statuses: &[Status]| {

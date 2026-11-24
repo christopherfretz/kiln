@@ -192,7 +192,8 @@ impl Sema<'_, '_> {
         let n = self.ast.exprs.get(x);
         let qual = match r.qualifier.link() {
             QualLink::None => None,
-            QualLink::Global => return None,
+            // A `decltype(e)::` or splice qualifier keeps no scope.
+            QualLink::Global | QualLink::Specifier => return None,
             QualLink::Entry(q) => {
                 let ctx = self.written_qualifier_scope(self.ast.written_refs.get(q).entity?)?;
                 (self.kind_of(ctx) == DeclKind::CXXRecord).then_some(ctx)?;
@@ -841,6 +842,10 @@ impl Sema<'_, '_> {
     ) -> Option<(crate::lookup::Found, crate::lookup::WalkProvenance)> {
         Some(match r.qualifier.link() {
             QualLink::None => self.lookup_name_provenance(name, kind),
+            // The scope a `decltype(e)::` or splice names is not kept
+            // with the entry (WP-2828), and an unqualified walk would be
+            // the wrong lookup: no provenance.
+            QualLink::Specifier => return None,
             QualLink::Global => self.lookup_qualified_walk(self.ast.tu, name, kind, true),
             QualLink::Entry(q) => {
                 let ctx = self.written_qualifier_scope(self.ast.written_refs.get(q).entity?)?;

@@ -834,6 +834,18 @@ pub struct Args {
     /// `-include <file>`, in order: `#include "<file>"` at the end of the
     /// predefines' `<command line>` section (clang `AddImplicitInclude`).
     pub includes: Vec<String>,
+    /// `-imacros <file>` (`--imacros`, `--imacros=`), in order: processed
+    /// before every `-include`, keeping only its macros (clang
+    /// `AddImplicitIncludeMacros`; spec/driver.md "Options").
+    pub imacros: Vec<String>,
+    /// The prefix the next `-iwithprefix` / `-iwithprefixbefore` joins on:
+    /// the last `-iprefix` so far (clang's default is empty).
+    pub iprefix: String,
+    /// `-iwithprefix <dir>` (an [`DirGroup::After`] directory, before every
+    /// `-idirafter`) and `-iwithprefixbefore <dir>` (a [`DirGroup::Angled`]
+    /// one, after every `-I`), in order, each with the [`Args::iprefix`] in
+    /// force joined on (clang `ParseHeaderSearchArgs`).
+    pub prefixed_dirs: Vec<(DirGroup, String)>,
     /// The PCH options (WP-1023, spec/driver.md "Precompiled headers").
     pub pch: PchArgs,
     /// `-ffile-prefix-map=<old>=<new>` and `-fmacro-prefix-map=<old>=<new>`,
@@ -1302,7 +1314,8 @@ fn include_alias<'a>(arg: &'a str, next: Option<&str>) -> Option<Valued<'a>> {
 
 /// clang's `--include-*` options, each `Separate` and `=`-joined (and
 /// `--include-barrier`, a flag): `--include-directory=d` is `-Id`, not
-/// `--include` with `-directory=d`. kiln does not accept them yet.
+/// `--include` with `-directory=d`. kiln accepts the prefix ones
+/// ([`SEPARATE_OR_EQ_ALIASES`]); the others are unknown arguments.
 const LONGER_THAN_INCLUDE: &[&str] = &[
     "--include-barrier",
     "--include-directory",
@@ -1317,6 +1330,11 @@ const LONGER_THAN_INCLUDE: &[&str] = &[
 const JOINED_OR_SEPARATE: &[&str] = &[
     "-cxx-isystem",
     "-include",
+    "-imacros",
+    "--imacros",
+    "-iprefix",
+    "-iwithprefix",
+    "-iwithprefixbefore",
     "-idirafter",
     "-iquote",
     "-isysroot",
@@ -1338,7 +1356,7 @@ const JOINED_OR_SEPARATE: &[&str] = &[
 
 /// Options taking a separate value only (`-target foo`), or `=`-joined
 /// (`--sysroot=foo`, `-resource-dir=foo`).
-const SEPARATE_OR_EQ: &[&str] = &[
+pub(crate) const SEPARATE_OR_EQ: &[&str] = &[
     "--sysroot",
     "-resource-dir",
     "-target-feature",
@@ -1356,6 +1374,21 @@ const SEPARATE_OR_EQ: &[&str] = &[
 /// `-Xclang` it sets the handler, as a driver option it is claimed by
 /// nothing ([`crate::codegen_flags::CodegenFlags::trapv_handler_separate`]).
 const SEPARATE: &[&str] = &["-ftrapv-handler", "-include-pch"];
+
+/// clang's `Joined` aliases (`--imacros=<file>`, so `--imacros=` is an
+/// empty value): the spelling and the option it stands for.
+const JOINED_ALIASES: &[(&str, &str)] = &[("--imacros=", "-imacros")];
+
+/// clang's GCC-style aliases taking a separate or `=`-joined value: the
+/// spelling and the option it stands for. Each wins over `--include`
+/// ([`LONGER_THAN_INCLUDE`]); `--include-prefixp` is `--include` with
+/// `-prefixp`, as in clang.
+const SEPARATE_OR_EQ_ALIASES: &[(&str, &str)] = &[
+    ("--include-prefix", "-iprefix"),
+    ("--include-with-prefix", "-iwithprefix"),
+    ("--include-with-prefix-after", "-iwithprefix"),
+    ("--include-with-prefix-before", "-iwithprefixbefore"),
+];
 
 /// The library builtins clang declares in namespace `std` (the
 /// `Builtins.td` rows with the `z` attribute), which `-fno-builtin-`
@@ -1878,6 +1911,14 @@ impl Args {
             "-D" => self.macros.push(CmdMacro::Define(v_owned)),
             "-U" => self.macros.push(CmdMacro::Undef(v_owned)),
             "-include" => self.includes.push(v_owned),
+            "-imacros" | "--imacros" => self.imacros.push(v_owned),
+            "-iprefix" => self.iprefix = v_owned,
+            "-iwithprefix" => {
+                self.prefixed_dirs.push((DirGroup::After, format!("{}{v}", self.iprefix)));
+            }
+            "-iwithprefixbefore" => {
+                self.prefixed_dirs.push((DirGroup::Angled, format!("{}{v}", self.iprefix)));
+            }
             "-include-pch" => self.pch.include = Some(v_owned),
             "-I" => self.dirs.push((DirGroup::Angled, v_owned)),
             "-iquote" => self.dirs.push((DirGroup::Quoted, v_owned)),
@@ -2828,32 +2869,40 @@ pub(crate) fn split_valued<'a>(
     next: Option<&str>,
 ) -> Option<(&'static str, Valued<'a>)> {
     let separate = |opt| (opt, if next.is_some() { Valued::Next } else { Valued::Missing });
-    let mut best: Option<(&'static str, Valued<'a>)> = None;
-    let mut consider = |c: (&'static str, Valued<'a>)| {
-        if best.as_ref().is_none_or(|(b, _)| c.0.len() > b.len()) {
-            best = Some(c);
+    // The longest spelling wins (clang's `OptTable`); an alias names the
+    // option it stands for.
+    let mut best: Option<(usize, (&'static str, Valued<'a>))> = None;
+    let mut consider = |spelled: &str, c: (&'static str, Valued<'a>)| {
+        if best.as_ref().is_none_or(|(n, _)| spelled.len() > *n) {
+            best = Some((spelled.len(), c));
         }
     };
     for &opt in SEPARATE {
         if arg == opt {
-            consider(separate(opt));
+            consider(opt, separate(opt));
         }
     }
-    for &opt in SEPARATE_OR_EQ {
-        if arg == opt {
-            consider(separate(opt));
-        } else if let Some(v) = arg.strip_prefix(opt).and_then(|r| r.strip_prefix('=')) {
-            consider((opt, Valued::Joined(v)));
+    let separate_or_eq = SEPARATE_OR_EQ.iter().map(|&o| (o, o));
+    for (spelled, opt) in separate_or_eq.chain(SEPARATE_OR_EQ_ALIASES.iter().copied()) {
+        if arg == spelled {
+            consider(spelled, separate(opt));
+        } else if let Some(v) = arg.strip_prefix(spelled).and_then(|r| r.strip_prefix('=')) {
+            consider(spelled, (opt, Valued::Joined(v)));
         }
     }
     for &opt in JOINED_OR_SEPARATE {
         if arg == opt {
-            consider(separate(opt));
+            consider(opt, separate(opt));
         } else if let Some(v) = arg.strip_prefix(opt) {
-            consider((opt, Valued::Joined(v)));
+            consider(opt, (opt, Valued::Joined(v)));
         }
     }
-    best
+    for &(spelled, opt) in JOINED_ALIASES {
+        if let Some(v) = arg.strip_prefix(spelled) {
+            consider(spelled, (opt, Valued::Joined(v)));
+        }
+    }
+    best.map(|(_, c)| c)
 }
 
 /// `-f[no-]sanitize-merge[=<list>]` (clang 20+; WP-1044).
@@ -2893,6 +2942,44 @@ mod tests {
 
     fn parse(s: &str) -> Args {
         Args::parse(&s.split_whitespace().map(str::to_owned).collect::<Vec<_>>())
+    }
+
+    /// WP-2822: `-imacros` and the `-iprefix` family, joined or separate,
+    /// with clang's aliases; `-iprefix` applies to the later
+    /// `-iwithprefix`/`-iwithprefixbefore` only (spec/driver.md "Options").
+    #[test]
+    fn imacros_and_prefix_options() {
+        let a = parse(
+            "-imacros a.h -imacrosb.h --imacros c.h --imacrosd.h --imacros=e.h -imacros=f t.cpp",
+        );
+        assert_eq!(a.imacros, ["a.h", "b.h", "c.h", "d.h", "e.h", "=f"]);
+        assert!(a.errors.is_empty() && a.includes.is_empty());
+        let a = parse(
+            "-iwithprefix w0 -iprefix=p -iwithprefix w1 -iprefix q/ -iwithprefixbefore b1 \
+             --include-prefix=r/ --include-with-prefix w2 --include-with-prefix-after=w3 \
+             --include-with-prefix-before b2 -iwithprefixw4 -iwithprefixbeforeb3 t.cpp",
+        );
+        assert_eq!(a.iprefix, "r/");
+        let (after, angled) = (DirGroup::After, DirGroup::Angled);
+        let dirs = [
+            (after, "w0"),
+            (after, "=pw1"),
+            (angled, "q/b1"),
+            (after, "r/w2"),
+            (after, "r/w3"),
+            (angled, "r/b2"),
+            (after, "r/w4"),
+            (angled, "r/b3"),
+        ];
+        assert_eq!(a.prefixed_dirs, dirs.map(|(g, d)| (g, d.to_owned())));
+        assert!(a.errors.is_empty() && a.includes.is_empty() && a.dirs.is_empty());
+        // `--include-prefixp` is `--include` with `-prefixp`, as in clang.
+        let a = parse("--include-prefixp t.cpp");
+        assert_eq!(
+            (a.includes.as_slice(), a.iprefix.as_str()),
+            (["-prefixp".to_owned()].as_slice(), "")
+        );
+        assert_eq!(parse("t.cpp -iprefix").errors.len(), 1);
     }
 
     /// WP-1397: the retired `-fkiln-pch-image` forms are accepted and only
@@ -3378,15 +3465,21 @@ mod tests {
             "--include-directory=d",
             "--include-directory",
             "--include-directory-after=d",
-            "--include-prefix=p",
-            "--include-with-prefix=p",
-            "--include-with-prefix-after=p",
-            "--include-with-prefix-before=p",
             "--include-barrier",
         ] {
             let a = parse(&format!("{o} t.cpp"));
             assert_eq!(a.includes, [""; 0], "{o}");
             assert_eq!(a.errors, [ArgError::Unknown(o.into())], "{o}");
+        }
+        // WP-2822: the GCC `-iprefix` aliases are options of their own.
+        for o in [
+            "--include-prefix=p",
+            "--include-with-prefix=p",
+            "--include-with-prefix-after=p",
+            "--include-with-prefix-before=p",
+        ] {
+            let a = parse(&format!("{o} t.cpp"));
+            assert_eq!((a.includes.len(), a.errors.len()), (0, 0), "{o}");
         }
         // `Separate`-only: a joined value is `--include` with `-directoryd`.
         assert_eq!(parse("--include-directoryd t.cpp").includes, ["-directoryd"]);

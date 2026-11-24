@@ -10,7 +10,8 @@ Reference: clang 22 (`clang++-22 -std=c++20`) for diagnostics, mangling and
 ## 1. The design: no binary module interface in part A
 
 A kiln invocation that imports a module **builds that module in-process
-from its interface source**. There is no BMI and no serialisation: the
+from its interface source** (a file, or a buffer an embedder holds in
+memory, §2 item 0). There is no BMI and no serialisation: the
 imported unit is preprocessed, parsed and analysed by the same
 `Preprocessor` / `Parser` / `Sema` / `Ast` as the importer, its tokens
 spliced into the token stream at the import, with every declaration tagged
@@ -54,6 +55,38 @@ is a declaration of a variable `m` of an unknown type name.
 
 Module sources are found in this order (spec/driver.md, "Modules"):
 
+0. **In-memory interface sources (WP-2824; embedders only, the driver
+   never sets it).** `ModuleOptions::module_buffers` lists `(name,
+   FileId)` pairs: module `<name>` (`M:P` for a partition) is built from
+   that buffer of the run's `SourceManager` (typically one
+   `add_virtual` made), the last entry of a name winning, as for
+   `-fmodule-file`. It is asked first, right after the per-invocation
+   cache (a unit built or being built, a cycle diagnosed), for every
+   import: the main unit's, an implementation unit's implicit import of
+   its interface (§3), a partition's, and those of a unit itself built
+   from a buffer. The import is then exactly that of a source named by
+   item 1, from `begin_unit` on (§1: the unit's includes go through the
+   include resolver, its imports through this same order, a cycle is
+   `pp_module_cycle`), so the `ModuleTable`, owners and diagnostics are
+   those of the same text read from disk, with the buffer's name as the
+   file name. Before `begin_unit` nothing happens: a buffer is always a
+   source, never sniffed or read as a module file whatever its first
+   bytes or name (`.pcm` included), and no path is opened, stat'ed or
+   canonicalised for it (nor for a header unit from a buffer, §11.6).
+   The list is the run's option: nothing is cached across runs.
+   A field and not a resolver method: the buffers live in the run's
+   `SourceManager`, whose `FileId`s are only meaningful to it, and a
+   list in the options keeps the lookup a pure function of the run's
+   inputs with no new trait surface; an embedder that wants a module
+   lazily adds its buffer before the parse. Under `ModuleOptions::record`
+   (a module file of the main unit is being recorded), an import the
+   main unit itself would record is refused with
+   `error: module 'M' is built from the in-memory buffer 'B', which a
+   module file cannot record as its import` (`pp_module_buffer_recorded`)
+   and the unit is still built: the module file would name the buffer as
+   the import's path, which no importer of it can find, and a host file
+   of that name could stand for it. Imports of units built from source
+   are not recorded and are not refused.
 1. `-fmodule-file=<name>=<path>`: the interface source, or the module
    file (§11), for module `<name>` (a partition is named `M:P`). A
    `-fmodule-file=<path>` without a name must name a module file, whose
@@ -4676,11 +4709,15 @@ since WP-2220 a declaration: the `UnresolvedUsing*` member of a
 using-declarator with a dependent qualifier, a declaration word), and the using-directive each pattern entry's candidate was
 found through (entry, declaration, directive; spec/ast.md §18.9.1), and
 since WP-2326 the leading tokens outside an entry's range (spec/ast.md
-§18.11.2: the location of a leading `::` and of a destructor name's
-`~`, sorted by entry; a `::` only on an entry whose qualifier is `::`). A declaration is a word as in a body: a record,
+§18.11.2: the location of a leading `::`, of a destructor name's
+`~` and, since WP-2828, of the first token of a `decltype(...)::` or
+splice specifier, four words a row, sorted by entry; a `::` only on an
+entry whose qualifier is `::`, a specifier's token only on one whose
+qualifier is the specifier). A declaration is a word as in a body: a record,
 `LEX_TU` or `PARAM | g` (a parameter of a function record by its
 global index). Entries are in the unit's recording order; a qualifier
-names an earlier entry (`NONE - 1`: `::`); a set lists its namespaces,
+names an earlier entry (`NONE - 1`: `::`; `NONE - 2`: a `decltype(...)::`
+or splice specifier, WP-2828); a set lists its namespaces,
 classes and enumerations. A name whose declaration, location, qualifier
 or pattern node the image cannot carry fails the image ("a written name
 of a declaration the image does not carry", "a written name the image
@@ -5483,7 +5520,7 @@ refused top-level declaration in source order, "refused: <example>:
 <reason>", for per-header tables.
 
 **Versioning and the fingerprint.** The section starts with its own
-format word (`IMAGE_VERSION = 86` since WP-2720, whose expression type records carry a constant array's kept bound (`KeptArray`) and `Decayed` parameter sugar (spec/types.md §7.2 "Kept bounds"); 85 for WP-2625, whose `CXXFoldExpr` records may carry `COLD_OPER`; 84 for WP-2542, which adds the `splits` section of split `>` locations (spec/ast.md §21.2), and WP-2541, whose `extents` section ends with the rows' written attributes (spec/ast.md §19.2); 83 for WP-2505, whose function specifier bits carry whether the exception specification was computed (bit 25, `FnSpec::exc_spec_computed`, spec/ast.md §4.2); 82 for WP-2472, whose `refs` section carries the found sets of dependent entries (spec/ast.md §18.12); 81 for WP-2470, whose `extents` section carries every row of a declaration written more than once under one id: a later row repeats the record and position of the row before it, with bit 7 of its end byte set (spec/ast.md §19.1); 80 for WP-2326, whose `refs` section carries the leading tokens of entries (a leading `::` and a destructor name's `~`, spec/ast.md §18.11.2); 79 for WP-2091, whose `extents` section carries the rows of requires-expression parameters and, in an image without a preamble, of the module declaration; 78 for WP-2220, whose `refs` section carries the using-directive of each per-specialization row and of each pattern entry's candidates; 77 for WP-1934, which adds the `refs` section of written references; 74 for WP-2200, whose pointer constants (`ConstRec::Ptr`) end with their union path: a count and the field records of the union members it enters, outermost first (spec/ast.md §9.1 "Union paths"); 62 for WP-2090, which adds the `extents` section of declaration extents; 61 for WP-2025, whose shadow records carry the record of the using-declaration that introduced them (the `using` word, `NONE` for none; `Ast::using_shadows`); 58 for WP-2023, whose lambda records carry the closure's owner (an eighth word, `NONE` when it is the closure's context); 56 for WP-2021, whose expression records widen the cold-annotation mask to 32 bits and carry a dependent operator expression's definition-context lookup set (`COLD_OPER`); 52 for WP-1923, which carries floating-point pragma states (a body section's `fp` table and the `fp_inits` section); 51 for WP-1791, whose predefined builtin types grow to 95 with the FP8 types; 48 for WP-1863, whose `no_sanitize` attribute words carry the `coverage` bit (bit 31); 47 for WP-1859, which adds the `nested` section of written function-type parameters; 46 for WP-1824, whose variable records carry thread storage duration (bits 3-4 of the specifier bits); 45 for WP-1806, whose attribute section gains the `xexprs` and `words` runs and whose function types carry Swift parameter ABIs; 44 for WP-1811, whose type records carry an address space (`ExtQual`) and a value-dependent one; 43 for WP-1740, whose builtin template stub kind 12 is `__builtin_common_type`; 42 before it; 41 for WP-1667 (its commit names the bump, not what it covers), 40 for WP-1630 and WP-1631, whose template state records `spec_own_header` and `ctad_class_params`, 39 for WP-1590, WP-1594 and WP-1573, a new expression flag and the Oven snapshot's table, 38 for WP-1517, whose variable specifier bits carry whether `inline` is implied (bit 13), 37 for WP-1505, whose splice expressions record a written `template` keyword, 36 for WP-1426, whose function type bits widen to u32, 35 for WP-1369, 34 for WP-1368, 33 for WP-1358, 32 for WP-1360, 31 for WP-1350, 30 for WP-1353, 29 for WP-1352, 28 for WP-1345, 27 for WP-1344, 26 for WP-1343, 25 for WP-1342, 24 for WP-1314, 23 for WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
+format word (`IMAGE_VERSION = 87` since WP-2823 and WP-2828, whose `PredefinedExpr` records carry the named function (an optional context declaration) and whose `refs` section carries a `decltype(...)::` or splice qualifier (`Q_SPEC`) and four-word lead rows (the specifier's first token, spec/ast.md §18.11.2); 86 for WP-2720, whose expression type records carry a constant array's kept bound (`KeptArray`) and `Decayed` parameter sugar (spec/types.md §7.2 "Kept bounds"); 85 for WP-2625, whose `CXXFoldExpr` records may carry `COLD_OPER`; 84 for WP-2542, which adds the `splits` section of split `>` locations (spec/ast.md §21.2), and WP-2541, whose `extents` section ends with the rows' written attributes (spec/ast.md §19.2); 83 for WP-2505, whose function specifier bits carry whether the exception specification was computed (bit 25, `FnSpec::exc_spec_computed`, spec/ast.md §4.2); 82 for WP-2472, whose `refs` section carries the found sets of dependent entries (spec/ast.md §18.12); 81 for WP-2470, whose `extents` section carries every row of a declaration written more than once under one id: a later row repeats the record and position of the row before it, with bit 7 of its end byte set (spec/ast.md §19.1); 80 for WP-2326, whose `refs` section carries the leading tokens of entries (a leading `::` and a destructor name's `~`, spec/ast.md §18.11.2); 79 for WP-2091, whose `extents` section carries the rows of requires-expression parameters and, in an image without a preamble, of the module declaration; 78 for WP-2220, whose `refs` section carries the using-directive of each per-specialization row and of each pattern entry's candidates; 77 for WP-1934, which adds the `refs` section of written references; 74 for WP-2200, whose pointer constants (`ConstRec::Ptr`) end with their union path: a count and the field records of the union members it enters, outermost first (spec/ast.md §9.1 "Union paths"); 62 for WP-2090, which adds the `extents` section of declaration extents; 61 for WP-2025, whose shadow records carry the record of the using-declaration that introduced them (the `using` word, `NONE` for none; `Ast::using_shadows`); 58 for WP-2023, whose lambda records carry the closure's owner (an eighth word, `NONE` when it is the closure's context); 56 for WP-2021, whose expression records widen the cold-annotation mask to 32 bits and carry a dependent operator expression's definition-context lookup set (`COLD_OPER`); 52 for WP-1923, which carries floating-point pragma states (a body section's `fp` table and the `fp_inits` section); 51 for WP-1791, whose predefined builtin types grow to 95 with the FP8 types; 48 for WP-1863, whose `no_sanitize` attribute words carry the `coverage` bit (bit 31); 47 for WP-1859, which adds the `nested` section of written function-type parameters; 46 for WP-1824, whose variable records carry thread storage duration (bits 3-4 of the specifier bits); 45 for WP-1806, whose attribute section gains the `xexprs` and `words` runs and whose function types carry Swift parameter ABIs; 44 for WP-1811, whose type records carry an address space (`ExtQual`) and a value-dependent one; 43 for WP-1740, whose builtin template stub kind 12 is `__builtin_common_type`; 42 before it; 41 for WP-1667 (its commit names the bump, not what it covers), 40 for WP-1630 and WP-1631, whose template state records `spec_own_header` and `ctad_class_params`, 39 for WP-1590, WP-1594 and WP-1573, a new expression flag and the Oven snapshot's table, 38 for WP-1517, whose variable specifier bits carry whether `inline` is implied (bit 13), 37 for WP-1505, whose splice expressions record a written `template` keyword, 36 for WP-1426, whose function type bits widen to u32, 35 for WP-1369, 34 for WP-1368, 33 for WP-1358, 32 for WP-1360, 31 for WP-1350, 30 for WP-1353, 29 for WP-1352, 28 for WP-1345, 27 for WP-1344, 26 for WP-1343, 25 for WP-1342, 24 for WP-1314, 23 for WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
 slice, 3 for S3, 2 for S2; rejected if different). The file
 header's kiln version and the flags fingerprint (§11.4) already reject a
 file made by another kiln or under other flags. `-fkiln-bmi-image` is
@@ -6628,6 +6665,18 @@ diagnostics. The `-fkiln-pch-image=check` mode is clean on both, in
   warning and the `--precompile` error, the mismatch, missing,
   wrong-module and clang-file diagnostics, and 40 truncated or flipped
   module files through the driver (each a fatal error, exit code 1).
+- `crates/kiln_parse/tests/module_buffers.rs` (WP-2824, §2 item 0):
+  every file in memory, from C++20: a module, a partition and an
+  implementation unit's interface given as buffers (unit kinds, keys,
+  imports, owners); the same text named by `-fmodule-file` gives the
+  same table and diagnostics but for file names; an error is reported
+  in the buffer by its name; decoy `h.h`, `m.cppm`, `m-p.cppm` in the
+  working directory (also a prebuilt path, and a header-unit module
+  file named for its `h.h`) change nothing, with and without the
+  image; a buffer named `.pcm` or starting with a module file's magic
+  is a source; the refusal under `record`.
+  `crates/kiln_pp/tests/header_unit_virtual.rs` (WP-2621, §11.6): the
+  header-unit key of an in-memory header.
 - Dependency scanning (WP-982, §11.9): `crates/kiln_driver/tests/scan_deps.rs`
   compares the P1689r5 document with clang-scan-deps 22's bytes for a
   primary interface importing its partitions (with a GMF `#include`

@@ -2719,6 +2719,17 @@ impl ExprArena {
         ExprId::from_raw(self.expect_kind(e, ExprKind::PredefinedExpr).a)
     }
 
+    /// The function a `PredefinedExpr` names (spec/ast.md §16, WP-2823):
+    /// the innermost enclosing function as clang's `getPredefinedExprDecl`
+    /// finds it (a lambda's call operator; in an instantiation the
+    /// specialization, in a template pattern the pattern's function).
+    /// `None` outside a function (namespace scope, a default argument, a
+    /// template head's requires-clause), where clang names the
+    /// translation unit and warns.
+    pub fn predefined_function(&self, e: ExprId) -> Option<DeclId> {
+        DeclId::from_raw(self.expect_kind(e, ExprKind::PredefinedExpr).b)
+    }
+
     /// The builtin a `SourceLocExpr` names.
     pub fn source_loc_kind(&self, e: ExprId) -> SourceLocKind {
         SourceLocKind::from_aux(self.expect_kind(e, ExprKind::SourceLocExpr).aux)

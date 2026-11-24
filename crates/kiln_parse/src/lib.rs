@@ -28,6 +28,7 @@ mod reflect;
 mod stmt;
 mod templ;
 mod tentative;
+pub mod token_table;
 pub mod tokens;
 mod written_refs;
 
@@ -56,6 +57,7 @@ pub use kiln_sema::session::{
 pub use kiln_sema::{HostCalls, HostError, HostOut};
 pub use parser::{PExpr, Parser};
 pub use tentative::TypeIdContext;
+pub use token_table::{TokenRow, TokenTable};
 pub use tokens::{Event, LoopHintInfo, TokenSource};
 
 /// Options for [`parse_file`], [`parse_tu`] and [`parse_preprocessed`].
@@ -146,6 +148,10 @@ pub struct ParseOptions {
     /// Record the declaration-extent table (`-fkiln-decl-extents`,
     /// `-fkiln-dump-decl-extents`; spec/ast.md §19): off by default.
     pub decl_extents: bool,
+    /// Record the token table ([`ParsedTu::token_table`], spec/parse.md
+    /// §2.6): every token the preprocessor delivers. Off by default; no
+    /// command-line flag (`FrontEndOptions::token_table` sets it).
+    pub token_table: bool,
     /// `-fkiln-cfg-stats` ([`kiln_sema::Sema::cfg_stats`]).
     pub cfg_stats: bool,
     /// `-fkiln-cfg-max-elems=` ([`kiln_sema::Sema::cfg_max_elems`]).
@@ -234,6 +240,7 @@ impl Default for ParseOptions {
             cfg_dump: false,
             written_refs: false,
             decl_extents: false,
+            token_table: false,
             cfg_stats: false,
             cfg_max_elems: kiln_sema::cfg::DEFAULT_MAX_ELEMS,
             permissive: false,
@@ -342,6 +349,11 @@ pub struct ParsedTu {
     /// the directive), none after. For
     /// [`continue_preprocessed`], the tokens after the prefix.
     pub tokens: u64,
+    /// The token table, when [`ParseOptions::token_table`] (spec/parse.md
+    /// §2.6): the delivered tokens (those [`Self::tokens`] counts), each
+    /// token the parser split as its pieces. For
+    /// [`continue_preprocessed`], the tokens after the prefix.
+    pub token_table: Option<TokenTable>,
 }
 
 impl ParsedTu {
@@ -356,6 +368,10 @@ impl ParsedTu {
         let mut r = self.ast.memory();
         r.rows.extend(self.sema_memory.rows.iter().cloned());
         r.rows.extend(self.oven.memory().rows);
+        if let Some(t) = &self.token_table {
+            let bytes = t.heap_bytes();
+            r.rows.push(kiln_ast::mem::MemRow::new("token_table", t.len() as u64, bytes, bytes));
+        }
         r
     }
 }
@@ -599,6 +615,7 @@ fn parse_to_end<'a, 'sm>(
     let main = main_id.map(|f| diags.sm().file_name(f).to_owned()).unwrap_or_default();
     let mut src = TokenSource::new(pp, diags);
     src.keep_all(opts.keep_tokens);
+    src.record_tokens(opts.token_table);
     let mut p = Parser::new(s, src, lit_opts);
     if opts.header_unit {
         p.main_header_unit();
@@ -618,7 +635,7 @@ fn finish_tu<'a, 'sm>(
     main: &str,
     opts: &ParseOptions,
 ) -> (ParsedTu, Preprocessor<'sm, 'a>) {
-    let (s, src) = p.finish();
+    let (s, mut src) = p.finish();
     let name = main.rsplit('/').next().unwrap_or(main);
     let inst_report = s.instantiation_report(name);
     let mut s = s;
@@ -630,6 +647,10 @@ fn finish_tu<'a, 'sm>(
     let carried_hits = s.carried_hits();
     let (ast, oven) = s.into_parts();
     let tokens = src.token_count();
+    // The splits are known only now (spec/parse.md §2.6).
+    let token_table = src
+        .take_token_rows()
+        .map(|rows| TokenTable::build(rows, &ast.split_greaters, src.source_manager()));
     let tu = ParsedTu {
         ast,
         oven,
@@ -641,6 +662,7 @@ fn finish_tu<'a, 'sm>(
         image,
         image_census,
         tokens,
+        token_table,
     };
     (tu, src.into_preprocessor())
 }
@@ -744,6 +766,7 @@ pub fn continue_preprocessed<'a, 'sm>(
     let main = main_id.map(|f| diags.sm().file_name(f).to_owned()).unwrap_or_default();
     let mut src = TokenSource::new(pp, diags);
     src.keep_all(opts.keep_tokens);
+    src.record_tokens(opts.token_table);
     let mut p = Parser::new(sema, src, lit_opts);
     // A restored snapshot's unit is its consumer's, not the producer's.
     p.s.tu_prefix = opts.prefix;

@@ -1034,7 +1034,16 @@ pub fn run(command_line: &[String], io: Io) -> i32 {
 /// modes"). Returns the exit code as [`run`].
 #[allow(clippy::too_many_lines, reason = "the driver's phases in order, one dispatch per action")]
 pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
-    let command_line = rsp::expand(command_line);
+    // clang prints an `@file` that exists but cannot be read (or that
+    // names itself) bare, and stops (spec/driver.md "Response files").
+    let command_line = match rsp::expand_checked(command_line, &kiln_source::WorkDir::process()) {
+        Ok(e) => e.words,
+        Err(e) => {
+            let _ = writeln!(io.stderr, "{e}");
+            let _ = io.stderr.flush();
+            return 1;
+        }
+    };
     // `kiln-scan-deps` and its `clang-scan-deps*` aliases (spec/modules.md
     // §11.9).
     if scan_deps::is_scanner_name(args::program_basename(argv0)) {
