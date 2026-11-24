@@ -1533,7 +1533,17 @@ pub struct ColdExprData {
     /// (it is evaluated at each use, §5.10): sema's evaluation at a use
     /// without source-location values, which every such use shares
     /// (codegen reads it instead of evaluating the call again, WP-1129).
+    /// Never the value at a use with source-location values (that one is
+    /// the use's own, [`ColdExprData::use_imm`]).
     pub default_imm: ColdMap<ExprId, ConstValueId>,
+    /// The values of the immediate invocations of a default argument or
+    /// default member initializer at one use with source-location values
+    /// (a `CXXDefaultArgExpr` / `CXXDefaultInitExpr` keyed beside its
+    /// [`ColdExprData::source_loc`]): each evaluated at that use, in its
+    /// context (CWG 2631, [expr.const]/16; §5.10), the invocations of
+    /// the default arguments and initializers it uses included, in
+    /// evaluation order.
+    pub use_imm: ColdMap<ExprId, Box<[UseImmediate]>>,
     /// The initialized member of a union's `CXXParenListInitExpr`
     /// (clang `getInitializedFieldInUnion`).
     pub union_field: ColdMap<ExprId, DeclId>,
@@ -1684,6 +1694,19 @@ pub struct SourceLocValues {
     pub ctx: DeclId,
 }
 
+/// The value of one immediate invocation of a default argument or
+/// default member initializer at one use ([`ColdExprData::use_imm`],
+/// §5.10).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
+pub struct UseImmediate {
+    /// The invocation: a `ConstantExpr` of the shared default argument
+    /// or initializer (or of one that it uses), which has no value of its
+    /// own.
+    pub invocation: ExprId,
+    /// Its value at the use.
+    pub value: ConstValueId,
+}
+
 /// The role of a source-location string: which value of a use it is
 /// (§5.8.1).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
@@ -1749,6 +1772,7 @@ impl Default for ColdExprData {
             source_loc: ColdMap::new("source_loc"),
             string_maker: ColdMap::new("string_maker"),
             default_imm: ColdMap::new("default_imm"),
+            use_imm: ColdMap::new("use_imm"),
             union_field: ColdMap::new("union_field"),
             cast_written: ColdMap::new("cast_written"),
             offsetof_pattern: ColdMap::new("offsetof_pattern"),
@@ -2854,6 +2878,39 @@ impl ExprArena {
         let _ = self.cold.default_imm.insert(e, v);
     }
 
+    /// The values sema found for the immediate invocations of the
+    /// default argument or default member initializer used by `u` (a
+    /// `CXXDefaultArgExpr` / `CXXDefaultInitExpr` with source-location
+    /// values), at that use ([`ColdExprData::use_imm`]); empty for any
+    /// other use.
+    pub fn use_immediates(&self, u: ExprId) -> &[UseImmediate] {
+        self.cold.use_imm.get(u).map_or(&[], |b| b)
+    }
+
+    /// The value of immediate invocation `c` at use `u` that
+    /// [`ExprArena::use_immediates`] records, if any.
+    pub fn use_immediate(&self, u: ExprId, c: ExprId) -> Option<ConstValueId> {
+        self.use_immediates(u).iter().find(|x| x.invocation == c).map(|x| x.value)
+    }
+
+    /// Records the value `v` of immediate invocation `c` at use `u`
+    /// ([`ExprArena::use_immediates`]; the first one for `c` wins: the
+    /// use is evaluated in one context).
+    pub fn note_use_immediate(&mut self, u: ExprId, c: ExprId, v: ConstValueId) {
+        let x = UseImmediate { invocation: c, value: v };
+        match self.cold.use_imm.get(u) {
+            None => {
+                let _ = self.cold.use_imm.insert(u, Box::new([x]));
+            }
+            Some(old) if old.iter().any(|y| y.invocation == c) => {}
+            Some(old) => {
+                let mut all = old.to_vec();
+                all.push(x);
+                let _ = self.cold.use_imm.refine(u, all.into_boxed_slice());
+            }
+        }
+    }
+
     /// Replaces the recorded source-location values of `e`: a function's
     /// pretty name is final only once its return type is deduced (clang
     /// computes `SourceLocExpr` values lazily, after the body). `false`
@@ -3680,6 +3737,7 @@ impl HeapSize for ExprArena {
         r.push(self.cold.source_loc.mem_row().prefixed("cold"));
         r.push(self.cold.union_field.mem_row().prefixed("cold"));
         r.push(self.cold.default_imm.mem_row().prefixed("cold"));
+        r.push(self.cold.use_imm.mem_row().prefixed("cold"));
         r.push(self.cold.cast_written.mem_row().prefixed("cold"));
         r.push(self.cold.offsetof_pattern.mem_row().prefixed("cold"));
         r.push(self.cold.offsetof_layout.mem_row().prefixed("cold"));

@@ -16,7 +16,7 @@ use crate::decl::{
 };
 use crate::expr::ExprArena;
 use crate::expr::ExprKind;
-use crate::ids::{DeclId, ExprId};
+use crate::ids::{ConstValueId, DeclId, ExprId};
 use crate::lists::IdLists;
 use crate::lookup::{LookupResult, LookupTables};
 use crate::mem::{HeapSize, MemReport, MemRow};
@@ -735,6 +735,25 @@ impl Ast {
             ExprKind::ExprWithCleanups => self.exprs.operand(d),
             _ => d,
         })
+    }
+
+    /// The value of immediate invocation `c` (a `ConstantExpr` of a
+    /// default argument or default member initializer, or of one that it
+    /// uses) at the use `u` (a `CXXDefaultArgExpr` / `CXXDefaultInitExpr`)
+    /// that encloses it, as sema evaluated it there (CWG 2631,
+    /// [expr.const]/16; spec/ast.md §5.10): the use's own value when the
+    /// use has source-location values ([`ExprArena::use_immediates`]),
+    /// else the one every such use shares
+    /// ([`ExprArena::default_immediate_value`]). `None` when sema kept
+    /// none: the invocation failed, its value depends on the evaluation
+    /// point (`access_context::current()`), or the use is in a template
+    /// or an imported module body (codegen evaluates it there).
+    pub fn default_use_immediate_value(&self, u: ExprId, c: ExprId) -> Option<ConstValueId> {
+        if self.exprs.source_loc_values(u).is_some() {
+            self.exprs.use_immediate(u, c)
+        } else {
+            self.exprs.default_immediate_value(c)
+        }
     }
 
     /// The expression the `CXXDefaultInitExpr` `e` stands for: its
@@ -1778,10 +1797,7 @@ impl Ast {
     /// Every pointer to a string kiln makes leads to one maker: a
     /// source-location use of one role evaluated in one declaration, a
     /// reflection, or a contract site.
-    pub fn string_maker_of(
-        &self,
-        v: crate::ConstValueId,
-    ) -> Option<(crate::expr::StringMaker, ExprId)> {
+    pub fn string_maker_of(&self, v: ConstValueId) -> Option<(crate::expr::StringMaker, ExprId)> {
         match self.consts.scalar(v)? {
             crate::consts::Scalar::Pointer {
                 base: crate::consts::PtrBase::StringLit { origin, .. },

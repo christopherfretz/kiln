@@ -1308,6 +1308,11 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-3060 | a pointer to a kiln-made string in a module's exported constant: export it with its maker (today refused, "outside the replayed source", kiln_sema/src/bmi_ast/inst.rs) | WP-3000 | open |
 | WP-3061 | evaluation sessions: report a kiln-made string's maker beside `CKey::Str` in the constants table | WP-3000 | open |
 | WP-3062 | `-fclang-compat=19`: an array comparison (`"f" == "f"`, -Warray-compare-cxx26) is a warning as in clang 19, not an error | WP-3000 | open |
+| WP-3278 | CWG 2631: an immediate invocation in a default argument or default member initializer is evaluated at each use, in the use's context (`len(__builtin_FUNCTION())` as a default argument gives the caller's name) | WP-3000 | done: evaluated per use (nested defaults, aggregate/ctor/`= default` member inits, templates), declaration no longer diagnosed or valued in its own context; clang 19/22 agree |
+| WP-3279 | the value of each immediate invocation of a default argument / default member initializer per use, kept on the CXXDefaultArgExpr / CXXDefaultInitExpr beside its source location | WP-3000 | done: `ColdExprData::use_imm` + `Ast::default_use_immediate_value`, in PCH (format 175) and the dump; module images re-derive (spec/ast.md §5.8.2) |
+| WP-3310 | carry the per-use immediate values of defaults (WP-3279) in module images; today images re-derive them and codegen falls back to `fold_immediate_in` | WP-3279 | open |
+| WP-3311 | AST dump: print clang's "has rewritten init" note for a CXXDefaultArgExpr with immediate invocations | WP-3279 | open |
+| WP-3312 | a nested default member initializer with an immediate invocation is diagnosed at the definition by clang 22, not clang 19; kiln follows clang 19 (the working draft): review at the clang 22 move | WP-3278 | open |
 | WP-3001 | `alignof` of a reference reads the referee's sugar (`alignof(L&)` of an aligned typedef `L`: clang 4, kiln 8; kiln_abi layout `decl_align` / `type_info`) | WP-2623 | open |
 | WP-3002 | `.*` and `->*` keep the pointee's sugar (`alignof(decltype(p->*mp))` of an aligned typedef member: clang 16, kiln 4) | WP-2623 | open |
 | WP-3003 | `Ast::vtables` under `-fsyntax-only`: a tooling query that lays out a class's vtable on demand (today only code generation fills it) | WP-2623 | open |

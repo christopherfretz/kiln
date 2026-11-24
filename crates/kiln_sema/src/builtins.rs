@@ -3674,6 +3674,25 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The `std::source_location::__impl` object of
+    /// `__builtin_source_location()` `own`, written directly in an
+    /// immediate invocation of the default argument (or default member
+    /// initializer) used by `at` and evaluated for that use: `own`'s
+    /// file, line and column with `at`'s pretty function (clang rebuilds
+    /// the `SourceLocExpr` with the use's context and evaluates it at its
+    /// own location; `kiln_oven::SemaBridge::srcloc_object_at`).
+    pub(crate) fn srcloc_object_at(
+        &mut self,
+        own: ExprId,
+        at: ExprId,
+    ) -> Option<kiln_ast::ConstValueId> {
+        let m = self.ast.exprs.source_loc_values(own).copied()?;
+        let u = self.ast.exprs.source_loc_values(at).copied()?;
+        let (_, pretty) = self.predefined_function_names(u.ctx);
+        let pretty_p = self.srcloc_string(&pretty, SrcLocRole::PrettyFunction, u.ctx)?;
+        self.source_location_object(m.file, pretty_p, m.line, m.column)
+    }
+
     /// The return type of `f` is deduced (or its body ends): the
     /// source-location objects built in it before then take the pretty
     /// name with the deduced type (clang computes a `SourceLocExpr`'s value

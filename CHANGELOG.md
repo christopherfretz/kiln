@@ -10,6 +10,12 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- The value of each immediate invocation of a default argument or default
+  member initializer per use (WP-3279, spec/ast.md §5.8.2):
+  `ColdExprData::use_imm` on the `CXXDefaultArgExpr`/`CXXDefaultInitExpr`
+  beside its source-location record, read with
+  `Ast::default_use_immediate_value`, carried in PCH (format 175) and
+  printed by the AST dump as the use's `ConstantExpr` value.
 - The search directories the driver drops, in the lookup log (WP-3275,
   spec/driver.md "Dropped directories", spec/pp.md "Lookup log"):
   `SearchList::dropped()` and `LookupLog::dropped` give each requested
@@ -1250,6 +1256,19 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   packagers").
 
 ### Fixed
+
+- An immediate invocation in a default argument or a default member
+  initializer is evaluated at each use, in the context of that use
+  (WP-3278, CWG 2631, [expr.const]/16, [dcl.fct.default]/5,
+  [class.base.init]/9): `len(__builtin_FUNCTION())` as a default argument
+  is the length of the caller's name, also through a nested default
+  argument, in an aggregate initialization, a constructor that does not
+  name the member, a `= default` constructor and a template. The
+  declaration is no longer diagnosed (and no longer valued) for an
+  invocation that would only fail in its own context, and a nested
+  default is diagnosed at each outermost use, as clang does. A
+  `__builtin_LINE`/`__builtin_COLUMN` written directly in the invocation
+  keeps its own position, as in clang 19 and 22.
 
 - An instantiation's lifetime-extended temporaries are its own (WP-3271,
   spec/ast.md "Lifetime-extended temporaries of instantiations"): a

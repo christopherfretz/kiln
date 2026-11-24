@@ -8901,11 +8901,14 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   stripped wrapper (`strip_impcast`) from `ImmState::early_values`
   (`early_immediate_value`, checked by `try_fold`, `fold_rvalue` and
   `fold_for_overflow`). A default argument's or default member
-  initializer's invocation is evaluated at each use (below); its first
-  successful value is stored in the wrapper's `default_immediate_value`,
-  which codegen's fold prepass and the Oven (`Compiler::stored_value`,
-  outside a use with source-location values) read instead of evaluating
-  the call again.
+  initializer's invocation is evaluated at each use (below), in the
+  context of that use (CWG 2631): at a use without source-location
+  values its first successful value is stored in the wrapper's
+  `default_immediate_value`, shared by every such use; at a use with
+  them (spec/ast.md §5.8) the value is the use's own, stored on the use
+  (`ExprArena::note_use_immediate`, spec/ast.md §5.8.2). Codegen's fold
+  prepass and the Oven (`Compiler::stored_value`) read the one for the
+  use in scope instead of evaluating the call again.
   **Default arguments (WP-1171).** clang rebuilds a default argument
   that holds an immediate invocation or a source-location builtin at
   each use (`BuildCXXDefaultArgExpr`, `ImmediateCallVisitor`,
@@ -9049,8 +9052,31 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   constant expression` at the invocation, then `in the default
   initializer of 'p'` at the use (callee begin, construct loc, ctor
   name, or the closing `}`/`)` of an aggregate init) and `declared here`
-  at the parameter or field. A default used inside another default
-  argument or initializer is checked at that definition only. In an
+  at the parameter or field. Each invocation is evaluated in the
+  context of the use (CWG 2631, [expr.const]/16 in the
+  working draft; `check_default_use_with` → `eval_default_invocation`
+  → `Oven::evaluate_in` with the use as the source-location root when
+  the use has source-location values): `pick(__builtin_FUNCTION())` or
+  `pick(std::source_location::current().function_name())` as a default
+  argument sees the caller's name, so an invocation that only fails
+  with the declaration's own (empty) name is valid at a use in a
+  function. A source-location builtin written directly in the
+  invocation keeps its own file, line and column and takes the use's
+  function (clang 19 and 22: the rebuilt `SourceLocExpr` has the use's
+  context and is evaluated at its own location; GCC 14 takes the use's
+  line too); one reached through a default argument the invocation
+  uses (`current()`'s) takes every value of the use (spec/oven.md,
+  Builtins). A default used inside another default argument or
+  initializer (`void h(int = (k(), 0))`, `struct S3 { S2 s{}; }`) is
+  not checked at that definition (`finish_default_init` only keeps
+  where it is used, `ImmState::nested_use_locs`): its invocations are
+  evaluated at each use of the outermost one, in its context
+  (`default_invocations` walks into the nested uses), and a failure is
+  reported there with the nested parameter or field and its use's
+  location, as clang 19 and 22 do for default arguments. For a nested
+  default member initializer clang 22 diagnoses at the definition and
+  clang 19 does not; kiln follows clang 19, which is the working
+  draft's rule. In an
   immediate-escalating function (defaulted or implicit constructor,
   `constexpr` template specialization, lambda) the failure escalates
   instead; a constructor's reason note is `'D' is an immediate

@@ -138,8 +138,9 @@ pub(crate) const MAGIC: [u8; 8] = *b"KILNSNAP";
 /// (`offsetof_layout`); version 8 (WP-1426) the SME diagnostic ids and
 /// attribute kinds and the 32-bit `FuncInfo`; version 174 (WP-3275,
 /// WP-3276) the lookup log's dropped search directories and module
-/// probes, in the head, whose lookup log the schema hash now covers.
-pub(crate) const FORMAT_VERSION: u32 = 174;
+/// probes, in the head, whose lookup log the schema hash now covers;
+/// version 175 (WP-3279) the per-use immediate values of defaults.
+pub(crate) const FORMAT_VERSION: u32 = 175;
 /// The length of the magic and the format version.
 pub(crate) const HEADER_LEN: usize = 12;
 

@@ -967,6 +967,47 @@ Tests: `tests/conformance/support.srcloc/string-identity*.cpp`,
 `meta.reflection.names/string-identity-srcloc.cpp`,
 `kiln_parse/tests/string_maker.rs`.
 
+#### 5.8.2 Immediate invocations of a default argument, per use (WP-3278, WP-3279)
+An immediate invocation in a default argument or a default member
+initializer is evaluated at each use, in the context of that use (CWG
+2631; [expr.const]/16, [dcl.fct.default]/5, [class.base.init]/9 in the
+working draft). Its `ConstantExpr` belongs to the shared default
+argument (or initializer) and has no value of its own
+(`constant_value` is `None`; the dump elides it at the declaration). The
+values sema found are kept by use:
+- **A use with source-location values** (a `CXXDefaultArgExpr` /
+  `CXXDefaultInitExpr` with an entry in `exprs.cold.source_loc`, §5.8):
+  `exprs.cold.use_imm: ColdMap<ExprId, Box<[UseImmediate]>>`, keyed by
+  the use beside its `source_loc` entry. `UseImmediate { invocation:
+  ExprId, value: ConstValueId }` is the value of the invocation at that
+  use, in evaluation order, the invocations of the default arguments
+  and initializers the use's argument uses included (they are evaluated
+  in the outermost use's context too). Written once per (use,
+  invocation) by sema (`ExprArena::note_use_immediate`); read with
+  `ExprArena::use_immediates(u)` / `use_immediate(u, c)`.
+- **A use without them**: every use evaluates the invocation the same
+  way, so the value is kept once, on the invocation
+  (`exprs.cold.default_imm`, `ExprArena::default_immediate_value(c)`).
+  It is never the value at a use with source-location values: with
+  `void log(unsigned n = len(__builtin_FUNCTION()))` called from `f`,
+  `default_immediate_value` of the `len(...)` wrapper is `None` and the
+  use's record holds 1.
+
+`Ast::default_use_immediate_value(u, c)` answers for any use: the use's
+record when it has source-location values, else `default_imm`. `None`
+when sema kept no value: the invocation failed (an error was reported),
+its value depends on the evaluation point (`access_context::current()`,
+WP-1462), or the use is in a template pattern, or in a body imported
+from a module image (images carry the use's location and context, not
+its values: codegen evaluates the invocation at the use there). PCH
+snapshots carry both maps (`ColdExprData`). The dump prints the value at
+the outermost use on the path as the `ConstantExpr`'s `value:` (clang's
+rebuilt default argument). Codegen's fold prepass and the Oven
+(`Compiler::stored_value`) read these values instead of evaluating the
+call again. Tests: `tests/conformance/expr.const/default-arg-immediate-per-use*.cpp`,
+`tests/conformance/class.base.init/*default-member-init-immediate-per-use*.cpp`,
+`kiln_parse/tests/default_use_immediate.rs`.
+
 ### 5.9 Lambdas (WP-075)
 - **`LambdaExpr`** ([expr.prim.lambda]; spec/sema-lambda.md): `a` is its
   `LambdaId`, an index into `exprs.lambdas: LambdaArena` (side records

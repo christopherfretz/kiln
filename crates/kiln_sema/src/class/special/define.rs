@@ -775,7 +775,7 @@ impl Sema<'_, '_> {
             let ctor = info.ctor;
             if !self.in_template() && !self.is_consteval_kind(ctor) {
                 let escalating = self.is_immediate_escalating(ctor).then_some(ctor);
-                self.check_default_use(field, loc, escalating, true);
+                self.check_default_use(init, field, loc, escalating, true);
             }
             info.out.push(CtorInit {
                 target: target.index(),
