@@ -188,6 +188,16 @@ pub trait TypeNames {
         19
     }
 
+    /// A substituted template parameter in a nested-name-specifier
+    /// (`T::type` with `T = ns::S`) prints its canonical replacement
+    /// fully scoped (`typename ns::S::type`, clang 22) rather than under
+    /// `SuppressScope` (`typename S::type`, clang 19). Names whose other
+    /// clang 22 rules are separate flags (`__PRETTY_FUNCTION__`'s
+    /// [`crate::dump::AstNames`]) answer for themselves (WP-3402).
+    fn scoped_subst_qualifier(&self) -> bool {
+        self.clang_compat() >= 22
+    }
+
     /// The function-name span recorder (spec/ast.md §24.3), when these
     /// names record: the printer then writes a dependent identifier as a
     /// dependent entry and a template argument list as an owned group.
@@ -2507,14 +2517,17 @@ impl Printer<'_> {
                 }
                 // A substituted parameter (`T::` with `T = ns::S`) prints
                 // its canonical replacement under the same `SuppressScope`
-                // policy: `S::` (clang's `NestedNameSpecifier::print`).
-                let ty = match self.ctx.view(ty.ty()) {
+                // policy: `S::` (clang 19's `NestedNameSpecifier::print`).
+                // clang 22 prints that canonical type fully scoped
+                // (`typename ns::S::type`, `(anonymous namespace)::A::`,
+                // `ns::W<ns::S>::`; WP-3402).
+                let (ty, scoped) = match self.ctx.view(ty.ty()) {
                     TypeView::SubstTemplateTypeParm { replacement, .. }
                         if !self.ctx.is_dependent(replacement) =>
                     {
-                        self.ctx.canonical(replacement)
+                        (self.ctx.canonical(replacement), self.names.scoped_subst_qualifier())
                     }
-                    _ => ty,
+                    _ => (ty, false),
                 };
                 let saved_tag = self.suppress_tag;
                 self.suppress_tag = true;
@@ -2522,7 +2535,7 @@ impl Printer<'_> {
                 // prints as written: `'O::J<ns::S>'` for `O::J<SA>`.
                 let saved_dd = self.diag_desugar;
                 self.diag_desugar &= !self.c22;
-                self.with_scope(false, |p| p.print(ty, ""));
+                self.with_scope(scoped, |p| p.print(ty, ""));
                 self.diag_desugar = saved_dd;
                 self.suppress_tag = saved_tag;
             }

@@ -1347,6 +1347,19 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   to drop the next printed error behind. A function template
   specialization that failed under a trap and is then formed outside one
   reports its first substitution error.
+- `__PRETTY_FUNCTION__` and `source_location::function_name()` of a
+  member of a local class or a closure print the enclosing function's
+  parameter types as declared, as clang does, not the canonical ones:
+  `auto g(decltype(ns::S::value))::(lambda)::operator()() const` where
+  kiln printed `g(int)`, `t2(int, decltype(ns::S::value))` for an
+  instantiation (WP-3402, spec/sema.md §7.8). The function-name table's
+  entries for those parameters name the typedefs, aliases and `decltype`
+  operands written (spec/ast.md §24.4). With `-fclang-compat=22` a
+  substituted `T::` in a type prints its replacement fully scoped
+  (`'typename ns::S::type *'`), as clang 22 does. The
+  `KILN_FN_NAMES_VERIFY=1` self-check no longer rejects the reflection
+  type's builtin spelling `std::meta::info` (spec/ast.md §24.7).
+
 - A deduction guide declared outside the scope of its class template is
   rejected ([temp.deduct.guide]/3, WP-3272, spec/sema-templates.md "A
   deduction guide's scope and access"). The template's name can be found

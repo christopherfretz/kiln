@@ -783,7 +783,12 @@ impl<'a> AstNames<'a> {
     }
 
     /// Appends the scope prefix of a function used as a scope:
-    /// `f(char, int *)`.
+    /// `f(char, int *)`. The parameter types are those of `f`'s parameter
+    /// declarations, as declared (clang `printNestedNameSpecifier`:
+    /// `FD->getParamDecl(i)->getType()`): `g(decltype(ns::S::value))`, an
+    /// instantiation's with its arguments substituted into the written
+    /// types (`t2(int, decltype(ns::S::value))`), never the canonical
+    /// prototype's (WP-3402).
     fn write_function_scope(&self, f: DeclId, out: &mut String) {
         out.push('(');
         if let Some(sink) = self.spans {
@@ -791,7 +796,15 @@ impl<'a> AstNames<'a> {
         }
         let proto = self.ast.decls.get(f).ty().and_then(|t| self.ast.types.proto(t));
         if let Some(p) = proto {
-            let params = self.ast.types.params(p);
+            let params: Vec<QualType> = match self.ast.decls.function(f) {
+                Some(x) if x.params != ListId::EMPTY => self
+                    .ast
+                    .lists
+                    .iter::<DeclId>(x.params)
+                    .filter_map(|d| self.ast.decls.get(d).ty())
+                    .collect(),
+                _ => self.ast.types.params(p).to_vec(),
+            };
             for (i, &q) in params.iter().enumerate() {
                 if i > 0 {
                     out.push_str(", ");
@@ -2180,6 +2193,13 @@ impl TypeNames for AstNames<'_> {
 
     fn fn_spans(&self) -> Option<&crate::fn_names::FnSpanSink> {
         self.spans
+    }
+
+    /// clang 22's fully scoped substituted qualifier goes with its other
+    /// rules for function names and failed requirements
+    /// ([`Self::local_scopes`]).
+    fn scoped_subst_qualifier(&self) -> bool {
+        self.local_scopes
     }
 
     fn is_anonymous_namespace(&self, ns: DeclId) -> bool {

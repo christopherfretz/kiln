@@ -1153,7 +1153,11 @@ where `inner` is the declarator text so far (empty at the top):
   name as the driver names it in diagnostics;
 - `CanonTemplateTypeParm` prints `type-parameter-D-I`; sugar parameters
   print their name; `PackExpansion` appends `...`; `DependentName` prints
-  `typename T::type` (keyword only if written); `Decltype` prints
+  `typename T::type` (keyword only if written; a substituted `T::`,
+  `T = ns::S`, prints its canonical replacement: scope suppressed with
+  clang 19, `typename S::type`, fully scoped with clang 22,
+  `typename ns::S::type`, `(anonymous namespace)::A::`,
+  `ns::W<ns::S>::`; `TypeNames::scoped_subst_qualifier`, WP-3402); `Decltype` prints
   `decltype(expr)` with the expression printer; `Auto` prints `auto` /
   `decltype(auto)` / `C auto` when undeduced and the deduced type when
   deduced; `Atomic` `_Atomic(T)`; `BitInt` `_BitInt(N)`; `Vector`

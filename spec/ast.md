@@ -6088,7 +6088,11 @@ cv- and ref-qualifiers, `...`, literal values, `<dependent type>`,
   `-fclang-compat=19`), the call operator the `Name` `operator()`; as a
   type, `(lambda at F:L:C)` is one synthesized entry, path included.
 - A function as a scope (a local class's member): a `Scope` entry for
-  the function, the names of its printed parameters one depth in.
+  the function, the names of its printed parameters one depth in. The
+  parameters print as their declarations write them (spec/sema.md §7.8),
+  so a typedef or alias names the typedef or alias and a `decltype`
+  operand's names their declarations; an instantiation's are the
+  written types with its arguments substituted (WP-3402).
 - Return and parameter types are printed as the pattern writes them: a
   typedef or alias name names the typedef or alias, a template-id the
   alias or class template (arguments one depth in), an injected-class-name
@@ -6199,7 +6203,10 @@ entity exists, that a plain entry's bytes are its entity's identifier,
 and the converse: every identifier in the bytes outside all entries
 (not part of a number, character or string literal) is in a closed list
 of keywords, builtin type spellings and fixed printer words, or a
-builtin type family (`__SV`, `__clang_sv`, `__rvv_`, `__builtin_`).
+builtin type family (`__SV`, `__clang_sv`, `__rvv_`, `__builtin_`); a
+builtin type spelled with a scope (`std::meta::info`, the reflection
+type, which has no declaration) is skipped whole when none of it is in
+an entry (WP-3402).
 Under `KILN_FN_NAMES_VERIFY=1` a mismatch or a failed check is the error
 `sema_fn_names_verify_failed`. The lane runs over `tests/conformance`
 (`KILN_FN_NAMES_VERIFY=1 cargo xtask test tests/conformance`: every

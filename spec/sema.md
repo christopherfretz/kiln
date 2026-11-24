@@ -13273,6 +13273,16 @@ F:L:C)>::f() [T = (lambda at F:L:C)]`). The closure that is itself the
 scope of a lambda's call operator prints `(lambda)` at clang_compat >=
 22 and `(anonymous class)` before (`auto f()::(lambda)::operator()()
 const`).
+A function printed as a scope (the enclosing function of a closure or a
+local class's member) prints its parameter declarations' types as
+declared (clang `printNestedNameSpecifier`), not the canonical
+prototype's: `auto g(decltype(ns::S::value))::(lambda)::operator()()
+const`, `h(I, ns::S, int *, void (*)(I))::L::m()`; an instantiation's
+parameters are the written types with its arguments substituted
+(`t2(int, decltype(ns::S::value))`, `C<int>::f(int, I)`), a substituted
+`T::` printing its replacement (`typename S::type` at compat 19,
+`typename ns::S::type` at 22, spec/types.md §12). Diagnostics naming such
+a scope (`f(I)::L`) print alike (WP-3402).
 The source-location builtins use the same printer (§9.5 of
 sema-templates.md), and a `__builtin_FUNCTION`/`__builtin_source_location`
 in a dependent context, or a default argument evaluating one used there,
