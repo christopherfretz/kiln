@@ -471,19 +471,36 @@ impl Sema<'_, '_> {
         args: &[TemplateArg],
         loc: Loc,
     ) -> Result<(), ()> {
+        self.check_dependent_template_args_converted(tmpl, args, loc).map(|_| ())
+    }
+
+    /// [`Self::check_dependent_template_args`], with the converted
+    /// argument list when every parameter was matched without a pack
+    /// (one argument per parameter, the defaults filled in): a
+    /// non-dependent non-type argument for a parameter of a known type
+    /// converted to its value ([temp.arg.nontype]/1), every other
+    /// argument as written. `Ok(None)` when a pack is involved.
+    pub(crate) fn check_dependent_template_args_converted(
+        &mut self,
+        tmpl: DeclId,
+        args: &[TemplateArg],
+        loc: Loc,
+    ) -> Result<Option<Vec<TemplateArg>>, ()> {
         let locs = std::mem::take(&mut self.templ.arg_locs);
         let r = self.check_dependent_template_args_at(tmpl, args, &locs, loc);
         self.templ.arg_locs = locs;
         r
     }
 
+    /// [`Self::check_dependent_template_args_converted`] with the
+    /// argument locations `locs`.
     pub(crate) fn check_dependent_template_args_at(
         &mut self,
         tmpl: DeclId,
         args: &[TemplateArg],
         locs: &[Loc],
         loc: Loc,
-    ) -> Result<(), ()> {
+    ) -> Result<Option<Vec<TemplateArg>>, ()> {
         let saved = self.inst.template_id_loc.replace(loc);
         let r = self.check_dependent_template_args_in(tmpl, args, locs, loc);
         self.inst.template_id_loc = saved;
@@ -496,13 +513,13 @@ impl Sema<'_, '_> {
         args: &[TemplateArg],
         locs: &[Loc],
         loc: Loc,
-    ) -> Result<(), ()> {
+    ) -> Result<Option<Vec<TemplateArg>>, ()> {
         let ttp_expansion = std::mem::take(&mut self.templ.ttp_written_expansion);
         self.check_expanded_pack_arity(tmpl, args, loc)?;
         let head = self.head_template(tmpl);
         let params = self.template_params(head);
         if params.iter().any(|p| self.templ.expanded_packs.contains_key(p)) {
-            return Ok(());
+            return Ok(None);
         }
         // The `>` of the template-id as written (the "while checking a
         // default template argument" frame), as the full check finds it.
@@ -583,7 +600,10 @@ impl Sema<'_, '_> {
             self.diag_template_arity(tmpl, true, loc);
             return Err(());
         }
-        if failed { Err(()) } else { Ok(()) }
+        if failed {
+            return Err(());
+        }
+        Ok((!open && expansion.is_none() && wi == args.len()).then_some(prior))
     }
 
     /// One argument of [`Self::check_dependent_template_args`], with the

@@ -1318,6 +1318,24 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 - A coroutine whose promise is not constructible from the parameter copies
   ([dcl.fct.def.coroutine]/5) no longer leaves an invalid trial `__promise`
   variable beside the default-initialized one (WP-3282).
+- The non-dependent non-type arguments of a dependent class template-id
+  are converted to their parameters' types (WP-3321,
+  spec/sema-templates.md §2.2, [temp.type]/1): `It<T, 1 == 1>` and
+  `It<T, true>` are one type, as are `V<T, 2>` and `V<T, 2u>` for an
+  `unsigned` parameter, an enumerator and its cast value, `nullptr` and
+  `(int *)0`, and equal class-type values. Declarations spelling them
+  differently redeclare one function template (they were ambiguous
+  overloads), an out-of-line member written `It<T, 1 == 1>::f` matches
+  the partial specialization `It<T, true>`, and such a signature mangles
+  the converted value as clang does (`2ItIT_Lb1EE`, `Ll97E` for `'a'` to
+  a `long` parameter; kiln mangled the written expression). An argument
+  for a parameter whose type depends on a dependent argument stays as
+  written, as in clang.
+- An elaborated dependent class template-id (`struct It<T, S{}> *p;`,
+  `friend class It<T>;`) has its arguments checked as the simple spelling
+  does (WP-3322): the kind of each argument, the arity and a value that
+  does not convert are diagnosed at the same places with clang's
+  wording; kiln accepted them.
 - An elaborated-type-specifier naming a dependent class template
   specialization (`friend class It<T, true>;`, `struct It<T, true> *q;`,
   a friend naming a member template's `In<T, 2>`) is formed as the same

@@ -2066,20 +2066,56 @@ the running `Substituter` instead.
 
 With dependent args, steps 2–3 are skipped. The result is a dependent
 `TemplateSpecialization` type, unless it names the current instantiation
-(§3.4). Its arguments are not converted, so a non-dependent expression
-argument (the `1` of `X<T, 1>`) carries its canonical profile and compares
-as an expression ([temp.over.link]/5): two declarations writing `X<T, 1>`
-name the same type and redeclare the same function template
-(`tests/conformance/temp.over.link/non-type-literal-arg-in-dependent-specialization.cpp`).
-Divergence: clang converts such arguments first, so `X<T, true>` and
-`X<T, 1>` for a `bool` parameter are equivalent there and distinct here.
+(§3.4). Its arguments are still checked against the parameters (§3.3, §10.5,
+`Sema::check_dependent_template_args_converted`), and the canonical type
+takes the converted list that check gives ([temp.type]/1; clang's
+`CheckTemplateIdType` on the converted arguments; WP-3321):
+- a non-dependent non-type argument for a parameter whose type is known
+  is converted to that type and evaluated, and compares as its value:
+  `X<T, 1 == 1>`, `X<T, true>` and `X<T, 1>` for a `bool` parameter are
+  one type, as are `V<T, 2>` and `V<T, 2u>` for an `unsigned` one, an
+  enumerator and its cast value, `nullptr` and `(int *)0` for a pointer,
+  `&x` and `(&x)`, and two equal class-type values (`P{1}`, `P{0 + 1}`);
+  the parameters not written take their converted defaults (`Q<T>` and
+  `Q<T, 1u>` for `template<class, long = 1>`);
+- a value-dependent argument stays an expression with its canonical
+  profile ([temp.over.link]/5), so two declarations writing `X<T, N + 1>`
+  name the same type;
+- so does a non-dependent argument for a parameter whose type depends on
+  a dependent argument before it (`W<T, 1>` and `W<T, 1u>` for
+  `template<class U, U v>` are two types until `T` is substituted, as in
+  clang);
+- with a pack expansion argument or a parameter pack, nothing is
+  converted: the value arguments are profiled as written and the
+  defaults completed (`Sema::dependent_spec_canon`).
+The written arguments stay as the sugar (printing, `args_as_written`,
+written references); such a specialization is not sugar for its
+canonical form (`TypeContext::desugar_once`, clang's
+`TemplateSpecializationType::isSugared`), so the AST dump and an `aka`
+print `X<T, (3 > 2)>` alone, as they print `D<T>` for
+`template<class, class = void> struct D` alone
+(`tests/conformance/templates/parse/temp.names-greater-in-parens.cpp`).
+A mangled signature takes the canonical list,
+so `It<T, 1 == 1>` mangles `2ItIT_Lb1EE` as clang's does
+(`tests/mangle/dependent_converted_value_args.cpp`). Two declarations
+spelling one template-id differently redeclare one function template,
+and an out-of-line member written `It<T, 1 == 1>::f` is the partial
+specialization `It<T, true>`'s
+(`tests/conformance/temp.type/converted-value-args-dependent-specialization-run.cpp`,
+`tests/conformance/temp.over.link/non-type-literal-arg-in-dependent-specialization.cpp`,
+`crates/kiln_parse/tests/dependent_spec_converted_args.rs`).
 Every spelling of a dependent template-id is formed this one way
 (`Sema::dependent_class_spec_type`): a simple-type-specifier
 (`It<T, true> *p;`, `friend It<T, true>;`, a friend function's parameter)
 and an elaborated-type-specifier (`friend class It<T, true>;`,
 `struct It<T, true> *q;`, a friend naming a member template's
-`In<T, 2>`) profile their value arguments, complete the defaults and name
-a partial specialization's current instantiation alike, so a friend
+`In<T, 2>`) check and convert their arguments, with the same
+diagnostics at the same places (the kind of each argument, the arity, a
+value that does not convert; WP-3322,
+`tests/conformance/temp.arg.general/elaborated-dependent-template-id-args-checked.cpp`,
+`tests/conformance/temp.arg.nontype/elaborated-dependent-template-id-conversion.cpp`),
+complete the defaults and name a partial specialization's current
+instantiation alike, so a friend
 declaration befriends exactly the canonical type the same template-id
 names anywhere else ([temp.type]/1, [temp.friend]/1; WP-3270,
 `crates/kiln_parse/tests/friend_spec_canonical.rs`,

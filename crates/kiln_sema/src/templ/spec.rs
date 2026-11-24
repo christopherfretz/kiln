@@ -320,9 +320,7 @@ impl Sema<'_, '_> {
                 // `friend class It<T, true>;` befriends the type a member's
                 // `It<T, true>` names ([temp.type]/1, WP-3270).
                 if dependent {
-                    let converted = self.injected_template_args(name, args);
-                    let args = converted.as_deref().unwrap_or(args);
-                    let t = self.dependent_class_spec_type(name, tmpl, args, name_loc);
+                    let t = self.dependent_tag_template_id(name, tmpl, args, &locs, name_loc)?;
                     return Ok((None, self.ast.types.elaborated(keyword, None, t)));
                 }
                 let spec = self.get_class_spec(tmpl, args, &locs, name_loc)?;
@@ -336,6 +334,26 @@ impl Sema<'_, '_> {
                 Ok((Some(spec), self.spec_tag_type(keyword, name, args, spec)))
             }
         }
+    }
+
+    /// The dependent `class-key X<args>` (a reference, not a declaration
+    /// of a specialization) for class template `tmpl`: its arguments
+    /// checked and converted as the simple-type-specifier's are
+    /// ([temp.arg.general]; clang `CheckTemplateArgumentList`, WP-3322),
+    /// and the same canonical type formed (WP-3270, WP-3321). `Err` after
+    /// a diagnostic.
+    fn dependent_tag_template_id(
+        &mut self,
+        name: kiln_ast::ids::TemplateNameId,
+        tmpl: DeclId,
+        args: &[TemplateArg],
+        locs: &[Loc],
+        name_loc: Loc,
+    ) -> Result<QualType, ()> {
+        let injected = self.injected_template_args(name, args);
+        let args = injected.as_deref().unwrap_or(args);
+        let conv = self.check_dependent_template_args_at(tmpl, args, locs, name_loc)?;
+        Ok(self.dependent_class_spec_type(name, tmpl, args, conv.as_deref(), name_loc))
     }
 
     /// `kw X<args>` sugaring specialization `spec`'s record type.
