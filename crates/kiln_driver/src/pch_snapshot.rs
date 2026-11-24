@@ -156,7 +156,9 @@ pub(crate) const MAGIC: [u8; 8] = *b"KILNSNAP";
 /// schema).
 /// version 184 (WP-3540) the written-reference table's substitution keys
 /// and the key scopes (transient).
-pub(crate) const FORMAT_VERSION: u32 = 184;
+/// version 185 (WP-3582) the substituted index of a pack-index
+/// expression's selected element (`TemplateTables::pack_index_written`).
+pub(crate) const FORMAT_VERSION: u32 = 185;
 /// The length of the magic and the format version.
 pub(crate) const HEADER_LEN: usize = 12;
 

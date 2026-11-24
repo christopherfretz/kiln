@@ -1402,7 +1402,11 @@ impl Sema<'_, '_> {
             | TypeView::DeducedTemplateSpecialization { name, .. } => {
                 self.written_template_decl(name)
             }
-            // `Ts...[i]` names the pack `Ts`.
+            // `Ts...[i]` names the pack `Ts`; substituted, its element
+            // (WP-3582).
+            TypeView::PackIndexing { selected: Some(s), .. } => {
+                self.written_type_entity(s, depth + 1)
+            }
             TypeView::PackIndexing { pattern, .. } => self.written_type_entity(pattern, depth + 1),
             _ => types.as_record(ty).or_else(|| types.as_enum(ty)).map(|d| (d, None)),
         }

@@ -419,6 +419,10 @@ pub struct TemplateTables {
     /// non-dependent `PackIndexingExpr`, which still mangles as nothing
     /// (spec/abi.md §8.15, WP-1060).
     pub pack_index_origin: ColdMap<ExprId, ExprId>,
+    /// The selected element a substituted `pack...[i]` became, mapped to
+    /// its substituted index: the written form clang's non-dependent
+    /// `PackIndexingExpr` keeps (spec/sema-templates.md §7.4, WP-3582).
+    pub pack_index_written: ColdMap<ExprId, ExprId>,
     /// The `.`/`->` of a dependent member access (diagnostics after
     /// substitution point at the operator, as clang's `OperatorLoc`).
     pub member_op_loc: ColdMap<ExprId, Loc>,
@@ -594,6 +598,7 @@ impl Default for TemplateTables {
             size_of_pack_origin: ColdMap::new("size_of_pack_origin"),
             size_of_pack_partial: ColdMap::new("size_of_pack_partial"),
             pack_index_origin: ColdMap::new("pack_index_origin"),
+            pack_index_written: ColdMap::new("pack_index_written"),
             member_op_loc: ColdMap::new("member_op_loc"),
             pseudo_dtor_name: ColdMap::new("pseudo_dtor_name"),
             pseudo_dtor_first: ColdMap::new("pseudo_dtor_first"),
@@ -942,6 +947,7 @@ impl HeapSize for TemplateTables {
         r.push(self.size_of_pack_origin.mem_row());
         r.push(self.size_of_pack_partial.mem_row());
         r.push(self.pack_index_origin.mem_row());
+        r.push(self.pack_index_written.mem_row());
         r.push(self.member_op_loc.mem_row());
         r.push(self.pseudo_dtor_name.mem_row());
         r.push(self.pseudo_dtor_first.mem_row());

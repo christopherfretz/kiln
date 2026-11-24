@@ -793,8 +793,10 @@ impl Substituter<'_, '_, '_> {
     }
 
     /// `pack...[index]` ([expr.prim.pack.index]): the selected element.
-    /// Gap (spec §7.4): clang keeps a `PackIndexingExpr` around it; the
-    /// element is recorded in `pack_index_origin` for mangling.
+    /// clang keeps a `PackIndexingExpr` around it; kiln records the
+    /// element in `pack_index_origin` (the pattern's node, for mangling)
+    /// and in `pack_index_written` (the substituted index, its written
+    /// form; spec/sema-templates.md §7.4, WP-3582).
     pub(crate) fn pack_indexing_expr(
         &mut self,
         e: ExprId,
@@ -829,12 +831,18 @@ impl Substituter<'_, '_, '_> {
                 // which a dependent signature still mangles as nothing
                 // (`Y<1, 2>::g`'s `decltype(u + I...[1])` is `DTplfp_E`).
                 let _ = self.sema.ast.templates.pack_index_origin.insert(v[i], e);
+                let _ = self.sema.ast.templates.pack_index_written.insert(v[i], index);
                 Ok(v[i])
             }
         }
     }
 
-    /// `T...[index]` ([dcl.type.pack.index]): the selected element.
+    /// `T...[index]` ([dcl.type.pack.index]): the selected element, kept
+    /// as `PackIndexing` sugar over it with the pattern substituted in
+    /// keep mode (its packs named by their elements, clang's
+    /// `SubstTemplateTypeParmPackType`) and the substituted index, as
+    /// clang's `TransformPackIndexingType` builds it (spec/sema-templates.md
+    /// §7.4, WP-3582).
     pub(crate) fn pack_indexing_type(
         &mut self,
         pattern: QualType,
@@ -856,7 +864,8 @@ impl Substituter<'_, '_, '_> {
                 let name = format!("'{}'", self.sema.ty_str(pattern));
                 let at = self.sema.begin_loc(index);
                 let i = self.pack_index_value(index, v.len(), &name, at)?;
-                Ok(v[i])
+                let p = self.kept_pack_pattern(|s| s.element_ty(pattern, loc)).unwrap_or(pattern);
+                Ok(self.sema.ast.types.pack_indexing(p, index, None, Some(v[i])))
             }
         }
     }

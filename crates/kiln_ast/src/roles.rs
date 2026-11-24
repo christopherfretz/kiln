@@ -1110,6 +1110,7 @@ pub static COLD_MAPS: &[ColdMapRoles] = &[
     cold("TemplateTables", "size_of_pack_origin", E, D),
     cold("TemplateTables", "size_of_pack_partial", E, Role::ArgList),
     cold("TemplateTables", "pack_index_origin", E, E),
+    cold("TemplateTables", "pack_index_written", E, E),
     cold("TemplateTables", "member_op_loc", E, L),
     cold("TemplateTables", "pseudo_dtor_name", E, Role::Symbol),
     cold("TemplateTables", "pseudo_dtor_first", E, Role::Record("(QualType, Loc)")),

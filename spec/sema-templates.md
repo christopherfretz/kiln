@@ -5244,12 +5244,19 @@ argument substitution in `deduce_call`):
 After the checks the parameter type is adjusted ([dcl.fct]/5: array to
 pointer, function to pointer, `Sema::adjust_param_type`); the declared
 type is kept as `ParmVar::original_ty` (and `ParamInfo::original_ty`), as
-clang's `getOriginalType`, for a written parameter and for a substituted
-one whose declared type is still dependent (a member template of an
-instantiated class template, so that `T a[3]` with `T = void` still fails
-at its own deduction). A fully substituted parameter has none: a
-range-`for` over it in an instantiation is clang's plain invalid-range
-error, not the array-parameter diagnostic of the definition.
+clang's `getOriginalType`, whenever adjusting changed it: for a written
+parameter and for a substituted one alike (each element of a parameter
+pack too; WP-3581, clang's instantiated `ParmVarDecl` keeps its
+substituted type-source info). A still-dependent one (a member template
+of an instantiated class template) makes `T a[3]` with `T = void` still
+fail at its own deduction. In an instance its readers behave as clang's:
+`sizeof` of the parameter warns `-Wsizeof-array-argument` per
+instantiation, a variable length array's bounds are evaluated at entry,
+and a range-`for` over it is clang's plain invalid-range error, not the
+array-parameter diagnostic of the definition (clang diagnoses that only
+when building, `BFRK_Build`, so `range_on_array_parameter` stays silent
+under an instantiation). The redeclaration check (`-Warray-parameter`)
+and C's `[static N]` and `[*]` readers never see an instance.
 `tests/conformance/temp.deduct.general/invalid-parameter-type-sfinae.cpp`
 (the libc++ `MoveOnly` deleted `operator,` shape),
 `.../invalid-parameter-type-notes.cpp` (strict notes) and
@@ -7590,8 +7597,21 @@ cost is small.
 - `T...[I]` (type) and `p...[I]` (expression). `I` is a converted
   constant expression of type `size_t`.
 - After substitution:
-  - the type gives the selected element, keeping `PackIndexing` as sugar;
-  - the expression gives a `PackIndexingExpr` with the selected element.
+  - the type gives the selected element, keeping `PackIndexing` as sugar
+    over it (WP-3582): `pattern` substituted in keep mode (its packs named
+    by their elements, clang's `SubstTemplateTypeParmPackType`), `index`
+    the substituted index, `selected` the element, so `written_exprs`
+    reaches the index as written (one interned type per use, no new
+    kind); clang's `TransformPackIndexingType` builds the same;
+  - the expression gives the selected element itself (clang keeps a
+    non-dependent `PackIndexingExpr` around it): the element maps to the
+    pattern's pack-index expression in `TemplateTables::pack_index_origin`
+    (mangling) and to the substituted index in
+    `TemplateTables::pack_index_written` (its written form; WP-3582,
+    carried by the PCH snapshot and, as a cold field on the element's
+    record, by module images, though an image holds no pack-index
+    pattern yet, so a unit with one is replayed and the map is rebuilt;
+    test `kiln_parse/tests/written_bounds.rs`).
 - An index out of range: "invalid index 5 for pack 'T' of size 2". This
   is SFINAE-able.
 - A pack-index is a non-deduced context.
@@ -10634,8 +10654,9 @@ explicit specialization errors remain. The blockers are:
 - Gaps, with owners:
   - `sizeof...` after substitution is an `IntegerLiteral` of `size_t`,
     not a `SizeOfPackExpr` with the length (dump gap; WP-072 follow-up).
-  - A substituted `PackIndexingExpr`/`PackIndexingType` is replaced by
-    its element; clang keeps the node as sugar (dump gap).
+  - A substituted `PackIndexingExpr` is replaced by its element, with
+    its index in `pack_index_written`; clang keeps the node (dump gap).
+    The type keeps `PackIndexing` sugar (WP-3582).
   - Partially substituted pack expansions (`tl<tl<Ts, Us>...>` with
     only `Ts` known) need clang's `SubstTemplateTypeParmPackType`:
     unimplemented ("partially substituted pack expansion").

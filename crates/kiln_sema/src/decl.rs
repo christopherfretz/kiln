@@ -1812,7 +1812,7 @@ impl Sema<'_, '_> {
                                 let l = self.begin_loc(*e);
                                 let msg = self.diag(DiagId::sema_zero_length_array, l);
                                 self.emit(msg.per_instantiation());
-                                let kept = self.written_array_bound(*e, d.site);
+                                let kept = Some(self.written_array_bound(*e));
                                 self.ast.types.constant_array(ty, 0, kept)
                             }
                             // clang `BuildArrayType`: more than the
@@ -1827,7 +1827,7 @@ impl Sema<'_, '_> {
                                 fail!();
                             }
                             Some(Ok(n)) => {
-                                let kept = self.written_array_bound(*e, d.site);
+                                let kept = Some(self.written_array_bound(*e));
                                 self.ast.types.constant_array(ty, n, kept)
                             }
                             Some(Err(size)) => {
@@ -2310,7 +2310,8 @@ impl Sema<'_, '_> {
             return QualType::ERROR;
         };
         self.error(DiagId::sema_vla_folded_to_constant, at);
-        self.ast.types.constant_array(elem, n, None)
+        // The folded bound keeps its written expression (WP-3580).
+        self.ast.types.constant_array(elem, n, Some(size))
     }
 
     /// The array type `q` with each variable length dimension folded to a
@@ -2327,11 +2328,13 @@ impl Sema<'_, '_> {
                     .filter(|&v| (0..=i128::from(u64::MAX >> 4)).contains(&v))
                     .and_then(|v| u64::try_from(v).ok())?;
                 let e = self.fold_vla_dims(elem, depth + 1)?;
-                Some(self.ast.types.constant_array(e, n, None))
+                // A folded bound keeps its written expression, as a
+                // constant one does (spec/types.md §7.2; WP-3580).
+                Some(self.ast.types.constant_array(e, n, Some(size)))
             }
             TypeView::ConstantArray(a) => {
                 let e = self.fold_vla_dims(a.elem, depth + 1)?;
-                Some(self.ast.types.constant_array(e, a.size, None))
+                Some(self.ast.types.constant_array(e, a.size, a.size_expr))
             }
             _ => None,
         }
@@ -2461,14 +2464,15 @@ impl Sema<'_, '_> {
         Some(e)
     }
 
-    /// The bound expression a constant array type built from declarator
-    /// bound `e` keeps (spec/types.md §7.2 "Written bounds", WP-3015): a
-    /// kept instantiation-dependent one ([`Self::kept_array_bound`]), or
-    /// else `e` itself, as sugar, when a declarator wrote it, so that a
-    /// walk from the declaration reaches the expression (clang's
-    /// `ArrayTypeLoc`). A bound substitution made is not written: `None`.
-    pub(crate) fn written_array_bound(&mut self, e: ExprId, site: DeclSite) -> Option<ExprId> {
-        self.kept_array_bound(e).or((site != DeclSite::Subst).then_some(e))
+    /// The bound expression a constant array type built from bound `e`
+    /// keeps (spec/types.md §7.2 "Written bounds", WP-3015): a kept
+    /// instantiation-dependent one ([`Self::kept_array_bound`]), or else
+    /// `e` itself, as sugar, so that a walk from the declaration reaches
+    /// the expression (clang's `ArrayTypeLoc`). A bound substitution made
+    /// is the substituted form of a written one, and is kept too (the
+    /// instance's `ArrayTypeLoc`; WP-3580).
+    pub(crate) fn written_array_bound(&mut self, e: ExprId) -> ExprId {
+        self.kept_array_bound(e).unwrap_or(e)
     }
 
     /// The decl-specifiers and declarator-id a function parameter cannot

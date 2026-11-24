@@ -103,7 +103,7 @@ pub(crate) use locs::Locs;
 use locs::{FileRec, LocTable, SlocRec};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 98;
+pub(crate) const IMAGE_VERSION: u32 = 99;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -3680,6 +3680,11 @@ impl Writer<'_, '_, '_> {
     }
 
     fn qref(&mut self, q: QualType) -> W<QRef> {
+        // A substituted pack index's sugar (WP-3582) is not carried: the
+        // importer sees the selected element, as before.
+        if let TypeView::PackIndexing { selected: Some(s), .. } = self.s.ast.types.view(q.ty()) {
+            return self.qref(QualType::new(s.ty(), s.quals_bits() | q.quals_bits()));
+        }
         let ty = self.ty(q.ty())?;
         let quals = q.quals_bits();
         if quals != 0
@@ -3779,6 +3784,12 @@ impl Writer<'_, '_, '_> {
         }
         if let Some(r) = self.uncarried_subst(t) {
             return self.ty(r);
+        }
+        // See [`Self::qref`] (WP-3582); a qualified element goes there.
+        if let TypeView::PackIndexing { selected: Some(s), .. } = self.s.ast.types.view(t)
+            && s.quals_bits() == 0
+        {
+            return self.ty(s.ty());
         }
         if let Some(rec) = self.template_ty(t)? {
             let i = BUILTINS + 1 + self.img.types.len() as u32;

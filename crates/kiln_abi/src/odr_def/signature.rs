@@ -627,6 +627,8 @@ impl DefHasher<'_> {
                 self.u32(num_expansions.map_or(u32::MAX, |x| x));
                 self.ty(pattern);
             }
+            // A substituted pack index hashes as its element (WP-3582).
+            TypeView::PackIndexing { selected: Some(s), .. } => self.ty(s),
             TypeView::PackIndexing { pattern, index, .. } => {
                 self.ty(pattern);
                 self.operand(index);

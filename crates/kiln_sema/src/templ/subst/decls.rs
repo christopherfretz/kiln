@@ -568,8 +568,8 @@ impl Substituter<'_, '_, '_> {
                 };
                 let mut decls = Vec::with_capacity(tys.len());
                 for ty in tys {
-                    let ty = self.sema.apply_pattern_mode(p, ty);
-                    let ty = self.param_type(ty, loc)?;
+                    let declared = self.sema.apply_pattern_mode(p, ty);
+                    let ty = self.param_type(declared, loc)?;
                     let ctx = self.sema.ctx;
                     let idx = u16::try_from(out.len()).unwrap_or(u16::MAX);
                     let np =
@@ -580,9 +580,19 @@ impl Substituter<'_, '_, '_> {
                     if !self.sema.check_param_abi_attrs(ty, &mut attrs) {
                         return Err(SubstFail);
                     }
+                    // Each element keeps its type as declared, as a
+                    // parameter that is no pack does (WP-3581).
+                    let original_ty = (declared != ty).then_some(declared);
+                    if let Some(o) = original_ty {
+                        self.sema.ast.decls.set_param_original_ty(np, o);
+                    }
                     // The elements share the pack's name (carried by
                     // `np`); it is not a redefinition ([temp.variadic]/5).
-                    out.push(ParamInfo { attrs, ..subst_param_info(None, ty, at, np, None) });
+                    out.push(ParamInfo {
+                        original_ty,
+                        attrs,
+                        ..subst_param_info(None, ty, at, np, None)
+                    });
                 }
                 let l = self.sema.ast.lists.push(&decls);
                 self.locals.insert(p, DeclOrPack::Pack(l));
@@ -613,14 +623,14 @@ impl Substituter<'_, '_, '_> {
             if !self.sema.check_param_abi_attrs(ty, &mut attrs) {
                 return Err(SubstFail);
             }
-            // The type as declared is kept only while still dependent (a
-            // member template of a partially instantiated class), for the
-            // next substitution's invalid-type check (§5.7.2); clang's
-            // parse-time-only uses of it (a range-`for` over an array
-            // parameter) do not apply to an instantiation.
-            let original_ty = (declared != ty
-                && self.sema.is_instantiation_dependent_type(declared))
-            .then_some(declared);
+            // The type as declared, whenever adjusting changed it, as for a
+            // parameter written in plain code (clang's instantiated
+            // `ParmVarDecl` keeps its substituted `TypeSourceInfo`): the
+            // next substitution's invalid-type check (§5.7.2) when still
+            // dependent, and the readers of the original type (a
+            // range-`for` or `sizeof` over an array parameter, a variable
+            // length array's bounds at entry) in an instance (WP-3581).
+            let original_ty = (declared != ty).then_some(declared);
             if let Some(o) = original_ty {
                 self.sema.ast.decls.set_param_original_ty(np, o);
             }

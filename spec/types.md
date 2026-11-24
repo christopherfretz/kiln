@@ -876,7 +876,16 @@ canonical form of a dependent type must identify *equivalent* types:
   section can hold is written as the value alone, as before).
   Substitution keeps a written bound it does not change (`T a[f(5)]`
   instantiated keeps the pattern's `f(5)`, no new expression); a bound
-  it substitutes (`T a[N]`) gives the value only, as before. An array
+  it substitutes, dependent (`T a[N]`, `T a[sizeof(T::s())]`) or kept
+  as instantiation-dependent (`char a[sizeof(sizeof(T::s()))]`), keeps
+  the substituted expression as `size_expr` (WP-3580; clang's
+  instance `ArrayTypeLoc`): one interned sugar node per distinct
+  substituted bound, no expression beyond the one substitution built.
+  It holds for every declarator substitution rebuilds (a member, a
+  variable, a parameter's declared type and its `Decayed` sugar, a
+  type operand) and for the current-instantiation rebuild. A variable
+  length array folded to a constant one (`check_vla_var`,
+  `fold_vla_dims`) keeps its bound expression as `size_expr` too. An array
   parameter adjusted to a pointer keeps its written bound as `Decayed` sugar, whether the bound is
   instantiation-dependent or not, a call or a literal (`int a[f(2)]`,
   `int a[3]`; WP-3101, clang's `DecayedType`): the parameter's type and

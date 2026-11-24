@@ -1591,6 +1591,11 @@ impl Sema<'_, '_> {
                 self.mark_used_type(elem, depth, used, lvl);
                 self.mark_used_expr(size, depth, used, lvl);
             }
+            // A substituted pack index is sugar for its element
+            // (WP-3582).
+            TypeView::PackIndexing { selected: Some(s), .. } => {
+                self.mark_used_type(s, depth, used, lvl);
+            }
             TypeView::DependentSizedArray { elem, size }
             | TypeView::DependentVector { elem, size, .. }
             | TypeView::DependentAddrSpace { pointee: elem, space: size }

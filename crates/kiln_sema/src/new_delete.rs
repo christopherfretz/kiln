@@ -485,10 +485,8 @@ impl Sema<'_, '_> {
                     }
                     // The bound as written (spec/types.md §7.2 "Written
                     // bounds", WP-3015).
-                    let w = arrays
-                        .get(k + 1)
-                        .and_then(|a| a.0)
-                        .and_then(|e| self.written_array_bound(e, crate::declspec::DeclSite::New));
+                    let w =
+                        arrays.get(k + 1).and_then(|a| a.0).map(|e| self.written_array_bound(e));
                     self.ast.types.constant_array(elem, n, w)
                 }
                 None => self.ast.types.incomplete_array(elem),
