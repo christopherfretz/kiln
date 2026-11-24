@@ -2049,6 +2049,17 @@ name the same type and redeclare the same function template
 (`tests/conformance/temp.over.link/non-type-literal-arg-in-dependent-specialization.cpp`).
 Divergence: clang converts such arguments first, so `X<T, true>` and
 `X<T, 1>` for a `bool` parameter are equivalent there and distinct here.
+Every spelling of a dependent template-id is formed this one way
+(`Sema::dependent_class_spec_type`): a simple-type-specifier
+(`It<T, true> *p;`, `friend It<T, true>;`, a friend function's parameter)
+and an elaborated-type-specifier (`friend class It<T, true>;`,
+`struct It<T, true> *q;`, a friend naming a member template's
+`In<T, 2>`) profile their value arguments, complete the defaults and name
+a partial specialization's current instantiation alike, so a friend
+declaration befriends exactly the canonical type the same template-id
+names anywhere else ([temp.type]/1, [temp.friend]/1; WP-3270,
+`crates/kiln_parse/tests/friend_spec_canonical.rs`,
+`tests/conformance/temp.friend/befriended-spec-value-args-run.cpp`).
 
 ### 4.3 Triggers for implicit instantiation ([temp.inst]/2)
 

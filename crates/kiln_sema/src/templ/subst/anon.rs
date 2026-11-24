@@ -38,7 +38,9 @@ impl Substituter<'_, '_, '_> {
     /// members; an anonymous struct or union then declares its member
     /// object and injects its members' names into the class being
     /// instantiated. The instantiations are linked to their patterns
-    /// here (the caller links nothing).
+    /// here (the caller links nothing): the class as a member of the
+    /// enclosing class, its object and injected names through the sparse
+    /// map.
     pub(crate) fn unnamed_member_class(&mut self, m: DeclId) -> Result<(), SubstFail> {
         let loc = self.sema.ast.decls.get(m).loc();
         let Some(rec) = self.sema.ast.decls.record(m).copied() else { return Err(SubstFail) };
@@ -50,8 +52,14 @@ impl Substituter<'_, '_, '_> {
         let anonymous = rec.defn.contains(DefinitionBits::ANONYMOUS);
         let parent = self.entity;
         let x = self.sema.act_on_tag(kw, None, None, TagUse::Definition, 0, None, loc);
-        if let Some(spec) = parent {
-            self.sema.ast.templates.record_member(spec, m, x);
+        // A member of the class being instantiated, as an unnamed member
+        // enumeration is (`member_link`): `instantiated_from` reaches the
+        // pattern's unnamed class, which is no specialization (spec/ast.md
+        // §8.2, WP-3273). Linked before its body, whose member classes
+        // find their enclosing pattern through it.
+        match parent {
+            Some(spec) => self.sema.builder().member_of_spec(spec, x, m),
+            None => self.sema.ast.templates.set_instantiated_from(x, m),
         }
         self.class_body_with(x, m, None, anonymous);
         self.entity = parent;
@@ -94,7 +102,7 @@ impl Substituter<'_, '_, '_> {
             }
         }
         for (p, i) in links {
-            self.sema.ast.templates.record_member(spec, p, i);
+            self.sema.builder().member_of_spec(spec, i, p);
         }
         Ok(())
     }

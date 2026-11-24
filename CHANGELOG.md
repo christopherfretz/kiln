@@ -1257,6 +1257,23 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- An elaborated-type-specifier naming a dependent class template
+  specialization (`friend class It<T, true>;`, `struct It<T, true> *q;`,
+  a friend naming a member template's `In<T, 2>`) is formed as the same
+  template-id written as a simple-type-specifier is (WP-3270,
+  spec/sema-templates.md §2.2): its non-type arguments are profiled, so
+  the friend befriends the one canonical type a member's `It<T, true>`
+  names ([temp.type]/1, [temp.over.link]/5); tooling clients comparing
+  canonical types saw two.
+- An instantiated unnamed member class (`struct { T x; } m;`, an
+  anonymous struct or union, nested ones, those of member class
+  templates and partial specializations) links to its pattern
+  (`Ast::instantiated_from`, a member's `MemberSpecInfo`, never a
+  `SpecInfo`) as an unnamed member enumeration does (WP-3273,
+  spec/ast.md §8.2); its implicit member object and injected names reach
+  theirs too. A module whose specialization has one can now get a
+  declaration image, unless a carried body names a member of the
+  unnamed class.
 - An immediate invocation in a default argument or a default member
   initializer is evaluated at each use, in the context of that use
   (WP-3278, CWG 2631, [expr.const]/16, [dcl.fct.default]/5,

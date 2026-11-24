@@ -712,7 +712,7 @@ impl Sema<'_, '_> {
     /// converted ([temp.arg]), so its non-type arguments compare as
     /// expressions ([temp.over.link]/5) and two declarations writing the
     /// same `X<T, 1>` name the same type.
-    fn profile_value_args(&mut self, list: ArgListId) -> ArgListId {
+    pub(crate) fn profile_value_args(&mut self, list: ArgListId) -> ArgListId {
         let args = self.ast.types.args(list).to_vec();
         if !args.iter().any(|a| matches!(a.view(), ArgView::Expr { profile: None, .. })) {
             return list;
@@ -1271,6 +1271,33 @@ impl Sema<'_, '_> {
         Some(self.ast.types.template_specialization(name, full, None, false))
     }
 
+    /// The dependent specialization `name<args>` of class template `tmpl`
+    /// ([temp.dep.type]/9), however it is written: a simple-type-specifier
+    /// (`It<T, true> *p;`, `friend It<T, true>;`) or an
+    /// elaborated-type-specifier (`friend class It<T, true>;`,
+    /// `struct It<T, true> *q;`). Its non-dependent value arguments are
+    /// profiled ([`Sema::profile_value_args`]), the parameters not written
+    /// take their defaults, and a partial specialization's own arguments
+    /// name its current instantiation, so every spelling of one
+    /// template-id is one canonical type ([temp.type]/1,
+    /// [temp.over.link]/5; spec/sema-templates.md §2.2, WP-3270).
+    pub(crate) fn dependent_class_spec_type(
+        &mut self,
+        name: TemplateNameId,
+        tmpl: DeclId,
+        args: &[TemplateArg],
+        l: Loc,
+    ) -> QualType {
+        let list = self.ast.types.arg_list(args);
+        let list = self.profile_value_args(list);
+        let mut canon = self.dependent_spec_canon(name, tmpl, args, l);
+        if canon.is_none() {
+            let t = self.ast.types.template_specialization(name, list, None, false);
+            canon = self.partial_current_instantiation_canon(tmpl, t, l);
+        }
+        self.ast.types.template_specialization(name, list, canon, false)
+    }
+
     /// The arguments of the dependent specialization `tmpl<args>` of class
     /// template `tmpl` completed with the default arguments of the
     /// parameters not written ([temp.arg.general]/9), each substituted
@@ -1445,16 +1472,12 @@ impl Sema<'_, '_> {
                     let t = self.class_template_type(name, d, args, &locs, l)?;
                     return Ok(TemplateIdRef::Type(t));
                 }
-                let list = if ttp { list } else { self.profile_value_args(list) };
-                let mut canon =
-                    if ttp { None } else { self.dependent_spec_canon(name, d, args, l) };
-                if !ttp && canon.is_none() {
-                    let t = self.ast.types.template_specialization(name, list, None, false);
-                    canon = self.partial_current_instantiation_canon(d, t, l);
+                if ttp {
+                    return Ok(TemplateIdRef::Type(
+                        self.ast.types.template_specialization(name, list, None, false),
+                    ));
                 }
-                Ok(TemplateIdRef::Type(
-                    self.ast.types.template_specialization(name, list, canon, false),
-                ))
+                Ok(TemplateIdRef::Type(self.dependent_class_spec_type(name, d, args, l)))
             }
             DeclKind::TypeAliasTemplate => {
                 // [temp.alias]/2: the alias is substituted even with
@@ -2573,7 +2596,7 @@ impl Sema<'_, '_> {
     /// `convertTypeTemplateArgumentToTemplate`), so that substitution
     /// keeps a template there, not the specialization; `None` when
     /// there is none.
-    fn injected_template_args(
+    pub(crate) fn injected_template_args(
         &mut self,
         name: TemplateNameId,
         args: &[TemplateArg],

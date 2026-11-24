@@ -268,7 +268,10 @@ impl Sema<'_, '_> {
                 let r = self.act_on_partial_spec(keyword, tmpl, args, &locs, use_, range);
                 self.templ.cur = None;
                 let p = r?;
+                // Its value arguments profiled as any dependent
+                // template-id's are (WP-3270).
                 let list = self.ast.types.arg_list(args);
+                let list = self.profile_value_args(list);
                 let t = self.ast.types.template_specialization(name, list, None, false);
                 Ok((Some(p), self.ast.types.elaborated(keyword, None, t)))
             }
@@ -312,8 +315,14 @@ impl Sema<'_, '_> {
                 // [temp.friend]) stays a dependent type in the pattern's
                 // `FriendDecl`; each instantiation of the class befriends
                 // the substituted specialization (§4.8).
+                // Formed as the same template-id written as a
+                // simple-type-specifier is (`act_template_id`), so
+                // `friend class It<T, true>;` befriends the type a member's
+                // `It<T, true>` names ([temp.type]/1, WP-3270).
                 if dependent {
-                    let t = self.ast.types.template_specialization(name, list, None, false);
+                    let converted = self.injected_template_args(name, args);
+                    let args = converted.as_deref().unwrap_or(args);
+                    let t = self.dependent_class_spec_type(name, tmpl, args, name_loc);
                     return Ok((None, self.ast.types.elaborated(keyword, None, t)));
                 }
                 let spec = self.get_class_spec(tmpl, args, &locs, name_loc)?;

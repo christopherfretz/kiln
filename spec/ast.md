@@ -1224,6 +1224,16 @@ struct MemberSpecInfo { instantiated_from: DeclId, kind: SpecKind, point_of_inst
 for decls with a `TemplLink`, and a sparse map for other kinds
 (`Field`, `EnumConstant`, `ParmVar`, `Typedef`, `UsingShadow`, local
 decls), so every instantiated decl reaches its pattern in O(1).
+An unnamed member class (`struct { T x; } m;`, an anonymous struct or
+union, nested ones, those of member class templates and partial
+specializations) is a `MemberOfSpecialization` of the class it is
+instantiated in, exactly as an unnamed member enumeration is
+(`ImplicitInstantiation`, its `instantiated_from` the pattern's unnamed
+class; clang's `setInstantiationOfMemberClass`), and never a
+`Specialization`: it has no `SpecInfo`, no template arguments and no
+name of its own (WP-3273). The implicit member object of an anonymous
+struct or union and its injected `IndirectField`s reach theirs through
+the sparse map.
 
 ### 8.3 Specialization keys
 One global `specializations: FxHashMap<(DeclId /*first decl of template*/,
