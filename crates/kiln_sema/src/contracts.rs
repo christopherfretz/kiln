@@ -99,7 +99,7 @@ impl Sema<'_, '_> {
             // specialization even when it is not type- or value-dependent
             // (`template<class T> int g(int a) post(r: r > 0)`; WP-1463).
             let mut flags =
-                if ty == QualType::ERROR { DeclFlags::INVALID } else { DeclFlags::empty() };
+                if ty == QualType::ERROR { DeclFlags::INVALID } else { DeclFlags::empty() }; // ledger: born invalid
             if self.in_template() || self.ast.decls.get(ctx).has(DeclFlags::DEPENDENT_CTX) {
                 flags = flags.with(DeclFlags::DEPENDENT_CTX);
             }
@@ -116,6 +116,7 @@ impl Sema<'_, '_> {
                 // ContractResultName payload: unused (0); spec/contracts.md §4.
                 Payload::None(0),
             );
+            self.note_born_invalid(d);
             self.push_local(name, d);
             if let Some(f) = f {
                 self.check_result_name_conflict(self.contract_fn(f), name, loc);

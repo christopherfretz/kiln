@@ -963,7 +963,7 @@ impl Sema<'_, '_> {
         };
         self.declarator_type_invalid = false;
         if unexpanded || !self.check_nttp_type(ty, p.loc) {
-            self.ast.decls.set_flags(d, DeclFlags::INVALID);
+            self.invalidate(d);
         } else {
             self.attach_nttp_type_constraint(d, p.ty, p.type_loc, pack);
         }
@@ -1930,7 +1930,7 @@ impl Sema<'_, '_> {
         // declarations (`LookupResult::resolveKind`, WP-308).
         if kind == DeclKind::FunctionTemplate && self.ast.decls.get(pattern).has(DeclFlags::INVALID)
         {
-            self.ast.decls.set_flags(t, DeclFlags::INVALID);
+            self.invalidate(t);
         }
         if prev.is_some() {
             self.merge_template_defaults(t);

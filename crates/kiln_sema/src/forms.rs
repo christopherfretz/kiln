@@ -199,7 +199,7 @@ impl Sema<'_, '_> {
             // invalid and leaves the placeholder undeduced).
             let msg = self.diag(DiagId::sema_auto_fn_init_list, l.lbrace);
             self.emit(msg);
-            self.ast.decls.set_flags(fdecl, kiln_ast::decl::DeclFlags::INVALID);
+            self.invalidate(fdecl);
             if let Some(st) = self.func.as_mut() {
                 st.deduced = true;
                 st.ret = QualType::ERROR;

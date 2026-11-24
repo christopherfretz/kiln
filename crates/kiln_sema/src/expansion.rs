@@ -339,13 +339,14 @@ impl Sema<'_, '_> {
     /// non-errors; else `stash` unchanged.
     fn drop_after_capture_error(
         &mut self,
-        stash: Vec<kiln_diag::Diag>,
+        stash: crate::subst_failed::Stash,
         e: ExprId,
-    ) -> Vec<kiln_diag::Diag> {
+    ) -> crate::subst_failed::Stash {
         if !stash.iter().any(Self::is_capture_error) && !self.names_uncaptured_local(e) {
             return stash;
         }
-        stash
+        let crate::subst_failed::Stash { diags, serial } = stash;
+        let diags = diags
             .into_iter()
             .filter(|d| {
                 Self::is_capture_error(d)
@@ -353,7 +354,8 @@ impl Sema<'_, '_> {
                         self.diags.severity_at(id, d.loc()) < kiln_diag::Severity::Error
                     })
             })
-            .collect()
+            .collect();
+        crate::subst_failed::Stash { diags, serial }
     }
 
     /// Initializes implicit variable `v` from `e` (deducing its type);
@@ -469,7 +471,7 @@ impl Sema<'_, '_> {
             // again ("constexpr variable '__range' must be initialized by
             // a constant expression").
             let stash = self.drop_after_capture_error(stash, e);
-            self.ast.decls.set_flags(range, DeclFlags::INVALID);
+            self.invalidate(range);
             self.release(stash, Vec::new());
             return None;
         }

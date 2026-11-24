@@ -1433,6 +1433,12 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         }
         if n.has(DeclFlags::INVALID) {
             self.line.push_str(" invalid");
+            // A silent failure says what failed to form (spec/ast-dump.md
+            // §3, WP-3281); clang forms no declaration for these.
+            if let Some(k) = decls.subst_failed(d) {
+                self.line.push_str(" subst-failed=");
+                self.line.push_str(k.name());
+            }
         }
         if kind.is_function() {
             self.function_fields(d);

@@ -189,6 +189,10 @@ pub struct ParseOptions {
     /// declaration ([`ParsedTu::image_census`], spec/modules.md §11.11
     /// "Fallback census").
     pub image_census: bool,
+    /// `-fkiln-verify-subst-failed`: at the end of the unit, check the
+    /// silent-failure marks (`Sema::verify_subst_failed`, spec/ast.md
+    /// §4.1) and report each violation as an error.
+    pub verify_subst_failed: bool,
     /// The unit is a prefix ([`kiln_sema::Sema::tu_prefix`]): a header
     /// being precompiled, or the PCH producer's snapshot pass.
     pub prefix: bool,
@@ -207,6 +211,7 @@ impl Default for ParseOptions {
             header_unit: false,
             record_image: false,
             image_census: false,
+            verify_subst_failed: false,
             prefix: false,
             exceptions: true,
             rtti: true,
@@ -424,6 +429,7 @@ pub fn parse_tu<'sm>(
 
 /// Sets `s`'s language and option state from `opts`.
 fn configure(s: &mut Sema<'_, '_>, opts: &ParseOptions) {
+    s.set_verify_subst_failed(opts.verify_subst_failed);
     s.exceptions = opts.exceptions;
     s.rtti = opts.rtti;
     s.access_control = opts.access_control;
@@ -635,10 +641,14 @@ fn finish_tu<'a, 'sm>(
     main: &str,
     opts: &ParseOptions,
 ) -> (ParsedTu, Preprocessor<'sm, 'a>) {
-    let (s, mut src) = p.finish();
+    let (mut s, mut src) = p.finish();
+    // The silent-failure marks are final now (spec/ast.md §4.1).
+    s.flush_subst_failed();
+    if opts.verify_subst_failed {
+        s.report_subst_failed_violations();
+    }
     let name = main.rsplit('/').next().unwrap_or(main);
     let inst_report = s.instantiation_report(name);
-    let mut s = s;
     let cfg_dump = std::mem::take(&mut s.cfg_out);
     let sema_memory = s.memory();
     let carried = s.take_carried_section();
@@ -731,6 +741,8 @@ pub fn parse_prefix<'a, 'sm>(
     p.parse_top_level_declarations();
     p.end_prefix();
     p.s.end_prefix_keys();
+    // A snapshot carries the marks, not the ledger (spec/ast.md §4.1).
+    p.s.flush_subst_failed();
     drop(phase);
     let ready = match refused {
         Some(why) => Err(why.to_owned()),

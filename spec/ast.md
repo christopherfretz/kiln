@@ -203,6 +203,125 @@ struct DeclNode {        // 28 bytes
   / template-param) is a function of `kind` and `misc.friend`/
   `local_extern`, not stored.
 
+#### Silent failures (WP-3281)
+
+`DeclArena::subst_failed(d) -> Option<SubstFailedKind>` (cold map
+`subst_failed`, memory row `subst_failed`; the header has no spare flag
+bit) marks a declaration kiln made `INVALID` while it was inside a
+*trap* (a SFINAE context, or a diagnostic capture whose stash was then
+discarded) that printed no error; the kind says what failed to form.
+Sema writes it through its trap ledger only (spec/sema-templates.md
+§5.7.3), at the end of the translation unit and before a snapshot;
+`set_subst_failed` requires `INVALID` and keeps the first kind;
+`subst_failed_decls()` lists the marks by id.
+
+| value | `SubstFailedKind` | set on | its state |
+|---|---|---|---|
+| 1 | `FunctionSignature` | a function template specialization, or a deduction guide's, whose declaration failed to substitute ([temp.deduct.general]/8), or substituted while the frame trapped an error | substitution failed: type `ERROR`, no parameters; trapped error: full type and parameters. Neither is a usable specialization |
+| 2 | `ExplicitSpecifier` | the same, when only its `explicit(expr)` failed ([temp.deduct.general]/7) | full type and parameters |
+| 3 | `VariablePartialAmbiguity` | a variable template specialization whose partial-specialization choice was ambiguous ([temp.spec.partial.match]/1) | type `ERROR`, not listed as instantiated |
+| 4 | `ClassPartialAmbiguity` | a class template specialization whose choice was ambiguous | a never-instantiated specialization (kind `Undeclared`, no definition, members or bases), still a nameable type (`X<int>*`) |
+| 5 | `LocalOfFailedSignature` | an invalid declaration created while a kind 1 or 2 specialization failed to form (a parameter, a statement-expression's local), or whose owner chain reaches one | whatever its own failure left |
+| 6 | `OtherTrapped` | any other invalidation under a trap or a discarded pack-expansion probe, and the duplicate of a definition merged from another unit's global module fragment (spec/modules.md §6) | as the site left it |
+
+Value 0 is never written; `SubstFailedKind::from_value` gives `None`
+for 0 and for any value above 6. A tooling client treats a kind it does
+not know as indeterminate. The values are fixed: a new kind takes 7.
+
+Not marked: a variable template specialization whose template or
+matching partial specialization is only declared (a valid entity,
+[temp.inst]/7); a class template specialization used inside its own
+definition under a trap ([temp.inst]/2: the use's signature fails, the
+class instantiates on its next use, valid); a candidate dropped for
+unsatisfied constraints ([temp.deduct.general]/5: at clang compat 22 no
+specialization is formed, at 19 it is formed and valid).
+
+**The invariant.** In a translation unit without diagnosed errors,
+every `INVALID` declaration reachable from the lists carries
+`SUBST_FAILED` (`DeclArena::subst_failed`). An `INVALID` declaration
+without it means kiln printed an error.
+
+"Without diagnosed errors" means no diagnostic of error severity was
+emitted. "Reachable from the lists" is the closure, from the translation
+unit, over these lists and links:
+- the member list of a record, an enumeration, a namespace (the
+  translation unit is one) or a scope payload (`DeclArena::members`);
+- a function's parameter list (`FunctionData::params`);
+- the template parameter list of a template (`TemplateInfo::params`), a
+  partial specialization (`PartialSpecInfo::params`) or a template
+  template parameter (`TemplateParmInfo::params`);
+- a template's pattern (`TemplateInfo::pattern`) and its specializations
+  (`TemplateTables::specs_of`);
+- the closure types whose `closure_owner` is a reached declaration.
+
+The checker tests the stronger form: every `INVALID` declaration in the
+arena, reachable or not.
+
+**Rule A.** A declaration created while a marked kind 1 or 2
+specialization S was formed belongs to something; none sits unmarked and
+ownerless. From the declaration, ownership is followed until one of
+these holds:
+- it is kind 5 itself;
+- it reaches S, or an independent entity formed as a side effect: a
+  specialization (whose members belong to it), or an implicit deduction
+  guide (memoised with its class template);
+- a template is followed to its pattern;
+- a template parameter is followed to the declaration whose parameter
+  list holds it (a template, a partial specialization, a template
+  template parameter); one older than the formation lists it;
+- anything else is followed through `closure_owner`, else its lexical
+  context; once that owner is older than the formation, the owner lists
+  the declaration reached: as a member (a pattern through its template:
+  `Al<int>` completed inside the failed signature lists its member
+  template, whose pattern constructor and parameter are reached through
+  it), or as a function's parameter.
+
+Two exceptions are a known gap: valid scratch declarations held by no
+list, built only to check or compare in every instantiation (not because
+of the failure). Neither is `INVALID`, so the invariant is not affected.
+- Constraint-satisfaction `ParmVar` copies. Satisfying a function
+  template's trailing requires-clause substitutes its parameters into
+  new `ParmVar`s whose context is the pattern; clang maps the
+  specialization's own parameters instead
+  (`addInstantiatedParametersToScope`). The checker accepts a `ParmVar`
+  named like a parameter of its older function. One path from the lists
+  reaches a copy: a variable template specialization first formed while
+  the clause is satisfied stores its converted arguments as written
+  (crates/kiln_sema/src/templ/var.rs:93 into `SpecInfo::args`,
+  crates/kiln_ast/src/templates.rs:165), and a `decltype` argument keeps
+  its operand (crates/kiln_ast/src/types/context.rs:185), a
+  `DeclRefExpr` that names the copy: `v<decltype(x), int>` in
+  `requires v<decltype(x), int>`. No other path exists. The substituted
+  constraint expression is evaluated and dropped
+  (crates/kiln_sema/src/templ/concepts/sat.rs:648); the satisfaction
+  records and the atom cache keep a result, locations and text, no
+  declaration (crates/kiln_sema/src/templ/concepts/mod.rs:38); a written
+  reference or found set records only dependent lookups, and a
+  parameter's name is resolved at the definition
+  (crates/kiln_sema/src/written_specs.rs:93).
+- Friend class template head comparison. Instantiating
+  `template <class U> friend struct F;` substitutes the friend's head
+  only to compare it with `F`'s (`check_friend_class_head`); Sema
+  records that head, and the checker accepts its parameters. No path
+  from the lists reaches one. The compared head is passed only to
+  `check_template_heads_match`
+  (crates/kiln_sema/src/templ/equiv.rs:159), which compares, diagnoses
+  and keeps nothing. Every type or expression naming one of its
+  parameters depends on it, so it forms no specialization, satisfaction
+  record or atom-cache entry; a written reference or found set records
+  no template parameter, which is always found at the definition.
+
+No written reference (`Ast::written_refs`) is keyed by a kind 1 or 2
+specialization.
+
+The checker `-fkiln-verify-subst-failed` (or `KILN_VERIFY_SUBST_FAILED=1`
+in the environment; spec/harness.md) reports each violation of the
+invariant and of rule A as an error. Snapshots carry the map (an unknown
+kind is a `BadTag` decode error, spec/pch.md); module images do not: an
+importer re-forms the specializations, and the marks with them
+(spec/modules.md). The dump prints ` subst-failed=<kind>` after
+` invalid` (spec/ast-dump.md).
+
 ### 4.2 Kinds and payloads
 Context kinds (★) own a member list `members: Members { first, last }` (append O(1)
 through `next`) and a lookup table (§4.3). Functions are the semantic

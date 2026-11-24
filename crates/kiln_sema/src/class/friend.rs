@@ -180,7 +180,7 @@ impl Sema<'_, '_> {
         // C<T>;` is reported at the same place.
         let e = self.diag(id, ds.lead_cxx11.unwrap_or(ds.loc)).allow_duplicate();
         self.emit(e);
-        self.ast.decls.set_flags(f, kiln_ast::decl::DeclFlags::INVALID);
+        self.invalidate(f);
     }
 
     /// Whether a constraint of a friend function template with head
@@ -432,7 +432,7 @@ impl Sema<'_, '_> {
             self.error(DiagId::sema_friend_def_in_local_class, d.name_loc());
         }
         if ds.invalid || d.invalid {
-            self.ast.decls.set_flags(f, kiln_ast::decl::DeclFlags::INVALID);
+            self.invalidate(f);
         }
         if !def && self.inst.stack.is_empty() {
             self.check_constrained_friend_def(f, head, ds, d);

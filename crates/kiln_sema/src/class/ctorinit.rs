@@ -1338,7 +1338,7 @@ impl Sema<'_, '_> {
             self.delegation_cycle(ctor, &list, &mut valid, &mut invalid, &mut current, 0);
         }
         for c in invalid {
-            self.ast.decls.set_flags(c, DeclFlags::INVALID);
+            self.invalidate(c);
         }
         self.delegating = list;
     }

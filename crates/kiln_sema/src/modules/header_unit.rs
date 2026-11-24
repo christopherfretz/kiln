@@ -61,7 +61,7 @@ impl Sema<'_, '_> {
         }
         let loc = self.ast.decls.get(f).loc();
         self.error(DiagId::sema_extern_def_in_header_unit, loc);
-        self.ast.decls.set_flags(f, DeclFlags::INVALID);
+        self.invalidate(f);
     }
 
     /// [module.import]/6 for variable `v` as its initializer starts; true

@@ -330,7 +330,7 @@ impl Sema<'_, '_> {
         self.mark_pattern_next();
         let f = self.builder().deduction_guide(h, ty, spec);
         if invalid {
-            self.ast.decls.set_flags(f, DeclFlags::INVALID);
+            self.invalidate(f);
         }
         if explicit && let Some(e) = ds.explicit_expr {
             let _ = self.ast.decls.cold.explicit_expr.insert(f, e);
@@ -389,7 +389,7 @@ impl Sema<'_, '_> {
             let m = self.diag(id, loc);
             let m = self.note_prev(m, p, false);
             self.emit(m);
-            self.ast.decls.set_flags(g, DeclFlags::INVALID);
+            self.invalidate(g);
             return;
         }
     }
@@ -442,8 +442,8 @@ impl Sema<'_, '_> {
             msg = msg.with_note(note);
         }
         self.emit(msg);
-        self.ast.decls.set_flags(t, DeclFlags::INVALID);
-        self.ast.decls.set_flags(f, DeclFlags::INVALID);
+        self.invalidate(t);
+        self.invalidate(f);
     }
 
     /// The class template `ty` is an undeduced placeholder for
@@ -2436,14 +2436,14 @@ impl Sema<'_, '_> {
                 self.diag(DiagId::sema_auto_var_requires_init, loc).arg(name).arg(self.ty_arg(ty));
             self.emit(msg);
             self.ast.decls.set_ty(v, QualType::ERROR);
-            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            self.invalidate(v);
             return None;
         }
         self.templ.ctad_site = self.templ.ctad_var_type_locs.get(&v).copied();
         let t = self.deduce_ctad(ty, &[], &[], CtadInit::Direct, loc).unwrap_or(QualType::ERROR);
         self.ast.decls.set_ty(v, t);
         if self.is_error_type(t) {
-            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            self.invalidate(v);
             return None;
         }
         Some(t)

@@ -11,7 +11,7 @@
 //! text) and turns off access checking for the befriending class. kiln
 //! grants only the members the rule names.
 
-use kiln_ast::decl::{DeclFlags, DeclKind, FriendTarget};
+use kiln_ast::decl::{DeclKind, FriendTarget};
 use kiln_ast::friend_form::{FriendForm, FriendFormFlags, FriendFormKind};
 use kiln_ast::ids::{ArgListId, TemplateParamListId};
 use kiln_ast::names::{DeclName, DeclNameKind, OverloadedOperator};
@@ -229,7 +229,7 @@ impl Sema<'_, '_> {
         row.heads = self.friend_heads_list(&heads);
         row.flags |= FriendFormFlags::EVERY_SPEC | FriendFormFlags::DEPENDENT;
         if path.is_empty() && self.member_friend_kind_mismatch(template, name, false, at) {
-            self.ast.decls.set_flags(fd, DeclFlags::INVALID);
+            self.invalidate(fd);
             self.record_friend_form(fd, row);
             return Some(fd);
         }
@@ -382,7 +382,7 @@ impl Sema<'_, '_> {
         row.heads = self.friend_heads_list(&heads);
         row.flags |= FriendFormFlags::EVERY_SPEC | FriendFormFlags::DEPENDENT;
         if path.is_empty() && self.member_friend_kind_mismatch(template, name, true, at) {
-            self.ast.decls.set_flags(fd, DeclFlags::INVALID);
+            self.invalidate(fd);
             self.record_friend_form(fd, row);
             return Some(fd);
         }
@@ -392,7 +392,7 @@ impl Sema<'_, '_> {
             if depth == 0 {
                 self.warn_unsupported_friend(nns, record, at);
             }
-            self.ast.decls.set_flags(fd, DeclFlags::INVALID);
+            self.invalidate(fd);
             self.record_friend_form(fd, row);
             return Some(fd);
         }

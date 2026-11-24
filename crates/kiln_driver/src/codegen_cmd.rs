@@ -458,6 +458,7 @@ impl CodegenJob<'_> {
                 && a.bmi_kind != Some(1)
                 && job.module_output_path().is_some(),
             image_census: a.bmi_image_census,
+            verify_subst_failed: a.verify_subst_failed || crate::args::verify_subst_failed_env(),
             gnu89_inline: a.predef.gnu89_inline_for(&job.std),
             ..job.std.parse_options()
         }

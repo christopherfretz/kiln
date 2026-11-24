@@ -2018,9 +2018,9 @@ impl Sema<'_, '_> {
                 return;
             }
             let Some(def) = self.template_default(p) else { return };
-            self.inst.sfinae.borrow_mut().push(crate::templ::stack::SfinaeState::default());
+            self.push_sfinae_state();
             let r = self.default_template_arg(t, depth, p, def, Loc::INVALID, ps);
-            let failed = self.inst.sfinae.borrow_mut().pop().is_some_and(|s| s.errors > 0);
+            let failed = self.pop_sfinae_state().errors > 0;
             match r {
                 Ok(a) if !failed => ps.push(a),
                 _ => return,

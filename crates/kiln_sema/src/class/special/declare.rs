@@ -730,7 +730,7 @@ impl Sema<'_, '_> {
         let f = self.builder().function(h, fkind, ty, spec, prev_ok);
         self.finish_virtual_decl(f, &virt);
         if redecl_invalid || *invalid {
-            self.ast.decls.set_flags(f, DeclFlags::INVALID);
+            self.invalidate(f);
         }
         if explicit && let Some(e) = ds.explicit_expr {
             let _ = self.ast.decls.cold.explicit_expr.insert(f, e);
@@ -770,7 +770,7 @@ impl Sema<'_, '_> {
             self.check_copy_ctor_by_value(f, class, &fparams);
         }
         if shape == Shape::Assign && !*invalid && !redecl_invalid && !self.check_operator_decl(f) {
-            self.ast.decls.set_flags(f, DeclFlags::INVALID);
+            self.invalidate(f);
         }
         Some(f)
     }
@@ -977,7 +977,7 @@ impl Sema<'_, '_> {
                 None => first.loc,
             };
             self.error(DiagId::sema_copy_ctor_by_value, loc);
-            self.ast.decls.set_flags(f, DeclFlags::INVALID);
+            self.invalidate(f);
         }
     }
 

@@ -835,7 +835,7 @@ impl Parser<'_, '_> {
                     if self.s.check_default_arg_refs(e) {
                         self.s.act_on_param_default_arg(p, e, eq);
                     } else {
-                        self.s.ast.decls.set_flags(p, DeclFlags::INVALID);
+                        self.s.invalidate(p);
                     }
                 }
             }
@@ -1793,7 +1793,7 @@ impl Parser<'_, '_> {
         self.error_here(DiagId::parse_incomplete_array_member_init);
         self.skip_until(&[Punct::Comma], true, false);
         if let Some(x) = decl {
-            self.s.ast.decls.set_flags(x, DeclFlags::INVALID);
+            self.s.invalidate(x);
         }
     }
 

@@ -10,6 +10,17 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- Silent-failure marks (WP-3281, spec/ast.md §4.1): `DeclArena::subst_failed`
+  says which invalid declarations kiln made invalid while every error was
+  trapped (SFINAE or a discarded capture) and what failed to form (a
+  function signature, an `explicit` specifier, a variable or class partial
+  specialization choice, a local of a failed signature, other); in a
+  translation unit without errors every invalid declaration is marked.
+  The dump prints `subst-failed=<kind>`; snapshots carry the marks (PCH
+  format 176); `-fkiln-verify-subst-failed` / `KILN_VERIFY_SUBST_FAILED=1`
+  checks the rule. Under a trap, a class template used inside its own
+  definition and a lambda naming `this` in a requires-expression are no
+  longer made invalid, and an implicit definition is not a SFINAE context.
 - The value of each immediate invocation of a default argument or default
   member initializer per use (WP-3279, spec/ast.md §5.8.2):
   `ColdExprData::use_imm` on the `CXXDefaultArgExpr`/`CXXDefaultInitExpr`
@@ -1257,6 +1268,9 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- A coroutine whose promise is not constructible from the parameter copies
+  ([dcl.fct.def.coroutine]/5) no longer leaves an invalid trial `__promise`
+  variable beside the default-initialized one (WP-3282).
 - An elaborated-type-specifier naming a dependent class template
   specialization (`friend class It<T, true>;`, `struct It<T, true> *q;`,
   a friend naming a member template's `In<T, 2>`) is formed as the same

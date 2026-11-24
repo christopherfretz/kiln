@@ -346,7 +346,7 @@ impl Sema<'_, '_> {
             let msg = self.diag(DiagId::sema_nonlocal_sizeless, n.loc()).arg(self.ty_arg(ty));
             self.emit(msg);
         }
-        self.ast.decls.set_flags(v, DeclFlags::INVALID);
+        self.invalidate(v);
     }
 
     /// The element type and count of the SVE vector type `q` (clang

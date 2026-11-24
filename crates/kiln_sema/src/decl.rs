@@ -645,7 +645,7 @@ impl Sema<'_, '_> {
         let ctx = self.ctx;
         let pd = self.builder().prototype_param(ctx, name, p.loc, p.ty, idx, flags);
         if p.invalid {
-            self.ast.decls.set_flags(pd, DeclFlags::INVALID);
+            self.invalidate(pd);
         }
         self.unowned_params.insert(pd);
         p.decl = Some(pd);
@@ -2373,7 +2373,7 @@ impl Sema<'_, '_> {
             Initializer::Expr(_) | Initializer::Paren(..) => self.ast.decls.get(v).loc(),
         };
         self.error(DiagId::sema_vla_no_init, at);
-        self.ast.decls.set_flags(v, DeclFlags::INVALID);
+        self.invalidate(v);
         self.discard_initializer(init);
         true
     }
@@ -2895,7 +2895,7 @@ impl Sema<'_, '_> {
         {
             p.invalid = true;
             if let Some(d) = p.decl {
-                self.ast.decls.set_flags(d, DeclFlags::INVALID);
+                self.invalidate(d);
             }
         }
         if p.invalid || self.is_error_type(p.ty) {
@@ -2942,7 +2942,7 @@ impl Sema<'_, '_> {
         if !self.check_default_arg_locals(e) {
             p.invalid = true;
             if let Some(d) = p.decl {
-                self.ast.decls.set_flags(d, DeclFlags::INVALID);
+                self.invalidate(d);
             }
         }
         self.store_param_default(p, e);
@@ -2965,7 +2965,7 @@ impl Sema<'_, '_> {
         if self.has_errors_in(e) {
             p.invalid = true;
             if let Some(d) = p.decl {
-                self.ast.decls.set_flags(d, DeclFlags::INVALID);
+                self.invalidate(d);
             }
         }
         p.default_arg = DefaultArg::Parsed(e);
@@ -4307,13 +4307,13 @@ impl Sema<'_, '_> {
             v
         };
         if invalid {
-            self.ast.decls.set_flags(decl, DeclFlags::INVALID);
+            self.invalidate(decl);
         } else if d.ctx == DeclaratorContext::Member
             && let Some(w) = d.bit_width
             && self.ast.decls.field(decl).is_none()
         {
             self.non_field_bit_width(ds, ty, name, d.name_loc(), w);
-            self.ast.decls.set_flags(decl, DeclFlags::INVALID);
+            self.invalidate(decl);
         }
         if dropped_local {
             self.dropped_qualified_locals.insert(decl);
@@ -4595,7 +4595,7 @@ impl Sema<'_, '_> {
             // decl-specifier-seq.
             let at = if self.clang_compat >= 22 { ds.type_loc.unwrap_or(ds.loc) } else { ds.loc };
             self.error(DiagId::sema_asm_bad_register_type, at);
-            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            self.invalidate(v);
         }
     }
 
@@ -5079,7 +5079,7 @@ impl Sema<'_, '_> {
         }
         self.note_ref_loc(td, d, underlying);
         if invalid {
-            self.ast.decls.set_flags(td, DeclFlags::INVALID);
+            self.invalidate(td);
         }
         if let Some(t) = anon_tag {
             let _ = self.ast.decls.set_typedef_for_anon(t, td);
@@ -5233,12 +5233,12 @@ impl Sema<'_, '_> {
         let shadow = self.diagnose_class_name_shadow(self.ctx, name, name_loc);
         let td = self.act_on_typedef(&ds, ty, &d, name, true);
         if shadow {
-            self.ast.decls.set_flags(td, DeclFlags::INVALID);
+            self.invalidate(td);
         }
         // [temp.variadic]/12: `using U = Ts;`.
         if self.diagnose_unexpanded_declarator(ty, "declaration type", name_loc) {
             self.declarator_type_invalid = false;
-            self.ast.decls.set_flags(td, DeclFlags::INVALID);
+            self.invalidate(td);
         }
         if type_loc.is_valid() && self.is_instantiation_dependent_type(ty) {
             self.type_spec_locs.insert(td, type_loc);
@@ -6462,7 +6462,7 @@ impl Sema<'_, '_> {
             self.missing_typename_fns.insert(f);
         }
         if invalid_redecl {
-            self.ast.decls.set_flags(f, DeclFlags::INVALID);
+            self.invalidate(f);
         } else if templated_friend || deferred_method_friend {
             // Its row keeps the qualifier for the instantiation
             // (`declare_friend`, spec/ast.md §23).
@@ -6503,7 +6503,7 @@ impl Sema<'_, '_> {
             if !self.ast.decls.get(f).flags().contains(DeclFlags::INVALID)
                 && !self.check_literal_operator_decl(f)
             {
-                self.ast.decls.set_flags(f, DeclFlags::INVALID);
+                self.invalidate(f);
             }
         } else if let Some(op) = d.op_name {
             if matches!(
@@ -6520,14 +6520,14 @@ impl Sema<'_, '_> {
                     && (self.check_new_delete_scope(f, &fname)
                         || !self.check_new_delete_signature(f, op, new_fn.head.is_some(), &fname))
                 {
-                    self.ast.decls.set_flags(f, DeclFlags::INVALID);
+                    self.invalidate(f);
                 }
             } else if !global_new_delete
                 && !dep_member_friend
                 && !self.ast.decls.get(f).flags().contains(DeclFlags::INVALID)
                 && !self.check_operator_decl(f)
             {
-                self.ast.decls.set_flags(f, DeclFlags::INVALID);
+                self.invalidate(f);
             }
             // A block-scope operator declaration: a local class's friend
             // may redeclare it ([class.friend]/11).
@@ -6848,7 +6848,7 @@ impl Sema<'_, '_> {
                 self.inner_chunk_locs.insert(pd, p.chunk_loc);
             }
             if p.invalid {
-                self.ast.decls.set_flags(pd, DeclFlags::INVALID);
+                self.invalidate(pd);
             }
             // A substituted parameter already carries its pattern's
             // attributes, checked there (`Substituter::param_attrs`).
@@ -7285,7 +7285,7 @@ impl Sema<'_, '_> {
         if field_invalid {
             // [class.mem]: an invalid field makes its class invalid
             // (clang `ActOnFields`; spec/sema-class.md §2.3).
-            self.ast.decls.set_flags(f, DeclFlags::INVALID);
+            self.invalidate(f);
             self.invalidate_defining(ctx);
         }
         // The decl-specifiers' start (clang's `FieldDecl::getBeginLoc`;
@@ -8209,7 +8209,7 @@ impl Sema<'_, '_> {
             self.after_def_prev = Some((v, Some(p)));
         }
         if ambiguous || no_member || redefined || unmerged || self.storage_invalidates_var(ds, d) {
-            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            self.invalidate(v);
         }
         if let Some((StorageSpec::Static, l)) = ds.storage
             && self.in_local_scope()
@@ -8303,7 +8303,7 @@ impl Sema<'_, '_> {
         }
         let msg = self.diag(DiagId::sema_void_var, d.name_loc()).arg(self.ty_arg(ty));
         self.emit(msg);
-        self.ast.decls.set_flags(v, DeclFlags::INVALID);
+        self.invalidate(v);
     }
 
     // -- initializers ---------------------------------------------------------
@@ -8321,7 +8321,7 @@ impl Sema<'_, '_> {
         // (clang's ParenListExpr/InitListExpr); the variable becomes
         // invalid (its initializer dropped).
         if es.iter().any(|&e| self.diagnose_unexpanded_written(e, "initializer", at)) {
-            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            self.invalidate(v);
         }
         let paren = match &init {
             Initializer::Paren(es, l, _) if es.len() == 1 => Some(*l),
@@ -8332,13 +8332,13 @@ impl Sema<'_, '_> {
         if self.has_loader_uninitialized(v) {
             let at = self.ast.decls.get(v).loc();
             self.error(DiagId::sema_loader_uninitialized_init, at);
-            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            self.invalidate(v);
         }
         if self.check_alias_definition(v) {
             // clang `AddInitializerToDecl` returns at the redefinition: the
             // variable is invalid and its initializer unchecked (no
             // `'extern' variable has an initializer`).
-            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            self.invalidate(v);
         }
         // clang `AddInitializerToDecl`: [module.import]/6 (WP-1800), after
         // a placeholder's deduction (a variable deduced from an invalid
@@ -8366,7 +8366,7 @@ impl Sema<'_, '_> {
         if header_unit_def
             || (deduce_first && !self.deduced_from_error(v) && self.check_header_unit_var_def(v))
         {
-            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            self.invalidate(v);
         }
         if deduces {
             // [basic.link]/15.2: not the variable's type (WP-1856).
@@ -8444,7 +8444,7 @@ impl Sema<'_, '_> {
         }
         let msg = self.diag(DiagId::sema_typecheck_decl_incomplete_type, loc).arg(self.ty_arg(ty));
         self.emit(self.incomplete_note(msg, self.bounded_array_element(ty)));
-        self.ast.decls.set_flags(v, DeclFlags::INVALID);
+        self.invalidate(v);
         self.discard_initializer(init);
         true
     }
@@ -8463,7 +8463,7 @@ impl Sema<'_, '_> {
         if !self.incomplete_class_rejected(ty, loc) {
             return false;
         }
-        self.ast.decls.set_flags(v, DeclFlags::INVALID);
+        self.invalidate(v);
         true
     }
 
@@ -8518,7 +8518,7 @@ impl Sema<'_, '_> {
         let msg = self.diag(DiagId::sema_redefinition, loc).arg(self.decl_name_str(name));
         let msg = self.note_prev(msg, def, true);
         self.emit(msg);
-        self.ast.decls.set_flags(v, DeclFlags::INVALID);
+        self.invalidate(v);
         true
     }
 
@@ -8628,7 +8628,7 @@ impl Sema<'_, '_> {
             let msg = self.diag(DiagId::sema_void_var, loc).arg(self.ty_arg(ty));
             self.emit(msg);
         }
-        self.ast.decls.set_flags(v, DeclFlags::INVALID);
+        self.invalidate(v);
         self.discard_initializer(init);
         true
     }
@@ -8641,7 +8641,7 @@ impl Sema<'_, '_> {
             // initializer ([dcl.init]/1).
             if matches!(vn.kind(), DeclKind::Function | DeclKind::Typedef) {
                 self.error(DiagId::sema_illegal_initializer, vn.loc());
-                self.ast.decls.set_flags(v, DeclFlags::INVALID);
+                self.invalidate(v);
             }
             if let Initializer::Expr(e) = init {
                 self.act_on_full_expr(e);
@@ -8680,7 +8680,7 @@ impl Sema<'_, '_> {
             ty = self.ctad_for_var(v, ty, &init, direct, loc);
             self.ast.decls.set_ty(v, ty);
             if self.is_error_type(ty) {
-                self.ast.decls.set_flags(v, DeclFlags::INVALID);
+                self.invalidate(v);
                 self.discard_initializer(&init);
                 return;
             }
@@ -9246,7 +9246,7 @@ impl Sema<'_, '_> {
         let msg = self.diag(DiagId::sema_constexpr_var_non_literal, vn.loc()).arg(self.ty_arg(q));
         let msg = self.with_non_literal_notes(msg, q);
         self.emit(msg);
-        self.ast.decls.set_flags(v, DeclFlags::INVALID);
+        self.invalidate(v);
         false
     }
 
@@ -9297,7 +9297,7 @@ impl Sema<'_, '_> {
             msg = msg.with_note(self.diag(DiagId::note_constexpr_virtual_base_here, b.loc));
         }
         self.emit(msg);
-        self.ast.decls.set_flags(f, DeclFlags::INVALID);
+        self.invalidate(f);
     }
 
     /// Whether `v` is a `constexpr` variable of a known, complete
@@ -9432,7 +9432,7 @@ impl Sema<'_, '_> {
             // requires an initializer"; a new id would change the PCH schema.
             let msg = self.diag(DiagId::sema_constexpr_var_decl_not_definition, vn.loc());
             self.emit(msg);
-            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            self.invalidate(v);
             return true;
         }
         let bad = vn.kind() == DeclKind::Var
@@ -9444,7 +9444,7 @@ impl Sema<'_, '_> {
             && !self.is_var_definition(v);
         if bad {
             self.error(DiagId::sema_constexpr_var_decl_not_definition, vn.loc());
-            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            self.invalidate(v);
         }
         bad
     }
@@ -9555,7 +9555,7 @@ impl Sema<'_, '_> {
             // [dcl.spec.auto.general]/4 (clang `err_auto_var_requires_init`).
             // During instantiation the pattern had an initializer whose
             // substitution failed (already reported).
-            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            self.invalidate(v);
             if !self.inst.stack.is_empty() {
                 return;
             }
@@ -9592,7 +9592,7 @@ impl Sema<'_, '_> {
         // the base element type).
         let abs = if self.ast.types.is_array(ty) { self.base_element(ty) } else { ty };
         if self.require_non_abstract(loc, abs, crate::class::AbstractUse::Variable) {
-            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            self.invalidate(v);
             return;
         }
         let quals = self.ast.types.effective_quals(ty);
@@ -9666,7 +9666,7 @@ impl Sema<'_, '_> {
                 self.diag(DiagId::sema_typecheck_incomplete_array_needs_initializer, vn.loc())
             };
             self.emit(msg);
-            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            self.invalidate(v);
             return true;
         }
         if !self.ast.types.is_reference(ty)
@@ -9824,7 +9824,7 @@ impl Sema<'_, '_> {
             self.emit(msg);
             // clang `CheckForFunctionRedefinition` invalidates the
             // redefinition (a later redeclaration is not checked against it).
-            self.ast.decls.set_flags(f, DeclFlags::INVALID);
+            self.invalidate(f);
         }
         // clang `ActOnStartOfFunctionDef`: a non-library builtin cannot be
         // defined (spec/sema.md §5.4).
@@ -9833,14 +9833,14 @@ impl Sema<'_, '_> {
         {
             let loc = self.ast.decls.get(f).loc();
             self.emit(self.diag(DiagId::sema_builtin_definition, loc).arg(info.name));
-            self.ast.decls.set_flags(f, DeclFlags::INVALID);
+            self.invalidate(f);
         } else if self.ast.builtin_alias(f).is_some() {
             // clang `ActOnStartOfFunctionDef`: an alias of a builtin
             // (`__clang_arm_builtin_alias`, WP-810) is itself a builtin.
             let loc = self.ast.decls.get(f).loc();
             let name = self.decl_name_str(self.ast.decls.get(f).name());
             self.emit(self.diag(DiagId::sema_builtin_definition, loc).arg(name));
-            self.ast.decls.set_flags(f, DeclFlags::INVALID);
+            self.invalidate(f);
         }
         // clang `ActOnStartOfFunctionDef` resolves the exception
         // specification of every definition: a destructor or defaulted
@@ -9902,7 +9902,7 @@ impl Sema<'_, '_> {
             let loc = self.ast.decls.get(f).loc();
             let msg = self.diag(DiagId::sema_func_def_incomplete_result, loc).arg(self.ty_arg(ret));
             self.emit(self.incomplete_note(msg, ret));
-            self.ast.decls.set_flags(f, DeclFlags::INVALID);
+            self.invalidate(f);
         }
         for p in params {
             let n = self.ast.decls.get(p).name();
@@ -10507,7 +10507,7 @@ impl Sema<'_, '_> {
             .as_enum(elem)
             .is_some_and(|e| self.ast.decls.get(e).has(DeclFlags::INVALID))
         {
-            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            self.invalidate(v);
             return true;
         }
         if self.require_complete(elem, vloc) {
@@ -10519,7 +10519,7 @@ impl Sema<'_, '_> {
             self.diag(DiagId::sema_typecheck_decl_incomplete_type, loc).arg(self.ty_arg(elem))
         };
         self.emit(self.incomplete_note(msg, elem));
-        self.ast.decls.set_flags(v, DeclFlags::INVALID);
+        self.invalidate(v);
         true
     }
 
@@ -10530,7 +10530,7 @@ impl Sema<'_, '_> {
         if self.ast.types.is_reference(ty) || !self.instantiation_fails(ty, loc) {
             return false;
         }
-        self.ast.decls.set_flags(d, DeclFlags::INVALID);
+        self.invalidate(d);
         true
     }
 
@@ -10662,6 +10662,7 @@ impl Sema<'_, '_> {
         let mut keyword = keyword;
         let mut prev = None;
         let mut redefined = false;
+        let mut merged_dup = false;
         // A name of another kind (`kind_conflict`): the tag is declared
         // anyway, invalid and hidden from lookup (clang's recovery as an
         // anonymous tag).
@@ -10785,6 +10786,7 @@ impl Sema<'_, '_> {
                             // Silent (spec/modules.md §6): the body is
                             // skipped like a redefinition's.
                             redefined = true;
+                            merged_dup = true;
                         } else if !respecialized {
                             redefined = self.diag_tag_redefinition(p, n, nloc);
                         }
@@ -10877,12 +10879,12 @@ impl Sema<'_, '_> {
         let dname = name.map_or(DeclName::EMPTY, |n| DeclName::ident(n.0));
         let mut h = DeclHead::new(ctx, dname, name.map_or(loc, |n| n.1));
         if redefined || unnamed_template {
-            h = h.flags(DeclFlags::INVALID);
+            h = h.flags(DeclFlags::INVALID); // ledger: born invalid
         }
         h.lexical = Some(if qualifier.is_some() || self.is_c() { self.ctx } else { ctx });
         if conflict {
             h.misc = h.misc.with_friend(FriendKind::Undeclared);
-            h.flags = h.flags.with(DeclFlags::INVALID);
+            h.flags = h.flags.with(DeclFlags::INVALID); // ledger: born invalid
         }
         if is_enum
             && fixed.is_none()
@@ -10894,6 +10896,10 @@ impl Sema<'_, '_> {
             self.check_forward_ref_enum(prev, nloc);
         }
         let d = self.new_tag_decl(h, keyword, (scoped, fixed), prev, plain_ref);
+        self.note_born_invalid(d);
+        if merged_dup {
+            self.note_merged_duplicate(d);
+        }
         let proto_tag = self.c_in_proto_tag_scope() && qualifier.is_none() && !conflict;
         if proto_tag && prev.is_none() && (name.is_some() || is_enum) {
             self.c_warn_tag_in_param_list(d);
@@ -10919,7 +10925,7 @@ impl Sema<'_, '_> {
         let t = self.finish_template_pattern(d);
         if let Some(t) = t {
             if unnamed_template {
-                self.ast.decls.set_flags(t, DeclFlags::INVALID);
+                self.invalidate(t);
             }
             if qualifier.is_none() {
                 self.set_tag_member_access(t);
@@ -11411,7 +11417,7 @@ impl Sema<'_, '_> {
                 h.lexical = Some(self.ctx);
                 h.misc = h.misc.with_friend(FriendKind::Undeclared);
                 let d = self.builder().record(h, Self::tag_kind_of(keyword), None);
-                self.ast.decls.set_flags(d, DeclFlags::INVALID);
+                self.invalidate(d);
                 return Some(d);
             }
             let msg = if let Some(&other) = found.first() {
@@ -11429,7 +11435,7 @@ impl Sema<'_, '_> {
             h.lexical = Some(self.ctx);
             h.misc = h.misc.with_friend(FriendKind::Undeclared);
             let d = self.builder().record(h, Self::tag_kind_of(keyword), None);
-            self.ast.decls.set_flags(d, DeclFlags::INVALID);
+            self.invalidate(d);
             return Some(d);
         };
         if !self.tag_matches(p, keyword) {
@@ -11559,7 +11565,7 @@ impl Sema<'_, '_> {
                 continue;
             }
             if self.has_invalid_class_type(f) {
-                self.ast.decls.set_flags(f, DeclFlags::INVALID);
+                self.invalidate(f);
                 invalid = true;
             }
             let fd = self.ast.decls.field(f).copied();
@@ -11696,7 +11702,7 @@ impl Sema<'_, '_> {
         }
         self.builder().complete_record_definition(r, bits);
         if invalid {
-            self.ast.decls.set_flags(r, DeclFlags::INVALID);
+            self.invalidate(r);
         }
         let own = self.own_aligned(r);
         self.check_alignas_underalignment(r, &own);
@@ -13034,8 +13040,9 @@ impl Sema<'_, '_> {
                 Some((StorageSpec::Static, _)) => VarStorage::Static,
                 _ => VarStorage::None,
             };
-            let h = if invalid { h.flags(DeclFlags::IMPLICIT.with(DeclFlags::INVALID)) } else { h };
+            let h = if invalid { h.flags(DeclFlags::IMPLICIT.with(DeclFlags::INVALID)) } else { h }; // ledger: born invalid
             let v = self.builder().var(h, ty, VarSpec::new().with_storage(storage), None);
+            self.note_born_invalid(v);
             // The unnamed object is default-initialized ([dcl.init.general]/7;
             // clang `ActOnUninitializedDecl` from
             // `BuildAnonymousStructOrUnion`): a default member initializer
@@ -14419,7 +14426,7 @@ impl Sema<'_, '_> {
             return;
         }
         if let Some(held) = self.unknown_attr_held.take() {
-            self.release(held.into_iter().map(|h| h.diag).collect(), Vec::new());
+            self.release(held.into_iter().map(|h| h.diag).collect::<Vec<_>>(), Vec::new());
         }
     }
 

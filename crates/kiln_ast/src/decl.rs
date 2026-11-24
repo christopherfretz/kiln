@@ -341,7 +341,12 @@ impl DeclKind {
 pub struct DeclFlags(u8);
 
 impl DeclFlags {
-    /// The declaration is invalid (an error was diagnosed). Monotone.
+    /// The declaration is invalid. Monotone. Either kiln printed an
+    /// error forming it, or every error was trapped (a SFINAE context, a
+    /// discarded diagnostic capture) and [`DeclArena::subst_failed`] says
+    /// what failed to form: in a translation unit with no error, every
+    /// invalid declaration carries that mark (spec/ast.md §4.1 "Silent
+    /// failures").
     pub const INVALID: DeclFlags = DeclFlags(1);
     /// Implicitly declared (special members, builtins, injected names).
     pub const IMPLICIT: DeclFlags = DeclFlags(2);
@@ -382,6 +387,85 @@ impl DeclFlags {
     #[must_use]
     pub const fn without(self, f: DeclFlags) -> Self {
         DeclFlags(self.0 & !f.0)
+    }
+}
+
+/// What failed to form, silently, in an invalid declaration
+/// ([`DeclArena::subst_failed`], spec/ast.md §4.1 "Silent failures"):
+/// kiln set [`DeclFlags::INVALID`] while every error raised forming the
+/// declaration was trapped (a SFINAE context, or a diagnostic capture whose
+/// diagnostics were dropped), so no diagnostic was printed. The values are
+/// fixed; a snapshot holding any other is rejected on load.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
+#[repr(u8)]
+pub enum SubstFailedKind {
+    /// A function template specialization (formed by deduction, with
+    /// explicit template arguments, or from a deduction guide) whose
+    /// declaration failed to substitute: no specialization was formed.
+    FunctionSignature = 1,
+    /// The same, failing only in its `explicit(expr)` specifier.
+    ExplicitSpecifier = 2,
+    /// A variable template specialization whose partial-specialization
+    /// choice was ambiguous.
+    VariablePartialAmbiguity = 3,
+    /// A class template specialization whose partial-specialization choice
+    /// was ambiguous: a never-instantiated (incomplete) specialization that
+    /// stays nameable (`X<int>*`) and cannot be completed.
+    ClassPartialAmbiguity = 4,
+    /// A declaration owned by a [`Self::FunctionSignature`] or
+    /// [`Self::ExplicitSpecifier`] specialization (a variable of a GNU
+    /// statement-expression in its signature, a parameter) that failed
+    /// with it.
+    LocalOfFailedSignature = 5,
+    /// Any other declaration made invalid while its errors were trapped.
+    OtherTrapped = 6,
+}
+
+impl SubstFailedKind {
+    /// Every kind, by value.
+    pub const ALL: [SubstFailedKind; 6] = [
+        Self::FunctionSignature,
+        Self::ExplicitSpecifier,
+        Self::VariablePartialAmbiguity,
+        Self::ClassPartialAmbiguity,
+        Self::LocalOfFailedSignature,
+        Self::OtherTrapped,
+    ];
+
+    /// The fixed value (1-6).
+    pub const fn value(self) -> u8 {
+        self as u8
+    }
+
+    /// The kind of fixed value `v`; `None` for any other.
+    pub const fn from_value(v: u8) -> Option<Self> {
+        match v {
+            1 => Some(Self::FunctionSignature),
+            2 => Some(Self::ExplicitSpecifier),
+            3 => Some(Self::VariablePartialAmbiguity),
+            4 => Some(Self::ClassPartialAmbiguity),
+            5 => Some(Self::LocalOfFailedSignature),
+            6 => Some(Self::OtherTrapped),
+            _ => None,
+        }
+    }
+
+    /// The dump spelling (`subst-failed=<name>`, spec/ast-dump.md).
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::FunctionSignature => "function-signature",
+            Self::ExplicitSpecifier => "explicit-specifier",
+            Self::VariablePartialAmbiguity => "variable-partial-ambiguity",
+            Self::ClassPartialAmbiguity => "class-partial-ambiguity",
+            Self::LocalOfFailedSignature => "local-of-failed-signature",
+            Self::OtherTrapped => "other-trapped",
+        }
+    }
+
+    /// Whether the kind marks a function template specialization that was
+    /// not formed (1, 2).
+    pub const fn is_signature(self) -> bool {
+        matches!(self, Self::FunctionSignature | Self::ExplicitSpecifier)
     }
 }
 
@@ -1790,6 +1874,10 @@ pub struct ColdDeclData {
     /// A `Friend`'s row in `DeclArena::friend_forms` (spec/ast.md §23),
     /// or `friend_form::NOT_CARRIED` for one read from a module image.
     pub friend_form: ColdMap<DeclId, u32>,
+    /// An invalid declaration whose errors were all trapped → what failed
+    /// to form (`DeclArena::subst_failed`, spec/ast.md §4.1 "Silent
+    /// failures"; WP-3281). Every key is `INVALID`.
+    pub subst_failed: ColdMap<DeclId, SubstFailedKind>,
 }
 
 impl Default for ColdDeclData {
@@ -1832,12 +1920,13 @@ impl Default for ColdDeclData {
             closure_owner: ColdMap::new("closure_owner"),
             written_ns: ColdMap::new("written_ns"),
             friend_form: ColdMap::new("friend_form"),
+            subst_failed: ColdMap::new("subst_failed"),
         }
     }
 }
 
 impl ColdDeclData {
-    fn rows(&self) -> [MemRow; 37] {
+    fn rows(&self) -> [MemRow; 38] {
         [
             self.lexical_ctx.mem_row(),
             self.written_ns.mem_row(),
@@ -1876,6 +1965,7 @@ impl ColdDeclData {
             self.init_fp.mem_row(),
             self.closure_owner.mem_row(),
             self.friend_form.mem_row(),
+            self.subst_failed.mem_row(),
         ]
     }
 }
@@ -2597,6 +2687,33 @@ impl DeclArena {
     /// [`Self::set_written_ns`], else `ctx`.
     pub fn written_ns(&self, d: DeclId) -> Option<DeclId> {
         self.cold.written_ns.get(d).copied().or_else(|| self.get(d).ctx())
+    }
+
+    /// What failed to form, silently, in invalid declaration `d` (spec/ast.md
+    /// §4.1 "Silent failures"): `Some` exactly when kiln made `d` invalid
+    /// while every error raised forming it was trapped, so nothing was
+    /// printed. `None` for a valid declaration, and for an invalid one
+    /// whose error was printed.
+    pub fn subst_failed(&self, d: DeclId) -> Option<SubstFailedKind> {
+        self.cold.subst_failed.get(d).copied()
+    }
+
+    /// Marks invalid declaration `d` as a silent failure of `kind`; a
+    /// declaration already marked keeps its kind.
+    ///
+    /// # Panics
+    /// In debug builds, if `d` is not `INVALID`.
+    pub fn set_subst_failed(&mut self, d: DeclId, kind: SubstFailedKind) {
+        debug_assert!(self.get(d).has(DeclFlags::INVALID), "subst_failed on a valid declaration");
+        let _ = self.cold.subst_failed.insert(d, kind);
+    }
+
+    /// The marked declarations, in id order.
+    pub fn subst_failed_decls(&self) -> Vec<(DeclId, SubstFailedKind)> {
+        let mut v: Vec<(DeclId, SubstFailedKind)> =
+            self.cold.subst_failed.iter().map(|(d, &k)| (d, k)).collect();
+        v.sort_unstable_by_key(|&(d, _)| d.index());
+        v
     }
 
     /// Records `ns`, an opening of `d`'s namespace, as the namespace
@@ -7389,6 +7506,32 @@ mod snap_range_tests {
         assert_eq!(kiln_snap::from_bytes::<Option<QualType>>(&[0; 4]), Ok(None));
         let max = DeclId::MAX_INDEX.to_le_bytes();
         assert_eq!(kiln_snap::from_bytes::<DeclId>(&max), Ok(DeclId::new(DeclId::MAX_INDEX)));
+    }
+
+    /// WP-3281 (spec/pch.md "Silent-failure marks"): the marks ride the
+    /// snapshot, and a kind outside the six is a `BadTag` decoding error.
+    /// The encodings with the first and the last kind differ in one byte,
+    /// the tag; one past the last tag is refused.
+    #[test]
+    fn subst_failed_unknown_kind_is_bad_tag() {
+        use crate::decl::{DeclFlags, SubstFailedKind};
+        let marked = |k: SubstFailedKind| {
+            let mut a = ast();
+            a.decls.set_flags(a.tu, DeclFlags::INVALID);
+            a.decls.set_subst_failed(a.tu, k);
+            a
+        };
+        let a = marked(SubstFailedKind::LocalOfFailedSignature);
+        let b = decode(&a).expect("a marked declaration round-trips");
+        assert_eq!(b.decls.subst_failed(b.tu), Some(SubstFailedKind::LocalOfFailedSignature));
+        let first = kiln_snap::to_bytes(&marked(SubstFailedKind::FunctionSignature));
+        let mut last = kiln_snap::to_bytes(&marked(SubstFailedKind::OtherTrapped));
+        assert_eq!(first.len(), last.len());
+        let diff: Vec<usize> = (0..first.len()).filter(|&i| first[i] != last[i]).collect();
+        assert_eq!(diff.len(), 1, "{diff:?}");
+        last[diff[0]] += 1;
+        let e = kiln_snap::from_bytes::<Ast>(&last).expect_err("an unknown kind decoded");
+        assert!(matches!(e.kind(), kiln_snap::ErrorKind::BadTag(6)), "{e}");
     }
 
     /// A record's base list naming a base-specifier past the arena:

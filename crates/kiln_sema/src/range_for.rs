@@ -4,6 +4,7 @@
 //! P2718 lifetime extension of the for-range-initializer's temporaries
 //! (spec/sema.md §7.8, spec/sema-class.md §5.4).
 
+use crate::subst_failed::Stash;
 use kiln_ast::decl::{DeclFlags, DeclKind, InitStyle, VarSpec};
 use kiln_ast::expr::{BinaryOp, ExprKind, Radix, StorageDuration, UnaryOp};
 use kiln_ast::names::DeclName;
@@ -125,25 +126,30 @@ impl Sema<'_, '_> {
     // -- diagnostics capture ----------------------------------------------------
 
     /// Runs `f` with its diagnostics stash back; returns them in order.
-    pub(crate) fn capturing<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> (R, Vec<Diag>) {
-        let old = self.diag_capture.replace(Some((self.inst.stack.len(), Vec::new(), false)));
+    /// A stash the caller drops instead of releasing was discarded: the
+    /// declarations made invalid in it failed silently (`subst_failed.rs`).
+    pub(crate) fn capturing<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> (R, Stash) {
+        let old = self.open_capture(false);
         let r = f(self);
-        let stash = self.diag_capture.replace(old).map(|c| c.1).unwrap_or_default();
+        let stash = self.close_capture(old);
         (r, stash)
     }
 
     /// Emits `stash`, the last with `notes` attached (clang's standalone
     /// notes continue the diagnostic before them).
-    pub(crate) fn release(&self, mut stash: Vec<Diag>, notes: Vec<Diag>) {
+    pub(crate) fn release(&self, stash: impl Into<Stash>, notes: Vec<Diag>) {
+        let Stash { diags: mut stash, serial } = stash.into();
         if let Some(mut last) = stash.pop() {
             for n in notes {
                 last = last.with_note(n);
             }
             stash.push(last);
         }
+        let before = self.diags.error_count();
         for d in stash {
             self.emit(d);
         }
+        self.refile_stash(serial, self.diags.error_count() > before);
     }
 
     // -- the for-range-declaration --------------------------------------------
@@ -172,12 +178,12 @@ impl Sema<'_, '_> {
                     .arg(self.decl_name(v))
                     .arg(n);
                 self.emit(msg);
-                self.ast.decls.set_flags(v, DeclFlags::INVALID);
+                self.invalidate(v);
             }
         } else {
             let loc = self.ast.decls.get(v).loc();
             self.error(DiagId::sema_for_range_decl_must_be_var, loc);
-            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            self.invalidate(v);
         }
         if ds.tag_declares && ds.tag.is_some() {
             // The declaration group holds the class too (clang:
@@ -207,7 +213,7 @@ impl Sema<'_, '_> {
         let ty = n.ty().unwrap_or(QualType::ERROR);
         if self.contains_undeduced_auto(ty) {
             self.ast.decls.set_ty(v, QualType::ERROR);
-            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            self.invalidate(v);
             return;
         }
         if self.is_dependent_type(ty) {
@@ -223,7 +229,7 @@ impl Sema<'_, '_> {
                 .arg(self.ty_arg(base));
             let msg = self.incomplete_note(msg, base);
             self.emit(msg);
-            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            self.invalidate(v);
         }
     }
 
@@ -367,7 +373,7 @@ impl Sema<'_, '_> {
             };
         let Some(t) = deduced else {
             self.ast.decls.set_ty(v, QualType::ERROR);
-            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            self.invalidate(v);
             return true;
         };
         self.ast.decls.set_ty(v, t);

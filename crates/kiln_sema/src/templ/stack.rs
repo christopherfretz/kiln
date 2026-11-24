@@ -340,6 +340,13 @@ impl InstantiationStack {
             .is_some_and(|fs| fs.iter().all(|f| !f.kind.is_instantiation() && f.sfinae.is_none()))
     }
 
+    /// The index of the innermost frame that says diagnostics are in a
+    /// SFINAE context, when it says they are.
+    pub(crate) fn innermost_sfinae_frame(&self) -> Option<usize> {
+        let i = self.frames.iter().rposition(|f| f.sfinae.is_some())?;
+        (self.frames[i].sfinae == Some(true)).then_some(i)
+    }
+
     /// Whether diagnostics are currently in a SFINAE context (the
     /// innermost frame that says).
     pub fn is_sfinae(&self) -> bool {
@@ -948,6 +955,11 @@ pub struct SfinaeState {
     /// but a hard error (clang's `SFINAE_Report`); the context's end
     /// drops an unspent mark.
     pub host_failure: bool,
+    /// The declarations made invalid in this context, confirmed as silent
+    /// failures at its end when nothing printed (`subst_failed.rs`).
+    pub(crate) pending: Vec<crate::subst_failed::Pending>,
+    /// The number of errors printed when it began.
+    pub(crate) printed: u32,
 }
 
 #[cfg(test)]

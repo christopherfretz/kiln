@@ -5125,6 +5125,111 @@ error, not the array-parameter diagnostic of the definition.
 `.../invalid-parameter-type-notes.cpp` (strict notes) and
 `.../invalid-parameter-type-member-template.cpp`.
 
+#### 5.7.3 Silent failures: the trap ledger (WP-3281, WP-3282)
+
+A declaration kiln makes `INVALID` inside a *trap* failed silently, and
+`DeclArena::subst_failed` (spec/ast.md §4.1 "Silent failures") says so.
+A trap is a SFINAE context (an error is counted, not printed) or a
+diagnostic capture (`Sema::capturing`, an error is held until the stash
+is released or dropped). The ledger (`crates/kiln_sema/src/subst_failed.rs`)
+keeps the marks; three choke points feed it, and the `xtask` lint
+`invalid_lint` holds them (raw use is a finding):
+
+- every invalidation in Sema and the parser goes through
+  `Sema::invalidate` / `invalidate_as(d, kind)`; a declaration created
+  invalid carries `// ledger: born invalid` and calls
+  `note_born_invalid`. Each asks `Sema::trap_now`, the predicate `emit`
+  uses, and files the declaration with that trap;
+- a SFINAE context opens and ends only through `push_sfinae_state` /
+  `pop_sfinae_state`. Its entries sit in its state and are confirmed at
+  the pop when no error was printed while it was open, else dropped (the
+  printed error explains them);
+- a capture has a serial number, carried by its `Stash`. Releasing the
+  stash re-files its entries with the trap the released diagnostics go
+  to, or drops them when an error prints; a stash never released was
+  discarded, and its entries are confirmed at the end;
+- a pack-expansion probe (`Substituter::expand_pattern`,
+  `param_pack_len`: the pattern substituted until it reaches the pack it
+  expands, then failed on purpose) is a *discard scope*
+  (`open_discard` / `close_discard`): an entry filed under no other trap
+  waits in it; a probe that found a pack is thrown away, and its entries
+  are confirmed when no error printed meanwhile; a probe that found none
+  is the substitution itself, and its entries go to the enclosing trap.
+
+The confirmed entries are written at the end of the translation unit and
+of a snapshot prefix (`Sema::flush_subst_failed`, before the snapshot is
+taken). An entry filed without a kind becomes kind 5
+(`LocalOfFailedSignature`) when it was created while a kind 1 or 2
+specialization failed to form in the same trap (`claim_failed_locals`,
+so a statement-expression's local keeps its pattern's `ctx` and is
+still kind 5) or its owner chain reaches one, else kind 6
+(`OtherTrapped`). A template whose pattern is marked and which is
+invalid with it (its head copies the pattern's flags) takes the
+pattern's mark. The flush also drops the written-reference keys
+(spec/ast.md §18) of kind 1 and 2 specializations: nothing refers to a
+specialization that did not form.
+
+The sites that mark explicitly: a function specialization's signature
+(`Err`, or `Ok` while the frame trapped an error: kind 1, a deduction
+guide's too); its `explicit(expr)` (kind 2); a variable template's
+ambiguous partial-specialization choice (kind 3, not under
+`inst.fatal`); a class template's (kind 4, not under `inst.fatal`).
+When a signature fails, the parameters substituted before the failure
+take the specialization as their owner (`set_param_owner`), so none is
+left owned by the instantiation context.
+
+Decisions (reviewed by tooling clients):
+
+- A class partial-specialization ambiguity under a trap keeps `INVALID`
+  and adds kind 4: the ambiguity belongs to (template, arguments), so
+  every use needing completeness is ill-formed (clang sets the
+  declaration invalid too), and the memo saves re-ordering on each
+  probe. The specialization is otherwise a never-instantiated one.
+- A class template specialization instantiated inside its own
+  definition ([temp.inst]/2) under a trap is not made invalid (clang's
+  `DiagnoseUninstantiableTemplate` invalidates only an explicit
+  instantiation declaration): the error is trapped, the use's signature
+  fails, and the class instantiates on its next use. Outside a trap:
+  diagnosed and invalid, as before.
+- A variable template specialization whose template or matching partial
+  specialization is only declared takes the declaration as its pattern
+  and is valid ([temp.inst]/7).
+- An implicit definition (special member, comparison, inheriting
+  constructor) is not a SFINAE context (clang `isSFINAEContext`): a
+  synthesis context opened above the innermost SFINAE frame stops the
+  trap (`Sema::sfinae_traps`), so its errors print and its declarations
+  are not filed.
+- `this` named in a requires-expression inside a lambda that captures
+  nothing fails the requirement ([expr.prim.req.general]/5), not the
+  lambda: under a trap the call operator is not invalidated (as for a
+  default member initializer).
+- WP-3282: a coroutine's promise constructed from the parameter copies
+  ([dcl.fct.def.coroutine]/5) is tried with no declaration
+  (`perform_init` under a capture); on success the one `__promise` is
+  declared with those arguments, else default-initialized. No trial
+  variable is left behind.
+
+Kind 6 sites, one per line: the empty-pack sweep and the pack-expansion
+probe (`templ/pack.rs`; the substitution is discarded, nothing refers to
+what it created, `ctx` the declaration being instantiated, typically a
+closure type of the pattern); the duplicate of a class or enumeration
+definition merged from another unit's global module fragment
+(`act_on_tag`, spec/modules.md §6: born invalid, its body skipped, no
+diagnostic, under no trap); `local_tag_used_early`
+(`templ/subst/mod.rs`; a local class or enumeration declared ahead of
+its statement, `ctx` the instantiated function); the iterating thunk of
+a reflection intrinsic (`meta/iterate.rs`; the body is discarded on
+failure, `ctx` the intrinsic's specialization). Any other invalidation
+the ledger finds under a trap is kind 6 as well.
+
+The checker's rule A (spec/ast.md §4.1) needs one record from Sema:
+`Sema::note_scratch_head` keeps each friend class template head that
+`check_friend_class_head` substitutes only to compare (while verifying).
+
+Tests: `crates/kiln_parse/tests/subst_failed.rs` (each kind, the
+decisions, rule A), `xtask` `invalid_lint`, the dump token in
+`tests/conformance/temp.deduct.general/subst-failed-*.cpp`.
+
 ### 5.8 Written locations of dependent names
 
 Kiln's types are interned and carry no `TypeLoc`, so the substituter

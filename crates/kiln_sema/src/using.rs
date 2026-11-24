@@ -1280,7 +1280,7 @@ impl Sema<'_, '_> {
                 if self.check_typedef_redefinition(t, ty, false, name, loc).is_some() {
                     continue;
                 }
-                self.ast.decls.set_flags(d, kiln_ast::decl::DeclFlags::INVALID);
+                self.invalidate(d);
                 return true;
             }
             if !self.using_conflicts(t, d) {
@@ -1305,7 +1305,7 @@ impl Sema<'_, '_> {
             .with_note(self.diag(DiagId::note_using_decl_target, self.decl_loc(t)))
             .with_note(self.diag(DiagId::note_using_decl, self.decl_loc(s)));
         self.emit(msg);
-        self.ast.decls.set_flags(d, kiln_ast::decl::DeclFlags::INVALID);
+        self.invalidate(d);
         true
     }
 
@@ -1413,7 +1413,7 @@ impl Sema<'_, '_> {
                 .with_note(self.diag(DiagId::note_declared_at, self.decl_loc(e)));
             self.emit(msg);
             let ud = self.builder().using_enum(h, e);
-            self.ast.decls.set_flags(ud, kiln_ast::decl::DeclFlags::INVALID);
+            self.invalidate(ud);
             return ud;
         };
         let ud = self.builder().using_enum(h, def);

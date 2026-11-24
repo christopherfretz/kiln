@@ -190,6 +190,7 @@ const COLD_MAP_NAMES: &[&str] = &[
     "source_loc",
     "splice_args",
     "string_maker",
+    "subst_failed",
     "syntactic_list",
     "template_defaults",
     "template_inherited_defaults",

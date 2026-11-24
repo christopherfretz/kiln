@@ -2524,7 +2524,7 @@ impl Sema<'_, '_> {
         flags |= kiln_ast::decl::ParamData::scope_depth_flags(depth);
         let d = self.builder().param(body, name, p.loc, p.ty, idx, flags);
         if p.invalid {
-            self.ast.decls.set_flags(d, DeclFlags::INVALID);
+            self.invalidate(d);
         }
         if let Some((n, _)) = p.name {
             self.push_local(n, d);

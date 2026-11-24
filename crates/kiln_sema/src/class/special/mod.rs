@@ -486,7 +486,7 @@ impl Sema<'_, '_> {
                 .arg(self.name_for_diagnostic(first));
             let m = self.note_prev(m, prev, true);
             self.emit(m);
-            self.ast.decls.set_flags(f, DeclFlags::INVALID);
+            self.invalidate(f);
             return;
         }
         // A function already defined is redefined by `= delete`
@@ -501,7 +501,7 @@ impl Sema<'_, '_> {
                 .arg(self.name_for_diagnostic(first));
             let m = self.note_prev(m, def, true);
             self.emit(m);
-            self.ast.decls.set_flags(f, DeclFlags::INVALID);
+            self.invalidate(f);
             return;
         }
         // The declaration kiln makes for an explicit specialization's
@@ -521,7 +521,7 @@ impl Sema<'_, '_> {
             let m = self.diag(DiagId::sema_deleted_not_first, loc);
             let m = self.note_prev(m, p, false);
             self.emit(m);
-            self.ast.decls.set_flags(f, DeclFlags::INVALID);
+            self.invalidate(f);
             return;
         }
         // Deletion is read off the first declaration: an explicit

@@ -180,7 +180,7 @@ impl Sema<'_, '_> {
             false,
         );
         if failed {
-            self.ast.decls.set_flags(dc, DeclFlags::INVALID);
+            self.invalidate(dc);
         } else {
             let body = self.implicit_body(dc, &[], at);
             let _ = self.builder().set_body(dc, body);

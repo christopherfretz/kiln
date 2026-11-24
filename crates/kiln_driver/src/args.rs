@@ -993,6 +993,11 @@ pub struct Args {
     /// `-fkiln-bmi-image-census=all` (WP-1320): the census also lists
     /// every refused top-level declaration with its reason.
     pub bmi_image_census_all: bool,
+    /// The hidden `-fkiln-verify-subst-failed` (WP-3281): at the end of
+    /// the unit, check the silent-failure marks (spec/ast.md §4.1: no
+    /// unmarked invalid declaration in a unit without errors) and report
+    /// each violation as an error.
+    pub verify_subst_failed: bool,
     /// Errors, in order.
     pub errors: Vec<ArgError>,
     /// The `-fconstexpr-*` options.
@@ -2171,6 +2176,7 @@ impl Args {
             "-fkiln-bmi-image" => self.bmi_image = true,
             "-fno-kiln-bmi-image" => self.bmi_image = false,
             "-fkiln-bmi-image-census" => self.bmi_image_census = true,
+            "-fkiln-verify-subst-failed" => self.verify_subst_failed = true,
             "-fkiln-bmi-image-census=all" => {
                 self.bmi_image_census = true;
                 self.bmi_image_census_all = true;
@@ -2938,6 +2944,13 @@ pub(crate) fn parse_clang_unsigned(v: &str) -> Option<u32> {
         return None;
     }
     u32::from_str_radix(digits, radix).ok()
+}
+
+/// `KILN_VERIFY_SUBST_FAILED=1` turns `-fkiln-verify-subst-failed` on for
+/// every compile (WP-3281; spec/harness.md "The silent-failure check"): a
+/// harness run sets it once for all the compiles it starts.
+pub(crate) fn verify_subst_failed_env() -> bool {
+    std::env::var_os("KILN_VERIFY_SUBST_FAILED").is_some_and(|v| !v.is_empty() && v != "0")
 }
 
 #[cfg(test)]

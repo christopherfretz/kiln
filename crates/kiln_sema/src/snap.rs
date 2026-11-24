@@ -91,7 +91,7 @@
 //! | `cleanup`, `cleanup_saved`, `cleanup_marks` | transient | the cleanups of the full-expression being built |
 //! | `delayed_access`, `delayed_access_depth`, `delayed_deprecations`, `depr_points`, `depr_init`, `exempt_next_delay` | transient | open access and deprecation delay points |
 //! | `explicit_conv`, `cast_ignores_base_access`, `speculative_friend`, `replaying_access`, `requires_access_replay`, `access_ctx`, `oper_override`, `arith_warning` | transient | set around one conversion or access check |
-//! | `trailing_notes`, `omitted_inits`, `diag_capture`, `delayed_typos`, `typo_delay`, `open_specs`, `spec_failures`, `spec_exempt` | transient | diagnostics held for the construct being built |
+//! | `trailing_notes`, `omitted_inits`, `diag_capture`, `subst_ledger`, `delayed_typos`, `typo_delay`, `open_specs`, `spec_failures`, `spec_exempt` | transient | diagnostics held for the construct being built |
 //! | `nc_strict_only`, `pending_alias_vla`, `reverse_using_shadows`, `declarator_int_recovery`, `declarator_declares_fn`, `declarator_field`, `declarator_distant_exc`, `after_def_prev`, `after_def_held`, `unknown_attr_held`, `unknown_attrs_reported`, `pending_param_abis`, `pattern_member_access`, `base_annotation_packs`, `friend_tag`, `friend_class_template`, `extraneous_tag_head`, `nested_tag`, `inst_enable_if`, `declspec_nulls` | transient | handed from one action to the next within a declaration |
 //! | `image_texprs`, `bmi` | transient | declaration-image and carried-constant recording (module files): a snapshot is not taken with them on |
 //!
@@ -187,7 +187,7 @@ macro_rules! sema_fields {
                 delayed_access_depth, delayed_deprecations, depr_points, depr_init,
                 exempt_next_delay, explicit_conv, cast_ignores_base_access, speculative_friend,
                 replaying_access, requires_access_replay, access_ctx, oper_override, arith_warning,
-                trailing_notes, omitted_inits, diag_capture, delayed_typos, typo_delay, open_specs,
+                trailing_notes, omitted_inits, diag_capture, subst_ledger, delayed_typos, typo_delay, open_specs,
                 spec_failures, spec_exempt, nc_strict_only, pending_alias_vla,
                 reverse_using_shadows, declarator_int_recovery, declarator_declares_fn, declarator_field,
                 declarator_distant_exc, after_def_prev, after_def_held, unknown_attr_held, unknown_attrs_reported, pending_param_abis, this_watch, pattern_member_access, base_annotation_packs, friend_tag,
@@ -282,6 +282,12 @@ impl<T: AtRest + Copy> AtRest for Cell<T> {
 impl<T: AtRest> AtRest for RefCell<T> {
     fn at_rest(&self) -> bool {
         self.try_borrow().is_ok_and(|v| v.at_rest())
+    }
+}
+
+impl AtRest for crate::subst_failed::SubstLedger {
+    fn at_rest(&self) -> bool {
+        self.is_empty()
     }
 }
 

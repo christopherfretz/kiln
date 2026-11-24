@@ -139,8 +139,9 @@ pub(crate) const MAGIC: [u8; 8] = *b"KILNSNAP";
 /// attribute kinds and the 32-bit `FuncInfo`; version 174 (WP-3275,
 /// WP-3276) the lookup log's dropped search directories and module
 /// probes, in the head, whose lookup log the schema hash now covers;
-/// version 175 (WP-3279) the per-use immediate values of defaults.
-pub(crate) const FORMAT_VERSION: u32 = 175;
+/// version 175 (WP-3279) the per-use immediate values of defaults;
+/// version 176 (WP-3281) the subst-failed marks of silent failures.
+pub(crate) const FORMAT_VERSION: u32 = 176;
 /// The length of the magic and the format version.
 pub(crate) const HEADER_LEN: usize = 12;
 
@@ -198,6 +199,7 @@ fn excluded(args: &Args) -> Args {
         time_trace: d.time_trace,
         bmi_image_census: d.bmi_image_census,
         bmi_image_census_all: d.bmi_image_census_all,
+        verify_subst_failed: d.verify_subst_failed,
         verify: d.verify,
         no_crash_diagnostics: d.no_crash_diagnostics,
         crash_diagnostics_dir: d.crash_diagnostics_dir,

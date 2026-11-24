@@ -21,7 +21,7 @@ use crate::declspec::{
     Chunk, DeclSpec, Declarator, DeclaratorContext, DefaultArg, ParamInfo, SpecialName,
     StorageSpec, TypeSpecKind,
 };
-use crate::templ::stack::{FrameKind, SfinaeState};
+use crate::templ::stack::FrameKind;
 use crate::templ::written::{WrittenScope, WrittenSide};
 
 impl Substituter<'_, '_, '_> {
@@ -467,7 +467,7 @@ impl Substituter<'_, '_, '_> {
         } else {
             // clang marks the declaration invalid: no follow-up
             // "must be initialized" diagnostic.
-            self.sema.ast.decls.set_flags(v, DeclFlags::INVALID);
+            self.sema.invalidate(v);
             self.sema.report_deferred_immediates(v, false);
             self.init_failures += 1;
             // Only an error of this instantiation: an error of the
@@ -1156,6 +1156,25 @@ impl Substituter<'_, '_, '_> {
         }
     }
 
+    /// The parameters substituted before a signature failure belong to
+    /// specialization `spec`, which was not formed, though it lists none
+    /// (spec/ast.md §4.1 rule A): none is left without an owner.
+    fn own_failed_params(&mut self, spec: DeclId) {
+        let spec_index = spec.index();
+        let mut built: Vec<DeclId> = self
+            .sema
+            .unowned_params
+            .iter()
+            .copied()
+            .filter(|&d| d.index() > spec_index && self.sema.kind_of(d) == DeclKind::ParmVar)
+            .collect();
+        built.sort_unstable_by_key(|d| d.index());
+        for d in built {
+            self.sema.unowned_params.remove(&d);
+            self.sema.ast.decls.set_param_owner(d, spec);
+        }
+    }
+
     /// The signature of function template specialization `spec` of
     /// pattern `pat` (§6.1 step 4, clang's `SubstFunctionType` under
     /// `FinishTemplateArgumentDeduction`): parameters, return type and
@@ -1242,6 +1261,7 @@ impl Substituter<'_, '_, '_> {
             Ok(x) => x,
             Err(e) => {
                 self.forget_pattern_params(pat);
+                self.own_failed_params(spec);
                 return Err(e);
             }
         };
@@ -1655,7 +1675,7 @@ impl Substituter<'_, '_, '_> {
         let mut dr = self.pattern_declarator(d, DeclaratorContext::Member)?;
         if failed {
             let f = self.sema.act_on_declarator(&ds, ty, &dr).ok_or(SubstFail)?;
-            self.sema.ast.decls.set_flags(f, DeclFlags::INVALID);
+            self.sema.invalidate(f);
             return Ok(f);
         }
         let fd: Option<FieldData> = self.sema.ast.decls.field(d).copied();
@@ -1736,7 +1756,7 @@ impl Substituter<'_, '_, '_> {
             self.sema.in_typedef_instantiation = outer;
             self.sema.infer_gsl_instantiated_typedef(d, a);
             if failed {
-                self.sema.ast.decls.set_flags(a, DeclFlags::INVALID);
+                self.sema.invalidate(a);
             }
             self.var_align_attrs(a, d);
             return Ok(a);
@@ -1752,7 +1772,7 @@ impl Substituter<'_, '_, '_> {
         // `typename T::iterator` pattern.
         self.sema.infer_gsl_instantiated_typedef(d, td);
         if failed {
-            self.sema.ast.decls.set_flags(td, DeclFlags::INVALID);
+            self.sema.invalidate(td);
         }
         // `typedef enum { } D;` in a template: the instantiated unnamed
         // tag takes the instantiated typedef's name for linkage purposes
@@ -1898,7 +1918,7 @@ impl Substituter<'_, '_, '_> {
         let kw = TagKeyword::Enum;
         let e = self.sema.act_on_tag(kw, name, None, use_, scoped, fixed, loc);
         if failed {
-            self.sema.ast.decls.set_flags(e, DeclFlags::INVALID);
+            self.sema.invalidate(e);
         }
         // clang `VisitEnumDecl` -> `InstantiateAttrs`, ahead of the
         // definition (a `packed` one's underlying type).
@@ -2317,10 +2337,13 @@ impl Substituter<'_, '_, '_> {
         if let Some(fr) = self.sema.inst.stack.frames.last_mut() {
             fr.sfinae = Some(true);
         }
-        self.sema.inst.sfinae.borrow_mut().push(SfinaeState::default());
+        self.sema.push_sfinae_state();
         let list = self.friend_head(new).ok();
-        let st = self.sema.inst.sfinae.borrow_mut().pop().unwrap_or_default();
+        let st = self.sema.pop_sfinae_state();
         self.sema.pop_inst_frame();
+        if let Some(list) = list {
+            self.sema.note_scratch_head(list);
+        }
         if let Some(list) = list.filter(|_| st.errors == 0) {
             let _ = self.sema.check_template_heads_match(list, old);
         }

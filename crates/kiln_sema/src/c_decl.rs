@@ -295,7 +295,7 @@ impl Sema<'_, '_> {
                     .diag(DiagId::sema_tentative_def_incomplete_type, vn.loc())
                     .arg(self.ty_arg(ty));
                 self.emit(self.incomplete_note(msg, ty));
-                self.ast.decls.set_flags(acting, DeclFlags::INVALID);
+                self.invalidate(acting);
             }
         }
     }

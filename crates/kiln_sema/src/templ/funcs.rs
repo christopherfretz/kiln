@@ -7,7 +7,7 @@
 //! translation unit.
 
 use kiln_ast::QualType;
-use kiln_ast::decl::{ConstexprKind, DeclFlags, DeclKind};
+use kiln_ast::decl::{ConstexprKind, DeclFlags, DeclKind, SubstFailedKind};
 use kiln_ast::ids::{ArgListId, RawId};
 use kiln_ast::templates::SpecKind;
 use kiln_ast::types::{ExcSpec, NoexceptValue, TypeView};
@@ -148,7 +148,12 @@ impl Sema<'_, '_> {
             let _ = self.templ.suppressed_diags.insert(spec, warnings);
         }
         if r.is_err() || captured {
-            self.ast.decls.set_flags(spec, DeclFlags::INVALID);
+            // Not formed (spec/ast.md §4.1): marked when the frame trapped
+            // every error. The closures it substituted keep it as their
+            // owner, so nothing it created is left without one.
+            self.invalidate_as(spec, SubstFailedKind::FunctionSignature);
+            self.claim_failed_locals(after as usize);
+            self.note_failed_formation(spec, after as usize);
             return Err(());
         }
         if self.fn_spec(pattern).is_explicit()
@@ -240,6 +245,7 @@ impl Sema<'_, '_> {
         let pairs = self.inst_context_pairs(self.spec_pairs_ctx(spec, tmpl));
         let trapped = self.sfinae_errors();
         let access = self.friend_template_access_ctx(spec);
+        let first = self.ast.decls.len();
         let r = self.in_inst_context(ctx, |s| {
             s.access_ctx = Some(access);
             let mut sub = Substituter::new(s, &margs);
@@ -249,7 +255,8 @@ impl Sema<'_, '_> {
         });
         let captured = self.sfinae_errors() > trapped;
         if r.is_err() || captured {
-            self.ast.decls.set_flags(spec, DeclFlags::INVALID);
+            self.invalidate_as(spec, SubstFailedKind::ExplicitSpecifier);
+            self.claim_failed_locals(first);
             return Err(());
         }
         Ok(())
@@ -442,7 +449,7 @@ impl Sema<'_, '_> {
                     .function(f)
                     .is_some_and(|x| x.spec.constexpr_kind() != ConstexprKind::None);
             if sub.stmt_failed || inits_failed || named_failed {
-                s.ast.decls.set_flags(f, DeclFlags::INVALID);
+                s.invalidate(f);
             }
             s.act_on_finish_function_def(f, b, rbrace);
         });

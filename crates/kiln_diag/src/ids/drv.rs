@@ -165,3 +165,6 @@ drv_unsupported_option_argument = Error (2) "unsupported argument '{1}' to optio
 drv_unsupported_option_argument_for_target = Error (3) "unsupported argument '{1}' to option '{0}' for target '{2}'";
 drv_unsupported_target = Error (1) "unsupported target '{0}' (kiln supports aarch64 and x86_64 Linux)";
 drv_verify_prefix_spelling = Note (0) "-verify prefixes must start with a letter and contain only alphanumeric characters, hyphens, and underscores";
+// WP-3281: `-fkiln-verify-subst-failed`, the silent-failure checker
+// (spec/ast.md §4.1): one error per violation.
+drv_verify_subst_failed = Error (1) "kiln internal check failed (-fkiln-verify-subst-failed): {0}";

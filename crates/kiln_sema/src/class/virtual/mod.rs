@@ -263,7 +263,7 @@ impl Sema<'_, '_> {
             let _ = self.ast.decls.cold.overrides.insert(f, l);
         }
         if v.invalid {
-            self.ast.decls.set_flags(f, DeclFlags::INVALID);
+            self.invalidate(f);
         }
         if let Some(locs) = v.deferred_locs {
             self.virt_spec_locs.insert(f, locs);

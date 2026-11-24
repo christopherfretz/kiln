@@ -509,7 +509,7 @@ impl Sema<'_, '_> {
         };
         let msg = self.builtin_type_note(msg, info, loc);
         self.emit(msg);
-        self.ast.decls.set_flags(f, DeclFlags::INVALID);
+        self.invalidate(f);
     }
 
     /// Whether `f` is a `Function` whose redeclaration context is the
@@ -555,7 +555,7 @@ impl Sema<'_, '_> {
         let msg = self.diag(DiagId::sema_exception_spec_mismatch, loc);
         let msg = msg.with_note(self.diag(DiagId::note_previous_declaration, prev_loc));
         self.emit(msg);
-        self.ast.decls.set_flags(f, DeclFlags::INVALID);
+        self.invalidate(f);
         false
     }
 

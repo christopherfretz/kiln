@@ -2208,6 +2208,20 @@ It runs under (WP-1034, closing WP-1031):
   `--compiler` the differential is not run (it tests kiln's mangler,
   not the compiler under test). The decision is `names_mangle_corpus`.
 
+## The silent-failure check
+
+`KILN_VERIFY_SUBST_FAILED=1` in the environment of a kiln++ (any value
+but empty or `0`) is the driver's `-fkiln-verify-subst-failed`: after
+the translation unit, kiln checks spec/ast.md §4.1 "Silent failures"
+(in a unit without errors every invalid declaration is marked; rule A;
+no written reference keyed by a declaration that did not form) and
+reports each violation as an error `kiln internal check failed
+(-fkiln-verify-subst-failed): ...`. The harness passes its environment
+to every kiln++ it runs, so `KILN_VERIFY_SUBST_FAILED=1 cargo xtask test
+<dirs>` (or `libcxx`, `libstdcxx`) runs the corpus under the check: a
+violation shows as an unexpected error. It is a diagnosis tool, not a CI
+step (WP-3281).
+
 ## The ODR oracle
 
 `scripts/mason/odr_oracle.py` (WP-1581; Python 3 standard library only;

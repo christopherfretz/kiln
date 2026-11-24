@@ -530,6 +530,48 @@ mod product {
         assert_eq!(o.stderr.matches("warning: \"the prefix warns\"").count(), 1, "{}", o.stderr);
         assert_eq!(o.stderr.matches("warning: \"the main file warns\"").count(), 1, "{}", o.stderr);
     }
+
+    /// WP-3281 (spec/pch.md "Silent-failure marks"): a specialization the
+    /// prefix failed to form silently keeps its mark in the restored AST,
+    /// and the consumer's checker finds nothing (the ledger was flushed
+    /// before the snapshot).
+    #[test]
+    fn subst_failed_marks_round_trip() {
+        let d = scratch("subst-failed");
+        std::fs::write(
+            d.join("h.h"),
+            "template <class T> auto g(T t) -> decltype(t.size());\n\
+             int g(...);\n\
+             inline int u() { return g(1); }\n",
+        )
+        .unwrap();
+        std::fs::write(d.join("t.cpp"), "int main() { return u() - g(2.0); }\n").unwrap();
+        let o = ok(
+            &d,
+            &["-std=c++20", "-fkiln-pch-snapshot", "-v", "-x", "c++-header", "h.h", "-o", "h.pch"],
+        );
+        assert_eq!(note(&o), "written", "{}", o.stderr);
+        let o = ok(
+            &d,
+            &[
+                "-std=c++20",
+                "-include-pch",
+                "h.pch",
+                "-v",
+                "-fkiln-verify-subst-failed",
+                "-fdump-ast=all-files",
+                "-fsyntax-only",
+                "t.cpp",
+            ],
+        );
+        assert!(note(&o).contains(USED), "{}", o.stderr);
+        assert!(!o.stderr.contains("internal check failed"), "{}", o.stderr);
+        // `g<int>` from the prefix, `g<double>` from the main file, both
+        // under the prefix's template.
+        let marked =
+            o.stdout.lines().filter(|l| l.contains("subst-failed=function-signature")).count();
+        assert_eq!(marked, 2, "{}", o.stdout);
+    }
 }
 
 /// WP-1394: the consumer's behaviour on a restore.

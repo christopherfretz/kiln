@@ -1121,7 +1121,7 @@ impl Sema<'_, '_> {
         if !self.has_trivial(r, crate::class::SpecialKind::DefaultCtor) {
             let at = self.ast.decls.get(d).loc();
             self.error(DiagId::sema_loader_uninitialized_trivial_ctor, at);
-            self.ast.decls.set_flags(d, kiln_ast::decl::DeclFlags::INVALID);
+            self.invalidate(d);
         }
     }
 

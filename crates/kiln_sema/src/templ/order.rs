@@ -21,7 +21,7 @@ use kiln_source::Loc;
 use crate::Sema;
 use crate::templ::args::LevelMode;
 use crate::templ::deduce::{DeducedArgs, TdfFlags, Tdk};
-use crate::templ::stack::{FrameKind, SfinaeState};
+use crate::templ::stack::FrameKind;
 use crate::templ::subst::Substituter;
 
 /// A partial specialization that matched, with its deduced arguments.
@@ -139,7 +139,7 @@ impl Sema<'_, '_> {
         if let Some(f) = self.inst.stack.frames.last_mut() {
             f.sfinae = Some(true);
         }
-        self.inst.sfinae.borrow_mut().push(SfinaeState::default());
+        self.push_sfinae_state();
         let mut d = DeducedArgs::new(list.depth, n);
         d.params = Some(list.params);
         // [temp.deduct.type]/20 (second sentence), [temp.spec.partial.match]/2:
@@ -176,7 +176,7 @@ impl Sema<'_, '_> {
         } else {
             None
         };
-        let failed = self.inst.sfinae.borrow_mut().pop().is_some_and(|s| s.errors > 0);
+        let failed = self.pop_sfinae_state().errors > 0;
         self.pop_inst_frame();
         let deduced = r.filter(|_| !failed)?;
         // [temp.spec.partial.match]/2: the partial specialization's
@@ -683,7 +683,7 @@ impl Sema<'_, '_> {
         let lb = *self.ast.templates.param_list(pb.params);
         let ps: Vec<TemplateArg> = self.ast.types.args(pb.canonical).to_vec();
         let as_: Vec<TemplateArg> = self.ast.types.args(pa.canonical).to_vec();
-        self.inst.sfinae.borrow_mut().push(SfinaeState::default());
+        self.push_sfinae_state();
         let mut d = DeducedArgs::new(lb.depth, self.ast.lists.len(lb.params));
         d.params = Some(lb.params);
         // [temp.deduct.type]/9: a pack expansion of `a`'s (a synthesized
@@ -714,7 +714,7 @@ impl Sema<'_, '_> {
             let deduced = self.ast.types.arg_list(&d.args);
             ok = self.partial_args_match(&pb, lb.depth, deduced, pa.canonical, true, loc);
         }
-        let failed = self.inst.sfinae.borrow_mut().pop().is_some_and(|s| s.errors > 0);
+        let failed = self.pop_sfinae_state().errors > 0;
         let r = ok && !failed;
         let _ = self.templ.partial_order.insert((a, b), r);
         r
@@ -849,7 +849,7 @@ impl Sema<'_, '_> {
         loc: Loc,
         finish: impl FnOnce(&mut Self, &DeducedArgs) -> bool,
     ) -> bool {
-        self.inst.sfinae.borrow_mut().push(SfinaeState::default());
+        self.push_sfinae_state();
         let mut d = DeducedArgs::new(l.depth, self.ast.lists.len(l.params));
         d.params = Some(l.params);
         d.expansions = true;
@@ -859,7 +859,7 @@ impl Sema<'_, '_> {
             self.empty_undeduced_packs(l.params, &mut d);
             ok = d.first_undeduced().is_none() && finish(self, &d);
         }
-        let failed = self.inst.sfinae.borrow_mut().pop().is_some_and(|s| s.errors > 0);
+        let failed = self.pop_sfinae_state().errors > 0;
         ok && !failed
     }
 
@@ -1459,7 +1459,7 @@ impl Sema<'_, '_> {
     ) -> bool {
         let depth = self.template_param_depth(b);
         let n = self.template_params(b).len();
-        self.inst.sfinae.borrow_mut().push(SfinaeState::default());
+        self.push_sfinae_state();
         let mut d = DeducedArgs::new(depth, n);
         // [temp.deduct.type]/9: a pack expansion in `pa` (`L<I...>`, of
         // the other template's own pack) is deduced as a whole by one in
@@ -1521,7 +1521,7 @@ impl Sema<'_, '_> {
         if ok && d.first_undeduced().is_some() && !self.undeduced_params_unused(b, &d, pb) {
             ok = false;
         }
-        let failed = self.inst.sfinae.borrow_mut().pop().is_some_and(|s| s.errors > 0);
+        let failed = self.pop_sfinae_state().errors > 0;
         ok && !failed
     }
 }

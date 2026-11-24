@@ -141,6 +141,7 @@ pub mod stack_guard;
 mod static_tls;
 pub mod stmt;
 mod struct_bind;
+mod subst_failed;
 mod sve;
 mod sve_calls;
 mod swift_abi;
@@ -931,7 +932,7 @@ pub struct Sema<'a, 'sm> {
     /// until its attributes are checked: clang merges the attributes
     /// first, so their "must precede definition" warning comes before
     /// the errors (`Sema::release_after_def_held`, WP-1848).
-    pub(crate) after_def_held: Vec<Diag>,
+    pub(crate) after_def_held: Vec<subst_failed::Stash>,
     /// The "unknown attribute ignored" warnings of the attribute-specifier
     /// being parsed, while one is: clang issues them when the
     /// declaration's attributes are processed, after the syntax errors
@@ -1271,7 +1272,10 @@ pub struct Sema<'a, 'sm> {
     /// held step pushes (prior-argument substitution and the like, not an
     /// instantiation nor a SFINAE boundary) are held too: what the step
     /// substitutes is discarded, and clang never forms it.
-    pub(crate) diag_capture: std::cell::RefCell<Option<(usize, Vec<Diag>, bool)>>,
+    pub(crate) diag_capture: std::cell::RefCell<Option<subst_failed::DiagCapture>>,
+    /// The trap ledger: declarations made invalid while their errors were
+    /// trapped, waiting for the trap's end (`subst_failed.rs`, WP-3281).
+    pub(crate) subst_ledger: std::cell::RefCell<subst_failed::SubstLedger>,
     /// The "no member named" errors of qualified-ids held back until the
     /// end of the enclosing expression statement (clang's delayed typo
     /// correction, `TypoExpr`), while `typo_delay` is non-zero
@@ -1857,6 +1861,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             mem_inits: class::MemInitState::default(),
             extend_collector: None,
             diag_capture: std::cell::RefCell::new(None),
+            subst_ledger: std::cell::RefCell::new(subst_failed::SubstLedger::default()),
             delayed_typos: Vec::new(),
             typo_delay: 0,
             typo_count: 0,
@@ -1961,7 +1966,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     }
 
     /// Consumes the `Sema`, returning the AST.
-    pub fn into_ast(self) -> Ast {
+    pub fn into_ast(mut self) -> Ast {
+        self.flush_subst_failed();
         self.ast
     }
 
@@ -2025,11 +2031,10 @@ impl<'a, 'sm> Sema<'a, 'sm> {
                 d = d.with_note(n);
             }
         }
-        if let Some((depth, held, checks)) = self.diag_capture.borrow_mut().as_mut()
-            && (*depth == self.inst.stack.len()
-                || (*checks && self.inst.stack.only_checks_above(*depth)))
+        if let Some(c) = self.diag_capture.borrow_mut().as_mut()
+            && self.capture_holds(c)
         {
-            held.push(d);
+            c.held.push(d);
             return;
         }
         if self.inst.suppress_next_error.replace(false) {
@@ -2044,10 +2049,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             let sev = self.diags.severity_at(id, d.loc());
             // clang's `NoSFINAE` errors (`SFINAE_Report`) print even in
             // a SFINAE context, with the context notes.
-            if self.inst.stack.is_sfinae()
-                && !is_sfinae_report(id)
-                && !self.host_failure_escapes(sev)
-            {
+            if self.sfinae_traps() && !is_sfinae_report(id) && !self.host_failure_escapes(sev) {
                 if self.inst.suppress_access.get() && is_access_error(id) {
                     if let Some(s) = self.inst.sfinae.borrow_mut().last_mut()
                         && s.first.is_none()

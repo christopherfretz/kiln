@@ -19,6 +19,7 @@ mod gcc_tests;
 mod gen_pp;
 mod gen_reflect;
 mod guard;
+mod invalid_lint;
 mod jobs;
 mod kiln_hod;
 mod landed;

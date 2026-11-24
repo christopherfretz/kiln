@@ -474,7 +474,7 @@ impl Sema<'_, '_> {
                 .arg(self.ty_arg(deduced))
                 .arg(self.decl_name(v));
             self.emit(msg);
-            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            self.invalidate(v);
             return false;
         }
         true

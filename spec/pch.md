@@ -127,7 +127,7 @@ block holding them is read and they are ignored.
 
 ```
 "KILNSNAP"                              8 bytes, the magic
-u32 FORMAT_VERSION                      little-endian (now 175)
+u32 FORMAT_VERSION                      little-endian (now 176)
 kiln_snap stream: u64 SCHEMA_HASH, identity, lookup log
 kiln_snap stream: the roots
 ```
@@ -344,6 +344,14 @@ log that passes is repeated as written; its names and directories are
 only joined into paths and asked about, so an empty, `..`, absolute, NUL
 or very long name is a file that is not there, or another file
 (`tests/pch_snapshot_fuzz.rs` `snapshot_corruption_fuzz`).
+
+**Silent-failure marks** (WP-3281, version 176). The snapshot carries
+`DeclArena::subst_failed` (spec/ast.md §4.1) with the other cold maps;
+Sema's trap ledger is flushed before the snapshot is taken, so a prefix
+has no entry in flight. A kind is its variant's tag: a value outside the
+six kinds is `BadTag`, a decoding error, so the snapshot is refused
+(`kiln_ast` `decl::tests::subst_failed_unknown_kind_is_bad_tag`;
+`tests/pch_snapshot.rs` `subst_failed_marks_round_trip`).
 
 **Soundness.** (1) The prefix's tokens depend on the search path only
 through its lookups' results (the predefines and the feature queries,

@@ -409,7 +409,7 @@ impl Sema<'_, '_> {
             let body = self.implicit_body(f, &[], at);
             let _ = self.builder().set_body(f, body);
         } else {
-            self.ast.decls.set_flags(f, DeclFlags::INVALID);
+            self.invalidate(f);
         }
         self.pop_synth(saved);
     }
@@ -863,8 +863,8 @@ impl Sema<'_, '_> {
         // One per field at the same constructor (clang does not
         // deduplicate; the field is invalid afterwards).
         self.emit(d.with_note(note).allow_duplicate());
-        if !self.inst.stack.is_sfinae() {
-            self.ast.decls.set_flags(field, DeclFlags::INVALID);
+        if !self.sfinae_traps() {
+            self.invalidate(field);
         }
     }
 

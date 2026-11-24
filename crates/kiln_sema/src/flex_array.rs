@@ -81,8 +81,8 @@ impl Sema<'_, '_> {
                         .arg(self.ty_arg(ty))
                         .arg(tag as u8);
                     self.emit(msg.with_note(note).per_instantiation());
-                    self.ast.decls.set_flags(f, DeclFlags::INVALID);
-                    self.ast.decls.set_flags(r, DeclFlags::INVALID);
+                    self.invalidate(f);
+                    self.invalidate(r);
                     continue;
                 }
                 if union {
@@ -114,8 +114,8 @@ impl Sema<'_, '_> {
                         .arg(&name)
                         .arg(self.ty_arg(ty));
                     self.emit(msg.per_instantiation());
-                    self.ast.decls.set_flags(f, DeclFlags::INVALID);
-                    self.ast.decls.set_flags(r, DeclFlags::INVALID);
+                    self.invalidate(f);
+                    self.invalidate(r);
                     continue;
                 }
                 has = true;

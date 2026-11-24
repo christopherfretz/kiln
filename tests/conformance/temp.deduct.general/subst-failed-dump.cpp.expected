@@ -1,0 +1,100 @@
+Dumping sf_g:
+FunctionTemplateDecl sf_g
+|-TemplateTypeParmDecl referenced class depth 0 index 0 T
+|-FunctionDecl sf_g 'auto (T) -> decltype(t.size())'
+| `-ParmVarDecl referenced t 'T'
+`-FunctionDecl invalid subst-failed=function-signature sf_g '<error type>'
+
+Dumping sf_g:
+FunctionDecl used sf_g 'int (...)'
+
+Dumping sf_h:
+FunctionTemplateDecl sf_h
+|-TemplateTypeParmDecl referenced class depth 0 index 0 T
+|-FunctionDecl sf_h 'auto (T) -> decltype(int{t})'
+| `-ParmVarDecl referenced t 'T'
+`-FunctionDecl invalid subst-failed=function-signature sf_h 'auto (double) -> decltype(int{t})'
+  `-ParmVarDecl referenced t 'double'
+
+Dumping sf_h:
+FunctionDecl used sf_h 'long (...)'
+
+Dumping sf_S:
+CXXRecordDecl referenced struct sf_S definition
+|-FunctionTemplateDecl sf_S
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-CXXConstructorDecl sf_S 'void (T)' implicit-inline
+| | |-ParmVarDecl 'T'
+| | `-CompoundStmt
+| `-CXXConstructorDecl invalid subst-failed=explicit-specifier sf_S 'void (int)' implicit-inline
+|   `-ParmVarDecl 'int'
+`-CXXConstructorDecl used sf_S 'void (...)' implicit-inline
+  `-CompoundStmt
+
+Dumping sf_v:
+VarTemplateDecl sf_v
+|-TemplateTypeParmDecl class depth 0 index 0 T
+|-TemplateTypeParmDecl class depth 0 index 1 U
+|-VarDecl sf_v 'const int' constexpr cinit value=0
+| `-IntegerLiteral 'int' 0
+`-VarTemplateSpecializationDecl invalid subst-failed=variable-partial-ambiguity sf_v '<error type>' implicit_instantiation
+  |-TemplateArgument type 'int'
+  `-TemplateArgument type 'int'
+
+Dumping sf_v:
+VarTemplatePartialSpecializationDecl sf_v 'const int' explicit_specialization constexpr cinit value=1
+|-TemplateTypeParmDecl referenced class depth 0 index 0 T
+|-TemplateArgument type 'type-parameter-0-0'
+|-TemplateArgument type 'int'
+`-IntegerLiteral 'int' 1
+
+Dumping sf_v:
+VarTemplatePartialSpecializationDecl sf_v 'const int' explicit_specialization constexpr cinit value=2
+|-TemplateTypeParmDecl referenced class depth 0 index 0 U
+|-TemplateArgument type 'int'
+|-TemplateArgument type 'type-parameter-0-0'
+`-IntegerLiteral 'int' 2
+
+Dumping sf_f:
+FunctionTemplateDecl sf_f
+|-TemplateTypeParmDecl referenced class depth 0 index 0 T
+|-FunctionDecl sf_f 'auto (T) -> decltype(sf_v<T, int>)'
+| `-ParmVarDecl 'T'
+`-FunctionDecl invalid subst-failed=function-signature sf_f '<error type>'
+
+Dumping sf_f:
+FunctionDecl used sf_f 'long (...)'
+
+Dumping sf_X:
+ClassTemplateDecl sf_X
+|-TemplateTypeParmDecl class depth 0 index 0 T
+|-TemplateTypeParmDecl class depth 0 index 1 U
+|-CXXRecordDecl struct sf_X definition
+`-ClassTemplateSpecializationDecl invalid subst-failed=class-partial-ambiguity struct sf_X
+  |-TemplateArgument type 'int'
+  `-TemplateArgument type 'int'
+
+Dumping sf_X:
+ClassTemplatePartialSpecializationDecl struct sf_X definition explicit_specialization
+|-TemplateArgument type 'type-parameter-0-0'
+|-TemplateArgument type 'int'
+|-TemplateTypeParmDecl referenced class depth 0 index 0 T
+`-TypeAliasDecl t 'int'
+
+Dumping sf_X:
+ClassTemplatePartialSpecializationDecl struct sf_X definition explicit_specialization
+|-TemplateArgument type 'int'
+|-TemplateArgument type 'type-parameter-0-0'
+|-TemplateTypeParmDecl referenced class depth 0 index 0 U
+`-TypeAliasDecl t 'int'
+
+Dumping sf_k:
+FunctionTemplateDecl sf_k
+|-TemplateTypeParmDecl referenced class depth 0 index 0 T
+|-FunctionDecl sf_k 'auto (T) -> typename sf_X<T, int>::t'
+| `-ParmVarDecl 'T'
+`-FunctionDecl invalid subst-failed=function-signature sf_k '<error type>'
+
+Dumping sf_k:
+FunctionDecl used sf_k 'long (...)'
+

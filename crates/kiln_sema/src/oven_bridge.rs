@@ -1209,7 +1209,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
 
     /// The AST and the evaluator, at the end of the translation unit (the
     /// evaluator's [`Oven::stats`] are its `-fconstexpr-report=`).
-    pub fn into_parts(self) -> (Ast, Oven) {
+    pub fn into_parts(mut self) -> (Ast, Oven) {
+        self.flush_subst_failed();
         let Some(mut oven) = self.oven else {
             unreachable!("the Oven is out during an evaluation")
         };

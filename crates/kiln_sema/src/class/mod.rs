@@ -399,7 +399,7 @@ impl Sema<'_, '_> {
         let at = self.begin_loc(e);
         let op = crate::templ::pack::PackOperand::Expr(e);
         if self.lambdas.is_empty() && self.diagnose_unexpanded_pack(op, "default argument", at) {
-            self.ast.decls.set_flags(p, DeclFlags::INVALID);
+            self.invalidate(p);
             let _ = self.ast.decls.set_default_arg(p, e);
             return;
         }
@@ -412,7 +412,7 @@ impl Sema<'_, '_> {
         // [dcl.fct.default]/1, as `act_on_param_default_init`.
         let ploc = self.ast.decls.get(p).loc();
         if eq.is_valid() && self.incomplete_class_rejected(pty, ploc) {
-            self.ast.decls.set_flags(p, DeclFlags::INVALID);
+            self.invalidate(p);
             let _ = self.ast.decls.set_default_arg(p, e);
             return;
         }
@@ -667,7 +667,7 @@ impl Sema<'_, '_> {
             // constructor, aggregate initialization, an instantiation)
             // reports again.
             if self.is_err_expr(e) {
-                self.ast.decls.set_flags(field, DeclFlags::INVALID);
+                self.invalidate(field);
             }
             let _ = self.ast.decls.set_field_init(field, e);
         }

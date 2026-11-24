@@ -406,6 +406,7 @@ impl SyntaxJob<'_> {
             record_carried: writes_kind2,
             record_image: a.bmi_image && writes_kind2,
             image_census: a.bmi_image_census,
+            verify_subst_failed: a.verify_subst_failed || crate::args::verify_subst_failed_env(),
             gnu89_inline: a.predef.gnu89_inline_for(&job.std),
             prefix: a.pch.producing || a.pch.record_lookups,
             // [module.import]/6 applies to a header unit's build only, as

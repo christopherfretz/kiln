@@ -834,9 +834,9 @@ impl Sema<'_, '_> {
         let mut d = DeducedArgs::new(list.depth, params.len());
         d.expansions = true;
         d.self_deduce = true;
-        self.inst.sfinae.borrow_mut().push(crate::templ::stack::SfinaeState::default());
+        self.push_sfinae_state();
         let r = self.deduce_args(&args, &args, true, &mut d, loc);
-        let failed = self.inst.sfinae.borrow_mut().pop().is_some_and(|s| s.errors > 0);
+        let failed = self.pop_sfinae_state().errors > 0;
         if r != Tdk::Success || failed {
             return;
         }
