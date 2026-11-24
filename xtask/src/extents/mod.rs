@@ -320,6 +320,11 @@ type Exact<'a> = HashMap<(&'a str, u32), Vec<(&'a str, u32, bool)>>;
 /// kinds with a `None` share (`unit <path> <hash> <Kind>=<none>/<total>...`).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Baseline {
+    /// The host architecture the baseline was recorded on (its `arch`
+    /// line; `None` when it has none). The system headers a unit includes
+    /// expand differently per architecture (`va_list`, `NULL`), so the
+    /// `None` shares are only gated on this one.
+    arch: Option<String>,
     units: BTreeMap<String, (u64, NoneCounts)>,
 }
 
@@ -329,6 +334,10 @@ impl Baseline {
         for (i, line) in text.lines().enumerate() {
             let at = |what: &str| format!("{BASELINE}:{}: {what}", i + 1);
             if line.trim().is_empty() || line.starts_with('#') {
+                continue;
+            }
+            if let Some(a) = line.strip_prefix("arch ") {
+                b.arch = Some(a.trim().to_owned());
                 continue;
             }
             let mut w = line.split(' ');
@@ -359,8 +368,12 @@ impl Baseline {
             "# The expression kinds kiln gives no written extent, per unit of `cargo xtask\n\
              # extents` (spec/harness.md \"Expression extents\"): unit, FNV-1a hash of its\n\
              # text, <Kind>=<none>/<total>. A unit whose text is unchanged may not get a\n\
-             # larger None share of any kind. Regenerate: cargo xtask extents --update-baseline\n",
+             # larger None share of any kind. Regenerate: cargo xtask extents --update-baseline\n\
+             # The arch line names the host it was recorded on; other hosts are not gated.\n",
         );
+        if let Some(a) = &self.arch {
+            let _ = writeln!(out, "arch {a}");
+        }
         for (path, (hash, kinds)) in &self.units {
             let _ = write!(out, "unit {path} {hash:016x}");
             for (k, (n, t)) in kinds {
@@ -1249,8 +1262,16 @@ fn none_counts(kiln: &[KilnLine]) -> BTreeMap<String, (usize, usize)> {
 pub fn execute(root: &Path, kiln: &Path, opts: &Options) -> Result<Report, String> {
     let kinds = Arc::new(read_table(root, opts.kinds.as_ref(), KINDS, Kinds::parse)?);
     let gated = opts.compdb.is_none();
+    let mut other_arch = None;
     let baseline = if gated && !opts.update_baseline {
-        Some(read_table(root, opts.baseline.as_ref(), BASELINE, Baseline::parse)?)
+        let b = read_table(root, opts.baseline.as_ref(), BASELINE, Baseline::parse)?;
+        match &b.arch {
+            Some(a) if a != std::env::consts::ARCH => {
+                other_arch = Some(a.clone());
+                None
+            }
+            _ => Some(b),
+        }
     } else {
         None
     };
@@ -1305,7 +1326,8 @@ pub fn execute(root: &Path, kiln: &Path, opts: &Options) -> Result<Report, Strin
     let mut failed_units = 0;
     let mut compared_units = 0;
     let mut bad_compared = 0;
-    let mut fresh = Baseline::default();
+    let mut fresh =
+        Baseline { arch: Some(std::env::consts::ARCH.to_owned()), ..Baseline::default() };
     let mut stale = 0;
     for (u, v) in units.iter().zip(verdicts) {
         let v = v.into_inner().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -1394,6 +1416,13 @@ pub fn execute(root: &Path, kiln: &Path, opts: &Options) -> Result<Report, Strin
     for l in &lines {
         text.push_str(l);
         text.push('\n');
+    }
+    if let Some(a) = &other_arch {
+        let _ = writeln!(
+            text,
+            "baseline: recorded on {a}, not gated on {} (mismatches still are)",
+            std::env::consts::ARCH
+        );
     }
     if stale > 0 {
         let _ = writeln!(

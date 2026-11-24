@@ -668,6 +668,9 @@ fn a_run_checks_the_stack_of_its_own_thread() {
                 let deep = on(SMALL, s, "X::deep");
                 assert_eq!(deep.result, Err(RunError::StackExhausted));
                 let text = render(sm, &deep.diagnostics).join("\n");
+                // Each level of `R` both instantiates and evaluates, so
+                // which of the two finds the stack low depends on the
+                // host's frame sizes: the phase is either.
                 let headline = text
                     .lines()
                     .find(|l| l.contains("fatal error: kiln: stack exhausted during "))
@@ -691,7 +694,12 @@ fn a_run_checks_the_stack_of_its_own_thread() {
                 let again = run(s, "X::deep");
                 assert_eq!(again.result, Err(RunError::StackExhausted));
                 let again = render(sm, &again.diagnostics).join("\n");
-                assert!(again.contains(&headline), "{again}");
+                assert!(
+                    ["template instantiation", "constant evaluation"]
+                        .iter()
+                        .any(|p| again.contains(&format!("stack exhausted during {p};"))),
+                    "{again} (first: {headline})"
+                );
             });
             // A fresh session on A's stack runs the deep entry.
             session(STACK_SRC, |s, sm| {

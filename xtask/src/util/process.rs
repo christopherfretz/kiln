@@ -1137,7 +1137,7 @@ mod tests {
 
     /// [`child_runs_keep_no_descriptors_inner`] in a process of its own:
     /// this test binary again, one test thread (no other test opens or
-    /// closes anything meanwhile, so the counts compare exactly) and no
+    /// closes anything meanwhile, so a count that grew is a leak) and no
     /// jobserver (2000 token waits on a shared pool took minutes).
     #[cfg(target_os = "linux")]
     #[test]
@@ -1156,8 +1156,8 @@ mod tests {
     /// 2000 children started by every route of the harness's child-process
     /// path (capped and wrapped `run`, `run_with_input`, `run_streaming`,
     /// `run_measured`, a spawn that fails, a timeout) leave this process's
-    /// descriptor and thread counts exactly where they were: no pipe, child
-    /// handle or reader thread outlives its run (WP-2780).
+    /// descriptor and thread counts no higher than they were: no pipe,
+    /// child handle or reader thread outlives its run (WP-2780, WP-3420).
     #[cfg(target_os = "linux")]
     #[test]
     #[ignore = "run by child_runs_keep_no_descriptors in a process of its own"]
@@ -1203,19 +1203,24 @@ mod tests {
         let (fds, threads) = fds_and_threads();
         (0..RUNS).for_each(&one);
         // A joined reader thread can still be listed in /proc/self/task for
-        // a moment while the kernel reaps it: wait (bounded) for the counts
-        // to settle; a leak stays and still fails.
+        // a moment while the kernel reaps it, and a run's reader thread or
+        // pipe may still be closing when the first count is taken (the
+        // warm-up's timeout run): wait (bounded) for the counts to settle at
+        // or below the first ones. A leak is a count that grew and stays.
         let mut after = fds_and_threads();
         for _ in 0..100 {
-            if after == (fds, threads) {
+            if after.0 <= fds && after.1 <= threads {
                 break;
             }
             thread::sleep(Duration::from_millis(20));
             after = fds_and_threads();
         }
         let (fds_after, threads_after) = after;
-        assert_eq!(fds_after, fds, "descriptors before and after {RUNS} runs");
-        assert_eq!(threads_after, threads, "threads before and after {RUNS} runs");
+        assert!(fds_after <= fds, "descriptors before {fds} and after {RUNS} runs {fds_after}");
+        assert!(
+            threads_after <= threads,
+            "threads before {threads} and after {RUNS} runs {threads_after}"
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
