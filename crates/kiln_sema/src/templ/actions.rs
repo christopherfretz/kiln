@@ -863,6 +863,11 @@ impl Sema<'_, '_> {
             self.module_note_overload_set(&decls, n.loc());
             self.builder().unresolved_lookup_in(name, &decls, false, nns, targs, dep, n.loc())
         };
+        // The using-shadows the widening lookup found (spec/ast.md §8.8):
+        // `legacy::forward<T>` names `std::forward` through `legacy`'s
+        // using-declaration.
+        // (Each element is checked against the node's own declaration.)
+        self.ast.note_unresolved_found(r, &found.found);
         // A qualified member template-id (`C::f<int>`) keeps its naming
         // class, so the call or address resolving it checks the access
         // of the template it selects ([class.access]/4, clang's
@@ -987,7 +992,16 @@ impl Sema<'_, '_> {
             // [basic.link]/14 names the whole set (WP-1819).
             self.module_note_overload_set(&decls, loc);
         }
-        self.builder().unresolved_lookup(DeclName::ident(name), &decls, true, None, Some(list), loc)
+        let e = self.builder().unresolved_lookup(
+            DeclName::ident(name),
+            &decls,
+            true,
+            None,
+            Some(list),
+            loc,
+        );
+        self.ast.note_unresolved_found(e, &found.found);
+        e
     }
 
     /// The template-id `name<args>` assumed to name a template
@@ -1137,7 +1151,9 @@ impl Sema<'_, '_> {
                 // [basic.link]/14 names the whole set (WP-1819).
                 self.module_note_overload_set(&decls, loc);
             }
-            return self.builder().unresolved_lookup(name, &decls, true, None, Some(list), loc);
+            let e = self.builder().unresolved_lookup(name, &decls, true, None, Some(list), loc);
+            self.ast.note_unresolved_found(e, &found.found);
+            return e;
         }
         if decls.is_empty() && qualifier.is_none() {
             self.diagnose_undeclared_template_name(name, loc);
@@ -1152,7 +1168,10 @@ impl Sema<'_, '_> {
         // [basic.link]/14: the template-id names every function template
         // in the set (WP-1819).
         self.module_note_overload_set(&decls, loc);
-        self.builder().unresolved_lookup_in(name, &decls, false, None, Some(list), dep, loc)
+        let e =
+            self.builder().unresolved_lookup_in(name, &decls, false, None, Some(list), dep, loc);
+        self.ast.note_unresolved_found(e, &found.found);
+        e
     }
 
     /// The qualified function or variable template-id or concept-id `e`
@@ -2302,6 +2321,13 @@ impl Sema<'_, '_> {
                 if let Some(name) = name {
                     let name = DeclName::ident(name);
                     f = self.builder().unresolved_lookup(name, &[d], true, None, None, n.loc());
+                    // The using-shadow the name was found through
+                    // (spec/ast.md §8.8).
+                    if let Some(s) =
+                        self.ast.exprs.decl_ref_extra(callee).and_then(|x| x.found_decl)
+                    {
+                        self.ast.note_unresolved_found(f, &[s]);
+                    }
                 }
             }
         }

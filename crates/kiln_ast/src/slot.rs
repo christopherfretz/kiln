@@ -200,6 +200,7 @@ const COLD_MAP_NAMES: &[&str] = &[
     "ttp_owner",
     "typedef_for_anon",
     "union_field",
+    "unresolved_found",
     "use_imm",
     "using_shadows",
     "written_ns",

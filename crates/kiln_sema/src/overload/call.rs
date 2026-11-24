@@ -50,6 +50,9 @@ impl Sema<'_, '_> {
         self.module_note_overload_set(decls, loc);
         if naming.is_some() || found.iter().zip(decls).any(|(f, d)| f != d) {
             self.ovl.ule_found.insert(e, UleFound { found: found.to_vec(), naming });
+            // Kept on the node too, for the life of the `Ast` (spec/ast.md
+            // §8.8): `ule_found` is consumed by the call resolving it.
+            self.ast.note_unresolved_found(e, found);
         }
         e
     }

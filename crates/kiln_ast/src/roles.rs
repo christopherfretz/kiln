@@ -1114,6 +1114,7 @@ pub static COLD_MAPS: &[ColdMapRoles] = &[
     cold("TemplateTables", "pseudo_dtor_name", E, Role::Symbol),
     cold("TemplateTables", "pseudo_dtor_first", E, Role::Record("(QualType, Loc)")),
     cold("TemplateTables", "template_kw", E, L),
+    cold("TemplateTables", "unresolved_found", E, DL),
     cold("TemplateTables", "ttp_owner", D, D),
     cold("TemplateTables", "member_like_friend", D, D),
     cold("ColdExprData", "end_loc", E, L),

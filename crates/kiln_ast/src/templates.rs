@@ -435,6 +435,14 @@ pub struct TemplateTables {
     /// (`N::template v<T>`; clang's `TemplateKWLoc`), which the printer
     /// writes back (WP-308).
     pub template_kw: ColdMap<ExprId, Loc>,
+    /// What lookup found for each declaration of an
+    /// `UnresolvedLookupExpr` (spec/ast.md §8.8, WP-3400): a list
+    /// parallel to the node's declarations holding the `UsingShadow`
+    /// through which an element was found, else the element itself;
+    /// present only when at least one element was found through a
+    /// using-shadow. Read with [`Ast::unresolved_shadow`] and
+    /// [`Ast::unresolved_found_pairs`].
+    pub unresolved_found: ColdMap<ExprId, ListId>,
     /// The templated declaration (pattern) whose template-head declares
     /// a concept template parameter: its semantic parent for mangling a
     /// type-constraint that names it (clang 22's `N <owner> <name> E`,
@@ -590,6 +598,7 @@ impl Default for TemplateTables {
             pseudo_dtor_name: ColdMap::new("pseudo_dtor_name"),
             pseudo_dtor_first: ColdMap::new("pseudo_dtor_first"),
             template_kw: ColdMap::new("template_kw"),
+            unresolved_found: ColdMap::new("unresolved_found"),
             ttp_owner: ColdMap::new("ttp_owner"),
             member_like_friend: ColdMap::new("member_like_friend"),
             expr_nns: ColdMap::new("expr_nns"),
@@ -937,6 +946,7 @@ impl HeapSize for TemplateTables {
         r.push(self.pseudo_dtor_name.mem_row());
         r.push(self.pseudo_dtor_first.mem_row());
         r.push(self.template_kw.mem_row());
+        r.push(self.unresolved_found.mem_row());
         r.push(self.expr_nns.mem_row());
         self.oper_lookups.mem_rows(&mut r);
         r.push(MemRow::of_vec("templ.specs", &self.specs));
@@ -1331,6 +1341,88 @@ impl Ast {
         let n = self.exprs.get(e);
         assert_eq!(n.kind(), ExprKind::UnresolvedLookupExpr, "not an UnresolvedLookupExpr");
         self.lists.iter::<DeclId>(ListId::new(n.b())).collect()
+    }
+
+    /// The using-shadow through which lookup found element `i` of
+    /// [`Self::unresolved_decls`] of `e` (clang's `FoundDecl` of
+    /// `UnresolvedLookupExpr::decls()`; spec/ast.md §8.8). Total: `None`
+    /// when `e` is not an `UnresolvedLookupExpr`, when `i` is not an
+    /// index of its declarations, and when the element was not found
+    /// through a using-declaration (a declaration of the scope searched,
+    /// one a using-directive made visible, one no lookup found: a
+    /// candidate added at instantiation, a set kiln forms without a
+    /// lookup).
+    pub fn unresolved_shadow(&self, e: ExprId, i: usize) -> Option<DeclId> {
+        let n = self.exprs.get(e);
+        if n.kind() != ExprKind::UnresolvedLookupExpr {
+            return None;
+        }
+        let &found = self.templates.unresolved_found.get(e)?;
+        let shadow = self.lists.iter::<DeclId>(found).nth(i)?;
+        let target = self.lists.iter::<DeclId>(ListId::new(n.b())).nth(i)?;
+        (shadow != target).then_some(shadow)
+    }
+
+    /// The declarations of `e` (as [`Self::unresolved_decls`], in that
+    /// order), each with the using-shadow lookup found it through
+    /// ([`Self::unresolved_shadow`]): empty when `e` is not an
+    /// `UnresolvedLookupExpr` (spec/ast.md §8.8).
+    pub fn unresolved_found_pairs(
+        &self,
+        e: ExprId,
+    ) -> impl Iterator<Item = (DeclId, Option<DeclId>)> + '_ {
+        let n = self.exprs.get(e);
+        let decls = if n.kind() == ExprKind::UnresolvedLookupExpr {
+            ListId::new(n.b())
+        } else {
+            ListId::EMPTY
+        };
+        let found =
+            self.templates.unresolved_found.get(e).copied().filter(|_| decls != ListId::EMPTY);
+        let mut found = found.map(|l| self.lists.iter::<DeclId>(l));
+        self.lists.iter::<DeclId>(decls).map(move |d| {
+            let f = found.as_mut().and_then(Iterator::next);
+            (d, f.filter(|&f| f != d))
+        })
+    }
+
+    /// Records what lookup found for the declarations of unresolved
+    /// lookup `e` (`found`, parallel to them; spec/ast.md §8.8): an
+    /// element of `found` is kept when it is a using-shadow of the
+    /// declaration at its index (the same entity), else the declaration
+    /// stands for itself. Nothing is stored (and `false` returned) when
+    /// `e` is not an `UnresolvedLookupExpr`, the lengths differ, no
+    /// element is such a shadow, or `e` already has a record.
+    pub fn note_unresolved_found(&mut self, e: ExprId, found: &[DeclId]) -> bool {
+        let n = self.exprs.get(e);
+        if n.kind() != ExprKind::UnresolvedLookupExpr || self.templates.unresolved_found.contains(e)
+        {
+            return false;
+        }
+        let decls: Vec<DeclId> = self.lists.iter::<DeclId>(ListId::new(n.b())).collect();
+        if decls.len() != found.len() {
+            return false;
+        }
+        let mut any = false;
+        let kept: Vec<DeclId> = decls
+            .iter()
+            .zip(found)
+            .map(|(&d, &f)| {
+                let shadow = f != d
+                    && matches!(
+                        self.decls.get(f).kind(),
+                        DeclKind::UsingShadow | DeclKind::ConstructorUsingShadow
+                    )
+                    && self.first(self.strip_shadow(f)) == self.first(d);
+                any |= shadow;
+                if shadow { f } else { d }
+            })
+            .collect();
+        if !any {
+            return false;
+        }
+        let l = self.lists.push(&kept);
+        self.templates.unresolved_found.insert(e, l).is_ok()
     }
 
     /// The requires-expression record of `RequiresExpr` `e`.

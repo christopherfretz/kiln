@@ -2241,6 +2241,7 @@ impl Substituter<'_, '_, '_> {
                 let r =
                     self.sema.builder().unresolved_lookup(name, &[d], false, nns, targs, n.loc());
                 self.keep_ule_found(c, r);
+                self.keep_unresolved_found(c, r);
                 return Ok(r);
             }
             return Ok(self.sema.build_decl_ref_qualified(d, n.loc(), None, nns));
@@ -2256,6 +2257,7 @@ impl Substituter<'_, '_, '_> {
         };
         let r = self.sema.builder().unresolved_lookup(name, &ds, false, nns, targs, n.loc());
         self.keep_ule_found(c, r);
+        self.keep_unresolved_found(c, r);
         Ok(r)
     }
 
@@ -2280,6 +2282,70 @@ impl Substituter<'_, '_, '_> {
             f.naming = Some(n);
         }
         self.sema.ovl.ule_found.insert(r, f);
+    }
+
+    /// The unresolved name `r` rebuilt from `c` keeps what `c`'s lookup
+    /// found for the declarations they share (spec/ast.md §8.8): element
+    /// by element when the lists have one length (each declaration
+    /// instantiated in place), else by entity. A using-shadow that is a
+    /// member of a class template's pattern becomes the instantiated
+    /// class's shadow ([`Self::instantiated_shadow`]); one whose
+    /// instantiation is not found is dropped.
+    fn keep_unresolved_found(&mut self, c: ExprId, r: ExprId) {
+        if c == r || self.sema.ast.exprs.get(r).kind() != ExprKind::UnresolvedLookupExpr {
+            return;
+        }
+        let pairs: Vec<(DeclId, Option<DeclId>)> =
+            self.sema.ast.unresolved_found_pairs(c).collect();
+        if pairs.iter().all(|p| p.1.is_none()) {
+            return;
+        }
+        let decls = self.sema.ast.unresolved_decls(r);
+        let mut found = decls.clone();
+        for (i, &d) in decls.iter().enumerate() {
+            let shadow = if pairs.len() == decls.len() {
+                pairs[i].1
+            } else {
+                let first = self.sema.ast.first(d);
+                pairs.iter().find(|p| self.sema.ast.first(p.0) == first).and_then(|p| p.1)
+            };
+            let Some(s) = shadow else { continue };
+            let s = if self.sema.ast.decls.get(s).has(kiln_ast::decl::DeclFlags::DEPENDENT_CTX) {
+                match self.instantiated_shadow(s, d) {
+                    Some(x) => x,
+                    None => continue,
+                }
+            } else {
+                s
+            };
+            found[i] = s;
+        }
+        self.sema.ast.note_unresolved_found(r, &found);
+    }
+
+    /// The shadow of `target` the instantiation of pattern shadow `s`'s
+    /// using-declaration introduced, in the specialization of `s`'s class
+    /// that encloses the substitution's context. Reads only: shadows are
+    /// not in the instantiated class's member map, so
+    /// [`Self::find_instantiated_decl`] would report a member not
+    /// instantiated; `None` when there is no such specialization or
+    /// shadow.
+    fn instantiated_shadow(&self, s: DeclId, target: DeclId) -> Option<DeclId> {
+        let ast = &self.sema.ast;
+        let parent = ast.decls.get(s).ctx()?;
+        let u = ast.shadow_using(s)?;
+        let first = ast.first(ast.strip_shadow(target));
+        let mut at = Some(self.sema.ctx);
+        while let Some(x) = at {
+            if ast.decls.get(x).kind() == DeclKind::CXXRecord
+                && self.instantiated_from_parent(x, parent)
+            {
+                let iu = self.find_member_of(x, u)?;
+                return ast.using_shadows(iu).find(|&t| ast.first(ast.strip_shadow(t)) == first);
+            }
+            at = ast.decls.get(x).ctx();
+        }
+        None
     }
 
     /// A name `e` found as a block-scope dependent using-declarator
@@ -2431,6 +2497,7 @@ impl Substituter<'_, '_, '_> {
             if let Some(f) = self.sema.ovl.ule_found.get(&c).cloned() {
                 self.sema.ovl.ule_found.insert(r, f);
             }
+            self.keep_unresolved_found(c, r);
             return Ok(r);
         }
         let r = self.sema.act_on_call_name_dn(name, n.loc());
@@ -2442,14 +2509,16 @@ impl Substituter<'_, '_, '_> {
                 let rn = *self.sema.ast.exprs.get(r);
                 let ds = self.sema.ast.unresolved_decls(r);
                 let nns = self.sema.ast.templates.expr_nns.get(r).copied();
-                return Ok(self.sema.builder().unresolved_lookup(
+                let x = self.sema.builder().unresolved_lookup(
                     name,
                     &ds,
                     rn.aux() != 0,
                     nns,
                     Some(t),
                     rn.loc(),
-                ));
+                );
+                self.keep_unresolved_found(r, x);
+                return Ok(x);
             } else if self.sema.is_member_template_ref(r) {
                 // An implicit member template-id `this->f<T>` (§6.4).
                 return Ok(self.sema.act_on_member_template_args(r, t));

@@ -1605,6 +1605,71 @@ reachable from the `Ast` or names the row that puts it there.
   positions of pattern syntax whose tree is on the `Ast`): not yet, row
   WP-3123, only if a tooling client asks.
 
+### 8.8 The using-shadows of an unresolved name (WP-3400)
+An `UnresolvedLookupExpr` (§5: a dependent call's callee, a function
+template-id, an overload set resolved at the call) holds the
+declarations its lookup found, the targets: a using-declaration's
+shadow is looked through ([namespace.udecl]/1), so `legacy::forward<T>`
+after `namespace legacy { using std::forward; }` lists `std::forward`
+itself. The node also keeps, per element, the declaration lookup
+actually found when that is a using-shadow (clang's `FoundDecl` in
+`UnresolvedLookupExpr::decls()`): a tooling client tells
+`legacy::forward<T>` from `acme::forward<T>` (one entity, two shadows)
+and from `std::forward<T>` (no shadow). The using-directive route is not
+kept here (§18.7, §18.9.1 for the written-reference table's).
+
+- **Storage** (design choice: a parallel cold list, not pairs).
+  `templates.unresolved_found: ColdMap<ExprId, ListId>` (map name
+  `unresolved_found`, memory row of that name): a list of `DeclId`s
+  parallel to the node's declaration list, each the `UsingShadow` (or
+  `ConstructorUsingShadow`) through which the element at that index was
+  found, else the element itself. An entry exists only when at least one
+  element was found through a shadow, so a node without shadows costs
+  nothing: its header, its declaration list, their order and targets are
+  what they were before WP-3400.
+- **Written** by sema where a node is built from a lookup result
+  (`lookup::Found::found`, parallel to `decls`): an unqualified or
+  namespace-qualified function template name, an overload set
+  (`build_overload_ref`), a widened function template-id
+  (`widen_function_template_id_dn`), an assumed template-id
+  ([temp.names]/3) and an operator-function-id template-id, and a
+  dependent call's single callee (from the `DeclRefExpr`'s
+  `found_decl`). `Ast::note_unresolved_found(e, found)` keeps an element
+  only when it is a shadow of the same entity as the declaration at its
+  index; it writes nothing for a node that is not an
+  `UnresolvedLookupExpr`, a list of another length, no shadow, or a
+  node that already has an entry.
+- **Substitution** keeps it: a rebuilt node naming the declarations of
+  its pattern (a namespace-scope dependent call, a qualified overload
+  set, a generic lambda's body substituted still dependent) takes the
+  pattern's shadows, element by element (by entity when the lengths
+  differ); a shadow that is a member of a class template's pattern
+  becomes the shadow the instantiated using-declaration introduced in
+  the enclosing specialization (dropped if none). A node made by a new
+  lookup at instantiation records that lookup's shadows.
+- **Snapshots and images.** PCH snapshots carry the map (§17). Module
+  images carry it per node (`COLD_SHADOWS`, spec/modules.md §11.11); the
+  importer records it through `note_unresolved_found`, so the same
+  checks apply.
+- **Query** (total, for any expression of the `Ast`):
+  `Ast::unresolved_shadow(e, i) -> Option<DeclId>`: the shadow of
+  element `i` of `Ast::unresolved_decls(e)`. `None` when `e` is not an
+  `UnresolvedLookupExpr`; when `i` is not an index of its declarations;
+  when the element was not found through a using-declaration: declared
+  in the scope searched, made visible by a using-directive, or not found
+  by a lookup at all (a set kiln forms without one: a typo correction's
+  candidates, a structured binding's `get`, a literal operator's
+  templates, a splice, the two-phase recovery retry).
+  `Ast::unresolved_found_pairs(e) -> impl Iterator<Item = (DeclId,
+  Option<DeclId>)>`: every element with its shadow, in the node's order
+  (unqualified: newest first, spec/sema-overload.md §2.1); empty when
+  `e` is not an `UnresolvedLookupExpr`.
+
+Tests: `crates/kiln_parse/tests/unresolved_found.rs` (qualified and
+unqualified, an inline namespace, two shadows of one entity, a class
+using-declaration and its instantiation, a generic lambda substituted,
+totality, the PCH snapshot and module image round trips).
+
 ## 9. Constant values
 ### 9.1 `ConstStore` (`kiln_ast::consts`, WP-043)
 All results of constant evaluation that the AST retains are **interned**

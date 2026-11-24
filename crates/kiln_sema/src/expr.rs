@@ -2418,6 +2418,8 @@ impl Sema<'_, '_> {
                 None,
                 loc,
             );
+            // What lookup found for each element (spec/ast.md §8.8).
+            self.ast.note_unresolved_found(e, &lookup_set_order(&found.found, qualifier.is_none()));
             if found.decls.len() > 1 {
                 // [basic.link]/14: the id-expression names every function
                 // template in the set (WP-1819).

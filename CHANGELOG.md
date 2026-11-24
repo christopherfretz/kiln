@@ -10,6 +10,15 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- Using-shadows of unresolved names (WP-3400, spec/ast.md §8.8): an
+  `UnresolvedLookupExpr` keeps, per element of its declarations, the
+  `UsingShadow` through which lookup found it (`legacy::forward<T>` after
+  `namespace legacy { using std::forward; }`), as clang's
+  `UnresolvedLookupExpr::decls()` does, for tooling clients: total
+  accessors `Ast::unresolved_shadow(e, i)` and
+  `Ast::unresolved_found_pairs(e)`. A parallel cold list
+  (`templates.unresolved_found`), only on nodes with a shadow; kept
+  through instantiation, PCH snapshots and module images (`COLD_SHADOWS`).
 - Function-name spans for tooling clients (WP-3280, spec/ast.md §24):
   with `-fkiln-fn-names` (or `-fkiln-dump-fn-names`, which prints it), each
   string `__PRETTY_FUNCTION__`, `__FUNCTION__`, `__func__`,

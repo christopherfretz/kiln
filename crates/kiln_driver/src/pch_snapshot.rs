@@ -145,8 +145,10 @@ pub(crate) const MAGIC: [u8; 8] = *b"KILNSNAP";
 /// diagnostics; version 178 (WP-3280) the function-name self-check's
 /// diagnostic;
 /// version 179 (WP-3290) the uses of references odr-used when built
-/// (`Sema::ref_odr_at_build`).
-pub(crate) const FORMAT_VERSION: u32 = 179;
+/// (`Sema::ref_odr_at_build`);
+/// version 180 (WP-3400) the using-shadows of unresolved lookups'
+/// found lists.
+pub(crate) const FORMAT_VERSION: u32 = 180;
 /// The length of the magic and the format version.
 pub(crate) const HEADER_LEN: usize = 12;
 
