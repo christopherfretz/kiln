@@ -25,6 +25,7 @@ pub mod diag_names;
 pub mod dump;
 pub mod expr;
 pub mod expr_extent;
+pub mod fn_names;
 pub mod fp;
 pub mod friend_form;
 pub mod ids;

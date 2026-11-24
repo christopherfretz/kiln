@@ -1,0 +1,12 @@
+fn-name 'void ns::loc(S)::L::m()' of ns::loc(S)::L::m@9:19
+  [5,7) scope 'ns' -> ns@6:11
+  [9,12) scope 'loc' -> ns::loc@8:6 q
+  [13,14) scope 'S' -> ns::S@7:8 d=1
+  [17,18) scope 'L' -> L@9:10 q
+  [20,21) name 'm' -> ns::loc(S)::L::m@9:19 q
+fn-name 'static void ns::tl(S)::M::m()' of ns::tl(S)::M::m@13:26
+  [12,14) scope 'ns' -> ns@6:11
+  [16,18) scope 'tl' -> ns::tl<ns::S>@12:25 q
+  [19,20) scope 'S' -> ns::S@7:8 d=1
+  [23,24) scope 'M' -> M@13:10 q
+  [26,27) name 'm' -> ns::tl(S)::M::m@13:26 q

@@ -1,0 +1,43 @@
+fn-name 'void ns::en() [E = ns::Color::red]' of ns::en<ns::Color::red>@14:25
+  [5,7) scope 'ns' -> ns@8:11
+  [9,11) name 'en' -> ns::en<ns::Color::red>@14:25 q
+  [15,16) binding 'E' -> E@14:17
+  [19,21) arg 'ns' -> ns@8:11
+  [23,28) arg 'Color' -> ns::Color@9:12 q
+  [30,33) arg 'red' -> ns::Color::red@9:20 q
+fn-name 'void ns::ptr() [Q = &ns::obj]' of ns::ptr<&ns::obj>@15:24
+  [5,7) scope 'ns' -> ns@8:11
+  [9,12) name 'ptr' -> ns::ptr<&ns::obj>@15:24 q
+  [16,17) binding 'Q' -> Q@15:16
+  [21,23) arg 'ns' -> ns@8:11
+  [25,28) arg 'obj' -> ns::obj@10:5 q
+fn-name 'void ns::pm() [PM = &ns::M::m]' of ns::pm<&ns::M::m>@16:28
+  [5,7) scope 'ns' -> ns@8:11
+  [9,11) name 'pm' -> ns::pm<&ns::M::m>@16:28 q
+  [15,17) binding 'PM' -> PM@16:19
+  [21,23) arg 'ns' -> ns@8:11
+  [25,26) arg 'M' -> ns::M@11:8 q
+  [28,29) arg 'm' -> ns::M::m@11:16 q
+fn-name 'void ns::cls() [V = X{2}]' of ns::cls<X{2}>@17:21
+  [5,7) scope 'ns' -> ns@8:11
+  [9,12) name 'cls' -> ns::cls<X{2}>@17:21 q
+  [16,17) binding 'V' -> V@17:13
+  [20,21) arg 'X' -> ns::X@12:8
+fn-name 'void ns::tt() [TT = ns::C]' of ns::tt<ns::C>@18:43
+  [5,7) scope 'ns' -> ns@8:11
+  [9,11) name 'tt' -> ns::tt<ns::C>@18:43 q
+  [15,17) binding 'TT' -> TT@18:34
+  [20,22) arg 'ns' -> ns@8:11
+  [24,25) arg 'C' -> ns::C@13:25 q
+fn-name 'void ns::pk(Ts...) [Ts = <int, ns::M>]' of ns::pk<int, ns::M>@19:29
+  [5,7) scope 'ns' -> ns@8:11
+  [9,11) name 'pk' -> ns::pk<int, ns::M>@19:29 q
+  [12,14) param 'Ts' -> Ts@19:20
+  [20,22) binding 'Ts' -> Ts@19:20
+  [31,33) arg 'ns' -> ns@8:11
+  [35,36) arg 'M' -> ns::M@11:8 q
+fn-name 'void ns::lit() [N = 3, Ch = 'x']' of ns::lit<3, 'x'>@20:32
+  [5,7) scope 'ns' -> ns@8:11
+  [9,12) name 'lit' -> ns::lit<3, 'x'>@20:32 q
+  [16,17) binding 'N' -> N@20:15
+  [23,25) binding 'Ch' -> Ch@20:23

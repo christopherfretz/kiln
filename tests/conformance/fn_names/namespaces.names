@@ -1,0 +1,17 @@
+fn-name 'void a::f()' of a::f@7:20
+  [5,6) scope 'a' -> a@7:11
+  [8,9) name 'f' -> a::f@7:20 q
+fn-name 'void a::b::g(int)' of a::b::g@8:23
+  [5,6) scope 'a' -> a@7:11
+  [8,9) scope 'b' -> a::b@8:14 q
+  [11,12) name 'g' -> a::b::g@8:23 q
+fn-name 'void a::h()' of a::h@9:42
+  [5,6) scope 'a' -> a@7:11
+  [8,9) name 'h' -> a::h@9:42 q
+fn-name 'void a::(anonymous namespace)::anon(A)' of a::(anonymous namespace)::anon@10:45
+  [5,6) scope 'a' -> a@7:11
+  [8,29) scope '(anonymous namespace)' -> a::(anonymous namespace)@10:25 q synth
+  [31,35) name 'anon' -> a::(anonymous namespace)::anon@10:45 q
+  [36,37) param 'A' -> a::(anonymous namespace)::A@10:34
+fn-name 'void top()' of top@11:6
+  [5,8) name 'top' -> top@11:6

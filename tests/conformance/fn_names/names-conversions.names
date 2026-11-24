@@ -1,0 +1,36 @@
+fn-name 'int ns::K::operator int()' of ns::K::operator int@11:3
+  [4,6) scope 'ns' -> ns@7:11
+  [8,9) scope 'K' -> ns::K@10:8 q
+  [11,23) name 'operator int' -> ns::K::operator int@11:3 q
+fn-name 'S ns::K::operator S()' of ns::K::operator S@12:3
+  [0,1) return 'S' -> ns::S@8:8
+  [2,4) scope 'ns' -> ns@7:11
+  [6,7) scope 'K' -> ns::K@10:8 q
+  [9,19) name 'operator S' -> ns::K::operator S@12:3 q
+  [18,19) name 'S' -> ns::S@8:8 d=1
+fn-name 'operator S' of ns::K::operator S@12:3
+  [0,10) name 'operator S' -> ns::K::operator S@12:3
+  [9,10) name 'S' -> ns::S@8:8 d=1
+fn-name 'const S *ns::K::operator const S *()' of ns::K::operator const S *@13:3
+  [6,7) return 'S' -> ns::S@8:8
+  [9,11) scope 'ns' -> ns@7:11
+  [13,14) scope 'K' -> ns::K@10:8 q
+  [16,34) name 'operator const S *' -> ns::K::operator const S *@13:3 q
+  [31,32) name 'S' -> ns::S@8:8 d=1
+fn-name 'W<S> ns::K::operator W<S>()' of ns::K::operator W<S>@14:3
+  [0,1) return 'W' -> ns::W@9:27
+  [2,3) return 'S' -> ns::S@8:8 d=1
+  [5,7) scope 'ns' -> ns@7:11
+  [9,10) scope 'K' -> ns::K@10:8 q
+  [12,25) name 'operator W<S>' -> ns::K::operator W<S>@14:3 q
+  [21,22) name 'W' -> ns::W<ns::S>@9:27 d=1
+  [23,24) name 'S' -> ns::S@8:8 d=2
+fn-name 'T *ns::K::operator S *() [T = ns::S]' of ns::K::operator S *<ns::S>@15:22
+  [0,1) return 'T' -> T@15:19
+  [3,5) scope 'ns' -> ns@7:11
+  [7,8) scope 'K' -> ns::K@10:8 q
+  [10,22) name 'operator S *' -> ns::K::operator S *<ns::S>@15:22 q
+  [19,20) name 'S' -> ns::S@8:8 d=1
+  [26,27) binding 'T' -> T@15:19
+  [30,32) arg 'ns' -> ns@7:11
+  [34,35) arg 'S' -> ns::S@8:8 q

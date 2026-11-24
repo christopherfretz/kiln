@@ -10,6 +10,20 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- Function-name spans for tooling clients (WP-3280, spec/ast.md §24):
+  with `-fkiln-fn-names` (or `-fkiln-dump-fn-names`, which prints it), each
+  string `__PRETTY_FUNCTION__`, `__FUNCTION__`, `__func__`,
+  `__builtin_FUNCTION()` and `std::source_location::function_name()`
+  make has a record of the byte range of every declaration name printed in
+  it and the declaration it names (namespaces, classes, the function,
+  parameter and return types as written, template parameters and the
+  bracketed arguments). Read with `Ast::fn_name_of_string` (at a
+  `PtrBase::StringLit` pointer), `fn_name_of_value`,
+  `fn_name_of_predefined` and `fn_name_at_use`. `KILN_FN_NAMES_VERIFY=1`
+  self-checks every record; the harness directive `fn-names:` compares
+  the dump with a golden. Off by default; the strings are unchanged. PCH
+  snapshots and module images do not carry the table yet (PCH format 178
+  for the self-check's new diagnostic id).
 - Silent-failure marks (WP-3281, spec/ast.md §4.1): `DeclArena::subst_failed`
   says which invalid declarations kiln made invalid while every error was
   trapped (SFINAE or a discarded capture) and what failed to form (a

@@ -145,6 +145,12 @@ pub struct ParseOptions {
     /// Record the written-reference table (`-fkiln-dump-written-refs`;
     /// spec/ast.md §18): off by default.
     pub written_refs: bool,
+    /// Record the function-name span table (`-fkiln-fn-names`,
+    /// `-fkiln-dump-fn-names`; spec/ast.md §24): off by default.
+    pub fn_names: bool,
+    /// Self-check every function-name record (`KILN_FN_NAMES_VERIFY`,
+    /// spec/ast.md §24.7); implies [`Self::fn_names`].
+    pub fn_names_verify: bool,
     /// Record the declaration-extent table (`-fkiln-decl-extents`,
     /// `-fkiln-dump-decl-extents`; spec/ast.md §19): off by default.
     pub decl_extents: bool,
@@ -244,6 +250,8 @@ impl Default for ParseOptions {
             target_attr_features: |_, _, _| Vec::new(),
             cfg_dump: false,
             written_refs: false,
+            fn_names: false,
+            fn_names_verify: false,
             decl_extents: false,
             token_table: false,
             cfg_stats: false,
@@ -465,6 +473,8 @@ fn configure(s: &mut Sema<'_, '_>, opts: &ParseOptions) {
     s.target_attr_features = opts.target_attr_features;
     s.cfg_dump = opts.cfg_dump;
     s.ast.written_refs.set_on(opts.written_refs);
+    s.ast.fn_names.set_on(opts.fn_names);
+    s.ast.fn_names.set_verify(opts.fn_names_verify);
     s.ast.decl_extents.set_on(opts.decl_extents);
     s.cfg_stats = opts.cfg_stats;
     s.cfg_max_elems = opts.cfg_max_elems;
@@ -785,6 +795,10 @@ pub fn continue_preprocessed<'a, 'sm>(
     // The consumer records from its own options; a restored table
     // continues the prefix's (spec/ast.md §18.10.1).
     p.s.ast.written_refs.set_on(opts.written_refs);
+    // The consumer records from its own options; a restored prefix's
+    // strings have no records (spec/ast.md §24.6, stage A).
+    p.s.ast.fn_names.set_on(opts.fn_names);
+    p.s.ast.fn_names.set_verify(opts.fn_names_verify);
     // The consumer records from its own options (spec/ast.md §19.6).
     p.s.ast.decl_extents.set_on(opts.decl_extents);
     if opts.header_unit {

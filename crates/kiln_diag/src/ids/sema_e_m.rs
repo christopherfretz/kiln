@@ -139,6 +139,7 @@ sema_flexible_array_virtual_base = Error (2) "flexible array member '{0}' not al
 sema_float_literal_overflow = Warning [LiteralRange] (2) "magnitude of floating-point constant too large for type {0}; maximum is {1}";
 sema_float_literal_underflow = Warning [LiteralRange] (2) "magnitude of floating-point constant too small for type {0}; minimum is {1}";
 sema_fmv_hidden_member = Error (1) "non-default 'target_version' version of a {0:member|friend} function is not allowed: without the 'fmv' target feature the version is hidden, which a {0:member|friend} function cannot be";
+sema_fn_names_verify_failed = Error (2) "function-name record of '{0}' fails its self-check: {1}";
 sema_fn_template_spec_ambiguous = Error (1) "function template specialization '{0}' ambiguously refers to more than one function template; explicitly specify template arguments to identify a particular function template";
 sema_fn_template_spec_no_match = Error (1) "no function template matches function template specialization '{0}'";
 // WP-1551: C++ (GCC accepts it silently; clang rejects it): a plain

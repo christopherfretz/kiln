@@ -706,6 +706,14 @@ pub struct Args {
     /// sets it too. Part of a precompiled header's identity (a snapshot
     /// carries the table its producer recorded).
     pub decl_extents: bool,
+    /// `-fkiln-fn-names`: record the function-name span table
+    /// (spec/ast.md §24) without printing it, for a tooling client;
+    /// `-fkiln-dump-fn-names` sets it too. Not part of either identity
+    /// (stage A carries nothing).
+    pub fn_names: bool,
+    /// `-fkiln-dump-fn-names` (`-fsyntax-only` and codegen): record the
+    /// function-name span table and print it (spec/ast.md §24.6).
+    pub dump_fn_names: bool,
     /// `-fkiln-dump-decl-extents` (`-fsyntax-only` and codegen): print the
     /// declaration-extent table (spec/ast.md §19.6).
     pub dump_decl_extents: bool,
@@ -2157,6 +2165,11 @@ impl Args {
                 self.dump_written_refs = true;
             }
             "-fkiln-written-refs" => self.written_refs = true,
+            "-fkiln-fn-names" => self.fn_names = true,
+            "-fkiln-dump-fn-names" => {
+                self.fn_names = true;
+                self.dump_fn_names = true;
+            }
             "-fkiln-decl-extents" => self.decl_extents = true,
             "-fkiln-dump-decl-extents" => {
                 self.decl_extents = true;

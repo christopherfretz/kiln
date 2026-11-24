@@ -222,6 +222,15 @@ impl Sema<'_, '_> {
         };
         let comment = text.and_then(|t| predicate_text(sm, t)).unwrap_or_default().to_owned();
         let (_, pretty) = self.predefined_function_names(ctx);
+        // The function's name has its record under `(lit, ctx)`
+        // (spec/ast.md §24.5): the string object is shared by content.
+        if self.ast.fn_names.is_on() {
+            let lit = self
+                .ast
+                .strings
+                .intern(kiln_ast::strings::StringEncoding::Ordinary, pretty.as_bytes());
+            self.note_fn_name(true, ctx, lit);
+        }
         let (Some(file), Some(function), Some(comment)) = (
             self.contract_string(&file),
             self.contract_string(&pretty),

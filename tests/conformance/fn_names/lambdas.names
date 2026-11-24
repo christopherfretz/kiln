@@ -1,0 +1,13 @@
+fn-name 'auto ns::loc()::(lambda)::operator()(int) const' of ns::loc()::(lambda)::operator()@12:14
+  [5,7) scope 'ns' -> ns@10:11
+  [9,12) scope 'loc' -> ns::loc@11:6 q
+  [16,24) scope '(lambda)' -> (lambda)@12:14 q synth
+  [26,36) name 'operator()' -> ns::loc()::(lambda)::operator()@12:14 q
+fn-name 'operator()' of ns::loc()::(lambda)::operator()@12:14
+  [0,10) name 'operator()' -> ns::loc()::(lambda)::operator()@12:14
+fn-name 'auto ns::loc()::(lambda)::operator()(auto) const [v:auto = int]' of ns::loc()::(lambda)::operator()<int>@14:14
+  [5,7) scope 'ns' -> ns@10:11
+  [9,12) scope 'loc' -> ns::loc@11:6 q
+  [16,24) scope '(lambda)' -> (lambda)@14:14 q synth
+  [26,36) name 'operator()' -> ns::loc()::(lambda)::operator()<int>@14:14 q
+  [50,51) binding 'v' -> v@14:22 invented

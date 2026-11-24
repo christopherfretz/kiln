@@ -142,8 +142,9 @@ pub(crate) const MAGIC: [u8; 8] = *b"KILNSNAP";
 /// version 175 (WP-3279) the per-use immediate values of defaults;
 /// version 176 (WP-3281) the subst-failed marks of silent failures;
 /// version 177 (WP-3272, WP-3274) the guide-scope and undefined-qualifier
-/// diagnostics.
-pub(crate) const FORMAT_VERSION: u32 = 177;
+/// diagnostics; version 178 (WP-3280) the function-name self-check's
+/// diagnostic.
+pub(crate) const FORMAT_VERSION: u32 = 178;
 /// The length of the magic and the format version.
 pub(crate) const HEADER_LEN: usize = 12;
 
@@ -184,6 +185,11 @@ fn excluded(args: &Args) -> Args {
         // recorded it and read when the consumer does (spec/ast.md
         // §18.10.1): either side may differ.
         written_refs: d.written_refs,
+        // The function-name span table is not carried (stage A): a
+        // consumer recording it marks the prefix unrecorded
+        // (spec/ast.md §24.6).
+        fn_names: d.fn_names,
+        dump_fn_names: d.dump_fn_names,
         dump_decl_extents: d.dump_decl_extents,
         dump_expr_extents: d.dump_expr_extents,
         dump_friend_forms: d.dump_friend_forms,
@@ -1144,6 +1150,9 @@ impl crate::pp_cmd::Job<'_> {
             return None;
         }
         sema.ast.written_refs.set_prefix_files(prefix_files);
+        if self.args.fn_names || crate::env::fn_names_verify(&self.args.env) {
+            sema.ast.fn_names.set_unrecorded_prefix();
+        }
         if restore.reader.remaining() != 0 {
             restore.failed = Some(format!("{} trailing bytes", restore.reader.remaining()));
             return None;
@@ -1239,6 +1248,7 @@ pub(crate) fn single_pass_blocker(
         (args.dump_cfg, "-fkiln-dump-cfg"),
         (args.dump_written_refs, "-fkiln-dump-written-refs"),
         (args.dump_decl_extents, "-fkiln-dump-decl-extents"),
+        (args.dump_fn_names, "-fkiln-dump-fn-names"),
         (args.dump_expr_extents, "-fkiln-dump-expr-extents"),
         (args.dump_friend_forms, "-fkiln-dump-friend-forms"),
         (args.dump_pp_record, "-fkiln-dump-pp-record"),

@@ -5909,3 +5909,242 @@ image). A head's default argument cannot tell two rows apart in valid
 code: a friend class template declaration has none, and a friend
 function template declaration with one must be a definition
 ([temp.param]/12), which a qualified friend never is ([class.friend]/6).
+
+## 24. Function-name spans (WP-3280)
+
+`__PRETTY_FUNCTION__`, `__FUNCTION__`, `__func__`,
+`__builtin_FUNCTION()` and `std::source_location::function_name()`
+produce bytes such as `void ns::C<ns::S>::f(T) [T = ns::S]`. A tooling
+client that renames an entity must know which of those bytes name which
+declaration. `kiln_ast::fn_names` keeps, when asked for, one record per
+distinct (string, function) pair: the byte range of every declaration
+name the printers wrote, and the declaration it names. The strings
+themselves are unchanged (clang 19/22 parity as before); the table is a
+side record of how they were printed.
+
+### 24.1 Opt-in
+
+`-fkiln-fn-names` records the table; `-fkiln-dump-fn-names` records and
+prints it (§24.6). `FrontEndOptions::fn_names` is the in-process form,
+`ParseOptions::fn_names` the parser's. Off by default: no table, no
+marker, no work beyond a flag test per string. The options are not part
+of a snapshot's identity (spec/pch.md "Identity"), and a module built in
+process for an importer records nothing (§24.8). With the environment
+variable `KILN_FN_NAMES_VERIFY=1` the table is on and every record is
+self-checked as it is made (§24.7).
+
+### 24.2 What is recorded
+
+Every string the predefined-name printer makes for a function: the
+literal of a `PredefinedExpr` (`__func__`, `__FUNCTION__`,
+`__PRETTY_FUNCTION__`), the made string of a source-location builtin of
+role `Function` or `PrettyFunction` (`__builtin_FUNCTION()`, the
+`_M_function_name` of `__builtin_source_location()`'s `__impl` object,
+per use, WP-3000), and the pretty name of a contract site's function
+(reached through `get`, below). A string made for no function (`""`,
+`top level`) has no record. Strings the source spells, reflection names
+and diagnostic text are not covered.
+
+### 24.3 The entry (16 bytes, a `size_of` unit test)
+
+`FnNameSpan { lo: u32, hi: u32, entity: Option<DeclId>, role: u8,
+flags: u8, depth: u16 }`: the bytes `[lo, hi)` of the string name
+`entity`.
+
+- `role` (`FnNameRole`): `Scope` (a namespace, class or function before
+  the name), `Name` (the function's own name), `Return`, `Param` (a type
+  in the parameter list, as the pattern writes it), `Binding` (a
+  template parameter's name in `[P = A, ...]`), `Arg` (a name in a
+  bracketed argument `A`).
+- `flags`: `DEPENDENT` (1: a dependent name; `entity` is `None`),
+  `SYNTHESIZED` (2: an unnamed spelling such as `(anonymous namespace)`,
+  `(lambda)`, `(lambda at F:L:C)`, `(unnamed struct at F:L:C)`; always
+  has an entity), `CLASS_NAME` (4: a constructor's or destructor's class
+  name, the `~` excluded), `QUALIFIED` (8: the entry, or the `~` before
+  a destructor's, follows `::`, and the `::` follows the previous entry at
+  the same depth directly or after that entry's `<...>` arguments or
+  `(...)` parameters: `C` in `ns::C`, `f` in `C<int>::f`, `L` in
+  `loc()::L`), `INVENTED` (16: the `x` of an abbreviated
+  template's `x:auto`, naming the function parameter). Bit 32 is
+  reserved.
+- `depth`: nesting inside an enclosing entry's template argument list,
+  conversion target or scope function's parameter list; the owner of an
+  entry at depth `d > 0` is the nearest earlier entry at `d - 1`
+  (`FnNameView::owner`).
+
+Entries are sorted by `lo`, nest properly and never overlap at one
+depth. Each entity is normalised as §18's entries are: `Ast::first(d)`
+of the declaration printed (one id for every name of one namespace or
+class). The record key's function stays the declaration the string was
+printed for.
+
+### 24.4 Which tokens get entries
+
+Every declaration name the printers write gets exactly one entry over
+exactly its bytes, and the entity is the declaration whose name was
+written. Keywords, builtin types, punctuation, `virtual `/`static `,
+cv- and ref-qualifiers, `...`, literal values, `<dependent type>`,
+`auto`/`decltype(auto)` and the `:auto` of `x:auto` get none.
+
+- Namespaces: one `Scope` entry per printed component; an inline
+  namespace is not printed; `(anonymous namespace)` is one synthesized
+  entry.
+- Classes in the scope: the record printed (for `C<ns::S>::`, the
+  specialization; `Ast::spec_info` gives its template), its canonical
+  arguments one depth in.
+- The function's name: the identifier; an operator is one entry over
+  `operator==`, `operator()`, `operator new`, `operator""_x`; a
+  conversion function is one entry over `operator <type>` with the
+  type's names one depth in (the target is the name's type, printed
+  canonical: `operator W<S>` names the specialization `W<S>`, while a
+  written return type `W<S>` names the template); a constructor's or destructor's class name,
+  `CLASS_NAME`.
+- Lambdas: the closure is a synthesized `Scope` over its spelling
+  (`(lambda)` with clang 22, `(anonymous class)` under
+  `-fclang-compat=19`), the call operator the `Name` `operator()`; as a
+  type, `(lambda at F:L:C)` is one synthesized entry, path included.
+- A function as a scope (a local class's member): a `Scope` entry for
+  the function, the names of its printed parameters one depth in.
+- Return and parameter types are printed as the pattern writes them: a
+  typedef or alias name names the typedef or alias, a template-id the
+  alias or class template (arguments one depth in), an injected-class-name
+  the pattern record, a template parameter the pattern's parameter
+  (an unnamed one, printed `type-parameter-D-I`, is synthesized).
+- Dependent names: `DEPENDENT`, no entity; their non-dependent parts
+  keep theirs.
+- `[P = A, ...]`: `P` is a `Binding` of the template parameter (the
+  same id a `Param`/`Return` entry of it carries); `x:auto`'s `x` is an
+  `INVENTED` binding of the function parameter; `A` is printed
+  canonical, so its type entities are namespaces, classes, enums and
+  closures, never aliases; value arguments carry the names the constant
+  printer writes (enumerators, variables, members); a pack's elements
+  stay at the pack's depth.
+
+Example, `void ns::C<ns::S>::f(T) [T = ns::S]`:
+
+```
+[5,7)   scope ns
+[9,10)  scope C -> ns::C<ns::S>, q
+[11,13) scope ns, d=1
+[15,16) scope S, d=1, q
+[19,20) name f, q
+[21,22) param T -> template parameter T of C
+[25,26) binding T -> the same parameter
+[29,31) arg ns
+[33,34) arg S, q
+```
+
+### 24.5 Reading it
+
+`Ast::fn_names` holds the table: `is_on`, `get(lit, function)`,
+`len`, `entry_count`, `iter(ast)`, `unrecorded_prefix()`. The accessors
+return a `FnNameView { function, lit, bytes, spans, offset }`, with
+`text(i)`, `owner(i)`, `qualifier(i)` and `visible(len)`, which clips
+the entries to the `len` bytes from `offset` (the view of a client
+holding a pointer into the string) and marks every clipped entry
+`partial` (never dropping one silently).
+
+- `fn_name_of_string(lit, origin, offset)`: the fields of a
+  `PtrBase::StringLit` pointer and its byte offset, as a client meets
+  them walking a constant.
+- `fn_name_of_value(v)`: the same for a frozen pointer scalar.
+- `fn_name_of_predefined(e)`: a `PredefinedExpr`'s string.
+- `fn_name_at_use(u, FnNameAt::Function | FnNameAt::Location)`: the
+  function name at a source-location use (`SourceLocExpr`,
+  `CXXDefaultArgExpr` or `CXXDefaultInitExpr` with values, WP-3279):
+  `__builtin_FUNCTION()`'s string, or the `__impl` object's
+  `_M_function_name`.
+
+With the table on, the answer is `None` exactly when:
+
+1. the origin is neither a made string of role `Function` or
+   `PrettyFunction` nor a `PredefinedExpr`'s literal (a literal the
+   source spells, a reflection or contract string, a file name);
+2. the string names no function (`""` or `top level` outside one);
+3. the string was made in a restored PCH prefix (`unrecorded_prefix()`
+   is then true), or it is the literal of a `PredefinedExpr` in a body
+   read from a module image (no carriage yet, row WP-3340);
+4. `offset` is past the end of the string;
+5. for `fn_name_of_predefined` and `fn_name_at_use`: the node is not of
+   the asked kind, or has no values (a dependent `PredefinedExpr` in a
+   pattern, a use whose default holds no source-location builtin), or
+   `Location` is asked of a use with no `__impl` object.
+
+Off, every accessor answers `None`. A string the Oven builds from these
+bytes (a copy, a `std::string`) is a new object with no entries: only a
+pointer into the made string itself carries them. Two calls of one
+function with different deduced arguments (`f(1)`, `f(1L)`) are two
+functions and two records; two uses of one default argument in one
+function share a string and a record.
+
+### 24.6 The dump
+
+`-fkiln-dump-fn-names` (with `-fsyntax-only` or a compile, to the
+output, after the other kiln dumps) prints the records in `iter(ast)`
+order: by the function's location, then the bytes, then the function's
+key name (spec/types.md §12.1), a function of the source only:
+
+```
+fn-name '<bytes>' of <function>@<loc>
+  [lo,hi) <role> '<text>' -> <entity>@<loc> [d=N] [q] [dep] [synth] [class-name] [invented]
+```
+
+`<entity>` is `(dependent)` for a dependent entry; a specialization is
+printed with its arguments, a parameter unqualified. Positions are
+`line:col` in the main file and `file:line:col` elsewhere. After a
+restored PCH the dump starts with `fn-names: strings of the restored
+prefix have no records`.
+
+### 24.7 How it is recorded, and the self-check
+
+The printers are the ones that make the bytes: with a sink
+(`FnSpanSink`) they write in-band markers (private-use characters of
+plane 15: an open marker carrying the entry's index, a close marker,
+and group markers around template argument lists and a scope function's
+parameters) at `AstNames::write_name`, the unnamed spellings, the type
+printer's dependent identifiers and template parameter names. The
+markers move with the bytes through every splice; `FnSpanSink::strip`
+removes them in one pass and computes ranges, depth and `QUALIFIED`.
+Without a sink no marker is written. When a (string, function) pair is
+first made with the table on, sema prints it a second time with a sink
+and keeps the record only if the stripped bytes equal the string's.
+
+`fn_names::verify` checks a record: bounds and order, proper nesting,
+that an entry has an entity exactly when it is not `DEPENDENT`, that the
+entity exists, that a plain entry's bytes are its entity's identifier,
+and the converse: every identifier in the bytes outside all entries
+(not part of a number, character or string literal) is in a closed list
+of keywords, builtin type spellings and fixed printer words, or a
+builtin type family (`__SV`, `__clang_sv`, `__rvv_`, `__builtin_`).
+Under `KILN_FN_NAMES_VERIFY=1` a mismatch or a failed check is the error
+`sema_fn_names_verify_failed`. The lane runs over `tests/conformance`
+(`KILN_FN_NAMES_VERIFY=1 cargo xtask test tests/conformance`: every
+compile inherits the variable) and over `<bits/stdc++.h>` with
+`_GLIBCXX_ASSERTIONS`.
+
+### 24.8 Snapshots, modules, cost
+
+Stage A does not carry the table. A snapshot (PCH) restores none
+(`Snap` skips it; `FORMAT_VERSION` 178 only for the new diagnostic id
+of the self-check, which the schema hash covers), and a consumer that
+records sets `unrecorded_prefix`: the strings made by the prefix have no
+records, those made after it do. A module image carries none
+(`IMAGE_VERSION` unchanged): an importer's own strings are recorded, a
+`PredefinedExpr` in an imported body is not. Carriage of both is row
+WP-3340.
+
+Cost: off, nothing. On, 16 bytes per entry plus a 16-byte record and an
+index slot per string, the `fn_names` row of `-fkiln-memory-report`.
+Measured with `-std=c++26 -D_GLIBCXX_ASSERTIONS -fsyntax-only` (WP-3280):
+`#include <bits/stdc++.h>` alone makes 93 records with 699 entries,
+`fn_names` 14916 bytes live (19856 reserved) of 43.27 MB; a unit that
+also uses `vector`, `map`, `sort`, `regex` and `format` makes 118 records
+with 1028 entries, 21148 bytes live (35648 reserved) of 49.94 MB. The
+total live memory differs, flag off against on, by exactly the row; off,
+there is no row. Both pass the self-check.
+
+Tests: unit tests in `crates/kiln_ast/src/fn_names.rs` (entry size,
+marker round trip, depth, malformed markers, clipping, the converse
+check), `crates/kiln_parse/tests/fn_names.rs` (the accessors, per-use
+strings, deduction, contracts, off), and the `fn-names:` goldens under
+`tests/conformance/fn_names/`.

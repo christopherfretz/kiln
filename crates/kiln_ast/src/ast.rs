@@ -101,6 +101,9 @@ pub struct Ast {
     /// The declaration-extent table (§19): opt-in, off by default;
     /// written into snapshots.
     pub decl_extents: crate::decl_extents::DeclExtents,
+    /// The function-name span table (§24): opt-in, off by default;
+    /// transient in snapshots (stage B carries it).
+    pub fn_names: crate::fn_names::FnNames,
     /// The `>` tokens the parser split off a `>>`, `>=`, `>>=` (or the
     /// `>>` of a `>>>`) to close a template argument list
     /// ([temp.names]/4), by location (§21.2, WP-2542): each is a
@@ -508,6 +511,7 @@ impl Ast {
             contract_sites: crate::slot::ColdMap::new("contract_sites"),
             written_refs: crate::written_refs::WrittenRefs::default(),
             decl_extents: crate::decl_extents::DeclExtents::default(),
+            fn_names: crate::fn_names::FnNames::default(),
             split_greaters: kiln_source::fx::FxHashSet::default(),
             builtin_literals: crate::builtin_literals::BuiltinLiterals::default(),
             symbols,
@@ -1773,6 +1777,9 @@ impl Ast {
             r.push(row);
         }
         if let Some(row) = self.decl_extents.mem_row() {
+            r.push(row);
+        }
+        if let Some(row) = self.fn_names.mem_row() {
             r.push(row);
         }
         if let Some(row) = self.builtin_literals.mem_row() {

@@ -1,0 +1,29 @@
+fn-name 'S' of ns::S::S@8:3
+  [0,1) name 'S' -> ns::S::S@8:3 class-name
+fn-name 'ns::S::S()' of ns::S::S@8:3
+  [0,2) scope 'ns' -> ns@6:11
+  [4,5) scope 'S' -> ns::S@7:8 q
+  [7,8) name 'S' -> ns::S::S@8:3 q class-name
+fn-name 'ns::S::~S()' of ns::S::~S@9:3
+  [0,2) scope 'ns' -> ns@6:11
+  [4,5) scope 'S' -> ns::S@7:8 q
+  [8,9) name 'S' -> ns::S::~S@9:3 q class-name
+fn-name '~S' of ns::S::~S@9:3
+  [1,2) name 'S' -> ns::S::~S@9:3 class-name
+fn-name 'ns::C<int>::C() [T = int]' of ns::C<int>::C@12:3
+  [0,2) scope 'ns' -> ns@6:11
+  [4,5) scope 'C' -> ns::C<int>@11:27 q
+  [12,13) name 'C' -> ns::C<int>::C@12:3 q class-name
+  [17,18) binding 'T' -> T@11:17
+fn-name 'ns::C<int>::C(U *) [T = int, U = int]' of ns::C<int>::C<int>@13:22
+  [0,2) scope 'ns' -> ns@6:11
+  [4,5) scope 'C' -> ns::C<int>@11:27 q
+  [12,13) name 'C' -> ns::C<int>::C<int>@13:22 q class-name
+  [14,15) param 'U' -> U@13:19
+  [20,21) binding 'T' -> T@11:17
+  [29,30) binding 'U' -> U@13:19
+fn-name 'virtual ns::C<int>::~C() [T = int]' of ns::C<int>::~C@14:11
+  [8,10) scope 'ns' -> ns@6:11
+  [12,13) scope 'C' -> ns::C<int>@11:27 q
+  [21,22) name 'C' -> ns::C<int>::~C@14:11 q class-name
+  [26,27) binding 'T' -> T@11:17

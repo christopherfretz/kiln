@@ -357,6 +357,8 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 path_prefix_map: &[],
                 local_scopes: false,
                 key: false,
+                spans: None,
+                plain_ast: false,
             },
             opts,
             out,

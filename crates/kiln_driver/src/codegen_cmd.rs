@@ -445,6 +445,8 @@ impl CodegenJob<'_> {
             target_attr_features: crate::features::target_attr_feature_list,
             cfg_dump: a.dump_cfg,
             written_refs: a.written_refs,
+            fn_names: a.fn_names,
+            fn_names_verify: crate::env::fn_names_verify(&a.env),
             decl_extents: a.decl_extents,
             cfg_stats: a.cfg_stats,
             cfg_max_elems: a.cfg_max_elems.unwrap_or(kiln_sema::cfg::DEFAULT_MAX_ELEMS),
@@ -574,6 +576,9 @@ impl CodegenJob<'_> {
         }
         if a.dump_decl_extents {
             out.dumps.push_str(&tu.ast.decl_extents.dump(&tu.ast, sm, main_id));
+        }
+        if a.dump_fn_names {
+            out.dumps.push_str(&tu.ast.fn_names.dump(&tu.ast, sm, main_id));
         }
         if let Some(d) = pp_record {
             out.dumps.push_str(&d);

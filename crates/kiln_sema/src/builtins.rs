@@ -3730,6 +3730,13 @@ impl Sema<'_, '_> {
         role: SrcLocRole,
         decl: DeclId,
     ) -> Option<kiln_ast::ConstValueId> {
+        if self.ast.fn_names.is_on()
+            && matches!(role, SrcLocRole::Function | SrcLocRole::PrettyFunction)
+        {
+            let lit =
+                self.ast.strings.intern(kiln_ast::strings::StringEncoding::Ordinary, s.as_bytes());
+            self.note_fn_name(role == SrcLocRole::PrettyFunction, decl, lit);
+        }
         self.made_string(s, false, StringMaker::SourceLoc { role, decl })
     }
 
