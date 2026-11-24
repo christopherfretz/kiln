@@ -48,6 +48,13 @@ impl Sema<'_, '_> {
                 if self.eval_replay.is_some() {
                     self.sess_reach_at(&crate::session::Key::Init(self.ast.first(s)), loc);
                 }
+                // An ambiguity only a trap saw: reported by this use, the
+                // first that must (as `instantiate_class_as`; WP-3283).
+                if self.take_silent_failure(s, &[SubstFailedKind::VariablePartialAmbiguity])
+                    && let Some((_, info)) = self.ast.spec_info(s)
+                {
+                    let _ = self.match_partial_args(tmpl, info.args, tmpl, loc);
+                }
                 self.var_spec_depends_on_itself(s, loc);
                 return Err(());
             }

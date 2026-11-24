@@ -63,6 +63,16 @@ impl Sema<'_, '_> {
         let poi = self.templ.deduce_poi.take().unwrap_or(loc);
         if let Some(s) = self.ast.templates.find_spec(tmpl, args.canonical) {
             if self.ast.decls.get(s).has(DeclFlags::INVALID) {
+                // A specialization whose substitution failed inside a trap,
+                // now used outside one: the first substitution error,
+                // which nothing printed, is reported here (WP-3283).
+                if self.take_silent_failure(
+                    s,
+                    &[SubstFailedKind::FunctionSignature, SubstFailedKind::ExplicitSpecifier],
+                ) && let Some(d) = self.templ.fn_spec_failures.get(&s).cloned()
+                {
+                    self.emit(d);
+                }
                 return Err(());
             }
             return Ok(s);

@@ -5305,6 +5305,44 @@ a reflection intrinsic (`meta/iterate.rs`; the body is discarded on
 failure, `ctx` the intrinsic's specialization). Any other invalidation
 the ledger finds under a trap is kind 6 as well.
 
+**Hard use of a silent failure (WP-3283).** The specialization memo
+keeps a trapped failure (kinds 1-4) so that every later substitution
+fails the same way without redoing it. A later use that is not itself
+trapped (`Sema::trap_now` is `None`) must still be diagnosed, as it
+would have been had it come first: the program's diagnostics never
+depend on whether a SFINAE context or a dropped capture (the empty-pack
+sweep, a verify-only trial) met the specialization before
+([temp.spec.partial.match]/1, [temp.deduct.general]/8).
+`Sema::take_silent_failure(d, kinds)` answers, once per declaration,
+whether such a use is the first to need the report: `d`'s entry still
+waits with an open SFINAE context, a capture or a discard scope, or was
+confirmed, or the Ast marks it with one of `kinds` (a snapshot's). The
+memo hits that ask it:
+
+- `instantiate_class_as` on an invalid class specialization (kind 4):
+  the partial-specialization choice is made again at the use's point of
+  instantiation, printing "ambiguous partial specializations of
+  'X<int, int>'" and its notes; the caller's incomplete-type error stays
+  suppressed (`undefined_diagnosed`), as for a first use;
+- `get_var_spec` on an invalid variable specialization (kind 3): the
+  same, at the template-id;
+- `get_function_spec_signature` on an invalid function specialization
+  (kinds 1 and 2): the first error the trap held (`fn_spec_failures`)
+  is emitted. No caller reaches this outside a trap today (deduction
+  runs it in a SFINAE frame; the generic lambda conversion and the
+  structural re-formation of a member specialization use arguments a
+  successful deduction formed); it keeps a future caller from failing
+  without a diagnostic.
+
+The memo stays (the specialization keeps `INVALID` and its mark: the
+trap printed nothing), and so does the once-only report: clang 19 also
+reports an ambiguity at the first use only; clang 22 forms the class
+specialization again at every use and reports each, and neither clang
+reports a variable's ambiguity after a SFINAE failure, nor clang 19 a
+class's (the tests pin kiln's rule with `xfail(clang)`). A failure an
+error printed while its trap was open is not reported again (the error
+explains it).
+
 The checker's rule A (spec/ast.md §4.1) needs one record from Sema:
 `Sema::note_scratch_head` keeps each friend class template head that
 `check_friend_class_head` substitutes only to compare (while verifying).

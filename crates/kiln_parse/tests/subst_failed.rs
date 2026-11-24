@@ -243,6 +243,46 @@ fn kind4_ambiguity_hard_is_diagnosed_and_unmarked() {
     assert_eq!(ast.decls.subst_failed(x[0]), None);
 }
 
+/// WP-3283 ([temp.spec.partial.match]/1, [temp.deduct.general]/8): an
+/// ambiguity a deduction trapped first is reported by the first use
+/// outside a trap, once (a second use stays quiet, as after a first
+/// report), and the memo stays: the specialization keeps `INVALID` and its
+/// mark, since the trap that made it invalid printed nothing. Kinds 3 and 4.
+#[test]
+fn kind3_kind4_trapped_ambiguity_reported_at_first_hard_use() {
+    let (ast, diags) = compile_at(
+        "template <class T, class U> struct X;\n\
+         template <class T> struct X<T, int> {};\n\
+         template <class U> struct X<int, U> {};\n\
+         template <class T, class U> constexpr int v = 0;\n\
+         template <class T> constexpr int v<T, int> = 1;\n\
+         template <class U> constexpr int v<int, U> = 2;\n\
+         template <class T> auto f(T) -> decltype(sizeof(X<T, int>));\n\
+         long f(...);\n\
+         template <class T> auto g(T) -> decltype(v<T, int>);\n\
+         long g(...);\n\
+         long y = f(1) + g(1);\n\
+         X<int, int> a;\n\
+         X<int, int> b;\n\
+         int c = v<int, int>;\n\
+         int d = v<int, int>;\n",
+        22,
+    );
+    let ambiguous: Vec<_> =
+        diags.iter().filter(|d| d.contains("ambiguous partial specializations")).collect();
+    assert_eq!(ambiguous.len(), 2, "{diags:?}");
+    assert!(ambiguous[0].contains("'X<int, int>'"), "{diags:?}");
+    assert!(ambiguous[1].contains("'v<int, int>'"), "{diags:?}");
+    let x = specs(&ast, DeclKind::CXXRecord, "X");
+    assert_eq!(x.len(), 1);
+    assert!(invalid(&ast, x[0]));
+    assert_eq!(ast.decls.subst_failed(x[0]), Some(SubstFailedKind::ClassPartialAmbiguity));
+    let v = specs(&ast, DeclKind::Var, "v");
+    assert_eq!(v.len(), 1);
+    assert!(invalid(&ast, v[0]));
+    assert_eq!(ast.decls.subst_failed(v[0]), Some(SubstFailedKind::VariablePartialAmbiguity));
+}
+
 /// Kind 1 on a generic lambda's call operator whose trailing return type
 /// holds a GNU statement-expression that fails ([temp.deduct.general]/8);
 /// the local it declared and made invalid is kind 5, though it keeps the

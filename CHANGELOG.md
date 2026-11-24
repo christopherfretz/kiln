@@ -1295,6 +1295,17 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- A class or variable template specialization whose partial-specialization
+  choice is ambiguous is diagnosed at its first use outside a substitution
+  also when a SFINAE context or a probe whose diagnostics are dropped (the
+  empty-pack sweep of a pack expansion) met it first; such a use was
+  silent, so a program could be accepted ([temp.spec.partial.match]/1,
+  WP-3283, spec/sema-templates.md §5.7.3 "Hard use of a silent failure").
+  The program's diagnostics no longer depend on the order of those uses.
+  An error a probe held for an incomplete type no longer leaves a request
+  to drop the next printed error behind. A function template
+  specialization that failed under a trap and is then formed outside one
+  reports its first substitution error.
 - A deduction guide declared outside the scope of its class template is
   rejected ([temp.deduct.guide]/3, WP-3272, spec/sema-templates.md "A
   deduction guide's scope and access"). The template's name can be found

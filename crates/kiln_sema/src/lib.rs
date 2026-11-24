@@ -2031,13 +2031,16 @@ impl<'a, 'sm> Sema<'a, 'sm> {
                 d = d.with_note(n);
             }
         }
+        // The error `incomplete_note` asked to drop is this one, also when
+        // a capture would hold it: held, the request would outlive it and
+        // drop the next error printed, perhaps the only one (WP-3283).
+        if self.inst.suppress_next_error.replace(false) {
+            return;
+        }
         if let Some(c) = self.diag_capture.borrow_mut().as_mut()
             && self.capture_holds(c)
         {
             c.held.push(d);
-            return;
-        }
-        if self.inst.suppress_next_error.replace(false) {
             return;
         }
         let mut inst_notes = Vec::new();
