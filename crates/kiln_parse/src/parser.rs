@@ -2330,8 +2330,20 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                 _ => break,
             }
             let dep_prefix = qual.is_some_and(|(c, _)| self.s.is_dependent_ctx(c));
+            let member = if qual.is_none() && !template_kw {
+                // `x.X<int>::f()`: a member template of the object's class
+                // first ([basic.lookup.qual.general]/2).
+                self.s
+                    .member_qualifier_class()
+                    .map(|c| self.s.classify_name(name, Some(c)))
+                    .filter(|c| matches!(c, NameClass::TypeTemplate(_)))
+            } else {
+                None
+            };
             let class = if dep_prefix {
                 NameClass::Dependent
+            } else if let Some(m) = member {
+                m
             } else {
                 self.s.classify_name(name, qual.map(|q| q.0))
             };

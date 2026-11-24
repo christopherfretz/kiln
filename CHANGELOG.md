@@ -1304,6 +1304,18 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- A member access's qualifier on a type-dependent object
+  (`t.acme::B::f()` in a template) looks its first component up in the
+  object's class at instantiation before using what the definition found
+  ([basic.lookup.qual.general]/2-3, WP-3406). Before, `f<W>` called
+  namespace `acme`'s `B::f` even when `W` has a member `acme`: a silent
+  wrong call. A later component that only the class's `acme` has
+  (`t.acme::Only::f()`) is no longer rejected at the definition. On an
+  object of class type, a template-id first component (`x.TB<int>::f()`)
+  names the class's member template before one found in the enclosing
+  scope (it named the enclosing one). The written-reference table gives
+  the rebound qualifier components per-specialization rows
+  (spec/ast.md §18.9.1).
 - The first use of a reference variable template specialization or of a
   reference static data member of a class template specialization
   (`template<class T> const S &vt = S{...}; ... vt<int>.a[0]`) loads

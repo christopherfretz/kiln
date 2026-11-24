@@ -3561,7 +3561,15 @@ access, out-of-line declarator scope.**
   `begin_member_qualifier`/`end_member_qualifier` bracket the qualifier
   (`Sema.member_scope: Option<MemberScope>`: the object's class is looked
   up first, [basic.lookup.qual.general]/2), then `act_on_member_q` /
-  `act_on_template_member_q`. `qualifier_names_base` checks the
+  `act_on_template_member_q`. A template-id first component
+  (`x.TB<int>::f()`) names the object's class's member template `TB`
+  before one the context finds (`Sema::member_qualifier_class`, read by
+  the parser's nested-name loop; clang agrees); on a type-dependent
+  object the template name is the definition's and is kept at
+  instantiation. A first component found at the definition of a
+  template whose object is type-dependent is looked up in the object's
+  class again at instantiation (spec/sema-templates.md, "Dependent
+  forms"; WP-3406). `qualifier_names_base` checks the
   qualifier names the object's class or a base
   (`sema_qualified_member_of_unrelated`); an unscoped enumeration
   qualifier stands for its class, since its enumerators are members of

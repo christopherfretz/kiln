@@ -3471,7 +3471,7 @@ a separate table: the main table keeps one entry per written name.
 
   | field | type | meaning |
   |---|---|---|
-  | `entry` | `WrittenRefId` (4) | the pattern's main-table entry: `DEPENDENT`, no entity |
+  | `entry` | `WrittenRefId` (4) | the pattern's main-table entry: `DEPENDENT`, no entity; or a member qualifier's component the definition resolved and the instantiation looked up again in the object's class (below) |
   | `spec` | `DeclId` (4) | the specialization whose instantiation resolved the name (§18.9.2) |
   | `entity` | `Option<DeclId>` (4) | what the name denotes there, as §18.2's `entity` (a function template's specialization, a class's first declaration, ...); `None`: unresolved (§18.9.3) |
   | `found` | `Option<DeclId>` (4) | what lookup found, when it differs from `entity` (the template of a specialization) |
@@ -3482,6 +3482,18 @@ a separate table: the main table keeps one entry per written name.
 
   Not recorded per specialization: `Injected` (an injected-class-name
   names the pattern's class, which is not dependent).
+- **Member qualifiers looked up again.** In `t.acme::B::f()` on a
+  type-dependent object, the definition finds `acme` by unqualified
+  lookup only, and the pattern's `acme` and `B` entries keep that
+  resolution (namespace `acme`, `acme::B`). A specialization whose
+  object's class has its own `acme` binds the qualifier there
+  ([basic.lookup.qual.general]/2-3, spec/sema-templates.md "Dependent
+  forms"): each component it formed so (`TemplState::relooked_nns`)
+  gets a row on its resolved pattern entry when it names something else
+  than the entry (`W::acme`, `W::acme::B`), with the member's row
+  (`WB::f`). A specialization whose class has no `acme` adds no
+  qualifier rows (WP-3406;
+  `tests/conformance/written_refs/spec-member-qualifier-object-class.cpp`).
 - **The using-directive.** Ordinary unqualified lookup of a dependent
   name runs at the pattern's definition ([temp.dep.candidate]/1,
   [temp.res.general]/1); only argument-dependent lookup runs at the

@@ -147,8 +147,9 @@ pub(crate) const MAGIC: [u8; 8] = *b"KILNSNAP";
 /// version 179 (WP-3290) the uses of references odr-used when built
 /// (`Sema::ref_odr_at_build`);
 /// version 180 (WP-3400) the using-shadows of unresolved lookups'
-/// found lists.
-pub(crate) const FORMAT_VERSION: u32 = 180;
+/// found lists; version 181 (WP-3406) the transient member-qualifier
+/// fields of the template state (not written, named by the schema).
+pub(crate) const FORMAT_VERSION: u32 = 181;
 /// The length of the magic and the format version.
 pub(crate) const HEADER_LEN: usize = 12;
 

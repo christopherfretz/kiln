@@ -404,7 +404,11 @@ impl Sema<'_, '_> {
         for _ in 0..64 {
             let (QualLink::Entry(qid), Some(c)) = (link.link(), cur) else { return };
             let q = *self.ast.written_refs.get(qid);
-            if q.entity.is_none() && q.flags & REF_DEPENDENT != 0 {
+            // A component formed again from the object's class (`acme` of
+            // `t.acme::B::f()`, resolved at the definition): a row when it
+            // names something else now (§18.9.1).
+            let relooked = self.templ.relooked_nns.contains(&c);
+            if (q.entity.is_none() && q.flags & REF_DEPENDENT != 0) || relooked {
                 let entity = match self.ast.types.nns_view(c) {
                     Nns::Namespace { ns, .. } => Some(ns),
                     Nns::NamespaceAlias { alias, .. } => Some(alias),
@@ -417,7 +421,9 @@ impl Sema<'_, '_> {
                     Nns::Identifier { .. } | Nns::Splice(_) => return,
                     Nns::Global => None,
                 };
-                self.push_written_spec(qid, spec, entity, None);
+                if !relooked || q.flags & REF_DEPENDENT != 0 || entity != q.entity {
+                    self.push_written_spec(qid, spec, entity, None);
+                }
             }
             link = q.qualifier;
             cur = self.ast.types.nns_prefix(c);

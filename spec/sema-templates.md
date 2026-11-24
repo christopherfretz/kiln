@@ -4364,7 +4364,31 @@ here because the GCC cases reaching them are template tests:
 - **Dependent forms** are resolved:
   - `DependentScopeDeclRefExpr` becomes qualified lookup;
   - `UnresolvedLookupExpr` becomes an overload set plus ADL (§3.5);
-  - `CXXDependentScopeMemberExpr` becomes member lookup;
+  - `CXXDependentScopeMemberExpr` becomes member lookup. Its qualifier's
+    first component `N` (`t.N::m`, `p->N::m`) is a member-qualified name
+    whose lookup context, the object's type, was dependent at the
+    definition, so `N` was found there by unqualified lookup only
+    ([basic.lookup.qual.general]/2-3); in the specialization nothing is
+    dependent (/3, note 2), and `N` is looked up in the object's class
+    first: when the class has an `N` naming something else, the
+    qualifier is formed again from it, each later component (a name, or
+    a template-id with its arguments substituted) looked up in what the
+    one before it now names (`Substituter::relook_member_root`); the
+    definition's `N` stands when the class has none (clang's
+    `FirstQualifierInScope`). Not looked up again (as clang): a first
+    component that is a template-id (`t.TB<int>::f()`: the template name
+    found at the definition is kept), `::`, `decltype`; an object that
+    was the current instantiation at the definition (`this->N::f()`,
+    `p->N::f()` with `p` an `S*` in `S`: the class was known there,
+    `pattern_object_dependent`); a destructor name's qualifier
+    (`t.T::~T()` destroys the object whatever `T` names in its class).
+    At the definition, a later component the definition's `N` does not
+    have (`t.acme::Only::f()` with `Only` only in the class's `acme`)
+    makes the specifier dependent (`acme::Only::` as identifiers, looked
+    up at instantiation), not an error (`Sema::act_on_nested_name_component`,
+    `TemplState::member_dependent_chain`; WP-3406). Tests:
+    `tests/conformance/basic.lookup.qual.general/p3-member-qualifier-{object-class-first,definition-binding}-run.cpp`,
+    `tests/conformance/written_refs/spec-member-qualifier-object-class.cpp`;
   - `CXXUnresolvedConstructExpr` becomes [expr.type.conv];
   - `ParenListExpr` becomes the initialization of its variable.
 - **A resolved `MemberExpr` naming a member function template

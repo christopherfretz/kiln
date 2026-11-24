@@ -929,11 +929,20 @@ impl Substituter<'_, '_, '_> {
                 let name = self.sema.ast.dependent_member_name(e);
                 let name = self.member_name(name, loc)?;
                 let arrow = n.aux() & 1 != 0;
+                let relook = self.pattern_object_dependent(base, arrow);
                 let (base, this_at) = self.member_base_deferred(base)?;
                 let qual = match self.sema.ast.templates.expr_nns.get(e).copied() {
                     Some(q) => {
                         let at = self.sema.ast.templates.expr_begin.get(e).copied().unwrap_or(loc);
-                        Some(self.member_qualifier(q, base, arrow, at)?)
+                        let relooked = if self.relook_applies(relook, base, arrow) {
+                            self.relook_member_root(q, base, arrow, at)?
+                        } else {
+                            None
+                        };
+                        match relooked {
+                            Some((ctx, nns)) => Some(crate::using::Qualifier { ctx, nns, loc: at }),
+                            None => Some(self.member_qualifier(q, base, arrow, at)?),
+                        }
                     }
                     None => None,
                 };
@@ -1917,7 +1926,9 @@ impl Substituter<'_, '_, '_> {
                 else {
                     return Err(SubstFail);
                 };
-                Ok((c, self.sema.nns_component(None, c, spelled)))
+                let n = self.sema.nns_component(None, c, spelled);
+                self.note_relooked(n);
+                Ok((c, n))
             }
             Nns::Identifier { prefix: Some(p), name } if self.rooted_in_member(p) => {
                 let (pc, pn) = self.member_nns(p, base, arrow, loc)?;
@@ -1925,7 +1936,9 @@ impl Substituter<'_, '_, '_> {
                 else {
                     return Err(SubstFail);
                 };
-                Ok((c, self.sema.nns_component(Some(pn), c, spelled)))
+                let n = self.sema.nns_component(Some(pn), c, spelled);
+                self.note_relooked(n);
+                Ok((c, n))
             }
             _ => {
                 let q = self.nns(n, loc)?;
@@ -1948,6 +1961,227 @@ impl Substituter<'_, '_, '_> {
                 };
                 Ok((c, q))
             }
+        }
+    }
+
+    /// Whether the first component of the qualifier of a member access on
+    /// pattern object `base` (`arrow`: `base->`) is looked up in the
+    /// object's class again ([`Self::relook_member_root`]): the object is
+    /// type-dependent and no class was known at the definition
+    /// ([`Sema::begin_member_qualifier`]'s `MemberScope::Dependent`).
+    /// [`PatternObject::OwnArgs`] when the object is `t<P...>`, the current
+    /// instantiation if the instantiated function is a member of the
+    /// specialization the object becomes (`this->acme::B::f()`, `p->...`
+    /// with `p` an `S*` in `S`: the class was known at the definition,
+    /// looked up there, and its qualifier stands, as clang's
+    /// `BuildCXXNestedNameSpecifier` with the current instantiation as
+    /// the lookup context).
+    fn pattern_object_dependent(&self, base: ExprId, arrow: bool) -> PatternObject {
+        let t = &self.sema.ast.types;
+        let bt = self.sema.ety(base);
+        let obj = if !arrow {
+            bt
+        } else if let Some(p) = t.pointee(bt).filter(|_| t.is_pointer(bt)) {
+            p
+        } else {
+            return if t.is_dependent(bt) {
+                PatternObject::Dependent
+            } else {
+                PatternObject::Known
+            };
+        };
+        if t.as_record(obj).is_some() || !t.is_dependent(obj) {
+            return PatternObject::Known;
+        }
+        let canon = t.canonical(obj);
+        for ty in [obj, canon] {
+            if let kiln_ast::types::TypeView::TemplateSpecialization { name, args, .. } =
+                t.view(ty.ty())
+                && let Some(td) = t.template_decl(name)
+                && self.sema.kind_of(td) == DeclKind::ClassTemplate
+                && self.sema.names_own_args(td, args)
+            {
+                return PatternObject::OwnArgs(td);
+            }
+        }
+        PatternObject::Dependent
+    }
+
+    /// Whether the qualifier of a member access whose pattern object was
+    /// `relook` is looked up again on substituted object `base`: not for
+    /// a known class, nor for `own<P...>` when `base` is the specialization
+    /// of `own` that encloses the function being instantiated (the
+    /// pattern's object was the current instantiation).
+    fn relook_applies(&self, relook: PatternObject, base: ExprId, arrow: bool) -> bool {
+        let own = match relook {
+            PatternObject::Known => return false,
+            PatternObject::Dependent => return true,
+            PatternObject::OwnArgs(t) => t,
+        };
+        let t = &self.sema.ast.types;
+        let bt = self.sema.ety(base);
+        let obj = if arrow { t.pointee(bt) } else { Some(bt) };
+        let Some(rec) = obj.and_then(|o| t.as_record(o)) else { return true };
+        let rec = self.sema.ast.definition(rec).unwrap_or(rec);
+        let ast = &self.sema.ast;
+        let from =
+            ast.spec_info(rec).or_else(|| ast.spec_info(ast.first(rec))).map(|(_, i)| i.template);
+        !(from.is_some_and(|f| self.sema.ast.first(f) == self.sema.ast.first(own))
+            && self.sema.encloses(rec, self.sema.ctx))
+    }
+
+    /// The qualifier `N::...::` of a member access on substituted object
+    /// `base` whose pattern object was type-dependent
+    /// ([`Self::pattern_object_dependent`]) and whose first component `N`
+    /// the definition context found: `N` is looked up in the object's
+    /// class first, the definition's `N` used only if nothing is found
+    /// there ([basic.lookup.qual.general]/2; clang's
+    /// `FirstQualifierInScope`). When the class has an `N` naming
+    /// something else, the specifier is formed again from it, each later
+    /// component looked up in what the one before it now names; `None`
+    /// when the definition's specifier stands (no `N` in the class, the
+    /// same entity, a first component that is a template-id or `::`, or
+    /// an object that is not a class or still dependent).
+    fn relook_member_root(
+        &mut self,
+        n: NnsId,
+        base: ExprId,
+        arrow: bool,
+        loc: Loc,
+    ) -> SubstResult<Option<(DeclId, NnsId)>> {
+        let mut chain = vec![n];
+        let mut cur = n;
+        while let Some(p) = self.sema.ast.types.nns_prefix(cur) {
+            if chain.len() > 64 {
+                return Ok(None);
+            }
+            chain.push(p);
+            cur = p;
+        }
+        chain.reverse();
+        let root = chain[0];
+        let Some(name) = self.sema.nns_component_name(root) else { return Ok(None) };
+        if !chain[1..].iter().all(|&c| self.later_component_kind(c).is_some()) {
+            return Ok(None);
+        }
+        let bt = self.sema.ety(base);
+        let obj = if arrow { self.sema.ast.types.pointee(bt) } else { Some(bt) };
+        let Some(obj) = obj.filter(|&o| !self.sema.ast.types.is_dependent(o)) else {
+            return Ok(None);
+        };
+        let Some(rec) = self.sema.ast.types.as_record(obj) else { return Ok(None) };
+        let def = self.sema.ast.definition(rec).unwrap_or(rec);
+        let found = self.sema.lookup_in_class(def, name, crate::lookup::LookupKind::Nested);
+        if found.decls.is_empty() {
+            return Ok(None);
+        }
+        // The definition's context of `N`: kept when the class's `N`
+        // names it too (`t.Base::f()` with `Base` a base class).
+        let was = match self.sema.ast.types.nns_view(root) {
+            Nns::Namespace { ns, .. } | Nns::NamespaceAlias { ns, .. } => Some(ns),
+            Nns::Type { ty, .. } => {
+                let t = &self.sema.ast.types;
+                t.as_record(ty)
+                    .or_else(|| t.as_enum(ty))
+                    .map(|r| self.sema.ast.definition(r).unwrap_or(r))
+            }
+            _ => None,
+        };
+        let Some((c, spelled)) = self.sema.nested_name_from_found(None, name, &found, loc) else {
+            return Err(SubstFail);
+        };
+        if was == Some(c) {
+            return Ok(None);
+        }
+        let mut q = (c, self.sema.nns_component(None, c, spelled));
+        self.note_relooked(q.1);
+        for &comp in &chain[1..] {
+            q = self.relook_member_component(q, comp, loc)?;
+            self.note_relooked(q.1);
+        }
+        Ok(Some(q))
+    }
+
+    /// What a later component of a member qualifier is looked up as when
+    /// [`Self::relook_member_root`] forms the qualifier again: a name
+    /// (`B::`, a dependent `x::`) or a template-id's template name with its
+    /// arguments (`template X<int>::`). `None` for anything else.
+    fn later_component_kind(&self, comp: NnsId) -> Option<LaterComponent> {
+        let t = &self.sema.ast.types;
+        if let Some(name) = self.sema.nns_component_name(comp) {
+            return Some(LaterComponent::Name(name));
+        }
+        match t.nns_view(comp) {
+            Nns::Identifier { name, .. } => Some(LaterComponent::Name(name)),
+            Nns::Type { ty, template_kw, .. } => match t.view(ty.ty()) {
+                kiln_ast::types::TypeView::TemplateSpecialization { name, args, .. } => {
+                    let td = t.template_decl(name)?;
+                    let id = self.sema.ast.decls.get(td).name().as_ident()?;
+                    Some(LaterComponent::TemplateId(id, args, template_kw))
+                }
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// A later component `comp` of a member qualifier formed again by
+    /// [`Self::relook_member_root`], after `prefix`: its name (a
+    /// template-id's template name, its arguments substituted) looked up
+    /// in what `prefix` names.
+    fn relook_member_component(
+        &mut self,
+        (pc, pn): (DeclId, NnsId),
+        comp: NnsId,
+        loc: Loc,
+    ) -> SubstResult<(DeclId, NnsId)> {
+        match self.later_component_kind(comp) {
+            Some(LaterComponent::Name(name)) => {
+                let Some((c, spelled)) = self.sema.act_on_nested_name_spelled(Some(pc), name, loc)
+                else {
+                    return Err(SubstFail);
+                };
+                if !self.sema.require_complete_nns_ctx(c, loc) {
+                    return Err(SubstFail);
+                }
+                Ok((c, self.sema.nns_component(Some(pn), c, spelled)))
+            }
+            // `t.acme::template X<int>::f()`.
+            Some(LaterComponent::TemplateId(id, args, template_kw)) => {
+                let found = self.sema.lookup_qualified(pc, id, crate::lookup::LookupKind::Nested);
+                let tmpl = found.decls.iter().copied().find(|&d| {
+                    matches!(
+                        self.sema.kind_of(d),
+                        DeclKind::ClassTemplate | DeclKind::TypeAliasTemplate
+                    )
+                });
+                let Some(tmpl) = tmpl else {
+                    // Diagnosed as the lookup of a plain name is.
+                    let _ = self.sema.act_on_nested_name_spelled(Some(pc), id, loc);
+                    return Err(SubstFail);
+                };
+                let l = self.args(args, loc)?;
+                let list = self.sema.ast.types.args(l).to_vec();
+                let tn = self.sema.template_name_for(tmpl);
+                let Ok(crate::templ::actions::TemplateIdRef::Type(t)) =
+                    self.sema.act_template_id(tn, &list, loc, loc)
+                else {
+                    return Err(SubstFail);
+                };
+                self.sema
+                    .act_on_nested_name_template_id(Some(pn), tmpl, t, template_kw, loc)
+                    .ok_or(SubstFail)
+            }
+            // Ruled out by `relook_member_root`.
+            None => Err(SubstFail),
+        }
+    }
+
+    /// Records `n` as formed by [`Self::relook_member_root`] for the
+    /// written-reference table (spec/ast.md §18.9.1).
+    fn note_relooked(&mut self, n: NnsId) {
+        if self.sema.records_written_refs() {
+            let _ = self.sema.templ.relooked_nns.insert(n);
         }
     }
 
@@ -3573,4 +3807,28 @@ impl Substituter<'_, '_, '_> {
         };
         QualType::new(underlying.ty(), underlying.quals_bits() | q.quals_bits())
     }
+}
+
+/// A later component of a member qualifier formed again from the object's
+/// class (`Substituter::later_component_kind`).
+#[derive(Clone, Copy)]
+enum LaterComponent {
+    /// `name::`.
+    Name(kiln_source::symbol::Symbol),
+    /// `[template] name<args>::`: the template's name, the arguments as
+    /// written, the `template` keyword.
+    TemplateId(kiln_source::symbol::Symbol, ArgListId, bool),
+}
+
+/// The object of a member access in a template's pattern, for the lookup
+/// of its qualifier's first component (`Substituter::pattern_object_dependent`).
+#[derive(Clone, Copy)]
+enum PatternObject {
+    /// A class known at the definition (looked up there), or not dependent.
+    Known,
+    /// Type-dependent, no class known.
+    Dependent,
+    /// `t<P...>` with class template `t`'s own parameters: the current
+    /// instantiation inside `t`.
+    OwnArgs(DeclId),
 }
