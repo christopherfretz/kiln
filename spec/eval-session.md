@@ -1233,6 +1233,31 @@ object, of its own type, whatever the handler caught it as
 ([except.handle]/16). Until WP-2480 the field was `type_name: String`,
 spelled as the note spells it, without the enclosing namespaces.
 
+The spelling follows `display_string_of`'s one rule (GCC 16.1's `%T`,
+spec/reflection.md §3.9) for every shape, however the operand was
+written (WP-3408): every inline namespace is kept, at every depth
+(`lib::v0::error` for `throw lib::error{}`, `app::lib::v0::error`,
+`outer::box<lib::v0::error>::nested` through an alias); a class of the
+unnamed namespace is `{anonymous}::error`; a class or enumeration
+declared in a function is spelled through it (`d1()::error`,
+`q::d4(int)::error`, `d2()::o::in`, `outer::box<d6()::L>`); a closure
+type is `e1()::<lambda()>`; cv and pointers as `%T` prints them
+(`const ns::S*`). So no type spelled for a local class or a class of
+the unnamed namespace equals a namespace-scope class's, and `ty` is the
+same `Entity` as the thrown value's own type (`value`'s root
+`RecordValue::ty`) and as every other name in a run's results (§4.1),
+which is why it is not the note's spelling. The note
+(spec/oven.md "Exceptions") is a diagnostic and follows the diagnostic
+printer at the `-fclang-compat` level instead (`lib::error`,
+`(anonymous namespace)::error`, `d1()::error`, `(lambda at F:L:C)`);
+a client never parses it. Beside the string, `ty.decl` is the
+structured record: the class's or enumeration's first declaration
+whenever it existed at open (a local class and a closure type
+included); `None` only for a class a run instantiated and for a type
+that is no class or enumeration (`int`, `const char*`), where the
+spelling is all there is (`an_uncaught_type_is_spelled_by_one_rule` in
+`crates/kiln_parse/tests/eval_session_results.rs`).
+
 **`Uncaught`'s value** (WP-2502): `value: Result<Box<ValueTree>, String>`,
 the thrown object's value as a run's result of its type would be read
 (§4.1: a `ValueTree`, the root and its constants table; the same tree

@@ -1279,6 +1279,19 @@ Three printers name types, and only one is a key:
     `__PRETTY_FUNCTION__` (`AstNames::local_scopes`). A failed
     requirement names a closure type with its location, as clang does
     (`sizeof((lambda at a.cpp:6:21))`).
+  - Its thrown-type mode (`DiagNames::thrown_types`,
+    `thrown_type_name`; WP-3408) names an uncaught exception's type in
+    its note (spec/oven.md "Exceptions"): the canonical, cv-unqualified
+    type with every specialization's canonical arguments, and a class or
+    enumeration declared in a function (not a closure type) printed
+    through the function, as clang 22 prints such a class as a scope,
+    at every compatibility level and inside template arguments:
+    `f()::error`, `box<f()::error>`, `q::g(int)::o::in`. Everything else
+    is the diagnostic printer's text, so an inline namespace is left out
+    only where redundant (`lib::error`, `m::v1::e`). It is not a key
+    either (two local classes `L` of sibling blocks print alike), but no
+    spelling of a type declared in a function equals a namespace-scope
+    type's.
 - **The dump printer** (`AstNames`): the AST dump's and debug
   information's text (spec/ast-dump.md, spec/codegen.md §5.1), clang's
   for those outputs; not a key either.

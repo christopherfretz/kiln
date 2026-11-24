@@ -32,6 +32,10 @@ pub struct DiagNames<'s> {
     /// A specialization prints its canonical template arguments, not
     /// the ones it was first named with ([`Self::canonical_args`]).
     canonical_args: bool,
+    /// A class or enumeration declared in a function prints its scope
+    /// through the function (`f()::error`), not unqualified as clang's
+    /// `TypePrinter::AppendScope` prints it ([`Self::thrown_types`]).
+    local_types: bool,
 }
 
 impl<'s> DiagNames<'s> {
@@ -50,6 +54,7 @@ impl<'s> DiagNames<'s> {
             typed_args: None,
             c_lang: None,
             canonical_args: false,
+            local_types: false,
         }
     }
 
@@ -89,6 +94,7 @@ impl<'s> DiagNames<'s> {
             typed_args: None,
             c_lang: None,
             canonical_args: false,
+            local_types: false,
         }
     }
 
@@ -110,6 +116,37 @@ impl<'s> DiagNames<'s> {
     #[must_use]
     pub fn canonical_args(self) -> Self {
         DiagNames { canonical_args: true, ..self }
+    }
+
+    /// These names as the note of an uncaught exception spells the
+    /// exception object's type ([`Self::thrown_type_name`], WP-3408):
+    /// every specialization with its canonical arguments
+    /// ([`Self::canonical_args`]), and a class or enumeration declared in a
+    /// function (not a closure type, which prints `(lambda at F:L:C)`)
+    /// with its scope through the function, as clang 22 prints such a
+    /// class as the scope of another name (`NamedDecl::printQualifiedName`:
+    /// `f()::error`, `q::k(int)::error`, `f()::outer::inner`), at every
+    /// compatibility level and inside template arguments too
+    /// (`box<f()::error>`). clang's own diagnostics print the class
+    /// itself unqualified (`error`), which can equal a namespace-scope
+    /// class's spelling.
+    #[must_use]
+    pub fn thrown_types(self) -> Self {
+        DiagNames { canonical_args: true, local_types: true, ..self }
+    }
+
+    /// The type of an exception object, `q` with its sugar and top-level
+    /// cv-qualifiers removed ([except.throw]/3), as the uncaught-exception
+    /// note spells it (spec/oven.md "Exceptions", WP-3408): clang's
+    /// spelling of a canonical type in a diagnostic (an inline namespace
+    /// left out only when it is redundant, `(anonymous namespace)::`,
+    /// `(lambda at F:L:C)`) with [`Self::thrown_types`]'s rule for types
+    /// declared in a function. One rule however the operand was written
+    /// (`lib::v0::error`, `lib::error`, an alias, a template parameter).
+    pub fn thrown_type_name(&self, q: QualType) -> String {
+        let names = self.thrown_types();
+        let t = self.ast.types.canonical(q).without_quals();
+        crate::types::print_type(&self.ast.types, &names, t, crate::types::PrintOptions::CANONICAL)
     }
 
     /// `l`, canonical under [`Self::canonical_args`].
@@ -480,6 +517,14 @@ impl TypeNames for DiagNames<'_> {
             && (k.is_function() || k == DeclKind::FunctionTemplate)
             && self.in_local_scope(decl)
         {
+            self.write_decl_scope(decl, out);
+        } else if scoped
+            && self.local_types
+            && matches!(k, DeclKind::CXXRecord | DeclKind::Enum)
+            && self.ast.closure_lambda(decl).is_none()
+            && self.in_local_scope(decl)
+        {
+            // [`Self::thrown_types`]: through the function (`f()::error`).
             self.write_decl_scope(decl, out);
         } else if scoped {
             self.write_scope(decl, out);

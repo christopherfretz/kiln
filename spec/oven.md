@@ -4894,7 +4894,40 @@ follow clang trunk's P3068 branch.
   `T` has size 1 (an empty class, a `char`, a class of one `char`: the
   branch's `getTypeSizeInChars(T).isOne()`), and "unhandled exception of type 'T' with
   content V thrown from here" otherwise, `V` the value as every other
-  note prints it (`12`, `{4}`, `1.500000e+00`). The libc++ 22 `std::exception` constructors and `what()` are not
+  note prints it (`12`, `{4}`, `1.500000e+00`). `T` is the exception
+  object's type ([except.throw]/3: the operand's static type, sugar and
+  top-level cv-qualifiers removed, an array or function decayed), named
+  by one rule however the operand was written
+  (`DiagNames::thrown_type_name`, spec/types.md §12.1; WP-3408): the
+  diagnostic printer's spelling of that canonical type at the
+  `-fclang-compat` level, as clang 19 and 22 print it in their own
+  diagnostics (a template's argument in an instantiation note): an
+  inline namespace is left out only where it is redundant
+  (`isRedundantInlineQualifierFor`), at every depth (`lib::error` and
+  `app::lib::error` for `lib::v0::error` and `app::lib::v0::error`,
+  `m::v1::e` where `m::e` is ambiguous), the unnamed namespace prints
+  `(anonymous namespace)::error`, a closure type `(lambda at F:L:C)`, a
+  specialization its canonical arguments by the same rule
+  (`outer::box<lib::error>::nested`), cv and pointer spellings as
+  clang's (`const app::lib::error *`). One departure: a class or
+  enumeration declared in a function prints through the function, as
+  clang 22 prints such a class as the scope of another name
+  (`d1()::error`, `q::d4(int)::error`, `d2()::o::in`, `box<d6()::L>`;
+  a function template specialization's function without its arguments,
+  `d5()::L`; a closure in the scope `(lambda)`, `(anonymous class)` under
+  clang 19), at both levels, where clang prints the class itself bare
+  (`error`): no spelling of a thrown type can then equal a
+  namespace-scope class's. clang implements no P3068, so there is no
+  clang note to match. Until WP-3408 the note printed the operand's
+  type as written (`lib::v0::error`, but `lib::error` through an alias
+  or a template parameter; `error` for a class of the unnamed namespace
+  or a local class). A client wanting the type by identity reads
+  `RunError::Uncaught`'s `ty` (spec/eval-session.md §8: GCC 16.1's
+  `display_string_of` spelling and the class's `DeclId`), never the
+  note. Tests: `except.throw/constexpr-uncaught-type-spelling.cpp` (the
+  note), `except.throw/thrown-type-spelling-clang.cpp` (clang's spelling
+  of the same types), `thrown_type_names_follow_one_rule` in
+  `crates/kiln_parse/tests/type_keys.rs` (the printer). The libc++ 22 `std::exception` constructors and `what()` are not
   `constexpr`, so with the library headers only user exception classes
   are usable today.
 - *Function-try-blocks* ([except.handle]/13-15): a function body that is

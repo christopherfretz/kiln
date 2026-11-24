@@ -1340,6 +1340,21 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   specializations and declarations after the point of instantiation are
   unchanged, as in clang 19 and 22.
 
+- The note on an exception that leaves a constant evaluation ("unhandled
+  exception of type 'T' ...") names the exception object's type by one
+  rule however the operand was written ([except.throw]/3, WP-3408):
+  clang's diagnostic spelling of the canonical type, so an inline
+  namespace is left out only where it is redundant, at every depth
+  (`lib::error` and `app::lib::error`, where before `lib::v0::error`
+  kept `v0` as written and `app::lib::v0::error` through a template
+  lost it; `m::v1::e` where `m::e` is ambiguous), a class of the unnamed
+  namespace prints `(anonymous namespace)::error` and a class declared
+  in a function prints through it (`f()::error`, `box<f()::error>`),
+  where before both printed a bare `error` that equals a namespace-scope
+  class's; a closure type prints `(lambda at F:L:C)` (was `(lambda)`).
+  `RunError::Uncaught`'s `ty` keeps `display_string_of`'s spelling, now
+  specified for every shape (spec/eval-session.md §8).
+
 - A member access's qualifier on a type-dependent object
   (`t.acme::B::f()` in a template) looks its first component up in the
   object's class at instantiation before using what the definition found

@@ -1466,3 +1466,72 @@ fn an_unrepresentable_thrown_value_says_why() {
         },
     );
 }
+
+/// WP-3408 ([except.throw]/3; spec/eval-session.md §8 "`Uncaught`'s
+/// type", spec/oven.md "Exceptions"): each spelling of an uncaught
+/// exception's type follows one rule, however the operand was written.
+/// The record (`ty`) is `display_string_of`'s (GCC 16.1's `%T`): every
+/// inline namespace kept at every depth, `{anonymous}::`, a local class
+/// through its function, a closure as `f()::<lambda()>`, the same entity
+/// as the thrown value's own type. The note is the diagnostic printer's:
+/// an inline namespace left out only where redundant, `(anonymous
+/// namespace)::`, a local class through its function, a closure by its
+/// location. Neither ever spells a local class or a class of the unnamed
+/// namespace as a namespace-scope class's (`error`). Reduced from a
+/// tooling client's report.
+#[test]
+fn an_uncaught_type_is_spelled_by_one_rule() {
+    session(
+        "namespace lib { inline namespace v0 { struct error { int c; }; } }\n\
+         namespace app { namespace lib { inline namespace v0 { struct error { int c; }; } } }\n\
+         namespace { struct error { int c; }; }\n\
+         namespace outer { template <class T> struct box { int c; struct nested { int c; }; }; }\n\
+         namespace m { inline namespace v1 { struct e { int c; }; } inline namespace v2 { struct e { int c; }; } }\n\
+         using alias = lib::v0::error;\n\
+         template <class T> constexpr int thrower() { throw T{2}; }\n\
+         consteval int a1() { throw lib::v0::error{1}; }\n\
+         consteval int a2() { throw lib::error{1}; }\n\
+         consteval int a3() { throw alias{1}; }\n\
+         consteval int b1() { throw app::lib::v0::error{2}; }\n\
+         consteval int b2() { return thrower<app::lib::error>(); }\n\
+         consteval int b3() { return thrower<m::v1::e>(); }\n\
+         consteval int c1() { throw error{3}; }\n\
+         consteval int c2() { return thrower<error>(); }\n\
+         consteval int d1() { struct error { int c; }; throw error{4}; }\n\
+         consteval int d2() { struct o { struct in { int c; }; }; throw o::in{4}; }\n\
+         namespace q { consteval int d4(int) { struct error { int c; }; throw error{4}; } }\n\
+         consteval int d4() { return q::d4(0); }\n\
+         consteval int d6() { struct L { int c; }; throw outer::box<L>{4}; }\n\
+         consteval int e1() { auto l = [] {}; throw l; }\n\
+         consteval int f1() { throw outer::box<lib::v0::error>{5}; }\n\
+         consteval int f2() { throw outer::box<alias>::nested{5}; }\n",
+        |s| {
+            let want = [
+                ("a1", "lib::v0::error", "lib::error"),
+                ("a2", "lib::v0::error", "lib::error"),
+                ("a3", "lib::v0::error", "lib::error"),
+                ("b1", "app::lib::v0::error", "app::lib::error"),
+                ("b2", "app::lib::v0::error", "app::lib::error"),
+                ("b3", "m::v1::e", "m::v1::e"),
+                ("c1", "{anonymous}::error", "(anonymous namespace)::error"),
+                ("c2", "{anonymous}::error", "(anonymous namespace)::error"),
+                ("d1", "d1()::error", "d1()::error"),
+                ("d2", "d2()::o::in", "d2()::o::in"),
+                ("d4", "q::d4(int)::error", "q::d4(int)::error"),
+                ("d6", "outer::box<d6()::L>", "outer::box<d6()::L>"),
+                ("e1", "e1()::<lambda()>", "(lambda at t.cpp:"),
+                ("f1", "outer::box<lib::v0::error>", "outer::box<lib::error>"),
+                ("f2", "outer::box<lib::v0::error>::nested", "outer::box<lib::error>::nested"),
+            ];
+            for (entry, record_spelling, note_spelling) in want {
+                let (ty, _, value, notes) = uncaught(s, entry);
+                assert_eq!(&*ty.display, record_spelling, "{entry}");
+                assert!(ty.decl.is_some(), "{entry}: {ty:?}");
+                let value = value.unwrap_or_else(|e| panic!("{entry}: {e}"));
+                assert_eq!(record(&value.root).ty, ty, "{entry}");
+                let quoted = format!("of type '{note_spelling}");
+                assert!(notes.iter().any(|n| n.contains(&quoted)), "{entry}: {notes:?}");
+            }
+        },
+    );
+}
