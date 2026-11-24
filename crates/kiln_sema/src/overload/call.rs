@@ -259,6 +259,7 @@ impl Sema<'_, '_> {
         let wspec = wref.is_none() && self.pending_written_spec(named).is_some();
         let mut facts = None;
         let explain = wref.is_some() || wspec;
+        let parked = self.ovl.single_specs.len();
         let r = self.resolve_unresolved_call_inner(callee, args, braced, &mut facts, explain);
         if let Some(w) = wref {
             if r.is_none() {
@@ -266,7 +267,15 @@ impl Sema<'_, '_> {
             }
             self.note_written_call_lookup(w, facts);
         } else if wspec {
-            self.note_written_spec_call(named, facts);
+            let grew = self.ovl.single_specs.len() > parked;
+            match self.ovl.single_specs.last_mut() {
+                // The one candidate's row waits for its arguments
+                // (`act_on_call`, §18.9.4).
+                Some(s) if grew && s.set == named => {
+                    s.facts = facts;
+                }
+                _ => self.note_written_spec_call(named, facts),
+            }
         }
         r
     }
@@ -376,7 +385,23 @@ impl Sema<'_, '_> {
             // One candidate: the direct path's conversions and
             // diagnostics are clang's for a one-candidate set.
             let (d, f) = cands[0];
+            // In an instantiation, the entry's row names `d` only once the
+            // call's arguments convert to its parameters: a candidate that
+            // is not viable leaves the name unresolved, as a set of two
+            // does (spec/ast.md §18.9.4).
+            let parked = self.ast.written_refs.take_spec_pending(ule);
             let e = self.finish_overload_ref(d, f, naming, n.loc(), nns, ule, true);
+            if let Some((entry, spec)) = parked {
+                self.ovl.single_specs.push(super::SingleWrittenSpec {
+                    callee: e,
+                    set: ule,
+                    entry,
+                    spec,
+                    func: d,
+                    found: f,
+                    facts: None,
+                });
+            }
             if !adl
                 && decls.len() == 1
                 && self.ast.decls.get(d).has(DeclFlags::INVALID)

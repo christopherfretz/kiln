@@ -5897,11 +5897,28 @@ impl Sema<'_, '_> {
 
     /// A function call `f(args)` ([expr.call]). `loc` is the callee's
     /// location; `rparen` the closing parenthesis.
+    pub fn act_on_call(
+        &mut self,
+        callee: ExprId,
+        args: &[ExprId],
+        loc: Loc,
+        rparen: Loc,
+    ) -> ExprId {
+        let parked = self.ovl.single_specs.len();
+        let r = self.act_on_call_built(callee, args, loc, rparen);
+        if self.ovl.single_specs.len() > parked {
+            self.finish_single_written_specs(parked);
+        }
+        r
+    }
+
+    /// [`Sema::act_on_call`], a one-candidate call's parked written
+    /// reference finished where its arguments are converted.
     #[allow(
         clippy::too_many_lines,
         reason = "callee checks, argument conversion and default arguments in [expr.call] order"
     )]
-    pub fn act_on_call(
+    fn act_on_call_built(
         &mut self,
         callee: ExprId,
         args: &[ExprId],
@@ -5986,6 +6003,9 @@ impl Sema<'_, '_> {
         // is clang's `IsADLCandidate` (dumped `adl`; spec/sema-overload.md
         // §2.2).
         let mut adl_winner = false;
+        // The reference a one-candidate overload set resolved to, whose
+        // written reference waits for the argument conversions.
+        let mut single = None;
         let callee = if self.ast.exprs.get(self.ignore_parens(callee)).kind()
             == ExprKind::UnresolvedLookupExpr
             && !self.expr_is_type_dependent(callee)
@@ -5996,6 +6016,7 @@ impl Sema<'_, '_> {
             match self.resolve_unresolved_call(callee, args, &braced) {
                 Some((e, adl)) if !self.is_err_expr(e) => {
                     adl_winner = adl;
+                    single = Some(e);
                     self.rebuild_parens(callee, e)
                 }
                 _ => return self.recover_err(&kids, loc),
@@ -6191,9 +6212,14 @@ impl Sema<'_, '_> {
         if !self.check_x86_interrupt_call(callee) {
             return self.recover_err(&kids, loc);
         }
-        let Some(conv_args) =
-            self.convert_call_args(callee_info, callee, args, &mut braced, &proto, loc, rparen)
-        else {
+        let conv_args =
+            self.convert_call_args(callee_info, callee, args, &mut braced, &proto, loc, rparen);
+        if let Some(e) = single
+            && !self.ovl.single_specs.is_empty()
+        {
+            self.finish_single_written_spec(e, conv_args.is_some());
+        }
+        let Some(conv_args) = conv_args else {
             // A one-candidate overload set: clang resolved it as a set.
             if adl_single == Some(callee) {
                 self.note_call_recovery(Some(proto.ret()));

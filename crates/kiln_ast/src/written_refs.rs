@@ -1500,6 +1500,20 @@ impl WrittenRefs {
         }
     }
 
+    /// Moves the live entries recorded since `mark` under specialization
+    /// `from` to specialization `to` (a function template's default
+    /// template argument, substituted before the specialization it is
+    /// part of was formed, §18.9.3). One that `to` already has is
+    /// dropped (one resolution is kept once, §18.9.1).
+    pub fn rekey_specs_since(&mut self, mark: u32, from: DeclId, to: DeclId) {
+        for i in mark as usize..self.specs.len() {
+            let r = self.specs[i];
+            if r.flags & SPEC_DEAD == 0 && r.spec == from {
+                let _ = self.update_spec(SpecRefId::from_index(i), |r| r.spec = to);
+            }
+        }
+    }
+
     /// Every live per-specialization entry, in recording order.
     pub fn specs(&self) -> impl Iterator<Item = (SpecRefId, &SpecRef)> + '_ {
         self.specs

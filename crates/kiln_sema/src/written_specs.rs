@@ -315,6 +315,35 @@ impl Sema<'_, '_> {
         });
     }
 
+    /// The one-candidate call whose callee became `callee` was checked:
+    /// `viable`, its arguments converted to the candidate's parameters,
+    /// and the row parked for it names the candidate; otherwise the call
+    /// failed as a candidate set would, so its name stays unresolved, and
+    /// a substitution failure records nothing (§18.9.3, §18.9.4).
+    pub(crate) fn finish_single_written_spec(&mut self, callee: ExprId, viable: bool) {
+        let Some(i) = self.ovl.single_specs.iter().rposition(|s| s.callee == callee) else {
+            return;
+        };
+        let s = self.ovl.single_specs.remove(i);
+        self.ast.written_refs.defer_spec(s.set, s.entry, s.spec);
+        if viable {
+            let _ = self.resolve_written_spec(s.set, Some(s.func), Some(s.found));
+        }
+        self.note_written_spec_call(s.set, s.facts);
+    }
+
+    /// The calls built since the parked rows numbered `mark` are done:
+    /// a row still parked (its call ended before its arguments were
+    /// converted, a builtin's or an implicit member call's) names its
+    /// candidate (§18.9.4).
+    pub(crate) fn finish_single_written_specs(&mut self, mark: usize) {
+        while self.ovl.single_specs.len() > mark {
+            let Some(s) = self.ovl.single_specs.last() else { return };
+            let callee = s.callee;
+            self.finish_single_written_spec(callee, true);
+        }
+    }
+
     /// The member call of the rebuilt overloaded member access `x`
     /// failed: its entry stays unresolved.
     #[inline]
@@ -471,6 +500,8 @@ impl Sema<'_, '_> {
     /// substitution failure): the entries it recorded for `ft` itself
     /// are dropped, and on failure those for the specializations of `ft`
     /// it formed; what nested instantiations recorded stays (§18.9.3).
+    /// A deduction's default template argument keeps its own on success
+    /// until the deduction ends ([`Self::end_written_spec_deduction`]).
     pub(crate) fn end_written_spec_sfinae(&mut self, mark: u32, ft: DeclId, failed: bool) {
         let ft = self.ast.first(ft);
         let drop: Vec<DeclId> = self
@@ -489,6 +520,39 @@ impl Sema<'_, '_> {
             .collect();
         if !drop.is_empty() {
             self.ast.written_refs.drop_specs_since(mark, |k| drop.contains(&k));
+        }
+    }
+
+    /// The deduction of function template `ft` that began at `mark`
+    /// ended, forming `spec` (`None`: it failed). The rows its default
+    /// template arguments recorded, keyed by `ft` while the
+    /// specialization did not exist yet, become `spec`'s; a failed
+    /// deduction's are dropped, as its substitution failures record
+    /// nothing (§18.9.3).
+    pub(crate) fn end_written_spec_deduction(
+        &mut self,
+        mark: u32,
+        ft: DeclId,
+        spec: Option<DeclId>,
+    ) {
+        let ft = self.ast.first(ft);
+        let own: Vec<DeclId> = self
+            .ast
+            .written_refs
+            .spec_keys_since(mark)
+            .into_iter()
+            .filter(|&k| self.ast.first(k) == ft)
+            .collect();
+        if own.is_empty() {
+            return;
+        }
+        match spec {
+            Some(s) => {
+                for k in own {
+                    self.ast.written_refs.rekey_specs_since(mark, k, s);
+                }
+            }
+            None => self.ast.written_refs.drop_specs_since(mark, |k| own.contains(&k)),
         }
     }
 }

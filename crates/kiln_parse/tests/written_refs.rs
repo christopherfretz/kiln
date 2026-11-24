@@ -1256,3 +1256,37 @@ fn rename_claims_dependent_template_ids() {
         assert_eq!(claims(one.decl), [pos_in(TEMPLATE_IDS, 12, "one<")]);
     });
 }
+
+/// A function template's default template argument (spec/ast.md §18.9.2,
+/// WP-3520): the deduction that uses it forms `call<n::S, 4>`, and the
+/// default's `s` has one row, for that specialization, naming
+/// `n::S::s`. A dependent call with one candidate (§18.9.4) gets a row
+/// only where the candidate is viable: `Sw<n::S>` records `n::swap` with
+/// `n::S`'s associated set, the unsatisfied `Sw<n::U>` records nothing.
+#[test]
+fn default_template_arguments_and_one_candidate_calls() {
+    let src = "namespace n { struct S { static int s() { return 1; } }; struct U {}; void swap(S &, S &); }\n\
+               template <class T, int = sizeof(T::s())> int call() { return 0; }\n\
+               template <class T> concept Sw = requires(T &a) { swap(a, a); };\n\
+               int u() { return call<n::S>() + call<n::S, 4>(); }\n\
+               static_assert(Sw<n::S> && !Sw<n::U>);\n";
+    with_ast(src, |ast, sm| {
+        let t = &ast.written_refs;
+        let spec = t.get(entry_at(t, sm, (4, 18))).entity.expect("call<n::S, 4>");
+        let s = entry_at(t, sm, (2, 36));
+        let rows: Vec<_> = t.specs_of(s).map(|(_, r)| *r).collect();
+        assert_eq!(rows.len(), 1, "one row for the default: {rows:?}");
+        assert_eq!(rows[0].spec, spec, "keyed by the formed specialization");
+        let e = rows[0].entity.expect("n::S::s");
+        assert_eq!(line_col(sm, ast.decls.get(e).loc()), (1, 37));
+        let swap = entry_at(t, sm, (3, 50));
+        let rows: Vec<_> = t.specs_of(swap).map(|(_, r)| *r).collect();
+        assert_eq!(rows.len(), 1, "no row for the unsatisfied check: {rows:?}");
+        let f = rows[0].entity.expect("n::swap");
+        assert_eq!(line_col(sm, ast.decls.get(f).loc()), (1, 76));
+        let set = t.adl_set_of(rows[0].adl.expect("the associated set"));
+        let classes: Vec<_> =
+            set.classes().iter().map(|&c| line_col(sm, ast.decls.get(c).loc())).collect();
+        assert_eq!(classes, [(1, 22)], "n::S's set");
+    });
+}

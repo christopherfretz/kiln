@@ -1345,6 +1345,17 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   with `Ts` empty, and such a candidate leaves the overload set instead of
   winning the call; the same for a nested expansion over an explicitly
   given pack and for taking the address of `h<int>`.
+- Per-specialization written references (spec/ast.md §18.9, WP-3520):
+  the names in a function template's default template argument used by
+  a deduction (`template <class T, int = sizeof(T::s())> int call();`
+  called as `call<n::S>()`) get rows for the specialization the
+  deduction forms (`call<n::S, 4>`); they were dropped with the
+  deduction's SFINAE frame even when it succeeded. A failed deduction
+  still records nothing. A dependent call whose lookup finds one
+  function no longer records a row naming it when the call's arguments
+  do not convert (an unsatisfied `requires (T &a) { swap(a, a); }` with
+  one `swap` found by argument-dependent lookup): the name stays
+  unresolved, as with two candidates.
 - A function template specialization's parameter attributes come from
   the template's latest declaration where the specialization is
   declared, not from its first ([temp.inst]/3, [dcl.attr.grammar]/5,

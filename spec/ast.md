@@ -3753,7 +3753,15 @@ instantiation stack (§8.4) from the innermost frame:
 - an alias template's aliased type: an alias template specialization is
   not a declaration ([temp.alias]/2), so the key is the alias template,
   one row per distinct resolution;
-- a default template argument: the template whose parameter it is; a
+- a default template argument: the template whose parameter it is,
+  except a function template's default that a deduction uses
+  ([temp.deduct.general]/5): the specialization the deduction forms
+  (`call<n::S, 4>`). That default is substituted before the
+  specialization exists, so its rows are keyed by the template until
+  the deduction ends; `deduce_spec` then re-keys them to the
+  specialization it formed, or drops them when it failed
+  (`end_written_spec_deduction`, §18.9.3). A call with the argument
+  written explicitly substitutes no default and gets no row for it; a
   default function argument used by a call ([temp.inst]/12): the called
   function (`from<P>`, `Holder<P>::pick`); a default member initializer
   ([temp.inst]/4): the field of the specialization;
@@ -3812,7 +3820,16 @@ building deduction guides, `std::meta::substitute`.
   template `ft`'s deduction ends (`in_sfinae_held`), the rows it
   recorded keyed by `ft` itself are dropped, and when it failed also
   those keyed by the specializations of `ft` it formed; a lookup that
-  fails inside a SFINAE context records no unresolved row. What the
+  fails inside a SFINAE context records no unresolved row. The frame
+  of a default template argument the deduction substitutes keeps its
+  rows keyed by `ft` when it succeeds, until the deduction ends: they
+  become the formed specialization's, or are dropped with a deduction
+  that fails at a later step (§18.9.2). Rows belong to the
+  specializations that are formed: every candidate whose deduction
+  succeeds forms its specialization ([temp.over]/1), and keeps the rows
+  of its signature and its default template arguments whether or not
+  overload resolution then chooses it; a candidate whose deduction
+  fails keeps none. What the
   real instantiations nested in the deduction recorded stays (a class
   template specialization instantiated while the signature was
   substituted is instantiated, [temp.inst]/2), as do an alias
@@ -3897,6 +3914,21 @@ building deduction guides, `std::meta::substitute`.
 - **Argument-dependent lookup.** A dependent unqualified call's row gets
   §18.7.4's `how` and set from the facts `resolve_unresolved_call`
   reports, as the main table's call entries do.
+- **One candidate.** A rebuilt call whose lookup found exactly one
+  non-template function takes `resolve_unresolved_call`'s direct path,
+  which checks the arguments only when `act_on_call` converts them. Its
+  row waits until then (`SingleWrittenSpec`, parked by the direct path):
+  arguments that convert make the row name the function, as overload
+  resolution choosing it would; arguments that do not (the candidate is
+  not viable, [over.match.viable]/4) leave the name unresolved, as a
+  set of two with no viable function does: no row inside a SFINAE
+  context or a constraint, an `UNRESOLVED` row with the
+  argument-dependent set after an error (§18.9.3). A call that ends
+  before its arguments are converted (a builtin's custom checking, an
+  implicit member call) records the function when `act_on_call`
+  returns. The other one-candidate paths are not calls (the address of
+  a single function, `resolve_single_overload_candidate`) and resolve at
+  once.
 - **Using-declarations.** The class template specialization's
   instantiation redoes each dependent using-declarator
   (`member_using`, `member_using_typename`) and records its row keyed
@@ -4024,6 +4056,11 @@ generic lambda (`inst-generic-lambda`), variable and alias templates
 (`inst-var-template`), explicit instantiation (`inst-explicit`), a
 member template of a class template (`inst-nested`), a substitution
 failure (`inst-sfinae`), an instantiation error (`inst-error`),
+function template default template arguments used by deduction, with
+several candidates, carried by a precompiled header and a module
+image (`inst-default-targ`, `inst-default-targ-pch`,
+`inst-default-targ-module-*`), a dependent call with one candidate, viable or not, in a constraint, a deduction and a body
+(`inst-adl-single`, `inst-adl-single-error`),
 using-directives at file, namespace and block scope, with
 argument-dependent lookup and both (`inst-udir`), dependent types a
 generic lambda's body rebuilds still dependent (`inst-rebuilt`),

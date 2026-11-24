@@ -413,6 +413,27 @@ pub struct OverloadStats {
     pub max_set: u64,
 }
 
+/// A one-candidate call's per-specialization written reference
+/// (spec/ast.md §18.9.4), parked by `resolve_unresolved_call` until
+/// `act_on_call` knows whether the candidate is viable: the row names
+/// `func` only when the arguments convert.
+#[derive(Debug)]
+pub(crate) struct SingleWrittenSpec {
+    /// The reference to the candidate the call's callee became.
+    pub callee: kiln_ast::ExprId,
+    /// The rebuilt overload set the pattern entry awaits.
+    pub set: kiln_ast::ExprId,
+    /// The pattern entry.
+    pub entry: kiln_ast::written_refs::WrittenRefId,
+    /// The specialization the row is for.
+    pub spec: DeclId,
+    /// The candidate and its found declaration.
+    pub func: DeclId,
+    pub found: DeclId,
+    /// What argument-dependent lookup saw.
+    pub facts: Option<adl::AdlFacts>,
+}
+
 /// The pool of candidate sets (spec/sema-overload.md §1.4): nested
 /// resolutions take one each; pool depth = nesting depth.
 #[derive(Debug, Default, kiln_snap::Snap)]
@@ -470,6 +491,12 @@ pub(crate) struct OverloadScratch {
     /// without ADL (qualified, parenthesized, block-scope) reports the
     /// conversion directly. Consumed by [`Sema::act_on_call`].
     pub adl_single: Option<kiln_ast::ExprId>,
+    /// Not in a snapshot: scratch of a call being built. The written
+    /// references of one-candidate calls in an instantiation, parked
+    /// until the call's arguments convert (spec/ast.md §18.9.4):
+    /// innermost last.
+    #[snap(skip)]
+    pub single_specs: Vec<SingleWrittenSpec>,
     /// The `get<i>` name of a structured binding's tuple-like
     /// initializer ([dcl.struct.bind]/4): argument-dependent lookup only,
     /// built by clang's `BuildCallExpr`, so not the C++20 extension of a

@@ -151,7 +151,10 @@ pub(crate) const MAGIC: [u8; 8] = *b"KILNSNAP";
 /// fields of the template state (not written, named by the schema);
 /// version 182 (WP-3401) the shadow each using-shadow's lookup found
 /// (`ColdDeclData::shadow_named`).
-pub(crate) const FORMAT_VERSION: u32 = 182;
+/// version 183 (WP-3520) the parked written references of one-candidate
+/// calls (`OverloadScratch::single_specs`, not written, named by the
+/// schema).
+pub(crate) const FORMAT_VERSION: u32 = 183;
 /// The length of the magic and the format version.
 pub(crate) const HEADER_LEN: usize = 12;
 
