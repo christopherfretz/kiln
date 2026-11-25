@@ -1501,6 +1501,23 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             if n.ty().is_some_and(|t| ast.needs_destruction(t)) {
                 self.line.push_str(" destroyed");
             }
+            // The static-initialization fact, where it is recorded, while
+            // the unit records them (§25.4).
+            if ast.static_init_facts
+                && let Some(f) = spec.static_init_fact()
+            {
+                self.line.push_str(" static-init=");
+                self.line.push_str(f.init.name());
+                if let crate::static_init::StaticInit::NotEvaluated(why) = f.init {
+                    self.line.push('(');
+                    self.line.push_str(why.name());
+                    self.line.push(')');
+                }
+                if let Some(x) = f.destruction {
+                    self.line.push_str(" static-destroy=");
+                    self.line.push_str(x.name());
+                }
+            }
         } else if let Some(p) = decls.param(d) {
             let p = *p;
             self.name(d);

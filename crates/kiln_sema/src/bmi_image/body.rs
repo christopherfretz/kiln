@@ -3234,8 +3234,11 @@ impl Writer<'_, '_, '_> {
                 _ => return Err("a template"),
             }
         }
-        let bits = vd.spec.bits();
-        if var_spec(bits) != Some(vd.spec) {
+        // A static-initialization fact is not carried: an importer that
+        // records them records its own (spec/ast.md §25.5).
+        let spec = vd.spec.without_static_init_fact();
+        let bits = spec.bits();
+        if var_spec(bits) != Some(spec) {
             return Err("a variable with specifiers the image does not carry");
         }
         let ty = self.qref(ast.decls.get(d).ty().ok_or("a malformed variable")?)?;

@@ -637,6 +637,47 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         self.with_oven(None, |oven, b| oven.fold_constant_init(b, e, var))
     }
 
+    /// How the initializer `e` of variable `var` of static or thread
+    /// storage duration initializes it, as code generation decides
+    /// ([`Oven::static_init`]; spec/ast.md §25). Silent.
+    pub(crate) fn static_init_eval(
+        &mut self,
+        e: ExprId,
+        var: DeclId,
+        fallback: bool,
+    ) -> kiln_oven::StaticInitEval {
+        self.with_oven(None, |oven, b| oven.static_init(b, e, var, fallback))
+    }
+
+    /// Code generation's fold of a static variable's scalar or
+    /// initializer-list initializer `e` that is not a constant initializer
+    /// ([`Oven::fold_static_fallback`]; spec/ast.md §25). Silent.
+    pub(crate) fn fold_static_fallback(&mut self, e: ExprId) -> Option<ConstValueId> {
+        if !self.eval_stack_ok(e) {
+            return None;
+        }
+        self.with_oven(None, |oven, b| oven.fold_static_fallback(b, e))
+    }
+
+    /// Whether the native stack allows evaluating `e` (without the
+    /// guard's diagnostic when it does).
+    pub(crate) fn static_init_stack_ok(&self, e: ExprId) -> bool {
+        self.eval_stack_ok(e)
+    }
+
+    /// Whether variable `var` has constant destruction ([expr.const]/7,
+    /// [`Oven::has_constant_destruction`]): `value` is its initializer's
+    /// constant value, `const_context` whether it is constant-initialized.
+    /// Silent.
+    pub(crate) fn has_constant_destruction(
+        &mut self,
+        var: DeclId,
+        value: Option<ConstValueId>,
+        const_context: bool,
+    ) -> bool {
+        self.with_oven(None, |oven, b| oven.has_constant_destruction(b, var, value, const_context))
+    }
+
     /// [`Sema::try_fold`]'s two paths for `e` (`lax`: those of the lax
     /// fold, [`Oven::fold_rvalue`]), the Oven's trial-fold fast path
     /// (`None` where it declines, `Some(None)` for a definite failure) and

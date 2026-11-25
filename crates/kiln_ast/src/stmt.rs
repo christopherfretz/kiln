@@ -847,6 +847,13 @@ impl StmtArena {
         self.fp_overrides[self.expect(s, &[StmtKind::CompoundStmt]).aux as usize]
     }
 
+    /// Whether some compound statement's FP pragma override, applied to
+    /// `base` (the command line's options), makes folds depend on the
+    /// dynamic floating-point environment ([`crate::fp::FpOptions::env_dependent`]).
+    pub fn any_env_dependent_fp(&self, base: crate::fp::FpOptions) -> bool {
+        self.fp_overrides.iter().any(|o| o.apply(base).env_dependent())
+    }
+
     /// The `)` closing a `DoStmt`'s condition.
     pub fn do_rparen(&self, s: StmtId) -> Loc {
         Loc::from_raw(self.expect(s, &[StmtKind::DoStmt]).b)

@@ -138,6 +138,7 @@ mod splice;
 mod splice_local;
 mod splice_object;
 pub mod stack_guard;
+mod static_init_facts;
 mod static_tls;
 pub mod stmt;
 mod struct_bind;

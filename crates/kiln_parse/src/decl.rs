@@ -160,6 +160,9 @@ impl Parser<'_, '_> {
         // Then clang's `ActOnEndOfTranslationUnit` checks (delegating
         // constructor cycles), after the pending instantiations as there.
         self.s.act_on_end_of_translation_unit();
+        // Opt-in: every static variable's initialization and destruction
+        // kinds, once nothing more is instantiated (spec/ast.md §25).
+        self.s.record_static_init_facts();
         drop(phase);
         // No row comes after the parse: the declaration-extent table
         // gives back its spare capacity (spec/ast.md §19.8, WP-2092).

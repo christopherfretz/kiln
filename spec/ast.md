@@ -627,6 +627,7 @@ struct VarData {                    // 24 bytes
     spec: VarSpec,                  // u32: storage(3) tls(2) init_style(2: c/call/list/paren-list) constexpr(1) constinit(1)
                                     //   inline(1) nrvo(1) exception_var(1) cxx_for_range(1) inline_implied(1)
                                     //   placeholder(2: none/auto/decltype(auto)/__auto_type, bits 14-15)
+                                    //   static_init_fact(8, bits 16-23, §25.3; not in module images)
     eval: VarEval,                  // u32, §9.2: 0 NotEvaluated | MAX Evaluating | MAX-1 NotConstant | else ConstValueId
     templ: TemplLink,
 }
@@ -2140,7 +2141,8 @@ the two forms of a `const` static data member agree: each has its value
 from its check (before WP-2504 the in-class form was evaluated by its
 check but the value dropped). A dependent initializer (a template's
 pattern) is not evaluated and stays `NotEvaluated`. A later use never
-writes `eval`: an Oven that reads a variable still `NotEvaluated` (one
+writes `eval` (except, with `-fkiln-static-init-facts`, the end-of-unit
+pass of §25.2): an Oven that reads a variable still `NotEvaluated` (one
 no check covers: a non-`const` one read by a lax fold, an initializer
 not yet instantiated) evaluates its initializer into its own global
 object, which that Oven keeps, and leaves `eval` as it is. A module or
@@ -7069,3 +7071,130 @@ marker round trip, depth, malformed markers, clipping, the converse
 check), `crates/kiln_parse/tests/fn_names.rs` (the accessors, per-use
 strings, deduction, contracts, off), and the `fn-names:` goldens under
 `tests/conformance/fn_names/`.
+
+## 25. Static-initialization facts (WP-3650)
+
+A tool that reads the AST (a binding generator, a refactoring tool) needs
+to know, for each variable of static or thread storage duration, what
+code generation will do with it: run an initializer at program start or
+not, register a destructor or not. Without the facts it must evaluate
+the initializers again and can disagree with the compiler. With
+`-fkiln-static-init-facts` (`FrontEndOptions::static_init_facts`,
+`ParseOptions::static_init_facts`, the transient `Ast::static_init_facts`)
+sema records both on the variable, and code generation reads them
+instead of deciding again, so the two agree by construction. Off by
+default: off, nothing is recorded, nothing is evaluated beyond what was
+before, and the IR is unchanged.
+
+### 25.1 The rule (what code generation does)
+
+For a variable `v` of static or thread storage duration with a
+definition and initializer `e` (`kiln_codegen` `fold::prepass`):
+
+- **Initialization** ([basic.start.static], [basic.start.dynamic]):
+  - no initializer, or a trivial default construction: zero-initialized,
+    *constant*;
+  - `e` is a constant initializer ([expr.const]/2: evaluated as a
+    constant expression in a manifestly constant-evaluated context,
+    float UB folded, leaked allocations allowed as clang folds them) whose
+    value holds no address of an automatic object: *constant*, the
+    value is emitted;
+  - otherwise, when `v`'s type is arithmetic, enumeration, pointer,
+    pointer to member, vector, or `e` is an initializer list, and `e`
+    folds outside a constant context (clang
+    `ConstantEmitter::tryEmitPrivateForVarInit`; integer-pointer casts
+    allowed): *early static* ([basic.start.static]/3), the folded value
+    is emitted and no initializer runs. A static local in a function
+    whose floating-point environment a fold must not assume is never
+    folded so;
+  - otherwise *dynamic*: an initializer runs at program start (a
+    namespace-scope or static member variable, ordered or unordered per
+    [basic.start.dynamic]), on first use (a static local, guarded), or
+    per thread (`thread_local`).
+- **Destruction** ([basic.start.term]):
+  - a trivially destructible type, or a reference: *trivial*, except a
+    reference whose dynamic initialization materializes a static or
+    thread temporary ([class.temporary]/6) with a non-trivial destructor
+    and no constant value: that temporary's destructor is *registered*;
+  - a type with a non-trivial destructor whose destruction of the
+    constant value is a constant expression ([expr.const]/7, evaluated in
+    a manifestly constant-evaluated context only when `v` is
+    constant-initialized): *constant*, nothing is registered;
+  - otherwise *registered* (`__cxa_atexit`, `__cxa_thread_atexit` for a
+    `thread_local`). `[[clang::no_destroy]]` and
+    `-fno-c++-static-destructors` still suppress the registration in code
+    generation; the fact records the kind before them.
+
+### 25.2 When it is recorded
+
+At the end of the translation unit, after its pending instantiations
+(`Parser::end_translation_unit` → `Sema::record_static_init_facts`), for
+every `Var` and `VarTemplateSpecialization` declaration that is a
+definition, has static or thread storage duration, a non-dependent type,
+and no template pattern among its contexts: namespace-scope and static
+member variables, instantiated static data members of class templates,
+variable template specializations, static and `thread_local` locals
+(including those of instantiated function templates). Not in C (no
+dynamic initialization) and not in a prefix (a precompiled header: the
+unit that includes it records its own). Each entity is decided once,
+on the declaration that holds its initializer (else its definition);
+`Ast::static_init_fact(d)` reads it from any redeclaration.
+
+Each variable is evaluated at most once. A variable whose `VarData.eval`
+is already written (§9.2: `constexpr`, `const` integral) reuses it; for
+any other the constant-initialization result is written to `eval` then
+(`Value(id)` or `NotConstant`; a resource limit writes nothing), as
+clang's `CheckCompleteVariableDeclaration` caches it. Code generation
+emits a *constant* variable's value from `eval`, and reruns only the
+early-static fold (the same `Oven::fold_static_fallback` the decision
+ran). Writing `eval` for such a variable is the one change the option
+makes beyond the fact: an `eval` value read later (debug info of a
+static data member, a lax fold of a `const` object) is the same value
+code generation would have folded.
+
+Not decided, `NotEvaluated(why)` (code generation then decides on its
+own as before): `invalid` (an invalid declaration), `init-errors` (an
+initializer with errors), `step-limit`, `depth-limit`, `memory-limit`
+(the evaluation hit a budget), `stack` (too little native stack, or a
+variable caught mid-evaluation), `flexible-array-member` (a GNU flexible
+array member given elements: folded apart from the object),
+`fp-environment` (a static local whose initializer is not constant, in a
+unit with an environment-dependent floating-point state). A
+value-dependent initializer has no fact.
+
+### 25.3 Storage
+
+`kiln_ast::static_init::StaticInitFact { init: StaticInit, destruction:
+Option<StaticDestruction> }`, in spare bits 16 to 23 of `VarSpec`
+(`VarSpec::static_init_fact`, `DeclArena::set_static_init_fact`): bits 16
+to 18 the initialization (0 none, 1 constant, 2 early static, 3 dynamic,
+4 not evaluated), 19 to 21 the reason, 22 and 23 the destruction (0
+undecided, 1 trivial, 2 constant, 3 registered). No node grows; a
+round-trip unit test covers the encoding.
+
+### 25.4 Dump
+
+With the option on, a `VarDecl` line with a fact ends in
+` static-init=<constant|early-static|dynamic|not-evaluated(<why>)>` and,
+when decided, ` static-destroy=<trivial|constant|registered>`. Off, the
+dump is unchanged.
+
+### 25.5 Snapshots and modules
+
+The option is not part of a snapshot's identity (spec/pch.md
+"Identity"). A prefix records no facts, so a snapshot holds none (the
+`VarSpec` bits are carried raw; `FORMAT_VERSION` unchanged). A module
+image never carries them: its writer masks them
+(`VarSpec::without_static_init_fact`, `IMAGE_VERSION` unchanged), and an
+importer's own definitions get its own facts.
+
+### 25.6 Self-check
+
+`KILN_STATIC_INIT_FACTS=1` in the environment turns the option on for
+every compile to code (not `-fsyntax-only`, whose dumps would change):
+`KILN_STATIC_INIT_FACTS=1 cargo xtask test tests/codegen` checks that
+code generation reading the facts gives the IR it gives deciding alone.
+
+Tests: `crates/kiln_ast/src/static_init.rs` (encoding round trip),
+`crates/kiln_driver/tests/static_init_facts.rs` (every kind, the IR the
+same with the option on and off).

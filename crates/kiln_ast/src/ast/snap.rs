@@ -182,6 +182,7 @@ impl Snap for Ast {
             fn_names: _,
             split_greaters,
             builtin_literals: _,
+            static_init_facts: _,
             symbols,
             inst,
         } = self;
@@ -274,6 +275,7 @@ impl Snap for Ast {
             fn_names: crate::fn_names::FnNames::default(),
             split_greaters,
             builtin_literals: crate::builtin_literals::BuiltinLiterals::default(),
+            static_init_facts: false,
             symbols,
             inst,
         };

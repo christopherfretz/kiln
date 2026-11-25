@@ -4733,6 +4733,18 @@ this check until WP-1568 fixed the Oven;
 `tests/codegen/dtor_constant_destruction.cpp`
 checks every case above against clang on both triples.
 
+With `-fkiln-static-init-facts` (spec/ast.md §25) sema has recorded,
+for each static or thread variable, the initialization kind and the
+destruction kind by this rule and §7f's; the fold prepass then takes a
+recorded *constant* initialization's value from `VarData.eval`, reruns
+only an *early static* one's fallback fold
+(`Oven::fold_static_fallback`), folds nothing for a *dynamic* one, and
+takes a recorded destruction kind as is (`const_destroyed` for
+*constant*). A *not evaluated* fact, or none, leaves the decision to the
+prepass as above. Off, nothing changes; on, the IR is the same
+(`crates/kiln_driver/tests/static_init_facts.rs`, and
+`KILN_STATIC_INIT_FACTS=1` over the codegen corpus).
+
 ## 7f. Landed (WP-178): dynamic initialization (`global_init.rs`)
 Mirrors clang's CGDeclCXX ([basic.start.static], [basic.start.dynamic],
 [basic.start.term], [stmt.dcl]/3).
