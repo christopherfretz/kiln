@@ -1,0 +1,29 @@
+subst_partial_mod.cppm:12:38-12:39  type  'T' -> T@subst_partial_mod.cppm:12:17 in=sm::W@subst_partial_mod.cppm:12:36
+subst_partial_mod.cppm:12:41-12:42  type  'U' -> U@subst_partial_mod.cppm:12:26 in=sm::W@subst_partial_mod.cppm:12:36
+subst_partial_mod.cppm:12:55-12:56  nns  'T' -> T@subst_partial_mod.cppm:12:17 in=sm::W@subst_partial_mod.cppm:12:36
+subst_partial_mod.cppm:12:58-12:62  type  'type' -> (dependent) q=subst_partial_mod.cppm:12:55 in=sm::W@subst_partial_mod.cppm:12:36
+subst_partial_mod.cppm:12:58-12:62  type  'type' -> sm::S::type@subst_partial_mod.cppm:7:9 key=partial:sm::W@subst_partial_mod.cppm:12:36<sm::S, int *, int>
+subst_partial_mod.cppm:12:36-12:37  spec-target  'W' -> sm::W@subst_partial_mod.cppm:9:50 in=sm::W@subst_partial_mod.cppm:12:36
+subst_partial_mod.cppm:15:29-15:30  type  'T' -> T@subst_partial_mod.cppm:15:17 in=sm::W@subst_partial_mod.cppm:15:27
+subst_partial_mod.cppm:15:48-15:49  nns  'T' -> T@subst_partial_mod.cppm:15:17 in=sm::W@subst_partial_mod.cppm:15:27
+subst_partial_mod.cppm:15:51-15:55  type  'type' -> (dependent) q=subst_partial_mod.cppm:15:48 in=sm::W@subst_partial_mod.cppm:15:27
+subst_partial_mod.cppm:15:51-15:55  type  'type' -> sm::S::type@subst_partial_mod.cppm:7:9 key=partial:sm::W@subst_partial_mod.cppm:15:27<sm::S, int *, int>
+subst_partial_mod.cppm:15:27-15:28  spec-target  'W' -> sm::W@subst_partial_mod.cppm:9:50 in=sm::W@subst_partial_mod.cppm:15:27
+subst_partial_mod.cppm:18:33-18:34  type  'S' -> sm::S@subst_partial_mod.cppm:6:8 in=sm::in_unit@subst_partial_mod.cppm:18:12
+subst_partial_mod.cppm:18:31-18:32  nns  'W' -> sm::W@subst_partial_mod.cppm:9:50 in=sm::in_unit@subst_partial_mod.cppm:18:12
+subst_partial_mod.cppm:18:49-18:50  expr  'v' -> sm::W<sm::S, int *, int>::v@subst_partial_mod.cppm:16:20 q=subst_partial_mod.cppm:18:31 in=sm::in_unit@subst_partial_mod.cppm:18:12
+14:20-14:22  nns  'sm' -> sm@subst_partial_mod.cppm:5:18 in=use@14:5
+14:26-14:28  nns  'sm' -> sm@subst_partial_mod.cppm:5:18 in=use@14:5
+14:30-14:31  type  'S' -> sm::S@subst_partial_mod.cppm:6:8 q=14:26 in=use@14:5
+14:24-14:25  nns  'W' -> sm::W@subst_partial_mod.cppm:9:50 q=14:20 in=use@14:5
+14:46-14:47  expr  'v' -> sm::W<sm::S, int *, int>::v@subst_partial_mod.cppm:16:20 q=14:24 in=use@14:5
+14:50-14:52  nns  'sm' -> sm@subst_partial_mod.cppm:5:18 in=use@14:5
+14:54-14:61  expr  'in_unit' -> sm::in_unit@subst_partial_mod.cppm:18:12 q=14:50 in=use@14:5
+keys  key=partial:sm::W@subst_partial_mod.cppm:12:36<sm::S, int *, int> rows=1
+keys  key=partial:sm::W@subst_partial_mod.cppm:12:36<sm::S, int *, int> root[0]=sm::S
+keys  key=partial:sm::W@subst_partial_mod.cppm:12:36<sm::S, int *, int> root[1]=int *
+keys  key=partial:sm::W@subst_partial_mod.cppm:12:36<sm::S, int *, int> root[2]=typename sm::S::type
+keys  key=partial:sm::W@subst_partial_mod.cppm:15:27<sm::S, int *, int> rows=1
+keys  key=partial:sm::W@subst_partial_mod.cppm:15:27<sm::S, int *, int> root[0]=sm::S
+keys  key=partial:sm::W@subst_partial_mod.cppm:15:27<sm::S, int *, int> root[1]=int *
+keys  key=partial:sm::W@subst_partial_mod.cppm:15:27<sm::S, int *, int> root[2]=typename sm::S::type

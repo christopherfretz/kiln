@@ -407,6 +407,23 @@ pub struct TemplState {
     /// Set by [`Sema::begin_member_qualifier`], taken by the first
     /// component.
     pub(crate) member_scope: Option<MemberScope>,
+    /// The specifier parsed so far of a member access's qualifier whose
+    /// object is type-dependent and whose first component the
+    /// definition context found (`t.acme::B::`): a later component that
+    /// is not found there leaves the specifier dependent, as the first
+    /// component is looked up in the object's class at instantiation
+    /// ([basic.lookup.qual.general]/2; [`Sema::act_on_nested_name_component`]).
+    /// Not in a snapshot: transient, `None` at a snapshot point.
+    #[snap(skip)]
+    pub(crate) member_dependent_chain: Option<kiln_ast::ids::NnsId>,
+    /// The components of member qualifiers an instantiation rebuilt
+    /// after looking their first component up in the object's class
+    /// (`t.acme::B::f()` with the object's member `acme`), recorded with
+    /// the written-reference table only: their pattern entries, resolved
+    /// at the definition, get per-specialization rows (spec/ast.md
+    /// §18.9.1). Not in a snapshot: transient.
+    #[snap(skip)]
+    pub(crate) relooked_nns: kiln_source::fx::FxHashSet<kiln_ast::ids::NnsId>,
     /// The implicit deduction guides of each class template (first
     /// declaration), formed on first use ([over.match.class.deduct]/1).
     pub(crate) ctad_guides: kiln_source::fx::FxHashMap<DeclId, Vec<DeclId>>,

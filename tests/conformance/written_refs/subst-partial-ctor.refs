@@ -1,0 +1,11 @@
+17:29-17:30  type  'T' -> T@17:17 in=C@17:27
+17:46-17:47  type  'T' -> T@17:17 in=C@17:27
+17:27-17:28  spec-target  'C' -> C@14:41 in=C@17:27
+20:3-20:4  type  'K' -> K@11:8 in=c@20:6
+20:1-20:2  template  'C' -> C@14:41 in=c@20:6
+21:17-21:18  type  'K' -> K@11:8 in=static_assert@21:1
+21:15-21:16  nns  'C' -> C@14:41 in=static_assert@21:1
+21:21-21:22  expr  'v' -> C<K>::v@18:20 q=21:15 in=static_assert@21:1
+keys  key=partial:C@17:27<K, void> rows=0
+keys  key=partial:C@17:27<K, void> root[0]=K
+keys  key=partial:C@17:27<K, void> root[1]=decltype(void(K(1)))

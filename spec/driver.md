@@ -128,6 +128,7 @@ linker prints its version; Meson's linker probe, WP-920), and `-c
 | `-fkiln-dump-cfg` | with `-fsyntax-only` (to the output) or codegen (to standard output, before the IR; WP-1745); `-E` has no CFG: the control-flow graph of every function body sema analyzes (spec/sema.md §7.5.1), in clang's `DumpCFG` layout, to the output (after the diagnostics, before an AST dump) |
 | `-fkiln-dump-written-refs` | with `-fsyntax-only` (to the output, after a CFG dump) or codegen (to standard output, before the IR): records the written-reference table (spec/ast.md §18; off otherwise) and prints one line per entry in the §18.6 layout; a PCH producer with it takes two passes; sets `-fkiln-written-refs` |
 | `-fkiln-written-refs` | records the written-reference table (spec/ast.md §18) without printing it, for a tooling client of the library API and for PCH and module-file producers: a snapshot or declaration image made with it carries the table to consumers that record (spec/ast.md §18.10); part of neither identity |
+| `-fkiln-written-ref-keys` | records the written-reference table's substitution keys too (spec/ast.md §18.14) and sets `-fkiln-written-refs`; a snapshot or declaration image made with it carries the keys to consumers that record them, and one made without lists the gap (§18.14.5); outside the PCH identity, part of an implicit module's cache key |
 | `-fkiln-decl-extents` | records the declaration-extent table (spec/ast.md §19; off otherwise) for a tooling client of the library API; part of the PCH and module-file identity, and its rows are carried in PCH snapshots and module images |
 | `-fkiln-dump-decl-extents` | implies `-fkiln-decl-extents`; with `-fsyntax-only` (to the output) or codegen (to standard output, before the IR): prints one line per declaration with a row in the §19.7 layout; a PCH producer with it takes two passes |
 | `-fkiln-fn-names` | kiln: records the function-name span table (spec/ast.md §24; off otherwise) without printing it, for a tooling client of the library API; part of neither identity; a snapshot does not carry the table (a consumer that records marks the prefix unrecorded) and a module built in process for an importer records nothing. `KILN_FN_NAMES_VERIFY=1` in the environment implies it and self-checks every record (an error on a failure, spec/ast.md §24.7) |
@@ -1808,7 +1809,10 @@ preprocessor keeps its preprocessing record, spec/pp.md "Preprocessing
 record", which the closure reads as `fe.pp.record()`; WP-2110), and
 `written_refs` (default off; WP-2320; on, the command line's
 `-fkiln-written-refs`: the parser records the written-reference table,
-spec/ast.md §18, and nothing is printed). The closure reads the table
+spec/ast.md §18, and nothing is printed), and `written_ref_keys`
+(default off; WP-3540; on, the command line's `-fkiln-written-ref-keys`:
+the table records its substitution keys too, spec/ast.md §18.14, and
+`written_refs` is implied). The closure reads the table
 on the finished tree as `fe.ast.written_refs`; its content is that of
 `-fkiln-dump-written-refs` for the same input:
 `fe.ast.written_refs.dump(fe.ast, fe.sm, fe.main_file)` equals that

@@ -217,6 +217,16 @@ const COLD_DESIG: u32 = 32768;
 /// instantiation then has argument-dependent lookup only, where a missing
 /// one would look the operator up again.
 const COLD_OPER: u32 = 65536;
+/// What lookup found for each declaration of an unresolved name (the
+/// templates' `unresolved_found`, WP-3400; spec/ast.md §8.8): the
+/// using-shadows, an [`F::DL`] of [`Dc::Lookup`] as long as the name's,
+/// only on `UnresolvedLookupExpr`. Independent of [`COLD_FOUND`], which
+/// is sema's call-resolution copy and needs a naming class.
+const COLD_SHADOWS: u32 = 131_072;
+/// The substituted index of the pack-index expression a selected element
+/// was substituted from (the templates' `pack_index_written`, WP-3582;
+/// spec/sema-templates.md §7.4): an [`F::E`], on any kind.
+const COLD_PACK_INDEX: u32 = 262_144;
 
 // ---------------------------------------------------------------------------
 // The schema
@@ -781,6 +791,8 @@ fn layout(shape: [Slot; 2], cold: u32) -> Vec<F> {
         (COLD_DESIG, F::Desig),
         (COLD_OPER, F::DL(Dc::Lookup)),
         (COLD_OPER, F::DL(Dc::Lookup)),
+        (COLD_SHADOWS, F::DL(Dc::Lookup)),
+        (COLD_PACK_INDEX, F::E),
     ] {
         if cold & bit != 0 {
             v.push(f);
@@ -1605,6 +1617,7 @@ pub(super) fn validate_section(
             || ((e.cold & COLD_DESIG != 0) != (k == ExprKind::DesignatedInitExpr))
             || (e.cold & (COLD_NAMING | COLD_FOUND) != 0 && k != ExprKind::UnresolvedLookupExpr)
             || (e.cold & COLD_FOUND != 0 && e.cold & COLD_NAMING == 0)
+            || (e.cold & COLD_SHADOWS != 0 && k != ExprKind::UnresolvedLookupExpr)
             || (e.cold & COLD_MEMBER != 0 && k != ExprKind::MemberExpr)
             || (e.cold & COLD_ARRAY != 0 && k != ExprKind::ArrayTypeTraitExpr)
             || (e.cold & COLD_PACK != 0 && k != ExprKind::IntegerLiteral)
@@ -2144,6 +2157,14 @@ impl Writer<'_, '_, '_> {
         if t.oper_lookups.set_of(e).is_some() {
             cold |= COLD_OPER;
             v.extend([Fv::Oper(e, false), Fv::Oper(e, true)]);
+        }
+        if let Some(&l) = t.unresolved_found.get(e) {
+            cold |= COLD_SHADOWS;
+            v.push(Fv::DL(l, Dc::Lookup));
+        }
+        if let Some(&i) = t.pack_index_written.get(e) {
+            cold |= COLD_PACK_INDEX;
+            v.push(Fv::E(Some(i)));
         }
         cold
     }
@@ -3577,6 +3598,19 @@ impl Sema<'_, '_> {
                 .collect();
             let set = self.ast.templates.oper_lookups.intern(&cs);
             let _ = self.ast.templates.oper_lookups.set(id, set);
+        }
+        if e.cold & COLD_SHADOWS != 0
+            && let Some(l) = ListId::from_raw(next())
+        {
+            // The shadows lookup found (WP-3400): checked against the
+            // node's declarations again as they are recorded.
+            let found: Vec<DeclId> = self.ast.lists.iter::<DeclId>(l).collect();
+            self.ast.note_unresolved_found(id, &found);
+        }
+        if e.cold & COLD_PACK_INDEX != 0
+            && let Some(i) = ExprId::from_raw(next())
+        {
+            let _ = self.ast.templates.pack_index_written.insert(id, i);
         }
         if let Some(w) = rewrite
             && k == ExprKind::InitListExpr

@@ -1,8 +1,8 @@
 // Found sets in a class template with a dependent base (spec/ast.md
 // §18.12): a member of the current instantiation is looked up in the
-// class at the definition, but the dependent base is not searched
-// ([temp.dep.general]/4), so the set is marked `+base`
-// ([temp.dep.type]/6). A name the class does not declare
+// class at the definition; the class declares `a` itself, which hides
+// any base's ([class.member.lookup]/2), so the set is closed (no
+// `+base`, [temp.dep.type]/6). A name the class does not declare
 // (`this->other`) is a member of an unknown specialization and a
 // qualified name with a dependent qualifier (`B<T>::other`) names a
 // member of one too: no lookup runs at the definition and there is no

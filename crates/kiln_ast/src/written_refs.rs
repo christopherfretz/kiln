@@ -9,18 +9,20 @@
 //! overloaded name once, and declarations narrow `enclosing` by claims
 //! (§18.3).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::num::NonZeroU32;
 
 use kiln_source::{FileId, Loc, SourceManager, Span};
 
-use crate::ids::{DeclId, ExprId, QualType};
+use crate::ids::{ArgListId, DeclId, ExprId, QualType, RawId};
 use crate::mem::MemRow;
 use crate::types::TypeNames;
 
 #[path = "written_refs_carry.rs"]
 mod carry;
+#[path = "written_refs_subst.rs"]
+mod subst;
 pub use carry::{CARRY_SCHEMA_HASH, WrittenRefsSection};
 
 /// The id of a table entry (index + 1).
@@ -414,8 +416,9 @@ impl FoundSetId {
 /// [`FoundSet::flags`]: argument-dependent lookup at each instantiation
 /// adds to the set ([temp.dep.candidate]/1).
 pub const FOUND_ADL: u8 = 1;
-/// [`FoundSet::flags`]: the class searched has a dependent base, so the
-/// instantiation's lookup can find more ([temp.dep.type]).
+/// [`FoundSet::flags`]: the class searched has a dependent base and does
+/// not declare the name itself, so the instantiation's lookup can find
+/// more ([temp.dep.type], [class.member.lookup]/2).
 pub const FOUND_DEPENDENT_BASE: u8 = 2;
 /// [`FoundSet::flags`]: an element is a dependent using-declarator,
 /// whose target exists per specialization only.
@@ -448,7 +451,9 @@ impl FoundSet<'_> {
         self.flags & FOUND_ADL != 0
     }
 
-    /// True when the class searched has a dependent base.
+    /// True when the class searched has a dependent base that could
+    /// supply the name: the class does not declare it itself
+    /// (spec/ast.md §18.12.2).
     pub fn dependent_base(&self) -> bool {
         self.flags & FOUND_DEPENDENT_BASE != 0
     }
@@ -622,6 +627,56 @@ pub struct WrittenRefs {
     /// of `group_decls`.
     groups: Vec<DeclGroupRec>,
     group_decls: Vec<DeclId>,
+    /// The substitution keys and their rows (§18.14): empty, and never
+    /// allocated, unless `-fkiln-written-ref-keys` is on.
+    subst: SubstTable,
+}
+
+/// The keyed table of spec/ast.md §18.14, part of [`WrittenRefs`].
+#[derive(Clone, Debug, Default)]
+struct SubstTable {
+    /// The sub-switch (`-fkiln-written-ref-keys`); effective only while
+    /// the table is on.
+    on: bool,
+    /// The committed keys, in commit order; each names a run of `rows`.
+    keys: Vec<SubstKey>,
+    /// The keyed rows, one contiguous run per key.
+    rows: Vec<SubstRef>,
+    /// Per key (parallel to `keys`), its root: start and length in
+    /// `root_slots` (§18.14.10).
+    root_spans: Vec<(u32, u32)>,
+    /// The roots' slots, one contiguous run per key.
+    root_slots: Vec<RootSlot>,
+    /// Per kind (`SubstKind as usize - 1`), the recording runs that
+    /// closed without committing (this parse's own, never carried).
+    not_completed: [u32; 4],
+    /// The keys by identity (rebuilt after a restore).
+    index: HashMap<SubstIdentity, SubstKeyId>,
+    /// The pattern nodes reached through an alias template-id kept only
+    /// as its expansion (§18.14.2, [`SUBST_EXPANDED`]).
+    expanded_nodes: HashSet<PatternNode>,
+    /// Rebuilt overload sets awaiting overload resolution inside a key
+    /// scope: their pattern entry and scope (transient, as
+    /// `spec_pending`).
+    pending: HashMap<ExprId, (WrittenRefId, ScopeRef)>,
+    /// The keyed row the last overload-resolution patch made: the
+    /// overload set, the scope, the row's index in the scope's buffer
+    /// (transient, as `spec_last`).
+    last: Option<(ExprId, ScopeRef, u32)>,
+}
+
+/// A key scope of the substituter (spec/ast.md §18.14.3) as the
+/// deferred-overload scratch holds it: the scope's position on the
+/// scope stack, a serial that tells it from a later scope at the same
+/// position, and the flags its row gets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ScopeRef {
+    /// The scope's index on the scope stack.
+    pub index: u32,
+    /// The scope's serial number.
+    pub serial: u32,
+    /// [`SUBST_EXPANDED`] when the row gets it.
+    pub flags: u8,
 }
 
 /// Source the table has no entries for although it is on (spec/ast.md
@@ -648,6 +703,46 @@ pub enum Unrecorded {
         /// The unit's files (the image's file table, the main file first).
         files: Box<[FileId]>,
     },
+    /// The snapshot was made with the table but without substitution keys
+    /// (§18.14), and the consumer records keys: nothing the prefix
+    /// substituted has a key. Files as [`Unrecorded::Prefix`].
+    PrefixKeys {
+        /// The number of files the snapshot's source manager held.
+        files: u32,
+    },
+    /// A module unit built from a declaration image made with the table
+    /// but without substitution keys.
+    ModuleKeys {
+        /// The module's name (`M`, `M:P`).
+        module: String,
+        /// The unit's files (the image's file table, the main file first).
+        files: Box<[FileId]>,
+    },
+    /// A module unit whose image was made with keys left some out: it
+    /// could not carry a key's template, parameter or argument list, or a
+    /// row's entry, entity or set member. A key is carried whole or not
+    /// at all.
+    ModuleKeysLeftOut {
+        /// The module's name (`M`, `M:P`).
+        module: String,
+        /// The whole keys left out.
+        keys: u32,
+        /// The rows those keys held.
+        rows: u32,
+    },
+}
+
+impl Unrecorded {
+    /// True for a gap in the keyed table only (§18.14.5): the main table
+    /// and its per-specialization rows are whole.
+    pub fn keys_only(&self) -> bool {
+        matches!(
+            self,
+            Unrecorded::PrefixKeys { .. }
+                | Unrecorded::ModuleKeys { .. }
+                | Unrecorded::ModuleKeysLeftOut { .. }
+        )
+    }
 }
 
 /// A pattern node a dependent entry was made from (spec/ast.md §18.9.4):
@@ -738,6 +833,300 @@ impl SpecRef {
     }
 }
 
+/// The id of a substitution key (spec/ast.md §18.14; index + 1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, kiln_snap::Snap)]
+pub struct SubstKeyId(NonZeroU32);
+
+impl SubstKeyId {
+    /// The key's index in commit order.
+    #[inline]
+    pub const fn index(self) -> usize {
+        (self.0.get() - 1) as usize
+    }
+
+    fn from_index(i: usize) -> Self {
+        let n = u32::try_from(i + 1).expect("substitution key table exhausted");
+        SubstKeyId(NonZeroU32::new(n).expect("index + 1 is never 0"))
+    }
+}
+
+/// The kind of substitution a key names (spec/ast.md §18.14.1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, kiln_snap::Snap)]
+#[repr(u8)]
+pub enum SubstKind {
+    /// A class or variable template partial specialization matched a
+    /// specialization's arguments ([temp.spec.partial.match]).
+    PartialMatch = 1,
+    /// The associated constraints of a declaration, or a concept-id, were
+    /// checked for satisfaction ([temp.constr.constr]).
+    Satisfaction = 2,
+    /// A default template argument was substituted ([temp.param]/10).
+    DefaultArg = 3,
+    /// An alias template's type-id was substituted ([temp.alias]/2).
+    Alias = 4,
+}
+
+impl SubstKind {
+    /// Every kind, in discriminant order.
+    pub const ALL: [SubstKind; 4] =
+        [SubstKind::PartialMatch, SubstKind::Satisfaction, SubstKind::DefaultArg, SubstKind::Alias];
+
+    /// The kind of discriminant `b`.
+    pub fn from_u8(b: u8) -> Option<SubstKind> {
+        Self::ALL.into_iter().find(|k| *k as u8 == b)
+    }
+
+    /// The dump's spelling (§18.14.6).
+    pub const fn spelling(self) -> &'static str {
+        match self {
+            SubstKind::PartialMatch => "partial",
+            SubstKind::Satisfaction => "sat",
+            SubstKind::DefaultArg => "default",
+            SubstKind::Alias => "alias",
+        }
+    }
+}
+
+/// How a keyed substitution completed (spec/ast.md §18.14.1): not part
+/// of a key's identity (one identity has one outcome).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Default, kiln_snap::Snap)]
+#[repr(u8)]
+pub enum SubstOutcome {
+    /// Matched (`PartialMatch`), satisfied (`Satisfaction`), substituted
+    /// (`DefaultArg`, `Alias`).
+    #[default]
+    Substituted = 1,
+    /// A satisfaction check that completed with the answer "not
+    /// satisfied" (`Satisfaction` only).
+    Unsatisfied = 2,
+}
+
+impl SubstOutcome {
+    /// The outcome of discriminant `b`.
+    pub fn from_u8(b: u8) -> Option<SubstOutcome> {
+        match b {
+            1 => Some(SubstOutcome::Substituted),
+            2 => Some(SubstOutcome::Unsatisfied),
+            _ => None,
+        }
+    }
+}
+
+/// One completed substitution of a template pattern with concrete
+/// arguments (spec/ast.md §18.14.1; 24 bytes).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, kiln_snap::Snap)]
+pub struct SubstKey {
+    /// What was substituted.
+    pub kind: SubstKind,
+    /// How it completed.
+    pub outcome: SubstOutcome,
+    /// The template (first declaration): the partial specialization, the
+    /// constrained declaration or concept, the template whose parameter
+    /// has the default, the alias template.
+    pub template: DeclId,
+    /// The canonical arguments (`Types::canonical_args`).
+    pub args: ArgListId,
+    /// The payload (0 = none): a `PartialMatch`'s deduced argument list
+    /// (an [`ArgListId`]'s raw value), a `DefaultArg`'s parameter (a
+    /// [`DeclId`]'s raw value, part of the identity).
+    pub extra: u32,
+    /// The key's rows: start and length in the row table (the length
+    /// may be 0).
+    rows: (u32, u32),
+}
+
+impl SubstKey {
+    /// The identity the key is interned by: `extra` counts only for a
+    /// `DefaultArg` (its parameter).
+    pub fn identity(&self) -> SubstIdentity {
+        SubstIdentity::new(self.kind, self.template, self.args, self.extra)
+    }
+
+    /// The number of the key's rows.
+    #[inline]
+    pub fn row_len(&self) -> u32 {
+        self.rows.1
+    }
+
+    /// A `PartialMatch`'s deduced argument list.
+    pub fn deduced(&self) -> Option<ArgListId> {
+        if self.kind == SubstKind::PartialMatch { ArgListId::try_new(self.extra) } else { None }
+    }
+
+    /// A `DefaultArg`'s template parameter (the one whose default was
+    /// substituted).
+    pub fn parameter(&self) -> Option<DeclId> {
+        if self.kind == SubstKind::DefaultArg { DeclId::try_new(self.extra) } else { None }
+    }
+}
+
+/// The identity of a substitution key: (kind, template, canonical
+/// arguments, the `DefaultArg` parameter or 0).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct SubstIdentity(u8, DeclId, ArgListId, u32);
+
+impl SubstIdentity {
+    /// The identity of a key of `kind` with these fields (`extra` kept
+    /// only for a `DefaultArg`).
+    pub fn new(kind: SubstKind, template: DeclId, args: ArgListId, extra: u32) -> Self {
+        let extra = if kind == SubstKind::DefaultArg { extra } else { 0 };
+        SubstIdentity(kind as u8, template, args, extra)
+    }
+}
+
+/// What one dependent entry of a key's pattern bound to under the key
+/// (spec/ast.md §18.14.2): a [`SpecRef`] without `spec` (24 bytes).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, kiln_snap::Snap)]
+pub struct SubstRef {
+    /// The pattern's entry (in the main table, `DEPENDENT`).
+    pub entry: WrittenRefId,
+    /// The declaration the name denotes under the key.
+    pub entity: Option<DeclId>,
+    /// What lookup found, when it differs from `entity`.
+    pub found: Option<DeclId>,
+    /// The argument-dependent set of a call's lookup (§18.7.4).
+    pub adl: Option<AdlSetId>,
+    /// The using-directive ordinary lookup found the selected declaration
+    /// through at the pattern's definition (§18.7.3).
+    pub udir: Option<DeclId>,
+    /// [`SpecRef::flags`]'s bits, with [`SUBST_DEPENDENT`] and
+    /// [`SUBST_EXPANDED`].
+    pub flags: u8,
+    /// How lookup found the name (§18.7.2).
+    pub how: RefLookup,
+}
+
+impl SubstRef {
+    /// The row of `r` without its specialization.
+    pub fn of_spec(r: &SpecRef) -> SubstRef {
+        SubstRef {
+            entry: r.entry,
+            entity: r.entity,
+            found: r.found,
+            adl: r.adl,
+            udir: r.udir,
+            flags: r.flags,
+            how: r.how,
+        }
+    }
+
+    /// The `how` the dump leaves out (spec/ast.md §18.7.5), with the
+    /// qualifier of the pattern entry `r`.
+    pub fn default_how(&self, r: &WrittenRef) -> RefLookup {
+        WrittenRef { entity: self.entity, flags: self.flags, ..*r }.default_how()
+    }
+}
+
+/// [`SubstRef::flags`]: the entry was substituted under the key and is
+/// still dependent (its name is resolved by a later substitution); no
+/// entity, `how` `None`.
+pub const SUBST_DEPENDENT: u8 = 1;
+
+/// [`SubstRef::flags`]: the row's entry is not written in the key's own
+/// template. It was reached through an alias template-id that the key's
+/// pattern keeps only as its expansion ([temp.alias]/2).
+pub const SUBST_EXPANDED: u8 = 64;
+
+/// What one slot of a key's root holds (spec/ast.md §18.14.10).
+/// `PartialMatch` keys write `Args` only; the other tags arrive with
+/// their kinds' keys, and a later tag may be added (hence
+/// `non_exhaustive`).
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, kiln_snap::Snap)]
+#[repr(u8)]
+pub enum RootTag {
+    /// The substitution never reached the slot.
+    NotReached = 0,
+    /// The slot's substitution failed.
+    Failed = 1,
+    /// An expression ([`ExprId`]).
+    Expr = 2,
+    /// A type ([`QualType`]).
+    Type = 3,
+    /// A template argument list ([`ArgListId`], interned, not
+    /// canonical).
+    Args = 4,
+}
+
+impl RootTag {
+    /// The tag of discriminant `b`.
+    pub fn from_u8(b: u8) -> Option<RootTag> {
+        match b {
+            0 => Some(RootTag::NotReached),
+            1 => Some(RootTag::Failed),
+            2 => Some(RootTag::Expr),
+            3 => Some(RootTag::Type),
+            4 => Some(RootTag::Args),
+            _ => None,
+        }
+    }
+}
+
+/// One slot of a key's root (spec/ast.md §18.14.10; 12 bytes): a handle
+/// on what the key's substitution built for one place of its pattern.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, kiln_snap::Snap)]
+pub struct RootSlot {
+    /// What the slot holds.
+    pub tag: RootTag,
+    /// The handle's raw id (0 for `NotReached` and `Failed`).
+    a: u32,
+    /// Reserved (0).
+    b: u32,
+}
+
+impl RootSlot {
+    /// A slot the substitution never reached.
+    pub const NOT_REACHED: RootSlot = RootSlot { tag: RootTag::NotReached, a: 0, b: 0 };
+    /// A slot whose substitution failed.
+    pub const FAILED: RootSlot = RootSlot { tag: RootTag::Failed, a: 0, b: 0 };
+
+    /// A slot holding argument list `l`.
+    pub fn args(l: ArgListId) -> RootSlot {
+        RootSlot { tag: RootTag::Args, a: l.raw(), b: 0 }
+    }
+
+    /// A slot holding expression `e`.
+    pub fn expr(e: ExprId) -> RootSlot {
+        RootSlot { tag: RootTag::Expr, a: e.raw(), b: 0 }
+    }
+
+    /// A slot holding type `q`.
+    pub fn ty(q: QualType) -> RootSlot {
+        RootSlot { tag: RootTag::Type, a: q.raw(), b: 0 }
+    }
+
+    /// The argument list of an `Args` slot.
+    pub fn as_args(&self) -> Option<ArgListId> {
+        (self.tag == RootTag::Args).then(|| ArgListId::try_new(self.a)).flatten()
+    }
+
+    /// The expression of an `Expr` slot.
+    pub fn as_expr(&self) -> Option<ExprId> {
+        (self.tag == RootTag::Expr).then(|| ExprId::try_new(self.a)).flatten()
+    }
+
+    /// The type of a `Type` slot.
+    pub fn as_type(&self) -> Option<QualType> {
+        (self.tag == RootTag::Type).then(|| QualType::from_raw(self.a)).flatten()
+    }
+
+    /// The handle's raw id (0 for `NotReached` and `Failed`).
+    pub fn raw(&self) -> u32 {
+        self.a
+    }
+
+    /// The slot with tag `tag` and raw handle `a` (an image's or a
+    /// snapshot's), unchecked: the reader validates the handle.
+    pub fn from_raw(tag: RootTag, a: u32) -> RootSlot {
+        RootSlot { tag, a, b: 0 }
+    }
+
+    /// The reserved word (0 in every slot kiln writes).
+    pub fn reserved(&self) -> u32 {
+        self.b
+    }
+}
+
 impl WrittenRefs {
     /// True when names are recorded.
     #[inline]
@@ -774,8 +1163,11 @@ impl WrittenRefs {
     /// snapshot's source manager held, once the restoring compilation
     /// knows it (it enters its own files around the restore).
     pub fn set_prefix_files(&mut self, files: u32) {
-        if let Some(Unrecorded::Prefix { files: f }) =
-            self.unrecorded.iter_mut().rev().find(|u| matches!(u, Unrecorded::Prefix { .. }))
+        if let Some(Unrecorded::Prefix { files: f } | Unrecorded::PrefixKeys { files: f }) = self
+            .unrecorded
+            .iter_mut()
+            .rev()
+            .find(|u| matches!(u, Unrecorded::Prefix { .. } | Unrecorded::PrefixKeys { .. }))
         {
             *f = files;
         }
@@ -1190,6 +1582,15 @@ impl WrittenRefs {
         }
     }
 
+    /// The node `n` noted for entry `id` resolved after all (a rebuilt
+    /// overload set whose call turned out not to be dependent): it no
+    /// longer stands for the entry (§18.9.4).
+    pub fn forget_pattern_node(&mut self, n: PatternNode, id: WrittenRefId) {
+        if self.spec_nodes.get(&n) == Some(&id) {
+            self.spec_nodes.remove(&n);
+        }
+    }
+
     /// Stops (`false`) or resumes remembering pattern nodes and their
     /// using-directives, for names parsed for the table alone that no
     /// instantiation rebuilds (§18.8); returns the previous setting.
@@ -1421,7 +1822,7 @@ impl WrittenRefs {
     /// True when a rebuilt overload set awaits resolution.
     #[inline]
     pub fn has_spec_pending(&self) -> bool {
-        !self.spec_pending.is_empty()
+        !self.spec_pending.is_empty() || !self.subst.pending.is_empty()
     }
 
     /// The pattern entry and specialization of the rebuilt overload set
@@ -1430,15 +1831,49 @@ impl WrittenRefs {
         self.spec_pending.get(&x).copied()
     }
 
+    /// Whether the rebuilt overload set `x` awaits resolution, for a
+    /// specialization's row, a key scope's row (§18.14.3) or both.
+    pub fn is_spec_pending(&self, x: ExprId) -> bool {
+        self.spec_pending.contains_key(&x) || self.subst.pending.contains_key(&x)
+    }
+
     /// Takes the pending resolution of `x` (it is being resolved).
     pub fn take_spec_pending(&mut self, x: ExprId) -> Option<(WrittenRefId, DeclId)> {
         if self.spec_pending.is_empty() { None } else { self.spec_pending.remove(&x) }
+    }
+
+    /// The rebuilt overload set `x` of pattern entry `entry` awaits
+    /// overload resolution inside key scope `scope` (§18.14.3).
+    pub fn defer_subst(&mut self, x: ExprId, entry: WrittenRefId, scope: ScopeRef) {
+        self.subst.pending.insert(x, (entry, scope));
+    }
+
+    /// Takes the keyed half of the pending resolution of `x`.
+    pub fn take_subst_pending(&mut self, x: ExprId) -> Option<(WrittenRefId, ScopeRef)> {
+        if self.subst.pending.is_empty() { None } else { self.subst.pending.remove(&x) }
+    }
+
+    /// Remembers that resolving the overload set `x` made the keyed row
+    /// `index` of scope `scope`.
+    pub fn set_subst_last(&mut self, x: ExprId, scope: ScopeRef, index: u32) {
+        self.subst.last = Some((x, scope, index));
+    }
+
+    /// The keyed row resolving the overload set `x` made, once.
+    pub fn take_subst_last(&mut self, x: ExprId) -> Option<(ScopeRef, u32)> {
+        match self.subst.last.take() {
+            Some((e, s, i)) if e == x => Some((s, i)),
+            _ => None,
+        }
     }
 
     /// The rebuilt overload set `from` goes on as `to`.
     pub fn retarget_spec(&mut self, from: ExprId, to: ExprId) {
         if let Some(p) = self.spec_pending.remove(&from) {
             self.spec_pending.insert(to, p);
+        }
+        if let Some(p) = self.subst.pending.remove(&from) {
+            self.subst.pending.insert(to, p);
         }
     }
 
@@ -1496,6 +1931,20 @@ impl WrittenRefs {
                     self.spec_seen.remove(&r);
                 }
                 self.specs[i].flags |= SPEC_DEAD;
+            }
+        }
+    }
+
+    /// Moves the live entries recorded since `mark` under specialization
+    /// `from` to specialization `to` (a function template's default
+    /// template argument, substituted before the specialization it is
+    /// part of was formed, §18.9.3). One that `to` already has is
+    /// dropped (one resolution is kept once, §18.9.1).
+    pub fn rekey_specs_since(&mut self, mark: u32, from: DeclId, to: DeclId) {
+        for i in mark as usize..self.specs.len() {
+            let r = self.specs[i];
+            if r.flags & SPEC_DEAD == 0 && r.spec == from {
+                let _ = self.update_spec(SpecRefId::from_index(i), |r| r.spec = to);
             }
         }
     }
@@ -1592,6 +2041,7 @@ impl WrittenRefs {
     /// Drops the entries recorded after `m` (and their pending patches).
     pub fn truncate(&mut self, m: RefMark) {
         let n = m.entries as usize;
+        self.truncate_subst(m);
         if n >= self.entries.len() {
             return;
         }
@@ -1605,6 +2055,7 @@ impl WrittenRefs {
         let k = self.found_rows.partition_point(|&(id, _)| id.index() < n);
         self.found_rows.truncate(k);
         self.spec_pending.retain(|_, (id, _)| id.index() < n);
+        self.subst.pending.retain(|_, (id, _)| id.index() < n);
         for r in &mut self.specs {
             if r.entry.index() >= n {
                 r.flags |= SPEC_DEAD;
@@ -1828,6 +2279,26 @@ impl WrittenRefs {
                         files.len()
                     );
                 }
+                Unrecorded::PrefixKeys { files } => {
+                    let _ = writeln!(out, "unrecorded  precompiled prefix keys ({files} files)");
+                }
+                Unrecorded::ModuleKeys { module, files } => {
+                    let main = files.first().map_or("?", |&f| {
+                        let n = sm.file_name(f);
+                        n.rsplit(['/', '\\']).next().unwrap_or(n)
+                    });
+                    let _ = writeln!(
+                        out,
+                        "unrecorded  module {module} keys ({main}, {} files)",
+                        files.len()
+                    );
+                }
+                Unrecorded::ModuleKeysLeftOut { module, keys, rows } => {
+                    let _ = writeln!(
+                        out,
+                        "unrecorded  module {module} keys left out ({keys} keys, {rows} rows)"
+                    );
+                }
             }
         }
     }
@@ -1902,6 +2373,7 @@ impl WrittenRefs {
     }
 
     /// The dump (spec/ast.md §18.6): one line per entry.
+    #[allow(clippy::too_many_lines, reason = "one block per kind of line, in the dump's order")]
     pub fn dump(&self, ast: &crate::Ast, sm: &SourceManager, main: Option<FileId>) -> String {
         let names = crate::diag_names::DiagNames::new(ast, Some(sm), 22).closures_as_lambda();
         // (file prefix outside the main file, `line:col`) of a spelling.
@@ -1961,6 +2433,7 @@ impl WrittenRefs {
         for (_, r) in self.specs() {
             by_entry.entry(r.entry).or_default().push(r);
         }
+        let keyed = self.keyed_by_entry();
         for (i, r) in self.entries.iter().enumerate() {
             let id = WrittenRefId::from_index(i);
             let (lf, lo) = pos2(r.range.lo);
@@ -2010,7 +2483,13 @@ impl WrittenRefs {
                 let head = format!("{lo}-{hi}  {}  '{text}' -> ", r.role.spelling());
                 self.dump_specs(r, v, &head, ast, &canon, &pos, &canon_decl, &mut out);
             }
+            // Its keyed rows (§18.14.6), sorted.
+            if let Some(v) = keyed.get(&id) {
+                let head = format!("{lo}-{hi}  {}  '{text}' -> ", r.role.spelling());
+                self.dump_keyed(r, v, &head, ast, &canon, &pos, &canon_decl, &mut out);
+            }
         }
+        self.dump_key_blocks(ast, &canon, &names, &pos, &mut out);
         out
     }
 
@@ -2598,6 +3077,22 @@ mod tests {
         assert_eq!(t.pattern_udir(WrittenRefId::from_index(0), DeclId::new(3)), None);
         assert_eq!(t.pattern_entry(PatternNode::Expr(ExprId::new(3))), None);
         assert_eq!(t.spec_mem(), (0, 0));
+    }
+
+    #[test]
+    fn forgotten_pattern_node_is_only_its_entrys() {
+        let mut t = WrittenRefs::default();
+        t.set_on(true);
+        let w = t.push(entry(None)).expect("on");
+        let v = t.push(entry(None)).expect("on");
+        let x = PatternNode::Expr(ExprId::new(7));
+        t.note_pattern_node(x, w);
+        // Another entry's forgetting leaves the node alone.
+        t.forget_pattern_node(x, v);
+        assert_eq!(t.pattern_entry(x), Some(w));
+        t.forget_pattern_node(x, w);
+        assert_eq!(t.pattern_entry(x), None);
+        assert!(!t.has_pattern_nodes());
     }
 
     #[test]

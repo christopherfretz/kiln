@@ -1,0 +1,14 @@
+13:16-13:17  type  'T' -> T@12:17 in=id::type@13:9
+18:29-18:30  type  'T' -> T@18:17 in=M@18:27
+18:44-18:45  type  'T' -> T@18:17 in=M@18:27
+18:41-18:43  nns  'id' -> id@12:27 in=M@18:27
+18:48-18:52  type  'type' -> (dependent) q=18:41 in=M@18:27
+18:27-18:28  spec-target  'M' -> M@15:36 in=M@18:27
+21:15-21:16  nns  'M' -> M@15:36 in=static_assert@21:1
+21:28-21:29  expr  'v' -> M<int, int>::v@16:20 q=21:15 in=static_assert@21:1
+25:29-25:30  type  'T' -> T@25:17 in=N@25:27
+25:41-25:42  nns  'T' -> T@25:17 in=N@25:27
+25:44-25:48  type  'type' -> (dependent) q=25:41 in=N@25:27
+25:27-25:28  spec-target  'N' -> N@22:36 in=N@25:27
+28:15-28:16  nns  'N' -> N@22:36 in=static_assert@28:1
+28:28-28:29  expr  'v' -> N<int, int>::v@23:20 q=28:15 in=static_assert@28:1

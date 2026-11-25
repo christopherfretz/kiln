@@ -10,6 +10,94 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- Entity keys in evaluation session results (WP-3481,
+  spec/eval-session.md §4.1 "Entity keys"): every `Entity` of a run's
+  value tree and of `RunError::Uncaught` carries `key`, the key
+  printer's text (spec/types.md §12.1): a type's `type_key`
+  (`store<f()::Local>`, `S<(int *)nullptr>`, `sib(bool)::L#2`), a
+  declaration's new `AstNames::decl_key` (`stat(bool)::x#2`,
+  `ov(long)`). Two entities are the same exactly when their keys are
+  equal, within a session and across sessions on one translation unit,
+  also for a class a run instantiated (`decl` `None`). The type key now
+  names a pointer or reference template argument by its declaration key,
+  so a second static local of one name and an overload print apart
+  (`P<&f()::x#2>`, `P<&ov(long)>`).
+- The shadow a using-declaration named, for tooling clients (WP-3401,
+  spec/ast.md §4.2): when a using-declarator's lookup finds a
+  using-shadow (`namespace acme { using std::string; } using
+  acme::string;`), the new shadow records the shadow it found, while its
+  target stays the entity. The total accessor `Ast::shadow_named(s)` gives
+  that first link, and a client walks the chain link by link. It covers
+  namespace, block and class scope, one record per shadow of an overload
+  set, inheriting constructors (the nominated base's shadow) and each
+  specialization of a template. A cold map holds a row only for a shadow
+  that found a shadow. PCH snapshots and module images carry it (a fourth
+  word in an image's shadow records).
+- Substitution keys of the written-reference table, stage 0 (WP-3540,
+  spec/ast.md §18.14), for tooling clients: an opt-in sub-switch
+  `-fkiln-written-ref-keys` (`ParseOptions::written_ref_keys`,
+  `FrontEndOptions::written_ref_keys`; implies `-fkiln-written-refs`)
+  and a second table beside `specs()`, keyed by a completed substitution
+  of a template pattern (a partial specialization match, a satisfaction
+  check, a default template argument, an alias template: kind, template,
+  canonical arguments, payload), with what each dependent entry bound to
+  under it (`WrittenRefs::subst_keys`, `subst_rows`, `subst_key_of`,
+  `subst_rows_of`, `subst_rows_naming`, `SUBST_DEPENDENT`,
+  `SUBST_EXPANDED`). The substituter's key scopes buffer rows privately
+  and commit them once per identity at a completed close. The table is
+  carried in PCH snapshots and module images, and a prefix or unit made
+  without keys, or keys an image left out, are listed
+  (`Unrecorded::PrefixKeys`, `ModuleKeys`, `ModuleKeysLeftOut`;
+  `subst_keys_complete()`); the dump prints keyed rows and the memory
+  report a `written_refs.subst` row. No compiler path opens a key yet;
+  `specs()` and every dump are unchanged with the sub-switch on or off.
+  PCH `FORMAT_VERSION` 184, `IMAGE_VERSION` 98.
+- Substitution keys, stage 1 (WP-3541, spec/ast.md §18.14.10): a
+  partial specialization match opens a `PartialMatch` key. Its rows are
+  what each written name of the partial's arguments bound to under the
+  deduced arguments (ADL sets, qualified names, operators, nested
+  matches), and every key has a root, `WrittenRefs::subst_root(id)`: one
+  `RootSlot` per written argument, the arguments as substituted, so a
+  reader walks to the operator function, constructor or conversion no
+  written name selects (`RootTag`, `RootSlot::{as_args, as_expr,
+  as_type}`). Partial ordering and an empty pack expansion record
+  nothing. Runs that record and do not complete are counted
+  (`subst_not_completed`); the memory report gains `written_refs.roots`
+  and `written_refs.subst.not_completed`. Roots are carried in PCH
+  snapshots and module images; `specs()` is unchanged. PCH
+  `FORMAT_VERSION` 186, `IMAGE_VERSION` 100.
+- What a using-declaration names, for tooling clients (WP-3403,
+  spec/ast.md §4.2): total accessors `Ast::using_named(u)` (each shadow
+  with its target and the member that hides it, `UsingNamed`),
+  `Ast::shadow_hider(s)`, `Ast::shadows_hidden_by(m)` (a scan of the
+  class) and `Ast::overridden_methods(m)` (read at the first declaration).
+  The rules the record keeps are stated: one mark in either declaration
+  order, the hider is the corresponding member's in-class declaration,
+  marks set by the class's `}` for implicit hiders, a pattern's dependent
+  correspondence left to each specialization, and `Ast::lookup_local`
+  holding hidden shadows while sema's lookups never find one. A class-scope
+  using-declarator repeated through another class now makes its own shadow,
+  which replaces the earlier one in lookup, as at namespace scope.
+- Using-shadows of unresolved names (WP-3400, spec/ast.md §8.8): an
+  `UnresolvedLookupExpr` keeps, per element of its declarations, the
+  `UsingShadow` through which lookup found it (`legacy::forward<T>` after
+  `namespace legacy { using std::forward; }`), as clang's
+  `UnresolvedLookupExpr::decls()` does, for tooling clients: total
+  accessors `Ast::unresolved_shadow(e, i)` and
+  `Ast::unresolved_found_pairs(e)`. A parallel cold list
+  (`templates.unresolved_found`), only on nodes with a shadow; kept
+  through instantiation, PCH snapshots and module images (`COLD_SHADOWS`).
+- Written references for every dependent template-id whose template name
+  is not dependent (WP-3405, spec/ast.md §18.5): a member variable
+  template of the current instantiation named after `this->` (`this->mw<T>`,
+  `this->template mw<T>`) in a class without a dependent base now names
+  the template, as `mw<T>` and `S::mw<T>` already did, so a rename of a
+  template claims every token of its name in a template that uses it
+  with dependent and non-dependent arguments. The rule and its
+  exceptions (function template-ids keep their found set, a dependent
+  base keeps `this->` names dependent, unknown specializations have no
+  definition-context lookup) are written down, with goldens for each
+  form and through PCH snapshots and module images (no format change).
 - Function-name spans for tooling clients (WP-3280, spec/ast.md §24):
   with `-fkiln-fn-names` (or `-fkiln-dump-fn-names`, which prints it), each
   string `__PRETTY_FUNCTION__`, `__FUNCTION__`, `__func__`,
@@ -1113,6 +1201,10 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Changed
 
+- `kiln_parse::Entity` (evaluation session results) has a new public
+  field `key: Arc<str>` (WP-3481): a client that builds an `Entity` by a
+  struct literal (a test's expected tree) adds it; reading code is
+  unaffected.
 - `PatternMemInits::colon` is an `Option<Loc>` and every constructor
   definition in a template has a record, the empty list included
   (WP-3200, spec/ast.md §8.6): `S() {}` is a record with `colon: None`
@@ -1295,6 +1387,95 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- The explicitly specified template arguments are substituted into the
+  pattern of a trailing function parameter pack too ([temp.deduct.general]/2-3,
+  /8, WP-3380): `h<int>()` of `template<class T, class... Ts> void
+  h(L<Ts, typename T::type>...)` is a deduction failure, not accepted
+  with `Ts` empty, and such a candidate leaves the overload set instead of
+  winning the call; the same for a nested expansion over an explicitly
+  given pack and for taking the address of `h<int>`.
+- Per-specialization written references (spec/ast.md §18.9, WP-3520):
+  the names in a function template's default template argument used by
+  a deduction (`template <class T, int = sizeof(T::s())> int call();`
+  called as `call<n::S>()`) get rows for the specialization the
+  deduction forms (`call<n::S, 4>`); they were dropped with the
+  deduction's SFINAE frame even when it succeeded. A failed deduction
+  still records nothing. A dependent call whose lookup finds one
+  function no longer records a row naming it when the call's arguments
+  do not convert (an unsatisfied `requires (T &a) { swap(a, a); }` with
+  one `swap` found by argument-dependent lookup): the name stays
+  unresolved, as with two candidates.
+- Written references (`-fkiln-written-refs`, spec/ast.md §18.5,
+  §18.12.2, WP-3450): in a class template with a dependent base,
+  `this->mw<T>` and `this->template mw<T>` now name the member variable
+  template `mw` when the class declares it itself (also in a nested class
+  of a class template, and through a using-declaration of a non-dependent
+  base's member), since class member lookup finds the class's own
+  declaration before any base ([class.member.lookup]/2); they were left
+  dependent with per-specialization rows. Found sets of overload sets the
+  class declares itself (`this->g(t)`, `g(t)`, `R::g(t)`,
+  `this->template mf<T>()`) lose `+base` (`FoundSet::dependent_base()` is
+  false: the set is closed). A name the class does not declare stays
+  dependent with `+base`, and a using-declaration of a dependent base's
+  member (`using B<T>::mw;`) stays dependent. Changed goldens:
+  `template-id-current-inst` (`R::a`'s `this->template mw<T>`: one entry
+  naming `R::mw`, its `def=` and `spec=` rows gone) and `found-this-base`
+  (`def=2+base` to `def=2` for `D::a`).
+
+- A function template specialization's parameter attributes come from
+  the template's latest declaration where the specialization is
+  declared, not from its first ([temp.inst]/3, [dcl.attr.grammar]/5,
+  WP-3407): `nonnull` written only on the definition
+  (`template<class T> void f(T *p); template<class T> void f(T *p
+  __attribute__((nonnull))) {}`) or only on a later declaration now
+  reaches `f<int>` (its AST and its argument's `nonnull` in IR), as do the
+  definition's `align_value`, `annotate`, `maybe_undef` and the
+  parameters' names; a first declaration's non-inherited `align_value` or
+  `maybe_undef` no longer does. Class template members, explicit
+  specializations and declarations after the point of instantiation are
+  unchanged, as in clang 19 and 22.
+
+- The note on an exception that leaves a constant evaluation ("unhandled
+  exception of type 'T' ...") names the exception object's type by one
+  rule however the operand was written ([except.throw]/3, WP-3408):
+  clang's diagnostic spelling of the canonical type, so an inline
+  namespace is left out only where it is redundant, at every depth
+  (`lib::error` and `app::lib::error`, where before `lib::v0::error`
+  kept `v0` as written and `app::lib::v0::error` through a template
+  lost it; `m::v1::e` where `m::e` is ambiguous), a class of the unnamed
+  namespace prints `(anonymous namespace)::error` and a class declared
+  in a function prints through it (`f()::error`, `box<f()::error>`),
+  where before both printed a bare `error` that equals a namespace-scope
+  class's; a closure type prints `(lambda at F:L:C)` (was `(lambda)`).
+  `RunError::Uncaught`'s `ty` keeps `display_string_of`'s spelling, now
+  specified for every shape (spec/eval-session.md §8).
+
+- A module interface with a generic lambda in a template (a function
+  template's body or default argument, a class template's member, a
+  variable template's initializer, nested ones) keeps its declaration
+  image under `-fkiln-bmi-image`: the image's own read-back check
+  rejected the call operator template's depth and the conversion
+  function template, so every importer replayed the interface (WP-3410).
+
+- A member access's qualifier on a type-dependent object
+  (`t.acme::B::f()` in a template) looks its first component up in the
+  object's class at instantiation before using what the definition found
+  ([basic.lookup.qual.general]/2-3, WP-3406). Before, `f<W>` called
+  namespace `acme`'s `B::f` even when `W` has a member `acme`: a silent
+  wrong call. A later component that only the class's `acme` has
+  (`t.acme::Only::f()`) is no longer rejected at the definition. On an
+  object of class type, a template-id first component (`x.TB<int>::f()`)
+  names the class's member template before one found in the enclosing
+  scope (it named the enclosing one). The written-reference table gives
+  the rebound qualifier components per-specialization rows
+  (spec/ast.md §18.9.1).
+- A dependent call to a static member function of a class template whose
+  using-declaration names a base member the specialization hides
+  ([namespace.udecl]/14: `using B::m; static int m(T); int call(T t) {
+  return m(t); }` in `D<int>`) is no longer ambiguous: the substituted
+  overload set leaves out the hidden base member, as lookup in the
+  specialization does (WP-3403, spec/ast.md §8.8).
+
 - The first use of a reference variable template specialization or of a
   reference static data member of a class template specialization
   (`template<class T> const S &vt = S{...}; ... vt<int>.a[0]`) loads
@@ -1315,6 +1496,23 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   any depth, not only down to 256 levels (WP-3292, spec/ast.md). The PCH
   snapshot format is version 179 (a new transient field of sema).
 
+- Class member lookup through a lattice of virtual bases is linear in the
+  classes, not exponential in the depth (WP-3404, spec/sema.md §3 "Class
+  member lookup cost"): a virtual base is searched once, however many paths
+  reach it. A using-declaration naming a member of the root of an N-deep
+  virtual lattice (`using LNa::f;`) took 26 s at depth 10 and over 8
+  minutes at depth 12 in a debug build; it is now about 0.1 s at depth 20.
+  The access check's best-path search ([class.paths]/1) folds each class
+  once too, and no longer gives up after 64 paths, so a member reachable
+  through a public path that comes after the first 64 is accessible (kiln
+  rejected it from depth 7 on; clang rejects it at every depth,
+  docs/status/deviations.md). An ambiguous member lists one path per
+  subobject, as clang does (kiln repeated paths through a shared virtual
+  base).
+- A class-scope using-declaration whose name's lookup is ambiguous (a
+  member of two subobjects of the same type, or members of different
+  bases) is diagnosed ([class.member.lookup]/7, [namespace.udecl]/1); kiln
+  introduced the first declaration found.
 - A class or variable template specialization whose partial-specialization
   choice is ambiguous is diagnosed at its first use outside a substitution
   also when a SFINAE context or a probe whose diagnostics are dropped (the
@@ -1326,6 +1524,19 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   to drop the next printed error behind. A function template
   specialization that failed under a trap and is then formed outside one
   reports its first substitution error.
+- `__PRETTY_FUNCTION__` and `source_location::function_name()` of a
+  member of a local class or a closure print the enclosing function's
+  parameter types as declared, as clang does, not the canonical ones:
+  `auto g(decltype(ns::S::value))::(lambda)::operator()() const` where
+  kiln printed `g(int)`, `t2(int, decltype(ns::S::value))` for an
+  instantiation (WP-3402, spec/sema.md §7.8). The function-name table's
+  entries for those parameters name the typedefs, aliases and `decltype`
+  operands written (spec/ast.md §24.4). With `-fclang-compat=22` a
+  substituted `T::` in a type prints its replacement fully scoped
+  (`'typename ns::S::type *'`), as clang 22 does. The
+  `KILN_FN_NAMES_VERIFY=1` self-check no longer rejects the reflection
+  type's builtin spelling `std::meta::info` (spec/ast.md §24.7).
+
 - A deduction guide declared outside the scope of its class template is
   rejected ([temp.deduct.guide]/3, WP-3272, spec/sema-templates.md "A
   deduction guide's scope and access"). The template's name can be found

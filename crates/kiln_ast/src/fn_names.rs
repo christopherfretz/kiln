@@ -814,6 +814,28 @@ fn closed_word(word: &str) -> bool {
         || word.starts_with("__builtin_")
 }
 
+/// Builtin type spellings that contain `::` (`types::kinds`): the
+/// printer writes them for a type with no declaration, so they carry no
+/// entry and are no names.
+const SCOPED_BUILTINS: &[&str] = &["std::meta::info"];
+
+/// The length of the scoped builtin spelling starting at byte `i` of
+/// `text`, when all of it is outside every entry and it is not the start
+/// of a longer identifier.
+fn builtin_spelling(text: &str, covered: &[bool], i: usize) -> Option<usize> {
+    let b = text.as_bytes();
+    if i > 0 && (b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'_' || b[i - 1] == b':') {
+        return None;
+    }
+    SCOPED_BUILTINS.iter().find_map(|w| {
+        let n = w.len();
+        (b[i..].starts_with(w.as_bytes())
+            && !covered[i..i + n].contains(&true)
+            && !b.get(i + n).is_some_and(|&c| c.is_ascii_alphanumeric() || c == b'_'))
+        .then_some(n)
+    })
+}
+
 /// Checks record `spans` of `bytes` (spec/ast.md §24.7): bounds, order,
 /// depth structure, entities, that a plain entry's bytes are its entity's
 /// identifier, and the converse: every identifier outside all entries is
@@ -895,6 +917,10 @@ fn converse(text: &str, covered: &[bool]) -> Result<(), String> {
             {
                 i += 1;
             }
+        } else if let Some(n) = builtin_spelling(text, covered, i) {
+            // A builtin type spelled with a scope (`std::meta::info`, the
+            // reflection type, no declaration behind it).
+            i += n;
         } else if c.is_ascii_alphabetic() || c == b'_' || c == b'$' || c >= 0x80 {
             let start = i;
             while i < b.len()
@@ -1057,6 +1083,30 @@ mod tests {
             covered[lo..hi].fill(true);
         }
         assert!(converse(text, &covered).is_ok());
+    }
+
+    #[test]
+    fn converse_skips_scoped_builtin_types() {
+        // `std::meta::info` is the reflection type's builtin spelling: no
+        // entry, not a name (WP-3402).
+        let text = "void f(std::meta::info) [T = std::meta::info]";
+        let mut covered = vec![false; text.len()];
+        for (lo, hi) in [(5, 6), (25, 26)] {
+            covered[lo..hi].fill(true);
+        }
+        assert!(converse(text, &covered).is_ok());
+        // A longer name, a qualified one or one partly in an entry is not
+        // the builtin.
+        for text in ["void f(std::meta::infox)", "void f(n::std::meta::info)"] {
+            let mut covered = vec![false; text.len()];
+            covered[5..6].fill(true);
+            assert!(converse(text, &covered).is_err(), "{text}");
+        }
+        let text = "void f(std::meta::info)";
+        let mut covered = vec![false; text.len()];
+        covered[5..6].fill(true);
+        covered[7..10].fill(true);
+        assert!(converse(text, &covered).unwrap_err().contains("'meta'"));
     }
 
     #[test]

@@ -1,0 +1,16 @@
+14:11-14:12  type  'S' -> n::S@12:8 in=(anonymous)@14:14
+14:16-14:17  type  'S' -> n::S@12:8 in=(anonymous)@14:19
+16:30-16:31  type  'T' -> T@16:17 in=a@16:33
+16:38-16:42  expr  'swap' -> (dependent) in=body@16:25 def=0+adl
+16:38-16:42  expr  'swap' -> (unresolved) spec=body<n::U>@16:25 adl-ns=n@11:11 adl-cls=n::U@13:8
+16:38-16:42  expr  'swap' -> n::swap@14:6 spec=body<n::S>@16:25 how=adl adl-ns=n@11:11 adl-cls=n::S@12:8
+16:43-16:44  expr  'a' -> a@16:33 in=body@16:25
+16:46-16:47  expr  'a' -> a@16:33 in=body@16:25
+18:10-18:11  nns  'n' -> n@11:11 in=s@18:16
+18:13-18:14  type  'S' -> n::S@12:8 q=18:10 in=s@18:16
+18:19-18:20  nns  'n' -> n@11:11 in=u@18:25
+18:22-18:23  type  'U' -> n::U@13:8 q=18:19 in=u@18:25
+19:3-19:7  expr  'body' -> body<n::S>@16:25 found=body@16:25 in=use@18:6 adl-ns=n@11:11 adl-cls=n::S@12:8
+19:8-19:9  expr  's' -> s@18:16 in=use@18:6
+20:3-20:7  expr  'body' -> body<n::U>@16:25 found=body@16:25 in=use@18:6 adl-ns=n@11:11 adl-cls=n::U@13:8
+20:8-20:9  expr  'u' -> u@18:25 in=use@18:6

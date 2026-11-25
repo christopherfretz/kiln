@@ -2470,6 +2470,11 @@ const IMGWF: &str =
     include_str!("../../../tests/conformance/module.interface/Inputs/img-wp1350-forms.cppm");
 const IMGWF_RUN: &str =
     include_str!("../../../tests/conformance/module.interface/image-wp1350-forms-run.cpp");
+const IMGGL: &str = include_str!(
+    "../../../tests/conformance/module.interface/Inputs/img-generic-lambda-templ.cppm"
+);
+const IMGGL_RUN: &str =
+    include_str!("../../../tests/conformance/module.interface/image-generic-lambda-templ-run.cpp");
 
 /// WP-1350 (§11.11 "Forms carried by WP-1350"): lambdas, closure types,
 /// local classes and enumerations come from the image. With the unit's
@@ -2495,6 +2500,23 @@ fn kind2_declaration_image_designators_and_spec_defaults() {
     let errs = image_round_trip("image-wf", "imgwf", IMGWF, IMGWF_RUN, err, "");
     let want = "m.cppm:6:57: error: field designator 'e' does not refer to any field in type 'Z'";
     assert!(errs.contains(want), "{errs}");
+}
+
+/// WP-3410: generic lambdas in function templates, a class template's
+/// members, nested ones, with a template parameter list or a constrained
+/// placeholder, in a default argument and in a variable template's
+/// initializer come from the image (the writer's own decode check used
+/// to refuse their call operator templates' depth). With the unit's
+/// source blanked an importer instantiates and runs them, its IR is the
+/// replay's, and a closure called with an argument its constraint
+/// rejects is diagnosed as after a replay ([expr.prim.lambda.closure]/3,
+/// [temp.constr.constr]).
+#[test]
+fn kind2_declaration_image_generic_lambdas_in_templates() {
+    let err = "import imggl;\nint main() { return gl::cons(1.5); }\n";
+    let out = "3 4 5 97 0.5 | 12 15 6 9 | 6 5 6 7 | 6 7 3 | 5 9 8 6 | 5 3 5 5 9\n";
+    let errs = image_round_trip("image-gl", "imggl", IMGGL, IMGGL_RUN, err, out);
+    assert!(errs.contains("m.cppm:"), "{errs}");
 }
 
 /// WP-1360, spec/modules.md §11.11 "Forms carried by WP-1360": a

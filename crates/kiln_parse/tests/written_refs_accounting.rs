@@ -1265,16 +1265,19 @@ type SetReport = (usize, usize, Vec<(String, String)>);
 /// per-specialization row of an entry with a found set selected an
 /// element of the set (`Ast::spec_origin`), or, found by
 /// argument-dependent lookup alone, one that is not an element of a set
-/// with `ADL`. Sets with `DEPENDENT_BASE` or `UNRESOLVED_USING`, a
-/// member of a closure type and a file with errors (`None`) are the
-/// documented exceptions.
+/// with `ADL`; and so does every keyed row (§18.14.2) that is not
+/// `SUBST_DEPENDENT`, parsed with the substitution keys on. Sets with
+/// `DEPENDENT_BASE` or `UNRESOLVED_USING`, a member of a closure type and
+/// a file with errors (`None`) are the documented exceptions.
 fn definition_sets(name: &str, src: &str) -> Option<SetReport> {
-    use kiln_ast::written_refs::{REF_UNRESOLVED, RefLookup, RefRole, SPEC_BUILTIN};
+    use kiln_ast::written_refs::{
+        REF_UNRESOLVED, RefLookup, RefRole, SPEC_BUILTIN, SUBST_DEPENDENT, SpecRef,
+    };
     let sm = SourceManager::new();
     let main = sm.add_virtual(name, src.to_owned()).expect("location space");
     let interner = Arc::new(Interner::new());
     let engine = DiagEngine::new(&sm, &DiagOptions::default(), MemorySink::new());
-    let opts = parse_options(None);
+    let opts = ParseOptions { written_ref_keys: true, ..parse_options(None) };
     let pp = preprocessor(&sm, &engine, &interner, main, None);
     let target = Target::for_arch(Arch::X86_64);
     let limits = ConstexprLimits::default();
@@ -1291,7 +1294,21 @@ fn definition_sets(name: &str, src: &str) -> Option<SetReport> {
     };
     let sets = refs.found_rows().len();
     let (mut checked, mut bad) = (0, Vec::new());
-    for (_, r) in refs.specs() {
+    // The keyed rows as rows of their template, the join's subject.
+    let keyed = refs.subst_keys().flat_map(|(id, k)| {
+        refs.subst_rows(id).iter().filter(|r| r.flags & SUBST_DEPENDENT == 0).map(|r| SpecRef {
+            entry: r.entry,
+            spec: k.template,
+            entity: r.entity,
+            found: r.found,
+            adl: r.adl,
+            udir: r.udir,
+            flags: r.flags,
+            how: r.how,
+        })
+    });
+    let rows: Vec<SpecRef> = refs.specs().map(|(_, r)| *r).chain(keyed).collect();
+    for r in &rows {
         let Some(set) = refs.found_at_definition(r.entry) else { continue };
         if set.dependent_base() || set.unresolved_using() || r.flags & REF_UNRESOLVED != 0 {
             continue;

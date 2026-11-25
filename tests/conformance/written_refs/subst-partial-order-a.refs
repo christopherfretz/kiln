@@ -1,0 +1,45 @@
+15:11-15:12  type  'X' -> a::X@14:8 in=(anonymous)@15:14
+15:16-15:17  type  'X' -> a::X@14:8 in=(anonymous)@15:19
+17:11-17:12  type  'Y' -> a::Y@16:8 in=(anonymous)@17:14
+17:16-17:17  type  'Y' -> a::Y@16:8 in=(anonymous)@17:19
+20:20-20:21  type  'T' -> T@20:17 in=ref@20:23
+24:37-24:38  type  'T' -> T@24:17 in=swappable@24:27
+24:56-24:60  expr  'swap' -> (dependent) in=swappable@24:27 def=0+adl
+24:56-24:60  expr  'swap' -> a::swap@15:6 key=partial:swappable@24:27<a::X, void> how=adl adl-ns=a@13:11 adl-cls=a::X@14:8
+24:56-24:60  expr  'swap' -> a::swap@17:6 key=partial:swappable@24:27<a::Y, void> how=adl adl-ns=a@13:11 adl-cls=a::Y@16:8
+24:65-24:66  type  'T' -> T@24:17 in=swappable@24:27
+24:61-24:64  expr  'ref' -> (dependent) in=swappable@24:27 def=1+adl
+24:61-24:64  expr  'ref' def=ref@20:23
+24:61-24:64  expr  'ref' -> ref<a::X>@20:23 found=ref@20:23 key=partial:swappable@24:27<a::X, void> adl-ns=
+24:61-24:64  expr  'ref' -> ref<a::Y>@20:23 found=ref@20:23 key=partial:swappable@24:27<a::Y, void> adl-ns=
+24:75-24:76  type  'T' -> T@24:17 in=swappable@24:27
+24:71-24:74  expr  'ref' -> (dependent) in=swappable@24:27 def=1+adl
+24:71-24:74  expr  'ref' def=ref@20:23
+24:71-24:74  expr  'ref' -> ref<a::X>@20:23 found=ref@20:23 key=partial:swappable@24:27<a::X, void> adl-ns=
+24:71-24:74  expr  'ref' -> ref<a::Y>@20:23 found=ref@20:23 key=partial:swappable@24:27<a::Y, void> adl-ns=
+24:40-24:46  template  'void_t' -> void_t@19:27 in=swappable@24:27
+24:27-24:36  spec-target  'swappable' -> swappable@21:41 in=swappable@24:27
+28:34-28:35  type  'T' -> T@27:17 in=user::v@28:20
+28:24-28:33  nns  'swappable' -> swappable@21:41 in=user::v@28:20
+28:38-28:39  expr  'v' -> (dependent) q=28:24 in=user::v@28:20
+28:38-28:39  expr  'v' -> swappable<a::X>::v@25:20 spec=user<a::X>@27:27
+30:11-30:12  nns  'a' -> a@13:11 in=N@30:7
+30:14-30:15  type  'X' -> a::X@14:8 q=30:11 in=N@30:7
+31:30-31:31  nns  'a' -> a@13:11 in=run@31:5
+31:33-31:34  type  'X' -> a::X@14:8 q=31:30 in=run@31:5
+31:20-31:29  nns  'swappable' -> swappable@21:41 in=run@31:5
+31:37-31:38  expr  'v' -> swappable<a::X>::v@25:20 q=31:20 in=run@31:5
+31:46-31:47  nns  'a' -> a@13:11 in=run@31:5
+31:49-31:50  type  'X' -> a::X@14:8 q=31:46 in=run@31:5
+31:41-31:45  nns  'user' -> user@27:27 in=run@31:5
+31:53-31:54  expr  'v' -> user<a::X>::v@28:20 q=31:41 in=run@31:5
+31:67-31:68  nns  'a' -> a@13:11 in=run@31:5
+31:70-31:71  type  'Y' -> a::Y@16:8 q=31:67 in=run@31:5
+31:57-31:66  nns  'swappable' -> swappable@21:41 in=run@31:5
+31:74-31:75  expr  'v' -> swappable<a::Y>::v@25:20 q=31:57 in=run@31:5
+keys  key=partial:swappable@24:27<a::X, void> rows=3
+keys  key=partial:swappable@24:27<a::X, void> root[0]=a::X
+keys  key=partial:swappable@24:27<a::X, void> root[1]=void_t<decltype(swap(ref<a::X>(), ref<a::X>()))>
+keys  key=partial:swappable@24:27<a::Y, void> rows=3
+keys  key=partial:swappable@24:27<a::Y, void> root[0]=a::Y
+keys  key=partial:swappable@24:27<a::Y, void> root[1]=void_t<decltype(swap(ref<a::Y>(), ref<a::Y>()))>

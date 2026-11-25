@@ -1,0 +1,51 @@
+29:11-29:12  type  'S' -> n::S@19:8 in=(anonymous)@29:12
+32:33-32:34  nns  'T' -> T@32:17 in=call@32:46
+32:36-32:37  expr  's' -> (dependent) q=32:33 in=call@32:46
+32:36-32:37  expr  's' -> n::S::s@20:14 spec=call<n::S, 4>@32:46
+33:35-33:36  nns  'T' -> T@33:17 in=sized@33:48
+33:38-33:39  expr  's' -> (dependent) q=33:35 in=sized@33:48
+33:38-33:39  expr  's' -> n::U::s@23:15 spec=sized<n::U, 8>@33:48
+33:54-33:55  type  'T' -> T@33:17 in=(anonymous)@33:55
+33:66-33:67  expr  'N' -> N@33:24 in=sized@33:48
+34:39-34:44  expr  'probe' -> (dependent) in=probed@34:54 def=0+adl
+34:39-34:44  expr  'probe' -> n::probe@29:5 spec=probed<n::S, int>@34:54 how=adl adl-ns=n@18:11 adl-cls=n::S@19:8
+34:45-34:46  type  'T' -> T@34:17 in=probed@34:54
+34:52-34:53  type  'R' -> R@34:26 in=probed@34:54
+34:61-34:62  type  'T' -> T@34:17 in=(anonymous)@34:62
+37:35-37:36  nns  'T' -> T@37:19 in=Host::make@37:55
+37:38-37:39  expr  's' -> (dependent) q=37:35 in=Host::make@37:55
+37:38-37:39  expr  's' -> n::S::s@20:14 spec=Host::make<n::S, 4>@37:55
+40:33-40:34  nns  'T' -> T@40:17 in=pick@40:46
+40:36-40:37  expr  's' -> (dependent) q=40:33 in=pick@40:46
+40:36-40:37  expr  's' -> n::S::s@20:14 spec=pick<n::S, 4>@40:46
+40:36-40:37  expr  's' -> n::W::s@26:14 spec=pick<n::W, 4>@40:46
+40:51-40:52  type  'T' -> T@40:17 in=(anonymous)@40:52
+41:33-41:34  nns  'T' -> T@41:17 in=pick@41:74
+41:36-41:37  expr  's' -> (dependent) q=41:33 in=pick@41:74
+41:36-41:37  expr  's' -> n::W::s@26:14 spec=pick<n::W, 4, 4>@41:74
+41:55-41:56  nns  'T' -> T@41:17 in=pick@41:74
+41:58-41:65  expr  'missing' -> (dependent) q=41:55 in=pick@41:74
+41:58-41:65  expr  'missing' -> n::W::missing@27:14 spec=pick<n::W, 4, 4>@41:74
+41:79-41:80  type  'T' -> T@41:17 in=(anonymous)@41:80
+44:15-44:16  nns  'n' -> n@18:11 in=use@43:5
+44:18-44:19  type  'S' -> n::S@19:8 q=44:15 in=use@43:5
+44:10-44:14  expr  'call' -> call<n::S, 4>@32:46 found=call@32:46 in=use@43:5 adl-ns=
+44:30-44:31  nns  'n' -> n@18:11 in=use@43:5
+44:33-44:34  type  'U' -> n::U@22:8 q=44:30 in=use@43:5
+44:25-44:29  expr  'call' -> call<n::U, 1>@32:46 found=call@32:46 in=use@43:5 adl-ns=
+44:43-44:48  expr  'sized' -> sized<n::U, 8>@33:48 found=sized@33:48 in=use@43:5 adl-ns=n@18:11 adl-cls=n::U@22:8
+44:49-44:50  nns  'n' -> n@18:11 in=use@43:5
+44:52-44:53  type  'U' -> n::U@22:8 q=44:49 in=use@43:5
+44:59-44:65  expr  'probed' -> probed<n::S, decltype(probe(n::S{}))>@34:54 found=probed@34:54 in=use@43:5 adl-ns=n@18:11 adl-cls=n::S@19:8
+44:66-44:67  nns  'n' -> n@18:11 in=use@43:5
+44:69-44:70  type  'S' -> n::S@19:8 q=44:66 in=use@43:5
+44:76-44:80  nns  'Host' -> Host@36:8 in=use@43:5
+44:87-44:88  nns  'n' -> n@18:11 in=use@43:5
+44:90-44:91  type  'S' -> n::S@19:8 q=44:87 in=use@43:5
+44:82-44:86  expr  'make' -> Host::make<n::S, 4>@37:55 found=Host::make@37:55 q=44:76 in=use@43:5
+45:10-45:14  expr  'pick' -> pick<n::S, 4>@40:46 found=pick@40:46 in=use@43:5 adl-ns=n@18:11 adl-cls=n::S@19:8
+45:15-45:16  nns  'n' -> n@18:11 in=use@43:5
+45:18-45:19  type  'S' -> n::S@19:8 q=45:15 in=use@43:5
+45:28-45:32  expr  'pick' -> pick<n::W, 4, 4>@41:74 found=pick@41:74 in=use@43:5 adl-ns=n@18:11 adl-cls=n::W@25:8
+45:33-45:34  nns  'n' -> n@18:11 in=use@43:5
+45:36-45:37  type  'W' -> n::W@25:8 q=45:33 in=use@43:5

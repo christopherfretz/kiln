@@ -510,25 +510,30 @@ impl Substituter<'_, '_, '_> {
         Ok(self.sema.adjust_param_type(ty))
     }
 
-    /// The parameters of pattern function `f` with substituted types.
+    /// The parameters of pattern function `f` with substituted types,
+    /// their attributes those of `f`'s or, for the specialization of a
+    /// function template, of its latest declaration's
+    /// ([`Substituter::param_attrs_from`]).
     pub(crate) fn param_infos(&mut self, f: DeclId) -> SubstResult<Vec<ParamInfo>> {
-        let params: Vec<DeclId> = self
-            .sema
-            .ast
-            .decls
-            .function(f)
-            .map(|x| self.sema.ast.lists.iter::<DeclId>(x.params).collect())
-            .unwrap_or_default();
+        let params = self.params_of(f);
+        let from = self.param_attrs_params(f, &params);
         let mut out = Vec::with_capacity(params.len());
-        for p in params {
+        for (p, ap) in params.into_iter().zip(from) {
             let n = *self.sema.ast.decls.get(p);
+            // The new parameter's name and location are `ap`'s too (clang
+            // substitutes that declaration's `ParmVarDecl`s); its type is
+            // substituted from `p`, the same type.
+            let an = *self.sema.ast.decls.get(ap);
+            let at = an.loc();
             let pd = self.sema.ast.decls.param(p).copied();
             // The function-scope depth stays (`ParamData::scope_depth`).
             let depth = pd.map_or(0, |x| x.flags & ParamData::SCOPE_DEPTH_MASK);
             let t = pd.and_then(|x| x.original_ty).unwrap_or_else(|| self.decl_ty(p));
-            let name = n.name().as_ident().filter(|_| !n.name().is_empty()).map(|s| (s, n.loc()));
-            // Its attributes are instantiated onto each new parameter
-            // (`Substituter::param_attrs`); its Swift parameter ABI is
+            let name = an.name().as_ident().filter(|_| !an.name().is_empty()).map(|s| (s, at));
+            // The attributes of `ap` (`p`, or its counterpart in the
+            // declaration the attributes come from) are instantiated onto
+            // each new parameter (`Substituter::param_attrs`); its Swift
+            // parameter ABI (the same in every declaration) is
             // re-checked on the substituted type (clang `SubstParmVarDecl`
             // → `AddParameterABIAttr`, in the immediate context).
             if pd.is_some_and(|x| x.flags & ParamData::PACK != 0)
@@ -548,36 +553,46 @@ impl Substituter<'_, '_, '_> {
                         let idx = u16::try_from(out.len()).unwrap_or(u16::MAX);
                         let np = self.sema.builder().prototype_param(
                             ctx,
-                            n.name(),
-                            loc,
+                            an.name(),
+                            at,
                             ty,
                             idx,
                             ParamData::PACK | depth,
                         );
                         self.sema.unowned_params.insert(np);
                         self.locals.insert(p, DeclOrPack::Decl(np));
-                        let attrs = self.instantiate_param_attrs(np, p)?;
-                        out.push(ParamInfo { attrs, ..subst_param_info(name, ty, loc, np, None) });
+                        let attrs = self.instantiate_param_attrs(np, ap)?;
+                        out.push(ParamInfo { attrs, ..subst_param_info(name, ty, at, np, None) });
                         continue;
                     }
                 };
                 let mut decls = Vec::with_capacity(tys.len());
                 for ty in tys {
-                    let ty = self.sema.apply_pattern_mode(p, ty);
-                    let ty = self.param_type(ty, loc)?;
+                    let declared = self.sema.apply_pattern_mode(p, ty);
+                    let ty = self.param_type(declared, loc)?;
                     let ctx = self.sema.ctx;
                     let idx = u16::try_from(out.len()).unwrap_or(u16::MAX);
                     let np =
-                        self.sema.builder().prototype_param(ctx, n.name(), loc, ty, idx, depth);
+                        self.sema.builder().prototype_param(ctx, an.name(), at, ty, idx, depth);
                     self.sema.unowned_params.insert(np);
                     decls.push(np);
-                    let mut attrs = self.instantiate_param_attrs(np, p)?;
+                    let mut attrs = self.instantiate_param_attrs(np, ap)?;
                     if !self.sema.check_param_abi_attrs(ty, &mut attrs) {
                         return Err(SubstFail);
                     }
+                    // Each element keeps its type as declared, as a
+                    // parameter that is no pack does (WP-3581).
+                    let original_ty = (declared != ty).then_some(declared);
+                    if let Some(o) = original_ty {
+                        self.sema.ast.decls.set_param_original_ty(np, o);
+                    }
                     // The elements share the pack's name (carried by
                     // `np`); it is not a redefinition ([temp.variadic]/5).
-                    out.push(ParamInfo { attrs, ..subst_param_info(None, ty, loc, np, None) });
+                    out.push(ParamInfo {
+                        original_ty,
+                        attrs,
+                        ..subst_param_info(None, ty, at, np, None)
+                    });
                 }
                 let l = self.sema.ast.lists.push(&decls);
                 self.locals.insert(p, DeclOrPack::Pack(l));
@@ -601,33 +616,53 @@ impl Substituter<'_, '_, '_> {
             let ctx = self.sema.ctx;
             let idx = u16::try_from(out.len()).unwrap_or(u16::MAX);
             let eo = pd.map_or(0, |x| x.flags & ParamData::EXPLICIT_OBJECT);
-            let np =
-                self.sema.builder().prototype_param(ctx, n.name(), n.loc(), ty, idx, eo | depth);
+            let np = self.sema.builder().prototype_param(ctx, an.name(), at, ty, idx, eo | depth);
             self.sema.unowned_params.insert(np);
             self.locals.insert(p, DeclOrPack::Decl(np));
-            let mut attrs = self.instantiate_param_attrs(np, p)?;
+            let mut attrs = self.instantiate_param_attrs(np, ap)?;
             if !self.sema.check_param_abi_attrs(ty, &mut attrs) {
                 return Err(SubstFail);
             }
-            // The type as declared is kept only while still dependent (a
-            // member template of a partially instantiated class), for the
-            // next substitution's invalid-type check (§5.7.2); clang's
-            // parse-time-only uses of it (a range-`for` over an array
-            // parameter) do not apply to an instantiation.
-            let original_ty = (declared != ty
-                && self.sema.is_instantiation_dependent_type(declared))
-            .then_some(declared);
+            // The type as declared, whenever adjusting changed it, as for a
+            // parameter written in plain code (clang's instantiated
+            // `ParmVarDecl` keeps its substituted `TypeSourceInfo`): the
+            // next substitution's invalid-type check (§5.7.2) when still
+            // dependent, and the readers of the original type (a
+            // range-`for` or `sizeof` over an array parameter, a variable
+            // length array's bounds at entry) in an instance (WP-3581).
+            let original_ty = (declared != ty).then_some(declared);
             if let Some(o) = original_ty {
                 self.sema.ast.decls.set_param_original_ty(np, o);
             }
-            let eo_loc = (eo != 0).then_some(n.loc());
+            let eo_loc = (eo != 0).then_some(at);
             out.push(ParamInfo {
                 original_ty,
                 attrs,
-                ..subst_param_info(name, ty, n.loc(), np, eo_loc)
+                ..subst_param_info(name, ty, at, np, eo_loc)
             });
         }
         Ok(out)
+    }
+
+    /// The parameters of function `f`.
+    fn params_of(&self, f: DeclId) -> Vec<DeclId> {
+        let ast = &self.sema.ast;
+        ast.decls
+            .function(f)
+            .map(|x| ast.lists.iter::<DeclId>(x.params).collect())
+            .unwrap_or_default()
+    }
+
+    /// The parameters whose attributes, names and locations the
+    /// substituted parameters of pattern function `f` (`params`) take:
+    /// those of [`Substituter::param_attrs_from`]'s redeclaration of `f`,
+    /// else `params`.
+    fn param_attrs_params(&self, f: DeclId, params: &[DeclId]) -> Vec<DeclId> {
+        let from = match self.param_attrs_from {
+            Some((pat, from)) if pat == f => self.params_of(from),
+            _ => Vec::new(),
+        };
+        if from.len() == params.len() { from } else { params.to_vec() }
     }
 
     /// The attributes of pattern parameter `p` instantiated onto `np`

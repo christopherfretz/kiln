@@ -1,0 +1,30 @@
+13:12-13:16  nns  'acme' -> acme@11:11 in=W@13:8
+13:18-13:19  base  'B' -> acme::B@11:25 q=13:12 in=W@13:8
+13:21-13:23  base  'WB' -> WB@12:8 in=W@13:8
+13:50-13:52  type  'WB' -> WB@12:8 in=W::acme::B@13:46 how=injected
+13:67-13:69  type  'WB' -> WB@12:8 in=W::acme::Only@13:60 how=injected
+14:12-14:16  nns  'acme' -> acme@11:11 in=U@14:8
+14:18-14:19  base  'B' -> acme::B@11:25 q=14:12 in=U@14:8
+15:26-15:27  type  'T' -> T@15:17 in=t@15:28
+15:40-15:41  expr  't' -> t@15:28 in=f@15:24
+15:42-15:46  nns  'acme' -> acme@11:11 in=f@15:24
+15:42-15:46  nns  'acme' -> W::acme@13:33 spec=f<W>@15:24
+15:48-15:49  nns  'B' -> acme::B@11:25 q=15:42 in=f@15:24
+15:48-15:49  nns  'B' -> W::acme::B@13:46 spec=f<W>@15:24
+15:51-15:52  member  'f' -> (dependent) q=15:48 in=f@15:24
+15:51-15:52  member  'f' -> WB::f@12:17 spec=f<W>@15:24
+15:51-15:52  member  'f' -> acme::B::f@11:33 spec=f<U>@15:24
+16:26-16:27  type  'T' -> T@16:17 in=p@16:29
+16:41-16:42  expr  'p' -> p@16:29 in=g@16:24
+16:44-16:48  nns  'acme' -> acme@11:11 in=g@16:24
+16:44-16:48  nns  'acme' -> W::acme@13:33 spec=g<W>@16:24
+16:50-16:54  nns  'Only' -> (dependent) q=16:44 in=g@16:24
+16:50-16:54  nns  'Only' -> W::acme::Only@13:60 spec=g<W>@16:24
+16:56-16:57  member  'f' -> (dependent) q=16:50 in=g@16:24
+16:56-16:57  member  'f' -> WB::f@12:17 spec=g<W>@16:24
+17:9-17:10  expr  'f' -> f<W>@15:24 found=f@15:24 in=x@17:5 how=both adl-ns=::,acme@11:11 adl-cls=W@13:8,acme::B@11:25,WB@12:8
+17:11-17:12  type  'W' -> W@13:8 in=x@17:5
+18:9-18:10  expr  'f' -> f<U>@15:24 found=f@15:24 in=y@18:5 how=both adl-ns=::,acme@11:11 adl-cls=U@14:8,acme::B@11:25
+18:11-18:12  type  'U' -> U@14:8 in=y@18:5
+19:9-19:10  expr  'g' -> g<W>@16:24 found=g@16:24 in=z@19:5 how=both adl-ns=::,acme@11:11 adl-cls=W@13:8,acme::B@11:25,WB@12:8
+19:23-19:24  type  'W' -> W@13:8 in=z@19:5

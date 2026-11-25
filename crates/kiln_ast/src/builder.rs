@@ -3883,6 +3883,15 @@ impl<'a> AstBuilder<'a> {
         e
     }
 
+    /// Records the type as written `ty` of compound literal `e` when it is
+    /// not the node's type (an array of unknown bound the list completed;
+    /// [`crate::expr::ColdExprData::compound_literal_written`], WP-3589).
+    pub fn set_compound_literal_written(&mut self, e: ExprId, ty: QualType) {
+        if self.ast.exprs.get(e).ty() != ty {
+            let _ = self.ast.exprs.cold.compound_literal_written.insert(e, ty);
+        }
+    }
+
     /// Records the type as written `ty` of named or functional cast `e`
     /// ([`crate::expr::ColdExprData::cast_written`]); a second record for
     /// the same cast is ignored.

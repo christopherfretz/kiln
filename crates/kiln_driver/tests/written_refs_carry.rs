@@ -345,3 +345,219 @@ fn thread_safety_arguments_keep_the_image() {
     assert!(used.stderr.contains("imported 'tm' from its declaration image"), "{}", used.stderr);
     assert!(used.stdout.contains("tm.cppm:4:35-4:36  nns  'T'"), "{}", used.stdout);
 }
+
+/// A dump without the substitution keys' own lines (spec/ast.md
+/// §18.14.6): the keyed rows, the `keys` block and the key gaps.
+fn without_key_lines(dump: &str) -> String {
+    let is_key_line = |l: &str| {
+        l.contains(" key=")
+            || l.starts_with("keys  ")
+            || (l.starts_with("unrecorded  ") && l.contains(" keys "))
+    };
+    let mut out = String::with_capacity(dump.len());
+    for l in dump.lines().filter(|l| !is_key_line(l)) {
+        out.push_str(l);
+        out.push('\n');
+    }
+    out
+}
+
+/// spec/ast.md §18.14.8: the sub-switch `-fkiln-written-ref-keys`
+/// changes no line of the dump but its own, on every compiling file of
+/// the corpus: with keys on, the only lines added are key lines.
+#[test]
+fn keys_leave_the_corpus_dump_unchanged() {
+    let dir = scratch("keys-corpus");
+    let mut files: Vec<PathBuf> = std::fs::read_dir(corpus())
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|x| x == "cpp"))
+        .collect();
+    files.sort();
+    let mut failures = String::new();
+    let mut checked = 0;
+    for f in &files {
+        let src = std::fs::read_to_string(f).unwrap();
+        if src.contains("//@ expect: compile-fail")
+            || src.contains("//@ module:")
+            || src.contains("//@ pch:")
+        {
+            continue;
+        }
+        let name = f.file_stem().unwrap().to_string_lossy().into_owned();
+        let path = f.to_string_lossy().into_owned();
+        let fl = flags(&src);
+        let fl: Vec<&str> = fl.iter().map(String::as_str).collect();
+        // Off: a file whose `args:` turn keys on (subst-partial-*.cpp) is
+        // compiled with the table alone.
+        let plain: Vec<&str> = fl
+            .iter()
+            .map(|&a| if a == "-fkiln-written-ref-keys" { "-fkiln-written-refs" } else { a })
+            .collect();
+        let dump = ["-fsyntax-only", "-fkiln-dump-written-refs"];
+        let off = kiln(&dir, &[&plain[..], &dump, &[&path]].concat());
+        let on = kiln(&dir, &[&fl[..], &dump, &["-fkiln-written-ref-keys", &path]].concat());
+        if off.code != 0 || on.code != 0 {
+            let _ = writeln!(failures, "{name}: exit {} / {}:\n{}", off.code, on.code, on.stderr);
+            continue;
+        }
+        if without_key_lines(&on.stdout) != off.stdout {
+            let _ = writeln!(
+                failures,
+                "{name}: the dump with keys differs\n--- off\n{}--- on\n{}",
+                off.stdout, on.stdout
+            );
+        }
+        checked += 1;
+    }
+    assert!(failures.is_empty(), "{failures}");
+    assert!(checked >= 40, "only {checked} corpus files were compared");
+}
+
+const TEMPLATED: &str = "namespace n { struct S { using t = int; }; }\n\
+                         template <class T> using A = typename T::t;\n\
+                         template <class T> int f(T x) { return g(x); }\n";
+const TEMPLATED_MAIN: &str = "A<n::S> v = 0;\n";
+
+/// spec/ast.md §18.14.5: a snapshot made with the table but without
+/// keys, restored by a compile that records keys, is a `PrefixKeys` gap
+/// (printed first); one made with keys is none; and a compile that
+/// records the table without keys sees no key gap.
+#[test]
+fn a_prefix_without_keys_is_a_key_gap() {
+    let dir = scratch("keys-prefix");
+    std::fs::write(dir.join("p.h"), TEMPLATED).unwrap();
+    std::fs::write(dir.join("m.cpp"), format!("\n\n\n{TEMPLATED_MAIN}")).unwrap();
+    let dump = ["-fsyntax-only", "-fkiln-dump-written-refs", "-include-pch"];
+    for (producer, pch) in [
+        (&["-fkiln-written-refs"][..], "plain.pch"),
+        (&["-fkiln-written-ref-keys"][..], "keys.pch"),
+    ] {
+        let made = kiln(&dir, &[producer, &["-x", "c++-header", "p.h", "-o", pch]].concat());
+        assert_eq!(made.code, 0, "{}", made.stderr);
+        let keyed = kiln(&dir, &[&dump[..], &[pch, "-fkiln-written-ref-keys", "m.cpp"]].concat());
+        assert_eq!(keyed.code, 0, "{}", keyed.stderr);
+        assert!(keyed.stderr.contains("snapshot-timing: restore"), "{}", keyed.stderr);
+        let first = keyed.stdout.lines().next().unwrap_or_default();
+        if pch == "plain.pch" {
+            assert!(first.starts_with("unrecorded  precompiled prefix keys ("), "{}", keyed.stdout);
+        } else {
+            assert!(!keyed.stdout.contains("unrecorded"), "{}", keyed.stdout);
+        }
+        let plain = kiln(&dir, &[&dump[..], &[pch, "m.cpp"]].concat());
+        assert_eq!(plain.code, 0, "{}", plain.stderr);
+        assert!(!plain.stdout.contains("unrecorded"), "{}", plain.stdout);
+        assert_eq!(without_key_lines(&keyed.stdout), plain.stdout);
+    }
+}
+
+/// spec/ast.md §18.14.5, §18.14.10: a snapshot of a prefix with a
+/// partial specialization match, made without keys, restored by a
+/// compile that records keys: a `PrefixKeys` gap, and the only key is
+/// the main file's new match (with its root); the prefix's match, used
+/// again, has none. Made with keys, both matches have keys.
+#[test]
+fn a_prefix_without_keys_has_no_partial_match_keys() {
+    let dir = scratch("keys-partial-prefix");
+    let header = std::fs::read_to_string(corpus().join("Inputs/subst_partial_pch.h")).unwrap();
+    std::fs::write(dir.join("p.h"), header).unwrap();
+    std::fs::write(
+        dir.join("m.cpp"),
+        "bool again = can_swap<sp::S>::value;\nbool anew = can_swap<sp::V>::value;\n",
+    )
+    .unwrap();
+    let key = |dump: &str, of: &str| {
+        dump.lines().any(|l| l.starts_with("keys  ") && l.contains(&format!("<sp::{of}, void>")))
+    };
+    for (producer, pch) in
+        [("-fkiln-written-refs", "plain.pch"), ("-fkiln-written-ref-keys", "keys.pch")]
+    {
+        let made = kiln(&dir, &["-std=c++26", producer, "-x", "c++-header", "p.h", "-o", pch]);
+        assert_eq!(made.code, 0, "{}", made.stderr);
+        let keyed = kiln(
+            &dir,
+            &[
+                "-std=c++26",
+                "-fsyntax-only",
+                "-fkiln-dump-written-refs",
+                "-fkiln-written-ref-keys",
+                "-include-pch",
+                pch,
+                "m.cpp",
+            ],
+        );
+        assert_eq!(keyed.code, 0, "{}", keyed.stderr);
+        let first = keyed.stdout.lines().next().unwrap_or_default();
+        let plain = pch == "plain.pch";
+        assert_eq!(
+            first.starts_with("unrecorded  precompiled prefix keys ("),
+            plain,
+            "{}",
+            keyed.stdout
+        );
+        assert_eq!(key(&keyed.stdout, "S"), !plain, "{}", keyed.stdout);
+        assert!(key(&keyed.stdout, "V"), "{}", keyed.stdout);
+        assert!(
+            keyed.stdout.lines().any(|l| l.contains("<sp::V, void> root[1]=")),
+            "{}",
+            keyed.stdout
+        );
+    }
+}
+
+/// spec/ast.md §18.14.5: a module unit compiled with the table but
+/// without keys, imported from its image by a compile that records keys,
+/// is a `ModuleKeys` gap; one compiled with keys is none, and its names
+/// are merged as without keys.
+#[test]
+fn a_module_compiled_without_keys_is_a_key_gap() {
+    let dir = scratch("keys-module");
+    std::fs::write(dir.join("rm.cppm"), MODULE).unwrap();
+    std::fs::write(dir.join("use.cpp"), IMPORTER).unwrap();
+    for (flag, pcm) in
+        [("-fkiln-written-refs", "plain.pcm"), ("-fkiln-written-ref-keys", "keys.pcm")]
+    {
+        let made = kiln(
+            &dir,
+            &[
+                "-std=c++20",
+                "-fkiln-bmi-image",
+                "--precompile",
+                flag,
+                "-x",
+                "c++-module",
+                "rm.cppm",
+                "-o",
+                pcm,
+            ],
+        );
+        assert_eq!(made.code, 0, "{}", made.stderr);
+        let file = format!("-fmodule-file=rm={pcm}");
+        let used = kiln(
+            &dir,
+            &[
+                "-std=c++20",
+                "-fsyntax-only",
+                "-v",
+                "-fkiln-bmi-image",
+                "-fkiln-dump-written-refs",
+                "-fkiln-written-ref-keys",
+                &file,
+                "use.cpp",
+            ],
+        );
+        assert_eq!(used.code, 0, "{}", used.stderr);
+        assert!(
+            used.stderr.contains("imported 'rm' from its declaration image"),
+            "{}",
+            used.stderr
+        );
+        let first = used.stdout.lines().next().unwrap_or_default();
+        if pcm == "plain.pcm" {
+            assert!(first.starts_with("unrecorded  module rm keys (rm.cppm, "), "{}", used.stdout);
+        } else {
+            assert!(first.starts_with("rm.cppm:3:"), "{}", used.stdout);
+        }
+        assert!(used.stdout.contains("2:18-2:20  nns  'rm' -> rm@rm.cppm:2:18"), "{}", used.stdout);
+    }
+}

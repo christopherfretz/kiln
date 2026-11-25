@@ -18,7 +18,7 @@ use super::{Image, Payload, QRef, Res, Writer, bad, body};
 use crate::Sema;
 
 /// The `Var` record `spec` bit of an initializer that is an expression
-/// section (the `VarSpec` bits stop at bit 12).
+/// section (the `VarSpec` bits stop at bit 15).
 pub(super) const INIT_SECT: u32 = 1 << 31;
 
 impl Writer<'_, '_, '_> {

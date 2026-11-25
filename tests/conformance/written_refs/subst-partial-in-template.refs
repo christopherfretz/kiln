@@ -1,0 +1,23 @@
+12:11-12:12  type  'S' -> n::S@11:8 in=(anonymous)@12:14
+12:16-12:17  type  'S' -> n::S@11:8 in=(anonymous)@12:19
+14:20-14:21  type  'T' -> T@14:17 in=ref@14:23
+18:36-18:37  type  'T' -> T@18:17 in=can_swap@18:27
+18:48-18:52  expr  'swap' -> (dependent) in=can_swap@18:27 def=0+adl
+18:48-18:52  expr  'swap' -> n::swap@12:6 key=partial:can_swap@18:27<n::S, void> how=adl adl-ns=n@10:11 adl-cls=n::S@11:8
+18:57-18:58  type  'T' -> T@18:17 in=can_swap@18:27
+18:53-18:56  expr  'ref' -> (dependent) in=can_swap@18:27 def=1+adl
+18:53-18:56  expr  'ref' def=ref@14:23
+18:53-18:56  expr  'ref' -> ref<n::S>@14:23 found=ref@14:23 key=partial:can_swap@18:27<n::S, void> adl-ns=
+18:67-18:68  type  'T' -> T@18:17 in=can_swap@18:27
+18:63-18:66  expr  'ref' -> (dependent) in=can_swap@18:27 def=1+adl
+18:63-18:66  expr  'ref' def=ref@14:23
+18:63-18:66  expr  'ref' -> ref<n::S>@14:23 found=ref@14:23 key=partial:can_swap@18:27<n::S, void> adl-ns=
+18:27-18:35  spec-target  'can_swap' -> can_swap@15:41 in=can_swap@18:27
+21:30-21:31  type  'T' -> T@21:17 in=(anonymous)@21:31
+21:51-21:52  nns  'n' -> n@10:11 in=body@21:25
+21:54-21:55  type  'S' -> n::S@11:8 q=21:51 in=body@21:25
+21:42-21:50  nns  'can_swap' -> can_swap@15:41 in=body@21:25
+21:58-21:63  expr  'value' -> can_swap<n::S>::value@19:21 q=21:42 in=body@21:25
+keys  key=partial:can_swap@18:27<n::S, void> rows=3
+keys  key=partial:can_swap@18:27<n::S, void> root[0]=n::S
+keys  key=partial:can_swap@18:27<n::S, void> root[1]=decltype(swap(ref<n::S>(), ref<n::S>()))

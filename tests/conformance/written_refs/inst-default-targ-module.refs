@@ -1,0 +1,12 @@
+default_targ_mod.cppm:9:33-9:34  nns  'T' -> T@default_targ_mod.cppm:9:17 in=dm::call@default_targ_mod.cppm:9:46
+default_targ_mod.cppm:9:36-9:37  expr  's' -> (dependent) q=default_targ_mod.cppm:9:33 in=dm::call@default_targ_mod.cppm:9:46
+default_targ_mod.cppm:9:36-9:37  expr  's' -> dm::S::s@default_targ_mod.cppm:4:14 spec=dm::call<dm::S, 4>@default_targ_mod.cppm:9:46
+default_targ_mod.cppm:9:36-9:37  expr  's' -> dm::U::s@default_targ_mod.cppm:7:15 spec=dm::call<dm::U, 8>@default_targ_mod.cppm:9:46
+default_targ_mod.cppm:10:36-10:37  type  'S' -> dm::S@default_targ_mod.cppm:3:8 in=dm::in_unit@default_targ_mod.cppm:10:12
+default_targ_mod.cppm:10:31-10:35  expr  'call' -> dm::call<S, 4>@default_targ_mod.cppm:9:46 found=dm::call@default_targ_mod.cppm:9:46 in=dm::in_unit@default_targ_mod.cppm:10:12 adl-ns=
+12:20-12:22  nns  'dm' -> dm@default_targ_mod.cppm:2:18 in=run@12:5
+12:29-12:31  nns  'dm' -> dm@default_targ_mod.cppm:2:18 in=run@12:5
+12:33-12:34  type  'U' -> dm::U@default_targ_mod.cppm:6:8 q=12:29 in=run@12:5
+12:24-12:28  expr  'call' -> dm::call<dm::U, 8>@default_targ_mod.cppm:9:46 found=dm::call@default_targ_mod.cppm:9:46 q=12:20 in=run@12:5
+12:40-12:42  nns  'dm' -> dm@default_targ_mod.cppm:2:18 in=run@12:5
+12:44-12:51  expr  'in_unit' -> dm::in_unit@default_targ_mod.cppm:10:12 q=12:40 in=run@12:5

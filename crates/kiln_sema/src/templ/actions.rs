@@ -251,11 +251,31 @@ impl Sema<'_, '_> {
             return Some((p, n));
         }
         let scope = self.templ.member_scope.take();
+        let chain = self.templ.member_dependent_chain.take();
         if prefix.is_none()
             && let Some(scope) = scope
             && let Some(r) = self.member_qualifier_first(scope, name, loc)
         {
             return r.ok();
+        }
+        // `t.acme::Only::` on a dependent object whose `acme` the
+        // definition context found: `acme` is looked up in the object's
+        // class first at instantiation ([basic.lookup.qual.general]/2), so
+        // `Only` missing from the definition's `acme` makes the specifier
+        // dependent, not an error (clang builds the whole specifier
+        // dependent and keeps the first component's `FirstQualifierInScope`).
+        let in_chain = match prefix {
+            None => matches!(scope, Some(MemberScope::Dependent)),
+            Some((_, pn)) => chain == Some(pn),
+        };
+        if in_chain
+            && let Some((p, pn)) = prefix
+            && self.lookup_qualified(p, name, LookupKind::Nested).decls.is_empty()
+            && let Some(dn) = self.dependent_member_chain(pn)
+        {
+            let n = self.ast.types.nns(Nns::Identifier { prefix: Some(dn), name });
+            self.note_written_loc(WrittenKey::Nns(n), loc);
+            return Some((self.decltype_scope_marker(), n));
         }
         // `D::X::` with `D` the current instantiation, a dependent base
         // and nothing named `X` found in it: a member of an unknown
@@ -280,7 +300,45 @@ impl Sema<'_, '_> {
         if self.ast.types.nns_flags(n).intersects(TypeFlags::DEPENDENT_INSTANTIATION) {
             self.note_written_loc(WrittenKey::Nns(n), loc);
         }
+        if in_chain {
+            self.templ.member_dependent_chain = Some(n);
+        }
         Some((ctx, n))
+    }
+
+    /// The identifier a resolved nested-name-specifier component was
+    /// written with (`acme::`, `Base::`, `T::`): a namespace, namespace
+    /// alias, class, enumeration, typedef, using-declaration or template
+    /// type parameter named by its own name. `None` for `::`, a
+    /// template-id, `decltype`, a splice or a dependent component.
+    pub(crate) fn nns_component_name(&self, n: NnsId) -> Option<Symbol> {
+        let d = match self.ast.types.nns_view(n) {
+            Nns::Namespace { ns, .. } => ns,
+            Nns::NamespaceAlias { alias, .. } => alias,
+            Nns::Type { ty, template_kw: false, .. } => match self.ast.types.view(ty.ty()) {
+                TypeView::Typedef { decl, .. } => decl,
+                TypeView::Using { shadow, .. } => shadow,
+                TypeView::Record(d) | TypeView::Enum(d) | TypeView::TemplateTypeParm(d) => d,
+                TypeView::InjectedClassName { pattern, .. } => pattern,
+                _ => return None,
+            },
+            _ => return None,
+        };
+        self.ast.decls.get(d).name().as_ident()
+    }
+
+    /// Resolved specifier `n` of a member qualifier (`acme::B::`, each
+    /// component written as an identifier) as the dependent `acme::B::`
+    /// its first component's lookup in the object's class makes it
+    /// ([`Sema::act_on_nested_name_component`]). `None` when a component
+    /// is not a plain identifier.
+    fn dependent_member_chain(&mut self, n: NnsId) -> Option<NnsId> {
+        let name = self.nns_component_name(n)?;
+        let prefix = match self.ast.types.nns_prefix(n) {
+            Some(p) => Some(self.dependent_member_chain(p)?),
+            None => None,
+        };
+        Some(self.ast.types.nns(Nns::Identifier { prefix, name }))
     }
 
     /// Starts the nested-name-specifier of a member access `base.N::m` /
@@ -302,6 +360,7 @@ impl Sema<'_, '_> {
         } else {
             Some(bt)
         };
+        self.templ.member_dependent_chain = None;
         self.templ.member_scope = obj.and_then(|o| {
             if let Some(r) = self.ast.types.as_record(o) {
                 Some(MemberScope::Class(self.ast.definition(r).unwrap_or(r)))
@@ -313,9 +372,24 @@ impl Sema<'_, '_> {
         });
     }
 
+    /// The object's class while the first component of a member access's
+    /// qualifier is parsed, if the object is a class (not dependent): a
+    /// template-id first component `X<args>::` names a member template
+    /// of that class before one of the context ([basic.lookup.qual.general]/2).
+    /// On a dependent object the template name is found where the
+    /// template is defined and kept (clang's `isTemplateName` with a
+    /// dependent object type).
+    pub fn member_qualifier_class(&self) -> Option<DeclId> {
+        match self.templ.member_scope {
+            Some(MemberScope::Class(c)) => Some(c),
+            _ => None,
+        }
+    }
+
     /// Ends [`Sema::begin_member_qualifier`].
     pub fn end_member_qualifier(&mut self) {
         self.templ.member_scope = None;
+        self.templ.member_dependent_chain = None;
     }
 
     /// The first component `name::` of a member access's qualifier in
@@ -498,16 +572,9 @@ impl Sema<'_, '_> {
         let TypeView::TemplateSpecialization { args, .. } = self.ast.types.view(ty.ty()) else {
             return None;
         };
-        // A friend redeclaration nested in a class template has deeper
-        // parameters (libc++ `template <class _Up> friend class weak_ptr;`
-        // inside `weak_ptr`).
         let own_decl = self.head_template(tmpl);
         let info = self.ast.template_info(own_decl).copied()?;
-        let list = *self.ast.templates.param_list(info.params);
-        let params: Vec<DeclId> = self.ast.lists.iter::<DeclId>(list.params).collect();
-        let written = self.ast.types.args(args).to_vec();
-        let own = params.len() == written.len()
-            && params.iter().zip(&written).all(|(&p, &a)| self.arg_names_param(p, a));
+        let own = self.names_own_args(tmpl, args);
         let pat = if own {
             match self.own_args_partial(tmpl, args, info.params) {
                 Some(p) => p,
@@ -543,6 +610,21 @@ impl Sema<'_, '_> {
             return None;
         }
         Some(self.ast.definition(pat).unwrap_or(pat))
+    }
+
+    /// True if argument list `args` of class template `tmpl` names its own
+    /// template parameters in order (`X<P...>`, [temp.dep.type]/1).
+    pub(crate) fn names_own_args(&self, tmpl: DeclId, args: ArgListId) -> bool {
+        // A friend redeclaration nested in a class template has deeper
+        // parameters (libc++ `template <class _Up> friend class weak_ptr;`
+        // inside `weak_ptr`).
+        let own_decl = self.head_template(tmpl);
+        let Some(info) = self.ast.template_info(own_decl).copied() else { return false };
+        let list = *self.ast.templates.param_list(info.params);
+        let params: Vec<DeclId> = self.ast.lists.iter::<DeclId>(list.params).collect();
+        let written = self.ast.types.args(args);
+        params.len() == written.len()
+            && params.iter().zip(written).all(|(&p, &a)| self.arg_names_param(p, a))
     }
 
     /// The partial specialization `X<P...>` of `tmpl` with the primary's
@@ -863,6 +945,11 @@ impl Sema<'_, '_> {
             self.module_note_overload_set(&decls, n.loc());
             self.builder().unresolved_lookup_in(name, &decls, false, nns, targs, dep, n.loc())
         };
+        // The using-shadows the widening lookup found (spec/ast.md §8.8):
+        // `legacy::forward<T>` names `std::forward` through `legacy`'s
+        // using-declaration.
+        // (Each element is checked against the node's own declaration.)
+        self.ast.note_unresolved_found(r, &found.found);
         // A qualified member template-id (`C::f<int>`) keeps its naming
         // class, so the call or address resolving it checks the access
         // of the template it selects ([class.access]/4, clang's
@@ -987,7 +1074,16 @@ impl Sema<'_, '_> {
             // [basic.link]/14 names the whole set (WP-1819).
             self.module_note_overload_set(&decls, loc);
         }
-        self.builder().unresolved_lookup(DeclName::ident(name), &decls, true, None, Some(list), loc)
+        let e = self.builder().unresolved_lookup(
+            DeclName::ident(name),
+            &decls,
+            true,
+            None,
+            Some(list),
+            loc,
+        );
+        self.ast.note_unresolved_found(e, &found.found);
+        e
     }
 
     /// The template-id `name<args>` assumed to name a template
@@ -1137,7 +1233,9 @@ impl Sema<'_, '_> {
                 // [basic.link]/14 names the whole set (WP-1819).
                 self.module_note_overload_set(&decls, loc);
             }
-            return self.builder().unresolved_lookup(name, &decls, true, None, Some(list), loc);
+            let e = self.builder().unresolved_lookup(name, &decls, true, None, Some(list), loc);
+            self.ast.note_unresolved_found(e, &found.found);
+            return e;
         }
         if decls.is_empty() && qualifier.is_none() {
             self.diagnose_undeclared_template_name(name, loc);
@@ -1152,7 +1250,10 @@ impl Sema<'_, '_> {
         // [basic.link]/14: the template-id names every function template
         // in the set (WP-1819).
         self.module_note_overload_set(&decls, loc);
-        self.builder().unresolved_lookup_in(name, &decls, false, None, Some(list), dep, loc)
+        let e =
+            self.builder().unresolved_lookup_in(name, &decls, false, None, Some(list), dep, loc);
+        self.ast.note_unresolved_found(e, &found.found);
+        e
     }
 
     /// The qualified function or variable template-id or concept-id `e`
@@ -2302,6 +2403,13 @@ impl Sema<'_, '_> {
                 if let Some(name) = name {
                     let name = DeclName::ident(name);
                     f = self.builder().unresolved_lookup(name, &[d], true, None, None, n.loc());
+                    // The using-shadow the name was found through
+                    // (spec/ast.md §8.8).
+                    if let Some(s) =
+                        self.ast.exprs.decl_ref_extra(callee).and_then(|x| x.found_decl)
+                    {
+                        self.ast.note_unresolved_found(f, &[s]);
+                    }
                 }
             }
         }

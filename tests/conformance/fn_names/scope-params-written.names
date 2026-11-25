@@ -1,0 +1,26 @@
+fn-name 'static void g(decltype(ns::S::value), ns::A, I (*)(ns::A))::L::m()' of g(decltype(ns::S::value), ns::A, I (*)(ns::A))::L::m@17:26
+  [12,13) scope 'g' -> g@16:6
+  [23,25) scope 'ns' -> ns@11:11 d=1
+  [27,28) scope 'S' -> ns::S@12:8 d=1 q
+  [30,35) scope 'value' -> ns::S::value@12:33 d=1 q
+  [38,40) scope 'ns' -> ns@11:11 d=1
+  [42,43) scope 'A' -> ns::A@13:7 d=1 q
+  [45,46) scope 'I' -> I@15:13 d=1
+  [51,53) scope 'ns' -> ns@11:11 d=1
+  [55,56) scope 'A' -> ns::A@13:7 d=1 q
+  [60,61) scope 'L' -> L@17:10 q
+  [63,64) name 'm' -> g(decltype(ns::S::value), ns::A, I (*)(ns::A))::L::m@17:26 q
+fn-name 'static void t3(ns::S, I)::L::m()' of t3(ns::S, I)::L::m@21:26
+  [12,14) scope 't3' -> t3<ns::S>@20:25
+  [15,17) scope 'ns' -> ns@11:11 d=1
+  [19,20) scope 'S' -> ns::S@12:8 d=1 q
+  [22,23) scope 'I' -> I@15:13 d=1
+  [26,27) scope 'L' -> L@21:10 q
+  [29,30) name 'm' -> t3(ns::S, I)::L::m@21:26 q
+fn-name 'static void nest(I)::L::m()::M::m()' of nest(I)::L::m()::M::m@25:55
+  [12,16) scope 'nest' -> nest@24:6
+  [17,18) scope 'I' -> I@15:13 d=1
+  [21,22) scope 'L' -> L@25:10 q
+  [24,25) scope 'm' -> nest(I)::L::m@25:26 q
+  [29,30) scope 'M' -> M@25:39 q
+  [32,33) name 'm' -> nest(I)::L::m()::M::m@25:55 q

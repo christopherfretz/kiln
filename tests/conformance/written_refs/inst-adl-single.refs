@@ -1,0 +1,35 @@
+16:11-16:12  type  'S' -> n::S@14:8 in=(anonymous)@16:14
+16:16-16:17  type  'S' -> n::S@14:8 in=(anonymous)@16:19
+19:42-19:43  type  'T' -> T@19:17 in=Sw@19:28
+19:50-19:54  expr  'swap' -> (dependent) in=Sw@19:28 def=0+adl
+19:50-19:54  expr  'swap' -> n::swap@16:6 spec=Sw@19:28 how=adl adl-ns=n@13:11 adl-cls=n::S@14:8
+19:55-19:56  expr  'a' -> a@19:45 in=Sw@19:28
+19:58-19:59  expr  'a' -> a@19:45 in=Sw@19:28
+21:31-21:32  type  'T' -> T@21:17 in=a@21:34
+21:49-21:53  expr  'swap' -> (dependent) in=twice@21:25 def=0+adl
+21:49-21:53  expr  'swap' -> n::swap@16:6 spec=twice<n::S>@21:25 how=adl adl-ns=n@13:11 adl-cls=n::S@14:8
+21:54-21:55  expr  'a' -> a@21:34 in=twice@21:25
+21:57-21:58  expr  'a' -> a@21:34 in=twice@21:25
+21:59-21:60  operator  ',' -> (dependent) in=twice@21:25 def=0+adl
+21:59-21:60  operator  ',' -> (builtin) spec=twice<n::S>@21:25 how=builtin
+24:30-24:31  type  'T' -> T@24:17 in=a@24:33
+24:38-24:42  expr  'swap' -> (dependent) in=body@24:25 def=0+adl
+24:38-24:42  expr  'swap' -> n::swap@16:6 spec=body<n::S>@24:25 how=adl adl-ns=n@13:11 adl-cls=n::S@14:8
+24:43-24:44  expr  'a' -> a@24:33 in=body@24:25
+24:46-24:47  expr  'a' -> a@24:33 in=body@24:25
+26:18-26:19  nns  'n' -> n@13:11 in=static_assert@26:1
+26:21-26:22  type  'S' -> n::S@14:8 q=26:18 in=static_assert@26:1
+26:15-26:17  concept  'Sw' -> Sw@19:28 in=static_assert@26:1
+27:19-27:20  nns  'n' -> n@13:11 in=static_assert@27:1
+27:22-27:23  type  'U' -> n::U@15:8 q=27:19 in=static_assert@27:1
+27:16-27:18  concept  'Sw' -> Sw@19:28 in=static_assert@27:1
+29:9-29:10  nns  'n' -> n@13:11 in=s@29:15
+29:12-29:13  type  'S' -> n::S@14:8 q=29:9 in=s@29:15
+29:18-29:19  nns  'n' -> n@13:11 in=u@29:24
+29:21-29:22  type  'U' -> n::U@15:8 q=29:18 in=u@29:24
+30:3-30:7  expr  'body' -> body<n::S>@24:25 found=body@24:25 in=use@29:5 adl-ns=n@13:11 adl-cls=n::S@14:8
+30:8-30:9  expr  's' -> s@29:15 in=use@29:5
+31:10-31:15  expr  'twice' -> twice<n::S>@21:25 found=twice@21:25 in=use@29:5 adl-ns=n@13:11 adl-cls=n::S@14:8
+31:16-31:17  expr  's' -> s@29:15 in=use@29:5
+31:21-31:26  expr  'twice' -> twice@22:5 in=use@29:5 adl-ns=n@13:11 adl-cls=n::U@15:8
+31:27-31:28  expr  'u' -> u@29:24 in=use@29:5

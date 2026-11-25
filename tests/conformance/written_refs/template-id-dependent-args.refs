@@ -1,0 +1,82 @@
+24:32-24:33  type  'T' -> T@24:17 in=n::A@24:26
+24:30-24:31  template  'K' -> n::K@23:27 in=n::A@24:26
+26:26-26:27  type  'T' -> T@26:17 in=(anonymous)@26:27
+27:26-27:27  type  'T' -> T@27:17 in=(anonymous)@27:27
+28:28-28:29  type  'T' -> T@28:17 in=(anonymous)@28:29
+29:39-29:40  type  'T' -> T@29:17 in=n::u@29:24
+29:37-29:38  expr  'v' -> n::v@22:34 in=n::u@29:24
+32:17-32:18  using-directive  'n' -> n@21:11 in=d@31:11
+35:37-35:38  nns  'n' -> n@21:11 in=g@35:24
+35:40-35:41  expr  'v' -> n::v@22:34 found=n::v@22:34 q=35:37 in=g@35:24
+35:49-35:50  nns  'n' -> n@21:11 in=g@35:24
+35:54-35:55  type  'T' -> T@35:17 in=g@35:24
+35:52-35:53  expr  'v' -> n::v@22:34 q=35:49 in=g@35:24
+35:47-35:48  operator  '+' -> (dependent) in=g@35:24 def=0+adl
+35:47-35:48  operator  '+' -> (builtin) spec=g<int>@35:24 how=builtin
+36:42-36:43  nns  'n' -> n@21:11 in=nested@36:24
+36:47-36:48  nns  'm' -> m@18:11 in=nested@36:24
+36:52-36:53  type  'T' -> T@36:17 in=nested@36:24
+36:50-36:51  template  'w' -> m::w@19:27 q=36:47 in=nested@36:24
+36:45-36:46  expr  'v' -> n::v@22:34 q=36:42 in=nested@36:24
+36:58-36:59  nns  'n' -> n@21:11 in=nested@36:24
+36:63-36:64  nns  'n' -> n@21:11 in=nested@36:24
+36:68-36:69  nns  'm' -> m@18:11 in=nested@36:24
+36:73-36:74  type  'T' -> T@36:17 in=nested@36:24
+36:71-36:72  template  'w' -> m::w@19:27 q=36:68 in=nested@36:24
+36:66-36:67  template  'K' -> n::K@23:27 q=36:63 in=nested@36:24
+36:61-36:62  expr  'v' -> n::v@22:34 q=36:58 in=nested@36:24
+36:56-36:57  operator  '+' -> (dependent) in=nested@36:24 def=0+adl
+36:56-36:57  operator  '+' -> (builtin) spec=nested<int>@36:24 how=builtin
+38:3-38:4  nns  'n' -> n@21:11 in=k@38:11
+38:8-38:9  type  'T' -> T@37:17 in=k@38:11
+38:6-38:7  template  'K' -> n::K@23:27 q=38:3 in=k@38:11
+39:3-39:4  nns  'n' -> n@21:11 in=a@39:11
+39:8-39:9  type  'T' -> T@37:17 in=a@39:11
+39:6-39:7  template  'A' -> n::A@24:26 q=39:3 in=a@39:11
+40:3-40:4  nns  'n' -> n@21:11 in=i@40:17
+40:8-40:9  nns  'n' -> n@21:11 in=i@40:17
+40:13-40:14  type  'T' -> T@37:17 in=i@40:17
+40:11-40:12  expr  'v' -> n::v@22:34 q=40:8 in=i@40:17
+40:6-40:7  template  'I' -> n::I@25:25 q=40:3 in=i@40:17
+43:28-43:29  nns  'n' -> n@21:11 in=contexts@43:41
+43:33-43:34  type  'T' -> T@43:17 in=contexts@43:41
+43:31-43:32  expr  'v' -> n::v@22:34 q=43:28 in=contexts@43:41
+44:17-44:18  nns  'n' -> n@21:11 in=contexts@43:41
+44:22-44:23  type  'T' -> T@43:17 in=contexts@43:41
+44:20-44:21  expr  'v' -> n::v@22:34 q=44:17 in=contexts@43:41
+44:39-44:40  nns  'n' -> n@21:11 in=contexts@43:41
+44:44-44:45  type  'T' -> T@43:17 in=contexts@43:41
+44:42-44:43  expr  'v' -> n::v@22:34 q=44:39 in=contexts@43:41
+44:52-44:53  nns  'd' -> d@31:11 in=contexts@43:41
+44:57-44:58  type  'T' -> T@43:17 in=contexts@43:41
+44:55-44:56  expr  'v' -> n::v@22:34 q=44:52 in=contexts@43:41 udir=n@32:1
+44:50-44:51  operator  '+' -> (dependent) in=contexts@43:41 def=0+adl
+44:50-44:51  operator  '+' -> (builtin) spec=contexts<int, 0>@43:41 how=builtin
+46:30-46:31  type  'T' -> T@46:17 in=t@46:32
+46:44-46:45  nns  'n' -> n@21:11 in=calls@46:24
+46:49-46:50  type  'T' -> T@46:17 in=calls@46:24
+46:47-46:48  expr  'f' -> (dependent) q=46:44 in=calls@46:24 def=2
+46:47-46:48  expr  'f' def=n::f@26:24
+46:47-46:48  expr  'f' def=n::f@27:24
+46:47-46:48  expr  'f' -> n::f<int>@26:24 found=n::f@26:24 spec=calls<int>@46:24
+46:52-46:53  expr  't' -> t@46:32 in=calls@46:24
+46:57-46:58  nns  'n' -> n@21:11 in=calls@46:24
+46:64-46:65  type  'T' -> T@46:17 in=calls@46:24
+46:60-46:63  expr  'one' -> (dependent) q=46:57 in=calls@46:24 def=1
+46:60-46:63  expr  'one' def=n::one@28:24
+46:60-46:63  expr  'one' -> n::one<int>@28:24 found=n::one@28:24 spec=calls<int>@46:24
+46:67-46:68  expr  't' -> t@46:32 in=calls@46:24
+46:55-46:56  operator  '+' -> (dependent) in=calls@46:24 def=0+adl
+46:55-46:56  operator  '+' -> (builtin) spec=calls<int>@46:24 how=builtin
+47:43-47:44  nns  'T' -> T@47:17 in=keyword@47:24
+47:55-47:56  expr  'x' -> (dependent) q=47:43 in=keyword@47:24
+47:55-47:56  expr  'x' -> X::x@49:43 found=X::x@49:43 spec=keyword<X>@47:24
+51:9-51:10  expr  'g' -> g<int>@35:24 found=g@35:24 in=z@51:5 adl-ns=
+51:20-51:26  expr  'nested' -> nested<int>@36:24 found=nested@36:24 in=z@51:5 adl-ns=
+51:36-51:41  expr  'types' -> types<int>@37:24 found=types@37:24 in=z@51:5 adl-ns=
+51:51-51:59  expr  'contexts' -> contexts<int, 0>@43:41 found=contexts@43:41 in=z@51:5 adl-ns=
+51:69-51:74  expr  'calls' -> calls<int>@46:24 found=calls@46:24 in=z@51:5 adl-ns=
+52:17-52:18  type  'X' -> X@48:8 in=z@51:5
+52:9-52:16  expr  'keyword' -> keyword<X>@47:24 found=keyword@47:24 in=z@51:5 adl-ns=
+52:24-52:25  nns  'n' -> n@21:11 in=z@51:5
+52:27-52:28  expr  'u' -> n::u<int>@29:24 found=n::u@29:24 q=52:24 in=z@51:5

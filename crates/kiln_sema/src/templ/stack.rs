@@ -245,6 +245,36 @@ pub struct InstFrame {
     /// The frame's `-ftime-trace` span (`InstantiateClass` /
     /// `InstantiateFunction`; spec/driver.md "Time trace").
     pub(crate) trace: Option<kiln_source::trace::Span>,
+    /// The key scope the frame owns, as its index + 1 (0: none;
+    /// spec/ast.md §18.14.3).
+    pub(crate) key_scope: u32,
+}
+
+impl InstFrame {
+    /// A frame that is pushed only to be shown in a diagnostic's
+    /// backtrace: no arguments, meter, trace or key scope.
+    fn shown(
+        kind: FrameKind,
+        entity: DeclId,
+        template: DeclId,
+        poi: Loc,
+        sfinae: Option<bool>,
+    ) -> Self {
+        InstFrame {
+            kind,
+            entity,
+            template,
+            poi,
+            sfinae,
+            args: None,
+            start: None,
+            start_bytes: 0,
+            start_nodes: 0,
+            child_ns: 0,
+            trace: None,
+            key_scope: 0,
+        }
+    }
 }
 
 /// The depth and backtrace limits (`-ftemplate-depth=`,
@@ -503,19 +533,7 @@ impl Sema<'_, '_> {
         if self.stack_exhausted() || self.stack_low() {
             // P4 (c): the frame that would not fit is part of the
             // backtrace, as for the depth limit.
-            self.inst.stack.push(InstFrame {
-                kind,
-                entity,
-                template,
-                poi,
-                sfinae: None,
-                args: None,
-                start: None,
-                start_bytes: 0,
-                start_nodes: 0,
-                child_ns: 0,
-                trace: None,
-            });
+            self.inst.stack.push(InstFrame::shown(kind, entity, template, poi, None));
             let _ = self.stack_ok(crate::stack_guard::StackPhase::Instantiation, poi);
             let _ = self.inst.stack.pop();
             self.inst.fatal = true;
@@ -548,19 +566,7 @@ impl Sema<'_, '_> {
         if over {
             // As clang, the frame that exceeds the limit is part of the
             // backtrace (`R<1024>` with the default depth).
-            self.inst.stack.push(InstFrame {
-                kind,
-                entity,
-                template,
-                poi,
-                sfinae,
-                args: None,
-                start: None,
-                start_bytes: 0,
-                start_nodes: 0,
-                child_ns: 0,
-                trace: None,
-            });
+            self.inst.stack.push(InstFrame::shown(kind, entity, template, poi, sfinae));
             let note = self.diag(DiagId::note_template_recursion_depth, poi);
             let d = self
                 .diag(DiagId::sema_template_recursion_depth, poi)
@@ -588,6 +594,7 @@ impl Sema<'_, '_> {
             start_bytes,
             start_nodes,
             child_ns: 0,
+            key_scope: 0,
             trace: match kind {
                 FrameKind::ClassInstantiation | FrameKind::MemberClass => {
                     kiln_source::trace::begin("InstantiateClass")
@@ -979,6 +986,7 @@ mod tests {
             start_nodes: 0,
             child_ns: 0,
             trace: None,
+            key_scope: 0,
         }
     }
 

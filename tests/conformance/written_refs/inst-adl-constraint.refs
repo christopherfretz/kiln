@@ -1,0 +1,34 @@
+15:11-15:12  type  'X' -> lib::X@13:8 in=(anonymous)@15:12
+18:41-18:42  type  'U' -> U@18:17 in=Big@18:28
+20:42-20:46  expr  'make' -> (dependent) in=f@20:58 def=0+adl
+20:42-20:46  expr  'make' -> lib::make@15:6 spec=f@20:58 how=adl adl-ns=lib@12:11 adl-cls=lib::X@13:8
+20:47-20:48  type  'T' -> T@20:17 in=f@20:58
+20:29-20:32  concept  'Big' -> Big@18:28 in=f@20:58
+20:60-20:61  type  'T' -> T@20:17 in=(anonymous)@20:61
+21:16-21:17  expr  'f' -> f<lib::X>@20:58 found=f@20:58 in=a@21:5 adl-ns=lib@12:11 adl-cls=lib::X@13:8
+21:18-21:21  nns  'lib' -> lib@12:11 in=a@21:5
+21:23-21:24  type  'X' -> lib::X@13:8 q=21:18 in=a@21:5
+23:26-23:27  type  'T' -> T@23:17 in=(anonymous)@23:27
+23:71-23:75  expr  'make' -> (dependent) in=g@23:24 def=0+adl
+23:71-23:75  expr  'make' -> lib::make@15:6 spec=g@23:24 how=adl adl-ns=lib@12:11 adl-cls=lib::X@13:8
+23:76-23:77  type  'T' -> T@23:17 in=g@23:24
+23:58-23:61  concept  'Big' -> Big@18:28 in=g@23:24
+24:16-24:17  expr  'g' -> g<lib::X>@23:24 found=g@23:24 in=b@24:5 adl-ns=lib@12:11 adl-cls=lib::X@13:8
+24:18-24:21  nns  'lib' -> lib@12:11 in=b@24:5
+24:23-24:24  type  'X' -> lib::X@13:8 q=24:18 in=b@24:5
+26:42-26:46  expr  'make' -> (dependent) in=k@26:58 def=0+adl
+26:42-26:46  expr  'make' -> lib::make@15:6 spec=k@26:58 how=adl adl-ns=lib@12:11 adl-cls=lib::X@13:8
+26:47-26:48  type  'T' -> T@26:17 in=k@26:58
+26:29-26:32  concept  'Big' -> Big@18:28 in=k@26:58
+26:60-26:61  type  'T' -> T@26:17 in=(anonymous)@26:61
+27:9-27:10  expr  'k' -> k<lib::X>@26:58 found=k@26:58 in=c@27:5 adl-ns=lib@12:11 adl-cls=lib::X@13:8
+27:11-27:14  nns  'lib' -> lib@12:11 in=c@27:5
+27:16-27:17  type  'X' -> lib::X@13:8 q=27:11 in=c@27:5
+29:42-29:43  nns  'T' -> T@29:17 in=q@29:55
+29:45-29:46  expr  's' -> (dependent) q=29:42 in=q@29:55
+29:45-29:46  expr  's' -> lib::Y::s@14:24 spec=q@29:55
+29:29-29:32  concept  'Big' -> Big@18:28 in=q@29:55
+29:57-29:58  type  'T' -> T@29:17 in=(anonymous)@29:58
+30:16-30:17  expr  'q' -> q<lib::Y>@29:55 found=q@29:55 in=d@30:5 adl-ns=lib@12:11 adl-cls=lib::Y@14:8
+30:18-30:21  nns  'lib' -> lib@12:11 in=d@30:5
+30:23-30:24  type  'Y' -> lib::Y@14:8 q=30:18 in=d@30:5

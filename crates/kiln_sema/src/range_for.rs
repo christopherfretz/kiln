@@ -339,6 +339,7 @@ impl Sema<'_, '_> {
         id: DiagId,
     ) -> bool {
         let declared = self.ast.decls.get(v).ty().unwrap_or(QualType::ERROR);
+        self.note_var_placeholder(v, declared);
         let (items, kind, init_ty) = match &init {
             Initializer::Expr(e) => (vec![Some(*e)], AutoInit::Expr, self.ety(*e)),
             Initializer::List(l) => {
@@ -947,9 +948,14 @@ impl Sema<'_, '_> {
     }
 
     /// clang's `err_range_on_array_parameter`: the range names a function
-    /// parameter declared with array type. True when diagnosed.
+    /// parameter declared with array type. True when diagnosed. Only in
+    /// the definition (clang's `BFRK_Build`): an instantiation, whose
+    /// parameters keep their declared types too (WP-3581), gets the plain
+    /// invalid-range error, as clang's rebuild does.
     fn range_on_array_parameter(&mut self, range_init: ExprId) -> bool {
-        if self.ast.exprs.get(range_init).kind() != ExprKind::DeclRefExpr {
+        if self.ast.exprs.get(range_init).kind() != ExprKind::DeclRefExpr
+            || !self.inst.stack.is_empty()
+        {
             return false;
         }
         let p = self.ast.exprs.decl(range_init);

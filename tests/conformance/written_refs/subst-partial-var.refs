@@ -1,0 +1,15 @@
+9:20-9:21  type  'T' -> T@9:17 in=make@9:22
+11:37-11:38  type  'T' -> T@11:17 in=vt@11:34
+11:54-11:55  type  'T' -> T@11:17 in=vt@11:34
+11:49-11:53  expr  'make' -> (dependent) in=vt@11:34 def=1+adl
+11:49-11:53  expr  'make' def=make@9:22
+11:49-11:53  expr  'make' -> make<F>@9:22 found=make@9:22 key=partial:vt@11:34<F, void> adl-ns=
+11:59-11:60  member  'f' -> (dependent) in=vt@11:34
+11:59-11:60  member  'f' -> F::f@13:8 key=partial:vt@11:34<F, void>
+11:34-11:36  spec-target  'vt' -> vt@10:48 in=vt@11:34
+15:18-15:19  type  'F' -> F@12:8 in=static_assert@15:1
+15:15-15:17  expr  'vt' -> vt@11:34 found=vt@10:48 in=static_assert@15:1
+16:15-16:17  expr  'vt' -> vt@10:48 found=vt@10:48 in=static_assert@16:1
+keys  key=partial:vt@11:34<F, void> rows=2
+keys  key=partial:vt@11:34<F, void> root[0]=F
+keys  key=partial:vt@11:34<F, void> root[1]=decltype(make<F>().f())

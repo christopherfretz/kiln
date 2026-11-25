@@ -705,6 +705,21 @@ translation unit that fails costs about what it costs clang:
   `module_adl_visible`, `module_redecl_candidate` in
   `kiln_sema::modules`); a TU without module or import directives skips
   it entirely.
+- **Class member lookup cost** ([class.member.lookup]/5, [class.mi]/4;
+  WP-3404). The search of a class (`lookup.rs` `class_leaves`) computes
+  the lookup set of a virtual base once: a virtual base reached again
+  through another `virtual` base-specifier is one subobject, so it is not
+  searched again, and a class whose search found nothing is not searched
+  again at all (WP-400). A lookup therefore searches at most one class per
+  class of the hierarchy plus one per non-virtual base subobject on the
+  way to the classes the name is found in
+  (`Sema::class_member_search_visits` counts them): linear in the classes
+  of a virtual lattice whose 2^N paths all reach the declaring class, as
+  for the name of a using-declarator (`using LNa::f;`). Non-virtual
+  repeated bases stay one subobject per path, so their ambiguities are
+  unchanged; an ambiguity lists one path per subobject, the first in
+  base-specifier order, as clang does. The access check's path searches
+  are linear too (spec/sema-class.md §10, "Virtual lattices").
 - **Unqualified lookup** ([basic.lookup.unqual]) walks the stack
   innermost first:
   - A local scope searches its `locals`.
@@ -3994,6 +4009,40 @@ instantiation unless stated.
      again against the substituted type (clang 22 re-checks
      `align_value`'s subject and `-Wnonnull`s a null argument of an
      instantiated `nonnull` parameter of non-pointer type; not done).
+     *Which declaration's parameters* (WP-3407): a function template
+     specialization's signature is substituted from the template's
+     first declaration, but its parameters take their attributes, names
+     and locations from the corresponding parameters of the template's
+     latest declaration when the specialization is declared
+     (`Sema::param_attrs_source`, `Substituter::param_attrs_from`; clang
+     substitutes the most recent `FunctionTemplateDecl` lookup finds,
+     `FinishTemplateArgumentDeduction` → `SubstDecl`). Those carry their
+     own attributes and the ones rule 2 gave them, so an attribute
+     written only on the definition, or only on a later non-defining
+     declaration, is instantiated; one written on both is one attribute;
+     a non-inherited attribute (`align_value`, `maybe_undef`,
+     `maybe_unused`, `noescape`) of an earlier declaration only is not.
+     The latest declaration is the latest valid one with as many
+     parameters that is not a friend declaration (ordinary lookup does
+     not find a friend). Each checked against clang 19 and 22:
+     - A declaration after the point where the specialization is
+       declared (its implicit instantiation's first use, or an explicit
+       instantiation) does not change it, a definition included: the
+       instantiated definition keeps the specialization's parameters.
+     - A member function of a class template, and a member function
+       template of one, are instantiated from their declaration in the
+       class: an out-of-class definition's parameter attributes do not
+       reach the instantiation (clang instantiates the class's member
+       declarations). A member function template of a class that is not
+       a template, and a namespace member defined with a qualified name,
+       take the definition's.
+     - An explicit specialization has its own parameters and their
+       attributes only.
+     - `pass_object_size` on the definition only declares another
+       template (an overload, rule 2), which overload resolution prefers.
+     Function-level attributes do not have the problem: a
+     specialization's are those of the declarations so far, merged
+     (tests `dcl.attr.param/template-redecl-*`).
   6. *Storage.* `aligned(N)` on a parameter aligns the callee's own
      storage of it (clang `EmitParmDecl`/`EmitFunctionProlog`,
      `getDeclAlign`): a scalar's spill slot, and the memory a class
@@ -5840,7 +5889,25 @@ specializations ([class.mem.general]/7, [except.spec]/13, [temp.inst]/14):
     dump has none in either; kiln's record keeps the hidden shadow in both
     (spec/ast.md §4.2) and its dump leaves it out, as clang's
     (`namespace.udecl/p14-hidden-either-order-run.cpp`,
-    `ast/namespace.udecl/hidden-shadow-either-order.cpp`). The
+    `ast/namespace.udecl/hidden-shadow-either-order.cpp`). In a class
+    template specialization the members are redone in declaration
+    order through the declarator actions, so a member function
+    (template) redone after the using-declaration marks the shadows it
+    hides (`check_using_shadow_conflict`) and one redone before it is
+    found by `introduce_shadow`, as in any class (pinned by WP-3403). A
+    using-declarator repeated through another class (`using B1::f;
+    using B2::f;`, both naming a virtual base's `f`) makes its own
+    shadow, which replaces the earlier one in lookup, as at namespace
+    scope (clang `CheckUsingShadowDecl` chains it as `PrevShadow`); a
+    member that hides one of them marks all of that entity's shadows
+    in the class (`mark_hidden_shadow`), and the conversion functions
+    of the class count the entity once (WP-3403,
+    `namespace.udecl/p14-hidden-after-using-specialization-run.cpp`,
+    `namespace.udecl/p14-repeated-using-through-bases-run.cpp`). The
+    text makes two using-declarators of one class scope that name one
+    declaration ill-formed ([namespace.udecl]/8); clang 19, clang 22 and
+    GCC 14 accept it through different classes, and kiln diagnoses only
+    the same class twice (`previous_class_using`). The
     implicitly-declared copy or move assignment operator hides the
     class's not yet hidden `operator=` shadows it corresponds to when it
     is declared (`declare_implicit`), so `struct A : B { using
@@ -13273,6 +13340,16 @@ F:L:C)>::f() [T = (lambda at F:L:C)]`). The closure that is itself the
 scope of a lambda's call operator prints `(lambda)` at clang_compat >=
 22 and `(anonymous class)` before (`auto f()::(lambda)::operator()()
 const`).
+A function printed as a scope (the enclosing function of a closure or a
+local class's member) prints its parameter declarations' types as
+declared (clang `printNestedNameSpecifier`), not the canonical
+prototype's: `auto g(decltype(ns::S::value))::(lambda)::operator()()
+const`, `h(I, ns::S, int *, void (*)(I))::L::m()`; an instantiation's
+parameters are the written types with its arguments substituted
+(`t2(int, decltype(ns::S::value))`, `C<int>::f(int, I)`), a substituted
+`T::` printing its replacement (`typename S::type` at compat 19,
+`typename ns::S::type` at 22, spec/types.md §12). Diagnostics naming such
+a scope (`f(I)::L`) print alike (WP-3402).
 The source-location builtins use the same printer (§9.5 of
 sema-templates.md), and a `__builtin_FUNCTION`/`__builtin_source_location`
 in a dependent context, or a default argument evaluating one used there,

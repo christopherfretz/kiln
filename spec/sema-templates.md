@@ -3804,8 +3804,26 @@ and the §6.2 tests.
   ([temp.deduct.type]/8): `template<int N> void f(A<N>&)` with `A<N> =
   int[N]` deduces `N` from `int[3]`; the bound may be `bool` or any
   integral type (`tests/conformance/temp.deduct.type/alias-array-bound-deduction-run.cpp`).
-- `alias_cache: (alias, canonical args) → canonical result` makes repeated
-  forms cost one probe.
+- `alias_cache: (alias, converted args) → result` makes repeated forms
+  cost one probe. The key is the sugared converted list at clang compat
+  22 (clang 22 substitutes the arguments as written) and the canonical
+  one at 19. An alias specialization is therefore substituted once per
+  such list, and the written-reference rows of the names in its aliased
+  type are recorded at that first substitution (spec/ast.md §18.9.3); a
+  later use reuses both. A result whose substitution checked access or
+  had an error trapped by a SFINAE context is not cached (below).
+- **Later declarations (WP-3587).** Because of the cache, a function
+  declared after the first use of `R<X>` (`using R = decltype(make(T()))`
+  with a better `make(X)` declared between two uses) is not seen by a
+  later use: kiln keeps the first result, as GCC 16.1 does; clang 19 and
+  22 substitute again at each use. Argument-dependent lookup over all the
+  declarations would find a better match, so the program is ill-formed,
+  no diagnostic required ([temp.dep.candidate]/1; [temp.point]/7 is the
+  rule for differing points of instantiation), and both behaviours
+  conform (`tests/conformance/written_refs/inst-alias-first-use.cpp`,
+  compared with GCC). Default template arguments are not cached: a class
+  or function template's default is substituted again at each use, by
+  kiln, clang and GCC alike.
 - Alias substitution is in the immediate context: a failure inside a
   deduction is SFINAE, including for args the alias does not use
   (CWG1558, the `void_t` idiom).
@@ -4364,7 +4382,31 @@ here because the GCC cases reaching them are template tests:
 - **Dependent forms** are resolved:
   - `DependentScopeDeclRefExpr` becomes qualified lookup;
   - `UnresolvedLookupExpr` becomes an overload set plus ADL (§3.5);
-  - `CXXDependentScopeMemberExpr` becomes member lookup;
+  - `CXXDependentScopeMemberExpr` becomes member lookup. Its qualifier's
+    first component `N` (`t.N::m`, `p->N::m`) is a member-qualified name
+    whose lookup context, the object's type, was dependent at the
+    definition, so `N` was found there by unqualified lookup only
+    ([basic.lookup.qual.general]/2-3); in the specialization nothing is
+    dependent (/3, note 2), and `N` is looked up in the object's class
+    first: when the class has an `N` naming something else, the
+    qualifier is formed again from it, each later component (a name, or
+    a template-id with its arguments substituted) looked up in what the
+    one before it now names (`Substituter::relook_member_root`); the
+    definition's `N` stands when the class has none (clang's
+    `FirstQualifierInScope`). Not looked up again (as clang): a first
+    component that is a template-id (`t.TB<int>::f()`: the template name
+    found at the definition is kept), `::`, `decltype`; an object that
+    was the current instantiation at the definition (`this->N::f()`,
+    `p->N::f()` with `p` an `S*` in `S`: the class was known there,
+    `pattern_object_dependent`); a destructor name's qualifier
+    (`t.T::~T()` destroys the object whatever `T` names in its class).
+    At the definition, a later component the definition's `N` does not
+    have (`t.acme::Only::f()` with `Only` only in the class's `acme`)
+    makes the specifier dependent (`acme::Only::` as identifiers, looked
+    up at instantiation), not an error (`Sema::act_on_nested_name_component`,
+    `TemplState::member_dependent_chain`; WP-3406). Tests:
+    `tests/conformance/basic.lookup.qual.general/p3-member-qualifier-{object-class-first,definition-binding}-run.cpp`,
+    `tests/conformance/written_refs/spec-member-qualifier-object-class.cpp`;
   - `CXXUnresolvedConstructExpr` becomes [expr.type.conv];
   - `ParenListExpr` becomes the initialization of its variable.
 - **A resolved `MemberExpr` naming a member function template
@@ -5202,12 +5244,19 @@ argument substitution in `deduce_call`):
 After the checks the parameter type is adjusted ([dcl.fct]/5: array to
 pointer, function to pointer, `Sema::adjust_param_type`); the declared
 type is kept as `ParmVar::original_ty` (and `ParamInfo::original_ty`), as
-clang's `getOriginalType`, for a written parameter and for a substituted
-one whose declared type is still dependent (a member template of an
-instantiated class template, so that `T a[3]` with `T = void` still fails
-at its own deduction). A fully substituted parameter has none: a
-range-`for` over it in an instantiation is clang's plain invalid-range
-error, not the array-parameter diagnostic of the definition.
+clang's `getOriginalType`, whenever adjusting changed it: for a written
+parameter and for a substituted one alike (each element of a parameter
+pack too; WP-3581, clang's instantiated `ParmVarDecl` keeps its
+substituted type-source info). A still-dependent one (a member template
+of an instantiated class template) makes `T a[3]` with `T = void` still
+fail at its own deduction. In an instance its readers behave as clang's:
+`sizeof` of the parameter warns `-Wsizeof-array-argument` per
+instantiation, a variable length array's bounds are evaluated at entry,
+and a range-`for` over it is clang's plain invalid-range error, not the
+array-parameter diagnostic of the definition (clang diagnoses that only
+when building, `BFRK_Build`, so `range_on_array_parameter` stays silent
+under an instantiation). The redeclaration check (`-Warray-parameter`)
+and C's `[static N]` and `[*]` readers never see an instance.
 `tests/conformance/temp.deduct.general/invalid-parameter-type-sfinae.cpp`
 (the libc++ `MoveOnly` deleted `operator,` shape),
 `.../invalid-parameter-type-notes.cpp` (strict notes) and
@@ -5552,6 +5601,31 @@ type is kept.
      explicit args stay parameters.
    - A trailing pack that was given explicitly can be *extended* by
      deduction (/9).
+   - (WP-3380) The trailing function parameter pack keeps its written
+     pattern for deduction, but the explicit arguments are substituted
+     into that pattern too, to check it ([temp.deduct.general]/2-3): with
+     `T = int`, `h(L<Ts, typename T::type>...)` fails here, even though
+     `Ts` is still open and later deduces empty. The final substitution
+     with `Ts` empty never forms the pattern (§7.2's sweep), so this is
+     the only place the failure can be found. A parameter that is no
+     expansion but names the explicitly given pack (kept for deduction,
+     above) is checked the same way: `tup<Ts..., L<Us, typename
+     T::type>...>` fails with `T = int`. The check substitutes with the
+     explicitly given pack as the partially substituted pack
+     (`Substituter::partial_pack`): an expansion over it substitutes each
+     given element, so a nested `typename Us::type...` over `Us = {int}`
+     fails, and is then retained, rebuilt partially substituted (§7.2), as
+     clang retains it, so `X<Ts...>` is never formed with the given
+     elements alone. A pack of another length is no conflict unless the
+     given pack is longer: deduction may extend it (`pack_reached`). A `T`
+     *deduced* with an empty pack never forms the pattern, as clang and
+     GCC agree. GCC 16 differs on three of these, and the standard sides
+     with clang: it accepts the nested `Us::type...`, and rejects both the
+     explicit pack extended to an outer pack's length and `X<Ts...>` with
+     the given elements alone. Tests:
+     `temp.deduct.general/explicit-args-trailing-pack-pattern-{fails,funcaddr,valid}.cpp`,
+     `-sfinae-run.cpp`, `explicit-args-nested-pack-pattern-fails.cpp`,
+     `explicit-args-partial-pack-param-pattern-fails.cpp`.
    - (WP-804) For a call, a return type written before the parameters
      is substituted too, first and only to check it (clang
      `SubstituteExplicitTemplateArguments`): with every argument given,
@@ -6406,6 +6480,19 @@ When a non-list argument has already been diagnosed (a `RecoveryExpr` or
 an error type, such as a variable whose own deduction failed), nothing is
 deduced and no further error is emitted. clang likewise deduces nothing
 from an initializer that contains errors (WP-192).
+An implicit guide's parameters are made one at a time, in order: each
+constructor parameter's type is substituted (every level kept, or for a
+member template of a specialization its levels, or for a constructor
+template its re-depthed level) and then the constructor parameter is
+mapped to the new guide parameter as an instantiated local, before the
+next type and the trailing requires-clause are substituted. So a type or
+constraint that names an earlier parameter (`C(T t, Arr<sizeof(t.g(1))>*
+= nullptr)`, `decltype(t.g(1))`, `requires (sizeof(t) > 0)`) names the
+guide's parameter, and deduction substitutes it like a function
+template's; without the mapping it would be looked up as a member of the
+deduced specialization (clang's `ConvertConstructorToDeductionGuideTransform`,
+`transformFunctionTypeParam`; `ctad_ctor_guide_function`, WP-3590,
+`over.match.class.deduct/p1-guide-param-names-earlier-param-*.cpp`).
 An implicit guide's parameter types may name member typedefs of the class
 template (libc++ `vector(initializer_list<value_type>)`). Substituting
 the guide's arguments into such a typedef substitutes its underlying type
@@ -7420,10 +7507,14 @@ function parameter pack swept inside a generic lambda's fold (libc++ 22
 `<mdspan>`'s rank-0 `operator()`) leaves the fold empty, its init value,
 instead of a retained expansion the Oven cannot evaluate (WP-980,
 `tests/conformance/temp.variadic/p7-empty-function-parameter-pack-in-generic-lambda-fold.cpp`).
-A sweep that fails for another reason (a lambda body, a pack it cannot keep)
-leaves the expansion empty, as before
+A sweep that fails for another reason (a lambda body, a pack it cannot keep,
+an invalid type such as `typename T::type` with `T = int`) leaves the
+expansion empty, as before
 (`tests/conformance/temp.variadic/expansion-empty-first-pack-checks-other-packs-run.cpp`,
-`p7-empty-first-pack-length-mismatch.cpp`).
+`p7-empty-first-pack-length-mismatch.cpp`): clang never forms the pattern
+of an empty expansion, so such a failure is no substitution failure
+here. A deduction checks a pattern whose pack is still open while it
+substitutes the explicit arguments instead (§6.1 step 1, WP-3380).
 An empty non-type pack the sweep keeps has the parameter's type
 substituted; a placeholder parameter (`auto... Vs`) has no element to
 deduce it from, so the kept expression's type is the dependent `auto`
@@ -7506,8 +7597,21 @@ cost is small.
 - `T...[I]` (type) and `p...[I]` (expression). `I` is a converted
   constant expression of type `size_t`.
 - After substitution:
-  - the type gives the selected element, keeping `PackIndexing` as sugar;
-  - the expression gives a `PackIndexingExpr` with the selected element.
+  - the type gives the selected element, keeping `PackIndexing` as sugar
+    over it (WP-3582): `pattern` substituted in keep mode (its packs named
+    by their elements, clang's `SubstTemplateTypeParmPackType`), `index`
+    the substituted index, `selected` the element, so `written_exprs`
+    reaches the index as written (one interned type per use, no new
+    kind); clang's `TransformPackIndexingType` builds the same;
+  - the expression gives the selected element itself (clang keeps a
+    non-dependent `PackIndexingExpr` around it): the element maps to the
+    pattern's pack-index expression in `TemplateTables::pack_index_origin`
+    (mangling) and to the substituted index in
+    `TemplateTables::pack_index_written` (its written form; WP-3582,
+    carried by the PCH snapshot and, as a cold field on the element's
+    record, by module images, though an image holds no pack-index
+    pattern yet, so a unit with one is replayed and the map is rebuilt;
+    test `kiln_parse/tests/written_bounds.rs`).
 - An index out of range: "invalid index 5 for pack 'T' of size 2". This
   is SFINAE-able.
 - A pack-index is a non-deduced context.
@@ -10550,8 +10654,9 @@ explicit specialization errors remain. The blockers are:
 - Gaps, with owners:
   - `sizeof...` after substitution is an `IntegerLiteral` of `size_t`,
     not a `SizeOfPackExpr` with the length (dump gap; WP-072 follow-up).
-  - A substituted `PackIndexingExpr`/`PackIndexingType` is replaced by
-    its element; clang keeps the node as sugar (dump gap).
+  - A substituted `PackIndexingExpr` is replaced by its element, with
+    its index in `pack_index_written`; clang keeps the node (dump gap).
+    The type keeps `PackIndexing` sugar (WP-3582).
   - Partially substituted pack expansions (`tl<tl<Ts, Us>...>` with
     only `Ts` known) need clang's `SubstTemplateTypeParmPackType`:
     unimplemented ("partially substituted pack expansion").
@@ -11267,7 +11372,7 @@ what a later use needs to re-diagnose it (`fn_spec_failures`, the
 |---|---|---|
 | A class, function or variable specialization (its declaration, chosen pattern and `from_args`) | `TemplateTables` spec list, `find_spec` | (first decl of the template, canonical argument list) |
 | The partial specialization a variable or class specialization is instantiated from | `SpecInfo.from` / `from_args` of that specialization | as above: matched once, when the specialization is created (§4.4, §4.11) |
-| An alias template specialization's type | `InstState.alias_cache` | (alias template, canonical argument list) |
+| An alias template specialization's type | `InstState.alias_cache` | (alias template, converted argument list: sugared at clang compat 22, canonical at 19; §4.10) |
 | Partial ordering of two partial specializations | `TemplState.partial_order` | (row index, row index) |
 | A function specialization's first signature-substitution error | `TemplState.fn_spec_failures` | the (invalid) specialization `DeclId` |
 | Constraint satisfaction of an entity | `ConceptState.sat_cache` | (entity, canonical argument list) |

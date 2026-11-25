@@ -212,6 +212,13 @@ pub struct Substituter<'s, 'a, 'sm> {
     /// WP-1154), with its template arguments when it is a template-id;
     /// `typeof` operands and pack indexes are rebuilt too (WP-1169).
     pub(crate) ci_rebuild: Option<DeclId>,
+    /// `(pattern, from)`: the parameters of pattern function `pattern`
+    /// are substituted with the attributes of the corresponding
+    /// parameters of its redeclaration `from`: a function template
+    /// specialization's are those of the template's latest declaration
+    /// (spec/sema.md §4.5 "Parameter attributes" rule 5, WP-3407). Read
+    /// by [`Substituter::param_infos`] for `pattern` only.
+    pub(crate) param_attrs_from: Option<(DeclId, DeclId)>,
 }
 
 impl std::fmt::Debug for Substituter<'_, '_, '_> {
@@ -266,6 +273,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             outer_used: std::cell::Cell::new(false),
             local_late: None,
             ci_rebuild: None,
+            param_attrs_from: None,
         }
     }
 
@@ -339,13 +347,18 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             return;
         }
         let at = self.pattern_loc(q, self.written_peek(WrittenKey::Type(q), loc));
-        let Some(w) =
-            self.sema.ast.written_refs.pattern_entry(PatternNode::Type(q.without_quals(), at))
-        else {
+        let old = PatternNode::Type(q.without_quals(), at);
+        let Some(w) = self.sema.ast.written_refs.pattern_entry(old) else {
             return;
         };
         let at = self.pattern_loc(r, self.written_peek(WrittenKey::Type(r), loc));
-        self.sema.ast.written_refs.note_pattern_node(PatternNode::Type(r.without_quals(), at), w);
+        let new = PatternNode::Type(r.without_quals(), at);
+        self.sema.ast.written_refs.note_pattern_node(new, w);
+        // Its keyed row and expanded mark (spec/ast.md §18.14.2).
+        if self.sema.ast.written_refs.subst_keys_on() {
+            let key = self.sema.written_row_keys(w, Some(old)).and_then(|k| k.key);
+            self.sema.note_keyed_still_dependent(w, key, old, new);
+        }
     }
 
     /// [`Self::written`] without remembering the occurrence it returns.

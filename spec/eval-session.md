@@ -398,8 +398,9 @@ GCC 16.1's form: a type as `%T`, a declaration as `%D`), a member by
 its identifier. A spelling is not an identity: two distinct entities
 can print alike (two static locals named `x` in sibling blocks, two
 specializations a run instantiated with arguments that print alike).
-For identity a node carries **`decl: Option<DeclId>`** (the first
-declaration), with one rule: `decl` is `Some` if and only if the
+For identity every `Entity` carries **`key: Arc<str>`** ("Entity
+keys", below), and a node also carries **`decl: Option<DeclId>`** (the
+first declaration), with one rule: `decl` is `Some` if and only if the
 entity existed when the session was opened (its first declaration's id
 is below the declaration count `open` recorded), never for an entity
 an earlier run or this run created (a specialization instantiated in a
@@ -408,6 +409,31 @@ what earlier runs did; such ids are numbered by history (§7 "Keys and
 caches"), so a fresh and a used session would number them apart. No
 other id (`QualType`, `ReflectionId`, `ConstValueId`, `Symbol`) is in
 the tree.
+
+**Entity keys** (WP-3481). `Entity::key` is the key printer's text
+(spec/types.md §12.1), which never prints two distinct entities alike:
+a type entity (a `RecordValue`'s or `EnumValue`'s type, a member
+pointer's conversion path class, `Uncaught`'s type, §8) has the
+`type_key` of its canonical cv-unqualified type
+(`AstNames::for_keys(ast, sm).type_key(t)`: `store<f()::Local>`,
+`f()::L#2`, `S<(int *)nullptr>`, `(anonymous namespace)::Hidden`); a
+declaration entity (a `Pointer`'s `Variable`, `Function` and
+`Temporary` base, the latter by the variable that extends it, a
+`MemberPointer`'s member) has the `decl_key` of its declaration
+(`AstNames::decl_key(d)`, spec/types.md §12.1 "Declaration keys": the
+same scoped name, so `f()::x#2` for the second static local `x` of
+`f`, and a function with its signature, `ov(int)`, `C::m() const &`).
+Two entities of one position (two types, or two declarations) are the
+same exactly when their keys are equal: within one session, and across
+two sessions on the same translation unit, whatever the runs did before
+(a specialization a run instantiated has the key of that type named
+after the run, by the key printer, though its `decl` is `None`). A key
+is a printing of one translation unit, not a cross-unit identity, and a
+client compares it, never parses it. It is built when the value is
+decoded for the client (once per type and declaration of one value),
+never on the evaluation's path: the session tests take the same wall
+time when every key is built ten times (measured for WP-3481, within
+noise).
 
 **The types are a closed set.** No enum of the tree is
 `#[non_exhaustive]`: a client matches them exhaustively, so a new
@@ -431,7 +457,7 @@ pub enum RunValue {                           // 32 bytes (asserted)
     Array(Box<[RunValue]>),
     Record(Box<RecordValue>),
 }
-pub struct Entity { pub display: Arc<str>, pub decl: Option<DeclId> }
+pub struct Entity { pub display: Arc<str>, pub key: Arc<str>, pub decl: Option<DeclId> }
 pub enum IntValue { Signed(i128), Unsigned(u128) }
 pub struct EnumValue { pub ty: Entity, pub value: IntValue, pub enumerator: Option<Arc<str>> }
 pub struct RecordValue { pub ty: Entity, pub union: bool, pub fields: Box<[Field]>,
@@ -1220,7 +1246,11 @@ a run to end.
 object's type ([except.throw]/3: the operand's static type with its
 top-level cv-qualifiers removed, an array or function type decayed),
 spelled fully qualified as `std::meta::display_string_of` spells it
-(`ns::v0::error`, `int`, `const char*`), and `decl`, the first
+(`ns::v0::error`, `int`, `const char*`), its `key`, the type's
+`type_key` (§4.1 "Entity keys"; WP-3481: two local classes `L` of
+sibling blocks spell alike, `sib(bool)::L` and `sib(bool)::L#2` are
+their keys), equal between two exceptions exactly when their types are
+the same, and `decl`, the first
 declaration of its class or enumeration, by §4.1's rule: `Some` when
 the class existed when the session was opened, `None` for a class a run
 instantiated and for a type that is no class or enumeration. Two
@@ -1232,6 +1262,33 @@ base (the operand's static type), and `throw;` rethrows the handled
 object, of its own type, whatever the handler caught it as
 ([except.handle]/16). Until WP-2480 the field was `type_name: String`,
 spelled as the note spells it, without the enclosing namespaces.
+
+The spelling follows `display_string_of`'s one rule (GCC 16.1's `%T`,
+spec/reflection.md §3.9) for every shape, however the operand was
+written (WP-3408): every inline namespace is kept, at every depth
+(`lib::v0::error` for `throw lib::error{}`, `app::lib::v0::error`,
+`outer::box<lib::v0::error>::nested` through an alias); a class of the
+unnamed namespace is `{anonymous}::error`; a class or enumeration
+declared in a function is spelled through it (`d1()::error`,
+`q::d4(int)::error`, `d2()::o::in`, `outer::box<d6()::L>`); a closure
+type is `e1()::<lambda()>`; cv and pointers as `%T` prints them
+(`const ns::S*`). So no type spelled for a local class or a class of
+the unnamed namespace equals a namespace-scope class's, and `ty` is the
+same `Entity` as the thrown value's own type (`value`'s root
+`RecordValue::ty`) and as every other name in a run's results (§4.1),
+which is why it is not the note's spelling. The note
+(spec/oven.md "Exceptions") is a diagnostic and follows the diagnostic
+printer at the `-fclang-compat` level instead (`lib::error`,
+`(anonymous namespace)::error`, `d1()::error`, `(lambda at F:L:C)`);
+a client never parses it. Beside the string, `ty.decl` is the
+structured record: the class's or enumeration's first declaration
+whenever it existed at open (a local class and a closure type
+included); `None` only for a class a run instantiated and for a type
+that is no class or enumeration (`int`, `const char*`), where the
+spelling and the key are all there is (`an_uncaught_type_is_spelled_by_one_rule` in
+`crates/kiln_parse/tests/eval_session_results.rs`; the keys:
+`entity_keys_tell_apart_what_spellings_do_not` and
+`a_class_the_run_instantiates_has_a_key_and_no_decl`).
 
 **`Uncaught`'s value** (WP-2502): `value: Result<Box<ValueTree>, String>`,
 the thrown object's value as a run's result of its type would be read
@@ -1552,7 +1609,12 @@ session's translation unit is parsed without recording either.
   reached 64 times: one, decoded once; pointers inside a constant: the
   next indices, in order), `decl` for an
   entity of the translation unit and `None` for a specialization a run
-  instantiated, `run(f) == variable_value(v)` on run 1 and run N, fresh
+  instantiated, `key` (WP-3481: local classes of one name in two
+  functions and in sibling blocks, a specialization a run instantiated
+  against the same type named after the run, an unnamed namespace's
+  class, `S<(int *)nullptr>` and `S<(char *)nullptr>`, enumerations,
+  thrown types, static locals, overloads, a member and a temporary; the
+  same keys in a second session run in the reverse order), `run(f) == variable_value(v)` on run 1 and run N, fresh
   and used, `variable_value` before and after runs and on demand, and
   `kept()` flat over 1000 runs. `crates/kiln_ast/tests/consts.rs`
   `truncate_to_a_mark`: `ConstStore::mark` / `truncate`. WP-2210 and

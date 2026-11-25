@@ -1,0 +1,13 @@
+15:10-15:11  type  'T' -> T@14:17 in=G@15:8
+15:27-15:28  type  'T' -> T@14:17 in=G@15:8
+15:58-15:59  expr  'x' -> x@15:46 in=(lambda)::operator()@15:38
+15:60-15:61  member  'f' -> (dependent) in=(lambda)::operator()@15:38
+15:60-15:61  member  'f' -> (dependent) key=partial:G@15:8<H, void>
+15:62-15:63  type  'T' -> T@14:17 in=(lambda)::operator()@15:38
+15:8-15:9  spec-target  'G' -> G@11:41 in=G@15:8
+19:17-19:18  type  'H' -> H@18:8 in=static_assert@19:1
+19:15-19:16  nns  'G' -> G@11:41 in=static_assert@19:1
+19:21-19:22  expr  'v' -> G<H>::v@16:20 q=19:15 in=static_assert@19:1
+keys  key=partial:G@15:8<H, void> rows=1
+keys  key=partial:G@15:8<H, void> root[0]=H
+keys  key=partial:G@15:8<H, void> root[1]=decltype(void(H()) , void(...))

@@ -54,6 +54,102 @@ fn keys(src: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+/// The types of the variables `v0`, `v1`, ... of `src` as the
+/// uncaught-exception note names an exception object's type
+/// (`DiagNames::thrown_type_name`, WP-3408) at `-fclang-compat=<compat>`,
+/// with the plain diagnostic printer's canonical spelling.
+fn thrown(src: &str, compat: u32) -> Vec<(String, String)> {
+    let interner = Arc::new(Interner::new());
+    let sm = SourceManager::new();
+    let file = sm.add_virtual("t.cpp", src.to_owned()).expect("location space");
+    let sink = MemorySink::new();
+    let engine = DiagEngine::new(&sm, &DiagOptions::default(), sink.clone());
+    let opts = ParseOptions::default();
+    let ast: Ast = parse_file(&sm, &interner, file, &engine, Target::for_arch(Arch::X86_64), &opts);
+    let diags: Vec<String> = sink.take().iter().map(|d| d.message.clone()).collect();
+    assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+    let mut vars: Vec<(u32, QualType)> = Vec::new();
+    for d in ast.decls.ids() {
+        let n = ast.decls.get(d);
+        if n.kind() != DeclKind::Var {
+            continue;
+        }
+        let Some(name) = ast.names.simple_spelling(n.name(), &interner) else { continue };
+        if let Some(i) = name.strip_prefix('v').and_then(|i| i.parse().ok()) {
+            vars.push((i, n.ty().expect("a variable's type")));
+        }
+    }
+    vars.sort_by_key(|v| v.0);
+    let names = DiagNames::new(&ast, Some(&sm), compat);
+    vars.iter()
+        .map(|&(_, q)| {
+            (names.thrown_type_name(q), print_type(&ast.types, &names, q, PrintOptions::CANONICAL))
+        })
+        .collect()
+}
+
+/// WP-3408 (spec/oven.md "Exceptions", spec/types.md §12.1): the
+/// thrown-type printer is the diagnostic printer on the canonical,
+/// cv-unqualified type, except that a class or enumeration declared in a
+/// function prints through it, at both compatibility levels and inside
+/// template arguments; so a local class and a class of the unnamed
+/// namespace never print as the namespace-scope `error`, which the
+/// diagnostic printer prints alike.
+#[test]
+fn thrown_type_names_follow_one_rule() {
+    let src = "struct error {};\n\
+               namespace lib { inline namespace v0 { struct error {}; } }\n\
+               namespace app { namespace lib { inline namespace v0 { struct error {}; } } }\n\
+               namespace m { inline namespace v1 { struct e {}; } inline namespace v2 { struct e {}; } }\n\
+               namespace u { namespace { struct error {}; } }\n\
+               template <class T> struct box { struct nested {}; };\n\
+               using alias = const lib::v0::error;\n\
+               error v0;\n\
+               lib::v0::error v1;\n\
+               alias v2;\n\
+               app::lib::v0::error v3;\n\
+               m::v1::e v4;\n\
+               box<alias>::nested v5;\n\
+               u::error v12;\n\
+               const app::lib::error *v6;\n\
+               void f() { struct error {}; error v7; box<error> v8; }\n\
+               namespace q { void g(int) { enum E { x }; struct o { struct in {}; }; E v9; o::in v10; } }\n\
+               void h() { struct error {}; error x; volatile error &v11 = x; }\n";
+    for compat in [19, 22] {
+        let got = thrown(src, compat);
+        let t: Vec<&str> = got.iter().map(|g| g.0.as_str()).collect();
+        assert_eq!(
+            t,
+            [
+                "error",
+                "lib::error",
+                "lib::error",
+                "app::lib::error",
+                "m::v1::e",
+                "box<const lib::error>::nested",
+                "const app::lib::error *",
+                "f()::error",
+                "box<f()::error>",
+                "q::g(int)::E",
+                "q::g(int)::o::in",
+                "volatile h()::error &",
+                "u::(anonymous namespace)::error",
+            ][..],
+            "compat {compat}"
+        );
+        // Where no function is involved it is the diagnostic printer's
+        // canonical spelling; there the local classes print bare.
+        assert_eq!(got[12].0, got[12].1, "{compat}");
+        // `v2`'s type is `const`: an exception object's type drops it.
+        assert_eq!(got[2].1, "const lib::error", "{compat}");
+        for i in [0, 1, 3, 4, 5, 6] {
+            assert_eq!(got[i].0, got[i].1, "{compat}: v{i}");
+        }
+        assert_eq!(got[7].1, "error", "{compat}");
+        assert_eq!(got[8].1, "box<error>", "{compat}");
+    }
+}
+
 /// Asserts the keys are `want`, all distinct, while the diagnostic
 /// spellings of the first two are `alike`.
 fn check(src: &str, want: &[&str], alike: &str) {
@@ -152,6 +248,25 @@ fn local_entities_as_values_carry_their_function() {
          void f() { static int x; T<&x> v0; enum E { e }; U<e> v2; }\n\
          void g() { static int x; T<&x> v1; enum E { e }; U<e> v3; }\n",
         &["T<&f()::x>", "T<&g()::x>", "U<f()::e>", "U<g()::e>"],
+        "T<&x>",
+    );
+}
+
+/// WP-3481 (spec/types.md §12.1 "Declaration keys"): a pointer argument
+/// names its object or function by its declaration key, so the static
+/// locals `x` of sibling blocks ([stmt.dcl]/3) and two overloads ([over])
+/// print apart, where the diagnostic printer prints them alike.
+#[test]
+fn declarations_as_values_are_told_apart() {
+    check(
+        "template <int *P> struct T {};\n\
+         template <auto F> struct H {};\n\
+         int ov(int);\n\
+         int ov(long);\n\
+         void s() { { static int x; T<&x> v0; } { static int x; T<&x> v1; } }\n\
+         H<static_cast<int (*)(int)>(ov)> v2;\n\
+         H<static_cast<int (*)(long)>(ov)> v3;\n",
+        &["T<&s()::x>", "T<&s()::x#2>", "H<&ov(int)>", "H<&ov(long)>"],
         "T<&x>",
     );
 }

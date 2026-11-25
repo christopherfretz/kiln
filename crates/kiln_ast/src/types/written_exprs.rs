@@ -8,7 +8,7 @@ use super::args::ArgView;
 use super::context::{ExprOperand, TypeContext, TypeOfOperand, TypeView};
 use super::func::ExcSpec;
 use super::nns::Nns;
-use crate::ids::{ArgListId, ExprId, NnsId, QualType};
+use crate::ids::{ArgListId, DeclId, ExprId, NnsId, QualType};
 
 /// How deep [`TypeContext::written_exprs`] descends (a written type is
 /// never this deep; the bound keeps a malformed one finite).
@@ -162,6 +162,29 @@ impl TypeContext {
             }
             Nns::Splice(e) => out.push(e),
             _ => {}
+        }
+    }
+}
+
+impl crate::Ast {
+    /// Appends to `out` the expressions written in declaration `d`'s type
+    /// (spec/types.md §8.4, WP-3583): [`TypeContext::written_exprs`] of
+    /// its type, except that a deduced type is no written one, so nothing
+    /// is appended for a variable whose type its initializer deduced from
+    /// a placeholder ([`crate::decl::VarSpec::placeholder`] is not
+    /// `None`: `auto v = w;`, `decltype(auto)`, `auto &`, `const auto *`,
+    /// a structured binding declaration, an init-capture) nor for a
+    /// structured binding (`Binding`, whose type is its element's).
+    pub fn decl_written_exprs(&self, d: DeclId, out: &mut Vec<ExprId>) {
+        use crate::decl::{DeclKind, VarPlaceholder};
+        let n = self.decls.get(d);
+        if n.kind() == DeclKind::Binding
+            || self.decls.var(d).is_some_and(|v| v.spec.placeholder() != VarPlaceholder::None)
+        {
+            return;
+        }
+        if let Some(t) = n.ty() {
+            self.types.written_exprs(t, out);
         }
     }
 }

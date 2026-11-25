@@ -10,11 +10,14 @@ use kiln_ast::decl::{Access, DeclKind, FriendKind};
 use kiln_ast::{DeclId, QualType};
 use kiln_diag::{Diag, DiagId};
 use kiln_source::Loc;
+use kiln_source::fx::FxHashMap;
 use kiln_source::symbol::Symbol;
 
 use super::AccessCheck;
 use crate::Sema;
-use crate::conv::bases::{BasePath, base_paths, is_derived_from, same_class};
+use crate::conv::bases::{
+    BasePath, MAX_DEPTH, all_bases, base_paths, class_bases, is_derived_from, path_at, same_class,
+};
 use crate::lookup::LookupKind;
 
 /// Restrictiveness: public < protected < private < none (clang's
@@ -65,6 +68,28 @@ struct Target {
     /// instance context), unless suppressed.
     object: Option<DeclId>,
 }
+
+/// One state of the [`Sema::find_best_path`] fold (clang `FindBestPath`)
+/// after the base-specifiers from some class down to the declaring class:
+/// the access so far, whether the instance context was dropped (a step
+/// granted access, so [class.protected] no longer applies), and whether a
+/// step above a private one ended the path (its access is then none).
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct PathState {
+    acc: Access,
+    cleared: bool,
+    done: bool,
+}
+
+impl PathState {
+    fn final_access(self) -> Access {
+        if self.done { Access::None } else { self.acc }
+    }
+}
+
+/// The [`PathState`]s some path from a class reaches, each with the first
+/// such path, as base-clause positions from that class.
+type PathStates = Vec<(PathState, Vec<usize>)>;
 
 impl Sema<'_, '_> {
     /// The class that declares member `d` (enumerators of an unscoped
@@ -276,10 +301,13 @@ impl Sema<'_, '_> {
 
     /// clang `GetProtectedFriendKind`: friendship of any class `P` with
     /// `instance` derived from `P` derived from `naming`.
+    /// The classes on the paths from `instance` to `naming` are its bases
+    /// derived from `naming` (and `naming`), each tried once rather than
+    /// once per path (WP-3404).
     fn is_protected_friend(&self, ec: &EffectiveContext, instance: DeclId, naming: DeclId) -> bool {
         let mut cands = vec![instance];
-        for p in base_paths(self, instance, naming) {
-            cands.extend(p.classes.iter().copied());
+        if !same_class(self, instance, naming) {
+            cands.extend(all_bases(self, instance));
         }
         cands
             .into_iter()
@@ -391,7 +419,13 @@ impl Sema<'_, '_> {
     }
 
     /// clang `FindBestPath`: the most permissive path from `naming` to the
-    /// target's declaring class, with its access.
+    /// target's declaring class, with its access; of several, the first in
+    /// base-specifier order. The access of a path is a fold over its
+    /// base-specifiers from the declaring class up ([`PathState`]), so the
+    /// search keeps, per class, each state some path from it reaches, with
+    /// the first such path: every class is folded once, however many
+    /// paths reach it (a virtual lattice has 2^N; WP-3404), and no path is
+    /// lost to a cap ([class.paths]/1: the path that gives most access).
     fn find_best_path(
         &self,
         ec: &EffectiveContext,
@@ -399,31 +433,97 @@ impl Sema<'_, '_> {
         naming: DeclId,
         final_access: Access,
     ) -> Option<(Access, BasePath)> {
-        let mut best: Option<(Access, BasePath)> = None;
-        for p in base_paths(self, naming, t.declaring) {
-            let mut tt = *t;
-            let mut acc = final_access;
-            for j in (0..p.specs.len()).rev() {
-                if acc == Access::Private {
-                    acc = Access::None;
-                    break;
-                }
-                let deriving = Self::deriving_class(naming, &p, j);
-                acc = max_access(acc, self.spec_access(deriving, p.specs[j]));
-                if self.has_access(ec, deriving, acc, &tt) {
-                    acc = Access::Public;
-                    tt.object = None;
-                }
-            }
-            if best.as_ref().is_none_or(|b| rank(acc) < rank(b.0)) {
-                let public = acc == Access::Public;
-                best = Some((acc, p));
-                if public {
-                    break;
+        if same_class(self, naming, t.declaring) {
+            return None;
+        }
+        let init = PathState { acc: final_access, cleared: false, done: false };
+        let mut memo = FxHashMap::default();
+        let states = self.path_states(ec, t, naming, init, 0, &mut memo, &mut false);
+        let (st, positions) = states.into_iter().min_by(|(a, p), (b, q)| {
+            rank(a.final_access()).cmp(&rank(b.final_access())).then_with(|| p.cmp(q))
+        })?;
+        Some((st.final_access(), path_at(self, naming, &positions)))
+    }
+
+    /// The states the [`Sema::find_best_path`] fold reaches at class `x`
+    /// (not the declaring class), each with the first path suffix from `x`
+    /// reaching it, as base-clause positions.
+    #[allow(clippy::too_many_arguments, reason = "one recursive search's state")]
+    fn path_states(
+        &self,
+        ec: &EffectiveContext,
+        t: &Target,
+        x: DeclId,
+        init: PathState,
+        depth: usize,
+        memo: &mut FxHashMap<DeclId, PathStates>,
+        cut: &mut bool,
+    ) -> PathStates {
+        if depth > MAX_DEPTH {
+            *cut = true;
+            return Vec::new();
+        }
+        if let Some(v) = memo.get(&x) {
+            return v.clone();
+        }
+        let Some(bases) = class_bases(self, x) else { return Vec::new() };
+        let cut_above = std::mem::replace(cut, false);
+        let mut out: PathStates = Vec::new();
+        for (k, (i, spec)) in bases.into_iter().enumerate() {
+            let Some(c) = self.ast.types.as_record(spec.ty) else { continue };
+            let below = if same_class(self, c, t.declaring) {
+                vec![(init, Vec::new())]
+            } else {
+                self.path_states(ec, t, c, init, depth + 1, memo, cut)
+            };
+            for (st, suffix) in below {
+                let next = self.path_step(ec, t, st, x, i);
+                let mut p = Vec::with_capacity(suffix.len() + 1);
+                p.push(k);
+                p.extend(suffix);
+                match out.iter_mut().find(|(s, _)| *s == next) {
+                    Some(e) => {
+                        if p < e.1 {
+                            e.1 = p;
+                        }
+                    }
+                    None => out.push((next, p)),
                 }
             }
         }
-        best
+        if !*cut {
+            memo.insert(x, out.clone());
+        }
+        *cut |= cut_above;
+        out
+    }
+
+    /// One step of the [`Sema::find_best_path`] fold: base-specifier
+    /// `spec` of class `deriving`, after the steps below it left `st`.
+    fn path_step(
+        &self,
+        ec: &EffectiveContext,
+        t: &Target,
+        st: PathState,
+        deriving: DeclId,
+        spec: u32,
+    ) -> PathState {
+        if st.done {
+            return st;
+        }
+        if st.acc == Access::Private {
+            return PathState { acc: Access::None, cleared: false, done: true };
+        }
+        let mut tt = *t;
+        if st.cleared {
+            tt.object = None;
+        }
+        let acc = max_access(st.acc, self.spec_access(deriving, spec));
+        if self.has_access(ec, deriving, acc, &tt) {
+            PathState { acc: Access::Public, cleared: true, done: false }
+        } else {
+            PathState { acc, cleared: st.cleared, done: false }
+        }
     }
 
     /// clang `IsAccessible`.
@@ -466,18 +566,72 @@ impl Sema<'_, '_> {
         if same_class(self, naming, declaring) {
             return decl;
         }
+        // A path's access is `merge_access` folded over its
+        // base-specifiers, then the member's own access: the first
+        // base-specifier's access, raised by each later one, and none once
+        // a later one or the member is private. So the best path through a
+        // class is found from the best suffix below it, and every class is
+        // searched once (WP-3404).
+        let tail = merge_access(Access::Public, decl);
+        let Some(bases) = class_bases(self, naming) else { return Access::None };
+        let mut memo = FxHashMap::default();
         let mut best = Access::None;
-        for p in base_paths(self, naming, declaring) {
-            let mut acc = Access::Public;
-            for (j, &s) in p.specs.iter().enumerate() {
-                let b = self.spec_access(Self::deriving_class(naming, &p, j), s);
-                acc = if j == 0 { b } else { merge_access(acc, b) };
-            }
-            let acc = merge_access(acc, decl);
+        for (i, spec) in bases {
+            let Some(c) = self.ast.types.as_record(spec.ty) else { continue };
+            let below = if same_class(self, c, declaring) {
+                tail
+            } else {
+                self.suffix_access(c, declaring, tail, 1, &mut memo, &mut false)
+            };
+            // The first base-specifier is not merged: a private one is
+            // still private, not none.
+            let acc = max_access(self.spec_access(naming, i), below);
             if rank(acc) < rank(best) {
                 best = acc;
             }
         }
+        best
+    }
+
+    /// The most permissive access of the paths from `x` (not `declaring`)
+    /// to `declaring` for [`Sema::unprivileged_access`], their first
+    /// base-specifier merged like every later one; `tail` is the member's
+    /// own access as merged at the end, `None` for no path.
+    fn suffix_access(
+        &self,
+        x: DeclId,
+        declaring: DeclId,
+        tail: Access,
+        depth: usize,
+        memo: &mut FxHashMap<DeclId, Access>,
+        cut: &mut bool,
+    ) -> Access {
+        if depth > MAX_DEPTH {
+            *cut = true;
+            return Access::None;
+        }
+        if let Some(&a) = memo.get(&x) {
+            return a;
+        }
+        let Some(bases) = class_bases(self, x) else { return Access::None };
+        let cut_above = std::mem::replace(cut, false);
+        let mut best = Access::None;
+        for (i, spec) in bases {
+            let Some(c) = self.ast.types.as_record(spec.ty) else { continue };
+            let below = if same_class(self, c, declaring) {
+                tail
+            } else {
+                self.suffix_access(c, declaring, tail, depth + 1, memo, cut)
+            };
+            let acc = merge_access(below, self.spec_access(x, i));
+            if rank(acc) < rank(best) {
+                best = acc;
+            }
+        }
+        if !*cut {
+            memo.insert(x, best);
+        }
+        *cut |= cut_above;
         best
     }
 

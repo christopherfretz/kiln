@@ -1636,6 +1636,7 @@ impl Sema<'_, '_> {
             (self.ast.types.pack_expansion(elem, None), pattern)
         } else {
             let direct = style == InitStyle::List;
+            self.note_var_placeholder(v, declared);
             // Deduced as `auto x <init>`, reported in clang's lambda-capture
             // wording (`deduce_var_auto` reads the entity).
             let ty = self

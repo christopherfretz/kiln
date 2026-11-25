@@ -50,6 +50,9 @@ impl Sema<'_, '_> {
         self.module_note_overload_set(decls, loc);
         if naming.is_some() || found.iter().zip(decls).any(|(f, d)| f != d) {
             self.ovl.ule_found.insert(e, UleFound { found: found.to_vec(), naming });
+            // Kept on the node too, for the life of the `Ast` (spec/ast.md
+            // §8.8): `ule_found` is consumed by the call resolving it.
+            self.ast.note_unresolved_found(e, found);
         }
         e
     }
@@ -252,10 +255,11 @@ impl Sema<'_, '_> {
         let named = self.ignore_parens(callee);
         let wref = self.pending_written_ref(named);
         // In an instantiation, the rebuilt name's per-specialization entry
-        // (stage 4, §18.9.4).
-        let wspec = wref.is_none() && self.pending_written_spec(named).is_some();
+        // (stage 4, §18.9.4), or its key scope's row alone (§18.14.3).
+        let wspec = wref.is_none() && self.pending_written_spec(named);
         let mut facts = None;
         let explain = wref.is_some() || wspec;
+        let parked = self.ovl.single_specs.len();
         let r = self.resolve_unresolved_call_inner(callee, args, braced, &mut facts, explain);
         if let Some(w) = wref {
             if r.is_none() {
@@ -263,7 +267,15 @@ impl Sema<'_, '_> {
             }
             self.note_written_call_lookup(w, facts);
         } else if wspec {
-            self.note_written_spec_call(named, facts);
+            let grew = self.ovl.single_specs.len() > parked;
+            match self.ovl.single_specs.last_mut() {
+                // The one candidate's row waits for its arguments
+                // (`act_on_call`, §18.9.4).
+                Some(s) if grew && s.set == named => {
+                    s.facts = facts;
+                }
+                _ => self.note_written_spec_call(named, facts),
+            }
         }
         r
     }
@@ -373,7 +385,23 @@ impl Sema<'_, '_> {
             // One candidate: the direct path's conversions and
             // diagnostics are clang's for a one-candidate set.
             let (d, f) = cands[0];
+            // In an instantiation, the entry's row names `d` only once the
+            // call's arguments convert to its parameters: a candidate that
+            // is not viable leaves the name unresolved, as a set of two
+            // does (spec/ast.md §18.9.4).
+            let parked = self.ast.written_refs.take_spec_pending(ule);
             let e = self.finish_overload_ref(d, f, naming, n.loc(), nns, ule, true);
+            if let Some((entry, spec)) = parked {
+                self.ovl.single_specs.push(super::SingleWrittenSpec {
+                    callee: e,
+                    set: ule,
+                    entry,
+                    spec,
+                    func: d,
+                    found: f,
+                    facts: None,
+                });
+            }
             if !adl
                 && decls.len() == 1
                 && self.ast.decls.get(d).has(DeclFlags::INVALID)

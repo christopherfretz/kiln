@@ -7,7 +7,8 @@
 //! parameter records, its pattern record and its template record, all in
 //! the class. Its template-head's depth is the number of class templates
 //! (and partial specializations) enclosing it, and its parameters carry
-//! that depth. An out-of-line definition of a member (template) of a
+//! that depth; a generic lambda's call operator template also counts the
+//! function templates whose bodies enclose it (WP-3410). An out-of-line definition of a member (template) of a
 //! class template is preceded by one parameter record per parameter of
 //! each enclosing template-head, outermost first, then by its own
 //! template-head's parameters; all of them in the definition's lexical
@@ -38,15 +39,24 @@ pub(super) fn template_patterns(img: &Image) -> FxHashMap<u32, u32> {
     m
 }
 
-/// The parameter count of the template-head that class record `c` opens
-/// (a class template's pattern, or a partial specialization), or `None`
-/// for a class that is not a template.
+/// The parameter count of the template-head that record `c` opens (a
+/// class template's pattern, a partial specialization, or a function or
+/// variable template's pattern), or `None` for a declaration that is
+/// not a template's pattern. A function or variable template's head
+/// encloses the lambdas of its body, default arguments or initializer:
+/// a generic lambda's call operator template there is one level deeper
+/// (WP-3410, [expr.prim.lambda.closure]/3).
 fn head_len(img: &Image, pats: &FxHashMap<u32, u32>, c: u32) -> Option<usize> {
     if let Some(n) = classtempl::partial_head_len(img, c) {
         return Some(n);
     }
-    match pats.get(&c).and_then(|&t| img.decls.get(t as usize)).map(|t| &t.payload) {
-        Some(Payload::Template { kind: 1, params, .. }) => Some(params.len()),
+    let own = img.decls.get(c as usize).map(|r| &r.payload);
+    match (own, pats.get(&c).and_then(|&t| img.decls.get(t as usize)).map(|t| &t.payload)) {
+        (Some(Payload::Record { .. }), Some(Payload::Template { kind: 1, params, .. }))
+        | (Some(Payload::Function { .. }), Some(Payload::Template { kind: 0, params, .. }))
+        | (Some(Payload::Var { .. }), Some(Payload::Template { kind: 3, params, .. })) => {
+            Some(params.len())
+        }
         _ => None,
     }
 }
@@ -54,26 +64,46 @@ fn head_len(img: &Image, pats: &FxHashMap<u32, u32>, c: u32) -> Option<usize> {
 /// The template-heads enclosing declarations whose context is record
 /// `c`, outermost first, as parameter counts; `None` when the chain is
 /// malformed. Every context is an earlier record (checked by the
-/// caller for `c`, here for the rest), so the walk ends.
+/// caller for `c`, here for the rest); a closure with an owner
+/// (`owners`, [`super::lambdas::closure_owners`]) continues at its
+/// owner, which may be a later record, so the walk is also bounded by
+/// the record count.
 pub(super) fn enclosing_heads(
     img: &Image,
     pats: &FxHashMap<u32, u32>,
+    owners: &FxHashMap<u32, u32>,
     c: u32,
 ) -> Option<Vec<usize>> {
     let mut out = Vec::new();
     let mut cur = c;
+    let mut steps = 0usize;
     while cur != NONE {
+        steps += 1;
+        if steps > img.decls.len() + 1 {
+            return None;
+        }
         let r = img.decls.get(cur as usize)?;
         match r.payload {
             // WP-1350: a closure type or local class is in a function,
-            // a template's pattern or not.
-            Payload::Record { .. } | Payload::Function { .. } => {
+            // a template's pattern or not; WP-3410: a closure in a
+            // variable (template)'s initializer is the variable's.
+            Payload::Record { .. } | Payload::Function { .. } | Payload::Var { .. } => {
                 if let Some(n) = head_len(img, pats, cur) {
                     out.push(n);
                 }
             }
             Payload::Namespace | Payload::Export => break,
             _ => return None,
+        }
+        // WP-3410: a lambda in a variable's initializer or a default
+        // argument is enclosed by its owner's template-heads.
+        if let Some(&o) = owners.get(&cur)
+            && img.decls.get(o as usize).is_some_and(|x| {
+                matches!(x.payload, Payload::Function { .. } | Payload::Var { .. })
+            })
+        {
+            cur = o;
+            continue;
         }
         if r.ctx != NONE && r.ctx >= cur {
             return None;
@@ -85,8 +115,13 @@ pub(super) fn enclosing_heads(
 }
 
 /// The template depth of a template-head declared in context `c`.
-pub(super) fn level(img: &Image, pats: &FxHashMap<u32, u32>, c: u32) -> Option<usize> {
-    enclosing_heads(img, pats, c).map(|h| h.len())
+pub(super) fn level(
+    img: &Image,
+    pats: &FxHashMap<u32, u32>,
+    owners: &FxHashMap<u32, u32>,
+    c: u32,
+) -> Option<usize> {
+    enclosing_heads(img, pats, owners, c).map(|h| h.len())
 }
 
 /// The scope an out-of-line definition's parameters are declared in:
@@ -106,12 +141,13 @@ pub(super) fn param_scope(lexical: u32, ctx: u32) -> u32 {
 pub(super) fn claim_outer_heads(
     img: &Image,
     pats: &FxHashMap<u32, u32>,
+    owners: &FxHashMap<u32, u32>,
     i: usize,
     own: usize,
     claimed: &mut [bool],
 ) -> Res<()> {
     let d = &img.decls[i];
-    let Some(heads) = enclosing_heads(img, pats, d.ctx) else {
+    let Some(heads) = enclosing_heads(img, pats, owners, d.ctx) else {
         return bad("an out-of-line member of a nested dependent class");
     };
     let total: usize = heads.iter().sum();

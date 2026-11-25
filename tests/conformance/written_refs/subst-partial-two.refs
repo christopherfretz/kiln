@@ -1,0 +1,33 @@
+11:31-11:32  type  'T' -> T@11:17 in=(anonymous)@11:32
+15:38-15:39  type  'T' -> T@15:17 in=W@15:36
+15:41-15:42  type  'U' -> U@15:26 in=W@15:36
+15:55-15:60  expr  'touch' -> (dependent) in=W@15:36 def=1+adl
+15:55-15:60  expr  'touch' def=touch@11:25
+15:55-15:60  expr  'touch' -> touch<P>@11:25 found=touch@11:25 key=partial:W@15:36<P, int *, void> how=both adl-ns=:: adl-cls=P@10:8
+15:55-15:60  expr  'touch' -> touch<P>@11:25 found=touch@11:25 key=partial:W@15:36<P, long *, void> how=both adl-ns=:: adl-cls=P@10:8
+15:61-15:62  type  'T' -> T@15:17 in=W@15:36
+15:36-15:37  spec-target  'W' -> W@12:50 in=W@15:36
+18:29-18:30  type  'T' -> T@18:17 in=W@18:27
+18:48-18:53  expr  'touch' -> (dependent) in=W@18:27 def=1+adl
+18:48-18:53  expr  'touch' def=touch@11:25
+18:48-18:53  expr  'touch' -> touch<P>@11:25 found=touch@11:25 key=partial:W@18:27<P, int *, void> how=both adl-ns=:: adl-cls=P@10:8
+18:54-18:55  type  'T' -> T@18:17 in=W@18:27
+18:27-18:28  spec-target  'W' -> W@12:50 in=W@18:27
+21:17-21:18  type  'P' -> P@10:8 in=static_assert@21:1
+21:15-21:16  nns  'W' -> W@12:50 in=static_assert@21:1
+21:28-21:29  expr  'v' -> W<P, int *>::v@19:20 q=21:15 in=static_assert@21:1
+22:17-22:18  type  'P' -> P@10:8 in=static_assert@22:1
+22:15-22:16  nns  'W' -> W@12:50 in=static_assert@22:1
+22:29-22:30  expr  'v' -> W<P, long *>::v@16:20 q=22:15 in=static_assert@22:1
+keys  key=partial:W@15:36<P, int *, void> rows=1
+keys  key=partial:W@15:36<P, int *, void> root[0]=P
+keys  key=partial:W@15:36<P, int *, void> root[1]=int *
+keys  key=partial:W@15:36<P, int *, void> root[2]=decltype(touch(P()))
+keys  key=partial:W@15:36<P, long *, void> rows=1
+keys  key=partial:W@15:36<P, long *, void> root[0]=P
+keys  key=partial:W@15:36<P, long *, void> root[1]=long *
+keys  key=partial:W@15:36<P, long *, void> root[2]=decltype(touch(P()))
+keys  key=partial:W@18:27<P, int *, void> rows=1
+keys  key=partial:W@18:27<P, int *, void> root[0]=P
+keys  key=partial:W@18:27<P, int *, void> root[1]=int *
+keys  key=partial:W@18:27<P, int *, void> root[2]=decltype(touch(P()))

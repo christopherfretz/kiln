@@ -1,0 +1,30 @@
+13:16-13:17  nns  'a' -> a@10:11 in=(anonymous)@13:20
+13:19-13:20  type  'X' -> a::X@11:8 q=13:16 in=(anonymous)@13:20
+13:22-13:23  nns  'a' -> a@10:11 in=(anonymous)@13:26
+13:25-13:26  type  'X' -> a::X@11:8 q=13:22 in=(anonymous)@13:26
+15:20-15:21  type  'T' -> T@15:17 in=val@15:22
+19:31-19:32  type  'T' -> T@19:17 in=shl@19:27
+19:54-19:55  type  'T' -> T@19:17 in=shl@19:27
+19:50-19:53  expr  'val' -> (dependent) in=shl@19:27 def=1+adl
+19:50-19:53  expr  'val' def=val@15:22
+19:50-19:53  expr  'val' -> val<a::X>@15:22 found=val@15:22 key=partial:shl@19:27<a::X, void> adl-ns=
+19:66-19:67  type  'T' -> T@19:17 in=shl@19:27
+19:62-19:65  expr  'val' -> (dependent) in=shl@19:27 def=1+adl
+19:62-19:65  expr  'val' def=val@15:22
+19:62-19:65  expr  'val' -> val<a::X>@15:22 found=val@15:22 key=partial:shl@19:27<a::X, void> adl-ns=
+19:59-19:61  operator  '<<' -> (dependent) in=shl@19:27 def=1+adl
+19:59-19:61  operator  '<<' def=operator<<@13:5
+19:59-19:61  operator  '<<' -> operator<<@13:5 key=partial:shl@19:27<a::X, void>
+19:34-19:40  template  'void_t' -> void_t@14:27 in=shl@19:27
+19:27-19:30  spec-target  'shl' -> shl@16:41 in=shl@19:27
+22:13-22:14  nns  'a' -> a@10:11 in=u@22:5
+22:16-22:17  type  'X' -> a::X@11:8 q=22:13 in=u@22:5
+22:9-22:12  nns  'shl' -> shl@16:41 in=u@22:5
+22:20-22:21  expr  'v' -> shl<a::X>::v@20:20 q=22:9 in=u@22:5
+23:19-23:20  nns  'a' -> a@10:11 in=static_assert@23:1
+23:22-23:23  type  'X' -> a::X@11:8 q=23:19 in=static_assert@23:1
+23:15-23:18  nns  'shl' -> shl@16:41 in=static_assert@23:1
+23:26-23:27  expr  'v' -> shl<a::X>::v@20:20 q=23:15 in=static_assert@23:1
+keys  key=partial:shl@19:27<a::X, void> rows=3
+keys  key=partial:shl@19:27<a::X, void> root[0]=a::X
+keys  key=partial:shl@19:27<a::X, void> root[1]=void_t<decltype(val<a::X>() << val<a::X>())>

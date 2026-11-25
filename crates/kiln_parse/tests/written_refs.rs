@@ -1173,3 +1173,419 @@ fn alloc_entries_through_the_api() {
         assert_eq!(row.how, RefLookup::Qualified);
     });
 }
+
+const TEMPLATE_IDS: &str = "namespace n {\n\
+                            template <class T> constexpr int v = 0;\n\
+                            template <int N> struct I {};\n\
+                            template <class T> int one(T) { return 0; }\n\
+                            }\n\
+                            template <class T> struct S {\n\
+                            \x20 template <class U> static constexpr int mw = 1;\n\
+                            \x20 int a() { return this->mw<T> + this->template mw<T> + mw<int>; }\n\
+                            };\n\
+                            template <class T> int g(T t) {\n\
+                            \x20 n::I<n::v<T>> i;\n\
+                            \x20 return n::v<T> + n::v<int> + n::v<n::I<n::v<T>>> + n::one<T>(t);\n\
+                            }\n\
+                            int h() { return n::v<long> + g(1) + S<int>().a(); }\n";
+
+/// Every column of `needle` in line `line` of `src`, 1-based, plus
+/// `skip` (the offset of the name within the needle).
+fn cols_in(src: &str, line: u32, needle: &str, skip: usize) -> Vec<(u32, u32)> {
+    let text = src.lines().nth(line as usize - 1).expect("the line");
+    text.match_indices(needle)
+        .map(|(i, _)| (line, u32::try_from(i + skip + 1).expect("a short line")))
+        .collect()
+}
+
+/// A rename of a template claims every written token of its name
+/// (spec/ast.md §18.5, [temp.names]/2, [temp.res.general]/1; WP-3405):
+/// `n::v` written with dependent arguments (`n::v<T>`, nested in another
+/// template-id's arguments and in a declaration) names the variable
+/// template, as the non-dependent `n::v<int>` names its specialization
+/// found as the template; a member variable template of the current
+/// instantiation after `this->`, with or without `template`, names it
+/// too. A function template-id with dependent arguments is an overload
+/// set: the rename claims it through its found set (§18.12.1).
+#[test]
+fn rename_claims_dependent_template_ids() {
+    use kiln_ast::written_refs::REF_DEPENDENT;
+    with_ast(TEMPLATE_IDS, |ast, sm| {
+        let t = &ast.written_refs;
+        let pos = |d: kiln_ast::DeclId| line_col(sm, ast.decls.get(d).loc());
+        let claims = |d: kiln_ast::DeclId| {
+            let mut at: Vec<(u32, u32)> = t
+                .iter()
+                .filter(|(_, r)| r.entity == Some(d) || r.found == Some(d))
+                .map(|(_, r)| line_col(sm, r.range.lo))
+                .chain(t.entries_finding(d).map(|id| line_col(sm, t.get(id).range.lo)))
+                .collect();
+            at.sort_unstable();
+            at
+        };
+        // `n::v`, from its non-dependent use in `h`.
+        let r = t.get(entry_at(t, sm, pos_in(TEMPLATE_IDS, 14, "v<")));
+        let v = r.found.expect("found as the template");
+        assert_ne!(r.entity, Some(v), "the specialization");
+        assert_eq!(pos(v), pos_in(TEMPLATE_IDS, 2, "v ="));
+        let mut want = cols_in(TEMPLATE_IDS, 11, "n::v<", 3);
+        want.extend(cols_in(TEMPLATE_IDS, 12, "n::v<", 3));
+        want.extend(cols_in(TEMPLATE_IDS, 14, "n::v<", 3));
+        want.sort_unstable();
+        assert_eq!(want.len(), 6);
+        assert_eq!(claims(v), want);
+        for &at in &want[..5] {
+            let r = t.get(entry_at(t, sm, at));
+            assert_eq!(r.flags & REF_DEPENDENT, 0, "{at:?} is resolved at the definition");
+        }
+        // `S::mw`, from `mw<int>`: in the class pattern a member of the
+        // current instantiation names the member template itself.
+        let r = t.get(entry_at(t, sm, pos_in(TEMPLATE_IDS, 8, "mw<int")));
+        let mw = r.entity.expect("the member template");
+        assert_eq!(ast.decls.get(mw).kind(), kiln_ast::decl::DeclKind::VarTemplate);
+        let want = cols_in(TEMPLATE_IDS, 8, "mw<", 0);
+        assert_eq!(want.len(), 3);
+        assert_eq!(claims(mw), want);
+        // `n::one<T>(t)`: dependent, claimed through its found set.
+        let call = entry_at(t, sm, pos_in(TEMPLATE_IDS, 12, "one<"));
+        assert_ne!(t.get(call).flags & REF_DEPENDENT, 0);
+        let set = t.found_at_definition(call).expect("a found set");
+        let [one] = set.decls else { panic!("one template") };
+        assert!(set.is_closed());
+        assert_eq!(pos(one.decl), pos_in(TEMPLATE_IDS, 4, "one("));
+        assert_eq!(claims(one.decl), [pos_in(TEMPLATE_IDS, 12, "one<")]);
+    });
+}
+
+/// A function template's default template argument (spec/ast.md §18.9.2,
+/// WP-3520): the deduction that uses it forms `call<n::S, 4>`, and the
+/// default's `s` has one row, for that specialization, naming
+/// `n::S::s`. A dependent call with one candidate (§18.9.4) gets a row
+/// only where the candidate is viable: `Sw<n::S>` records `n::swap` with
+/// `n::S`'s associated set, the unsatisfied `Sw<n::U>` records nothing.
+#[test]
+fn default_template_arguments_and_one_candidate_calls() {
+    let src = "namespace n { struct S { static int s() { return 1; } }; struct U {}; void swap(S &, S &); }\n\
+               template <class T, int = sizeof(T::s())> int call() { return 0; }\n\
+               template <class T> concept Sw = requires(T &a) { swap(a, a); };\n\
+               int u() { return call<n::S>() + call<n::S, 4>(); }\n\
+               static_assert(Sw<n::S> && !Sw<n::U>);\n";
+    with_ast(src, |ast, sm| {
+        let t = &ast.written_refs;
+        let spec = t.get(entry_at(t, sm, (4, 18))).entity.expect("call<n::S, 4>");
+        let s = entry_at(t, sm, (2, 36));
+        let rows: Vec<_> = t.specs_of(s).map(|(_, r)| *r).collect();
+        assert_eq!(rows.len(), 1, "one row for the default: {rows:?}");
+        assert_eq!(rows[0].spec, spec, "keyed by the formed specialization");
+        let e = rows[0].entity.expect("n::S::s");
+        assert_eq!(line_col(sm, ast.decls.get(e).loc()), (1, 37));
+        let swap = entry_at(t, sm, (3, 50));
+        let rows: Vec<_> = t.specs_of(swap).map(|(_, r)| *r).collect();
+        assert_eq!(rows.len(), 1, "no row for the unsatisfied check: {rows:?}");
+        let f = rows[0].entity.expect("n::swap");
+        assert_eq!(line_col(sm, ast.decls.get(f).loc()), (1, 76));
+        let set = t.adl_set_of(rows[0].adl.expect("the associated set"));
+        let classes: Vec<_> =
+            set.classes().iter().map(|&c| line_col(sm, ast.decls.get(c).loc())).collect();
+        assert_eq!(classes, [(1, 22)], "n::S's set");
+    });
+}
+
+/// Parses `src` with the table on and the substitution keys `keys`, and
+/// returns the dump, the keyed table's bytes and its memory row.
+fn run_keys(src: &str, keys: bool) -> (String, (u64, u64), Option<kiln_ast::mem::MemRow>) {
+    let sm = SourceManager::new();
+    let file = sm.add_virtual("t.cpp", src.to_owned()).expect("location space");
+    let interner = Arc::new(Interner::new());
+    let engine = DiagEngine::new(&sm, &DiagOptions::default(), MemorySink::new());
+    let opts =
+        ParseOptions { written_refs: true, written_ref_keys: keys, ..ParseOptions::default() };
+    let target = Target::for_arch(Arch::X86_64);
+    let tu = parse_tu(&sm, &interner, file, &engine, target, &opts, ConstexprLimits::default());
+    let t = &tu.ast.written_refs;
+    assert_eq!(t.subst_keys_on(), keys);
+    let row = tu.ast.memory().rows.into_iter().find(|r| r.name == "written_refs.subst");
+    (t.dump(&tu.ast, &sm, Some(file)), t.subst_mem(), row)
+}
+
+/// Substitution keys, stage 0 (spec/ast.md §18.14.7): with the table on
+/// and keys off, a parse that instantiates templates, satisfies
+/// constraints and expands an alias template allocates nothing for keys
+/// and reports no memory row; with keys on (no compiler path opens a key
+/// scope yet) the dump is the same and the `written_refs.subst` row
+/// counts 0 rows.
+#[test]
+fn keys_off_allocate_nothing_and_keys_on_change_no_dump() {
+    let sat = SAT.replace("int run()", "int run_sat()");
+    let src = format!(
+        "{SPECS}{sat}template <class T> using Size = decltype(T{{}}.size());\n\
+                       Size<V> s = 0;\n"
+    );
+    let (off, mem, row) = run_keys(&src, false);
+    assert_eq!(mem, (0, 0));
+    assert!(row.is_none(), "no row with keys off");
+    assert!(off.contains("spec="), "{off}");
+    let (on, _, row) = run_keys(&src, true);
+    assert_eq!(on, off);
+    let row = row.expect("a row with keys on");
+    assert_eq!(row.count, 0);
+}
+
+/// Parses `src` with the table and the substitution keys on (the source
+/// compiles) and hands the AST and the source manager to `check`.
+fn with_keys(src: &str, check: impl FnOnce(&kiln_ast::Ast, &SourceManager)) {
+    let sm = SourceManager::new();
+    let file = sm.add_virtual("t.cpp", src.to_owned()).expect("location space");
+    let interner = Arc::new(Interner::new());
+    let engine = DiagEngine::new(&sm, &DiagOptions::default(), MemorySink::new());
+    let opts =
+        ParseOptions { written_refs: true, written_ref_keys: true, ..ParseOptions::default() };
+    let target = Target::for_arch(Arch::X86_64);
+    let tu = parse_tu(&sm, &interner, file, &engine, target, &opts, ConstexprLimits::default());
+    assert_eq!(engine.error_count(), 0, "the source compiles");
+    check(&tu.ast, &sm);
+}
+
+/// The declaration whose location is `at` (`line:col`) and that is no
+/// class's injected name.
+fn decl_at(ast: &kiln_ast::Ast, sm: &SourceManager, at: (u32, u32)) -> kiln_ast::DeclId {
+    ast.decls
+        .ids()
+        .find(|&d| {
+            let lc = sm.line_col(sm.spelling_loc(ast.decls.get(d).loc()));
+            lc.is_some_and(|lc| (lc.line, lc.col) == at)
+        })
+        .unwrap_or_else(|| panic!("no declaration at {at:?}"))
+}
+
+/// What a root slot's argument list reaches (spec/ast.md §18.14.10): its
+/// expressions, depth first, through alias template-ids (their written
+/// arguments), `decltype`, type sugar and every subexpression.
+fn root_exprs(
+    ast: &kiln_ast::Ast,
+    slot: kiln_ast::written_refs::RootSlot,
+) -> Vec<kiln_ast::ExprId> {
+    use kiln_ast::types::{ArgView, TypeView};
+    let mut types = Vec::new();
+    let mut exprs = Vec::new();
+    let mut lists = vec![slot.as_args().expect("an argument list")];
+    let mut out = Vec::new();
+    while !(lists.is_empty() && types.is_empty() && exprs.is_empty()) {
+        if let Some(l) = lists.pop() {
+            for a in ast.types.args(l) {
+                match a.view() {
+                    ArgView::Type(q) => types.push(q),
+                    ArgView::Expr { expr, .. } => exprs.push(expr),
+                    ArgView::Pack(l) => lists.push(l),
+                    _ => {}
+                }
+            }
+        } else if let Some(q) = types.pop() {
+            match ast.types.view(q.ty()) {
+                TypeView::TemplateSpecialization { args, .. } => lists.push(args),
+                TypeView::Decltype { expr, .. } => exprs.push(expr),
+                TypeView::Typedef { underlying, .. } | TypeView::Using { underlying, .. } => {
+                    types.push(underlying);
+                }
+                TypeView::Elaborated { named, .. } => types.push(named),
+                TypeView::Paren(t)
+                | TypeView::Pointer(t)
+                | TypeView::LValueRef(t)
+                | TypeView::RValueRef(t) => types.push(t),
+                _ => {}
+            }
+        } else if let Some(e) = exprs.pop() {
+            out.push(e);
+            exprs.extend(ast.exprs.children(e, &ast.lists));
+        }
+    }
+    out
+}
+
+/// The declarations the root slot reaches: referenced (a callee, an
+/// operator function) and constructed (a constructor).
+fn root_decls(
+    ast: &kiln_ast::Ast,
+    slot: kiln_ast::written_refs::RootSlot,
+) -> Vec<kiln_ast::DeclId> {
+    use kiln_ast::expr::ExprKind as K;
+    root_exprs(ast, slot)
+        .into_iter()
+        .filter_map(|e| match ast.exprs.get(e).kind() {
+            K::DeclRefExpr | K::MemberExpr => Some(ast.exprs.decl(e)),
+            K::CXXConstructExpr | K::CXXTemporaryObjectExpr => Some(ast.exprs.constructor(e)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// No unresolved lookup and no dependent node among what `slot` reaches
+/// (§18.14.10: names and calls in a root are resolved).
+fn assert_root_resolved(ast: &kiln_ast::Ast, slot: kiln_ast::written_refs::RootSlot) {
+    use kiln_ast::expr::ExprKind as K;
+    for e in root_exprs(ast, slot) {
+        let k = ast.exprs.get(e).kind();
+        assert!(
+            !matches!(
+                k,
+                K::UnresolvedLookupExpr
+                    | K::UnresolvedMemberExpr
+                    | K::DependentScopeDeclRefExpr
+                    | K::CXXDependentScopeMemberExpr
+                    | K::CXXUnresolvedConstructExpr
+            ),
+            "an unresolved node in a root: {k:?}"
+        );
+    }
+}
+
+const PARTIAL_ADL: &str = "namespace n { struct S {}; void swap(S &, S &); struct U {}; }\n\
+                           template <class...> using void_t = void;\n\
+                           template <class T> T &ref();\n\
+                           template <class T, class = void> struct can_swap { static const bool value = false; };\n\
+                           template <class T> struct can_swap<T, void_t<decltype(swap(ref<T>(), ref<T>()))>> { static const bool value = true; };\n\
+                           bool s = can_swap<n::S>::value;\n\
+                           bool u = can_swap<n::U>::value;\n";
+
+/// Substitution keys, stage 1 (spec/ast.md §18.14.1, §18.14.10): a
+/// partial specialization match through the API. `n::swap` is named by
+/// one keyed row, the `swap` of the partial's arguments; its key is the
+/// partial specialization of `can_swap` matched by `<n::S, void>`, with
+/// the deduced `<n::S>`; the rows are in source order of the names; the
+/// root has one slot per written argument, and walking slot 1 (the alias
+/// template-id, its written argument, the `decltype`, its operand)
+/// reaches the call of `n::swap`, every name resolved. `can_swap<n::U>`
+/// has no key. The uses in the other order give the same.
+#[test]
+fn partial_match_keys_through_the_api() {
+    let swapped = PARTIAL_ADL.replace(
+        "bool s = can_swap<n::S>::value;\nbool u = can_swap<n::U>::value;\n",
+        "bool u = can_swap<n::U>::value;\nbool s = can_swap<n::S>::value;\n",
+    );
+    assert_ne!(swapped, PARTIAL_ADL);
+    for src in [PARTIAL_ADL, &swapped] {
+        with_keys(src, |ast, sm| {
+            let t = &ast.written_refs;
+            let swap = decl_at(ast, sm, (1, 33));
+            let named: Vec<_> = t.subst_rows_naming(swap).collect();
+            let [(key, row)] = named[..] else { panic!("one row naming n::swap: {named:?}") };
+            assert_eq!(line_col(sm, t.get(row.entry).range.lo), (5, 55));
+            let k = t.subst_key(key);
+            assert_eq!(k.kind, kiln_ast::written_refs::SubstKind::PartialMatch);
+            let (_, info) = ast.partial_spec_info(k.template).expect("a partial specialization");
+            assert_eq!(line_col(sm, ast.decls.get(info.template).loc()), (4, 41));
+            let name = |q: kiln_ast::QualType| {
+                use kiln_ast::types::{PrintOptions, print_type};
+                print_type(&ast.types, ast, q, PrintOptions::SUGARED)
+            };
+            let args: Vec<String> = ast
+                .types
+                .args(k.args)
+                .iter()
+                .map(|a| match a.view() {
+                    kiln_ast::types::ArgView::Type(q) => name(q),
+                    v => format!("{v:?}"),
+                })
+                .collect();
+            assert_eq!(args, ["S", "void"]);
+            let first = match ast.types.args(k.args)[0].view() {
+                kiln_ast::types::ArgView::Type(q) => ast.types.view(q.ty()),
+                v => panic!("a type: {v:?}"),
+            };
+            let s = decl_at(ast, sm, (1, 22));
+            assert!(matches!(first, kiln_ast::types::TypeView::Record(d) if d == s), "{first:?}");
+            let deduced = k.deduced().expect("the deduced arguments");
+            assert_eq!(ast.types.args(deduced).len(), 1);
+            // Rows in the order the substitution reached the names
+            // (§18.14.4): the two `ref`s, then `swap`, resolved once its
+            // arguments are.
+            let cols: Vec<(u32, u32)> =
+                t.subst_rows(key).iter().map(|r| line_col(sm, t.get(r.entry).range.lo)).collect();
+            assert_eq!(cols, [(5, 60), (5, 70), (5, 55)]);
+            // The root: one slot per written argument.
+            let root = t.subst_root(key);
+            assert_eq!(root.len(), 2);
+            assert!(root_decls(ast, root[1]).contains(&swap), "slot 1 reaches n::swap");
+            for &slot in root {
+                assert_root_resolved(ast, slot);
+            }
+            assert_eq!(t.subst_key_len(), 1, "no key for can_swap<n::U>");
+        });
+    }
+}
+
+/// §18.13, §18.14.10: an operator and a constructor no written name
+/// selects are reached from the root: `a::operator<<` from the operator
+/// call, `K::K(int)` from the construction.
+#[test]
+fn partial_match_roots_reach_operators_and_constructors() {
+    let oper = "namespace a { struct X {}; int operator<<(X, X); }\n\
+                template <class...> using void_t = void;\n\
+                template <class T> T val();\n\
+                template <class T, class = void> struct shl { static const int v = 0; };\n\
+                template <class T> struct shl<T, void_t<decltype(val<T>() << val<T>())>> { static const int v = 1; };\n\
+                int u = shl<a::X>::v;\n";
+    with_keys(oper, |ast, sm| {
+        let t = &ast.written_refs;
+        let op = decl_at(ast, sm, (1, 32));
+        let (key, _) = t.subst_keys().next().expect("a key");
+        assert!(t.subst_rows_naming(op).any(|(k, _)| k == key), "the `<<` token's row");
+        assert!(root_decls(ast, t.subst_root(key)[1]).contains(&op));
+        assert_root_resolved(ast, t.subst_root(key)[1]);
+    });
+    let ctor = "struct K { K(int); };\n\
+                template <class T, class = void> struct C {};\n\
+                template <class T> struct C<T, decltype(void(T(1)))> {};\n\
+                C<K> c;\n";
+    with_keys(ctor, |ast, sm| {
+        let t = &ast.written_refs;
+        let k = decl_at(ast, sm, (1, 12));
+        let (key, _) = t.subst_keys().next().expect("a key");
+        assert!(t.subst_rows(key).is_empty());
+        assert!(root_decls(ast, t.subst_root(key)[1]).contains(&k), "the constructor");
+    });
+}
+
+/// §18.14.10: a match triggered inside a template definition with
+/// concrete arguments (the body never instantiated) has a resolved root;
+/// a generic lambda's closure type is a valid declaration reachable from
+/// the root.
+#[test]
+fn partial_match_roots_in_templates_and_lambdas() {
+    let in_template = "namespace n { struct S {}; void swap(S &, S &); }\n\
+                       template <class T> T &ref();\n\
+                       template <class T, class = void> struct can_swap { static const bool value = false; };\n\
+                       template <class T> struct can_swap<T, decltype(swap(ref<T>(), ref<T>()))> { static const bool value = true; };\n\
+                       template <class T> bool body(T) { return can_swap<n::S>::value; }\n";
+    with_keys(in_template, |ast, sm| {
+        let t = &ast.written_refs;
+        let swap = decl_at(ast, sm, (1, 33));
+        let (key, _) = t.subst_keys().next().expect("a key");
+        assert!(t.subst_rows_naming(swap).any(|(k, r)| k == key && r.adl.is_some()));
+        assert!(root_decls(ast, t.subst_root(key)[1]).contains(&swap));
+        for &slot in t.subst_root(key) {
+            assert_root_resolved(ast, slot);
+        }
+    });
+    let lambda = "template <class T, class = void> struct G { static const int v = 0; };\n\
+                  template <class T> struct G<T, decltype(void(T()), void([](auto x) { return x.f(T()); }))> { static const int v = 1; };\n\
+                  struct H {};\n\
+                  int g = G<H>::v;\n";
+    with_keys(lambda, |ast, _| {
+        use kiln_ast::expr::ExprKind as K;
+        let t = &ast.written_refs;
+        let (key, _) = t.subst_keys().next().expect("a key");
+        let row = t.subst_rows(key)[0];
+        assert!(row.flags & kiln_ast::written_refs::SUBST_DEPENDENT != 0);
+        let lambdas: Vec<_> = root_exprs(ast, t.subst_root(key)[1])
+            .into_iter()
+            .filter(|&e| ast.exprs.get(e).kind() == K::LambdaExpr)
+            .collect();
+        let [l] = lambdas[..] else { panic!("one lambda: {lambdas:?}") };
+        let closure = match ast.types.view(ast.exprs.get(l).ty().ty()) {
+            kiln_ast::types::TypeView::Record(d) => d,
+            v => panic!("a closure type: {v:?}"),
+        };
+        assert!(ast.closure_lambda(closure).is_some(), "a valid closure");
+    });
+}

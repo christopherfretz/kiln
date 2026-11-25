@@ -145,6 +145,10 @@ pub struct ParseOptions {
     /// Record the written-reference table (`-fkiln-dump-written-refs`;
     /// spec/ast.md §18): off by default.
     pub written_refs: bool,
+    /// Record the substitution keys of the written-reference table
+    /// (`-fkiln-written-ref-keys`; spec/ast.md §18.14): off by default,
+    /// effective only with `written_refs`.
+    pub written_ref_keys: bool,
     /// Record the function-name span table (`-fkiln-fn-names`,
     /// `-fkiln-dump-fn-names`; spec/ast.md §24): off by default.
     pub fn_names: bool,
@@ -250,6 +254,7 @@ impl Default for ParseOptions {
             target_attr_features: |_, _, _| Vec::new(),
             cfg_dump: false,
             written_refs: false,
+            written_ref_keys: false,
             fn_names: false,
             fn_names_verify: false,
             decl_extents: false,
@@ -473,6 +478,7 @@ fn configure(s: &mut Sema<'_, '_>, opts: &ParseOptions) {
     s.target_attr_features = opts.target_attr_features;
     s.cfg_dump = opts.cfg_dump;
     s.ast.written_refs.set_on(opts.written_refs);
+    s.ast.written_refs.set_keys_on(opts.written_ref_keys);
     s.ast.fn_names.set_on(opts.fn_names);
     s.ast.fn_names.set_verify(opts.fn_names_verify);
     s.ast.decl_extents.set_on(opts.decl_extents);
@@ -795,6 +801,7 @@ pub fn continue_preprocessed<'a, 'sm>(
     // The consumer records from its own options; a restored table
     // continues the prefix's (spec/ast.md §18.10.1).
     p.s.ast.written_refs.set_on(opts.written_refs);
+    p.s.ast.written_refs.set_keys_on(opts.written_ref_keys);
     // The consumer records from its own options; a restored prefix's
     // strings have no records (spec/ast.md §24.6, stage A).
     p.s.ast.fn_names.set_on(opts.fn_names);

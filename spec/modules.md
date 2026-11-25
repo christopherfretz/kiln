@@ -4533,6 +4533,29 @@ records it on the new expression. `IMAGE_VERSION` 56. Test:
 `module.interface/image-oper-lookup-run.cpp` (it fails with the old image
 under `--bmi-image`).
 
+WP-3400 (spec/ast.md §8.8): bit 17 of the mask, `COLD_SHADOWS`, after
+`COLD_OPER`, carries what lookup found for each declaration of an
+`UnresolvedLookupExpr` when one was found through a using-declaration
+(the templates' `unresolved_found`): one `DL` of `Dc::Lookup`, parallel
+to the node's declarations (a shadow, else the declaration). Only on
+`UnresolvedLookupExpr` records (validation). It is independent of
+`COLD_FOUND`, sema's call-resolution copy, which needs a naming class: a
+namespace-scope `legacy::forward<T>` in an exported template has no
+naming class, so before it the importer read no shadow at all. The
+reader records it with `Ast::note_unresolved_found`, which checks each
+element against the node's declaration again. `IMAGE_VERSION` 96. Test:
+`crates/kiln_parse/tests/unresolved_found.rs`
+(`the_shadow_found_survives_the_module_image`).
+
+WP-3582 (spec/sema-templates.md §7.4): bit 18 of the mask,
+`COLD_PACK_INDEX`, after `COLD_SHADOWS`, carries the substituted index of
+the pack-index expression an element was selected by (the templates'
+`pack_index_written`): one `E`, on any kind. The reader records it on
+the new expression. No unit with a pack-index pattern is carried by its
+image yet (`PackIndexingExpr` is "a template expression (pack
+indexing)"), so such a unit is replayed and rebuilds the map.
+`IMAGE_VERSION` 99.
+
 **Forms carried by WP-1369.** The writer's additions are
 `bmi_image/fnsugar.rs`, `predef.rs` and `specbase.rs`, plus `exprs.rs`
 (a type form) and `body.rs`. Two side sections follow `psels`
@@ -4799,7 +4822,31 @@ name, each its declarations in order (two or more; the first is the
 shared entries' `enclosing`): a group with a declaration the image
 cannot carry fails the image ("a declarator group of a declaration the
 image does not carry"), and the validator checks that every shared
-entry's `enclosing` is a group's first declaration. A declaration is a word as in a body: a record,
+entry's `enclosing` is a group's first declaration. Since WP-3540 the
+section ends with the substitution keys (spec/ast.md §18.14.5): a byte,
+whether the unit recorded keys (1 only for a unit with keys on and no
+unrecorded source); the keys, each its kind and outcome bytes, its
+template's record word, its canonical arguments (the specialization
+argument encoding, a pack as its count and elements), a `DefaultArg`'s
+parameter record word (else 0), a presence byte and a `PartialMatch`'s
+deduced list, its row count and (since WP-3541) its root: a slot count
+and the slots, each a tag byte (0 `NotReached`, 1 `Failed`, 2 `Expr` and
+a template-expression word, 3 `Type` and a type reference, 4 `Args` and
+an argument list written as a declaration's written arguments); the
+keyed rows, each the words
+`entry, entity, found, adl, udir`, a flags byte and a lookup byte; and
+two words, the keys left out and their rows. A key is carried whole or
+left out and counted, never failing the image. The validator checks
+kinds and outcomes (`Unsatisfied` on a satisfaction key only), the
+template and parameter words, every argument, every root slot (a known
+tag, its expression, type and arguments in range, only `Args` slots on a
+`PartialMatch` key), that the row counts sum
+to the rows, that every row's entry is a dependent entry of the section,
+and that a unit without keys carries no key and no count. An importer
+that records keys commits each key it can map (an identity it has is
+kept; the matches it re-runs while building the image's declarations
+commit none), and lists `ModuleKeys` for a unit without keys and
+`ModuleKeysLeftOut` for the keys left out or not mapped. A declaration is a word as in a body: a record,
 `LEX_TU` or `PARAM | g` (a parameter of a function record by its
 global index). Entries are in the unit's recording order; a qualifier
 names an earlier entry (`NONE - 1`: `::`; `NONE - 2`: a `decltype(...)::`
@@ -4916,7 +4963,21 @@ templates, at any depth, and their out-of-line definitions.
 - *Depth.* A template-head declared in a class has the depth of the
   number of class templates and partial specializations enclosing it;
   its parameter records carry that depth. The validator computes the
-  depth from the context chain and checks it.
+  depth from the context chain and checks it. A generic lambda's call
+  operator template (and the conversion function and static invoker
+  templates that share its head) also counts the function and
+  variable templates enclosing its closure (WP-3410,
+  [expr.prim.lambda.closure]/3): `template <class T> auto f(T t) {
+  return [](auto x) { return x; }(t); }` puts the call operator's head
+  at depth 1. The walk goes from the closure to its function; a closure
+  whose context is not its owner (a lambda in a variable template's
+  initializer or in a default argument, whose context is the
+  namespace) continues at its owner (the lambdas section's `owner`
+  word; a parameter word names its function). The conversion and
+  invoker templates and their patterns are declared by sema outside
+  the template scope, so in a dependent closure they are the only
+  members without the dependent-context flag; the validator accepts
+  them there (they are claimed with the call operator's head).
 - *Out-of-line definitions.* `template <class T> template <class U> T
   S<T>::mul(U)` and `template <class T> template <class V> struct
   S<T>::Out { ... }` are preceded by one parameter record per parameter
@@ -4943,7 +5004,9 @@ templates, at any depth, and their out-of-line definitions.
 
 Tests: `image-member-template-run.cpp`, `image-member-template-errors.cpp`
 and `kind2_declaration_image_member_templates` (an error inside an
-imported member template's pattern is reported as after a replay).
+imported member template's pattern is reported as after a replay);
+generic lambdas in templates: `image-generic-lambda-templ-run.cpp` and
+`kind2_declaration_image_generic_lambdas_in_templates` (WP-3410).
 
 **Polymorphic class templates and pack bases (WP-1292).** A class
 template's pattern with virtual functions, overriders, `final`, pure
@@ -5170,7 +5233,12 @@ kinds:
   an implicit assignment operator declared at the class's `}`, whose
   re-declaration from its implicit record marks it too) imports as the
   replay has it. The writer (`shadow_hiders`) refuses a hidden shadow
-  whose member has no record.
+  whose member has no record. A fourth word (WP-3401, `IMAGE_VERSION` 97) is
+  the record of the shadow the using-declarator's lookup found for the
+  target, when it found one (`Ast::shadow_named`), another shadow
+  record before or after it, or `NONE`; the reader records it once every
+  record is read. The writer (`shadow_nameds`) refuses a shadow whose
+  named shadow has no record (a fallback, never a dropped link).
 - kind 22, *using-directive*: an unnamed record whose payload is the
   nominated namespace's first record. The reader adds the directive to
   the lookup tables of its context's namespace (or the translation
@@ -5616,7 +5684,7 @@ refused top-level declaration in source order, "refused: <example>:
 <reason>", for per-header tables.
 
 **Versioning and the fingerprint.** The section starts with its own
-format word (`IMAGE_VERSION = 95` since WP-3100 and WP-3102, whose specialization entries end with their arguments as written and whose expression type records carry a non-dependent written bound, `WrittenArray`; 94 for WP-3200, whose pattern mem-initializer section has a row for every pattern constructor definition, a `NONE` `:` for one without a ctor-initializer; 93 for WP-3144, whose `refs` section ends with the declarator groups its shared entries name, each a list of declaration words (spec/ast.md §18.3.1); 92 for WP-3145, whose shadow records carry the record of the member that hides a class-scope shadow (a third word, `hidden`, `NONE` for none; `DeclArena::hidden_shadow`); 91 for WP-2910, whose `refs` section's pattern nodes gain tag 3, `PatternNode::Oper` (the operator token of a dependent operator expression: the entry, the expression, the slot of a binary fold's second token; validated: slot below 2), spec/ast.md §18.13.6; 90 for WP-3008, whose `refs` section's lead rows are seven words, the last two the `<` and `>` of a friend specialization's written template argument list (spec/ast.md §18.11.2); 89 for WP-3026, whose pattern mem-initializer section tags each mem-initializer-id (an identifier, a resolved type, a member by name, a type written as an identifier); 88 for WP-2820, whose `refs` section carries the `operator` and `ud-suffix` entries (two new role bytes, two new flag bits) and a fifth word per lead, the closing token of a subscript or call operator entry (spec/ast.md §18.13); 87 for WP-2823 and WP-2828, whose `PredefinedExpr` records carry the named function (an optional context declaration) and whose `refs` section carries a `decltype(...)::` or splice qualifier (`Q_SPEC`) and four-word lead rows (the specifier's first token, spec/ast.md §18.11.2); 86 for WP-2720, whose expression type records carry a constant array's kept bound (`KeptArray`) and `Decayed` parameter sugar (spec/types.md §7.2 "Kept bounds"); 85 for WP-2625, whose `CXXFoldExpr` records may carry `COLD_OPER`; 84 for WP-2542, which adds the `splits` section of split `>` locations (spec/ast.md §21.2), and WP-2541, whose `extents` section ends with the rows' written attributes (spec/ast.md §19.2); 83 for WP-2505, whose function specifier bits carry whether the exception specification was computed (bit 25, `FnSpec::exc_spec_computed`, spec/ast.md §4.2); 82 for WP-2472, whose `refs` section carries the found sets of dependent entries (spec/ast.md §18.12); 81 for WP-2470, whose `extents` section carries every row of a declaration written more than once under one id: a later row repeats the record and position of the row before it, with bit 7 of its end byte set (spec/ast.md §19.1); 80 for WP-2326, whose `refs` section carries the leading tokens of entries (a leading `::` and a destructor name's `~`, spec/ast.md §18.11.2); 79 for WP-2091, whose `extents` section carries the rows of requires-expression parameters and, in an image without a preamble, of the module declaration; 78 for WP-2220, whose `refs` section carries the using-directive of each per-specialization row and of each pattern entry's candidates; 77 for WP-1934, which adds the `refs` section of written references; 74 for WP-2200, whose pointer constants (`ConstRec::Ptr`) end with their union path: a count and the field records of the union members it enters, outermost first (spec/ast.md §9.1 "Union paths"); 62 for WP-2090, which adds the `extents` section of declaration extents; 61 for WP-2025, whose shadow records carry the record of the using-declaration that introduced them (the `using` word, `NONE` for none; `Ast::using_shadows`); 58 for WP-2023, whose lambda records carry the closure's owner (an eighth word, `NONE` when it is the closure's context); 56 for WP-2021, whose expression records widen the cold-annotation mask to 32 bits and carry a dependent operator expression's definition-context lookup set (`COLD_OPER`); 52 for WP-1923, which carries floating-point pragma states (a body section's `fp` table and the `fp_inits` section); 51 for WP-1791, whose predefined builtin types grow to 95 with the FP8 types; 48 for WP-1863, whose `no_sanitize` attribute words carry the `coverage` bit (bit 31); 47 for WP-1859, which adds the `nested` section of written function-type parameters; 46 for WP-1824, whose variable records carry thread storage duration (bits 3-4 of the specifier bits); 45 for WP-1806, whose attribute section gains the `xexprs` and `words` runs and whose function types carry Swift parameter ABIs; 44 for WP-1811, whose type records carry an address space (`ExtQual`) and a value-dependent one; 43 for WP-1740, whose builtin template stub kind 12 is `__builtin_common_type`; 42 before it; 41 for WP-1667 (its commit names the bump, not what it covers), 40 for WP-1630 and WP-1631, whose template state records `spec_own_header` and `ctad_class_params`, 39 for WP-1590, WP-1594 and WP-1573, a new expression flag and the Oven snapshot's table, 38 for WP-1517, whose variable specifier bits carry whether `inline` is implied (bit 13), 37 for WP-1505, whose splice expressions record a written `template` keyword, 36 for WP-1426, whose function type bits widen to u32, 35 for WP-1369, 34 for WP-1368, 33 for WP-1358, 32 for WP-1360, 31 for WP-1350, 30 for WP-1353, 29 for WP-1352, 28 for WP-1345, 27 for WP-1344, 26 for WP-1343, 25 for WP-1342, 24 for WP-1314, 23 for WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
+format word (`IMAGE_VERSION = 101` since WP-3583, whose variable records carry the placeholder kind of a deduced type (bits 14-15 of the specifier bits, `VarSpec::placeholder`, spec/types.md §8.4); 100 for WP-3541, whose `refs` section's keys carry their roots (spec/ast.md §18.14.10: per key a slot count and the slots, each a tag and its argument list, expression or type); 99 for WP-3582, whose expression records may carry the substituted index of a pack-index expression's selected element (`COLD_PACK_INDEX`, bit 18); 98 for WP-3540, whose `refs` section ends with the substitution keys (spec/ast.md §18.14.5: `keys_on`, the keys and their rows, the counts of the keys left out); 97 for WP-3401, whose shadow records carry the record of the shadow lookup found (a fourth word, `named`, `NONE` for none; `Ast::shadow_named`); 96 for WP-3400, whose `UnresolvedLookupExpr` records may carry the using-shadows lookup found (`COLD_SHADOWS`, bit 17); 95 for WP-3100 and WP-3102, whose specialization entries end with their arguments as written and whose expression type records carry a non-dependent written bound, `WrittenArray`; 94 for WP-3200, whose pattern mem-initializer section has a row for every pattern constructor definition, a `NONE` `:` for one without a ctor-initializer; 93 for WP-3144, whose `refs` section ends with the declarator groups its shared entries name, each a list of declaration words (spec/ast.md §18.3.1); 92 for WP-3145, whose shadow records carry the record of the member that hides a class-scope shadow (a third word, `hidden`, `NONE` for none; `DeclArena::hidden_shadow`); 91 for WP-2910, whose `refs` section's pattern nodes gain tag 3, `PatternNode::Oper` (the operator token of a dependent operator expression: the entry, the expression, the slot of a binary fold's second token; validated: slot below 2), spec/ast.md §18.13.6; 90 for WP-3008, whose `refs` section's lead rows are seven words, the last two the `<` and `>` of a friend specialization's written template argument list (spec/ast.md §18.11.2); 89 for WP-3026, whose pattern mem-initializer section tags each mem-initializer-id (an identifier, a resolved type, a member by name, a type written as an identifier); 88 for WP-2820, whose `refs` section carries the `operator` and `ud-suffix` entries (two new role bytes, two new flag bits) and a fifth word per lead, the closing token of a subscript or call operator entry (spec/ast.md §18.13); 87 for WP-2823 and WP-2828, whose `PredefinedExpr` records carry the named function (an optional context declaration) and whose `refs` section carries a `decltype(...)::` or splice qualifier (`Q_SPEC`) and four-word lead rows (the specifier's first token, spec/ast.md §18.11.2); 86 for WP-2720, whose expression type records carry a constant array's kept bound (`KeptArray`) and `Decayed` parameter sugar (spec/types.md §7.2 "Kept bounds"); 85 for WP-2625, whose `CXXFoldExpr` records may carry `COLD_OPER`; 84 for WP-2542, which adds the `splits` section of split `>` locations (spec/ast.md §21.2), and WP-2541, whose `extents` section ends with the rows' written attributes (spec/ast.md §19.2); 83 for WP-2505, whose function specifier bits carry whether the exception specification was computed (bit 25, `FnSpec::exc_spec_computed`, spec/ast.md §4.2); 82 for WP-2472, whose `refs` section carries the found sets of dependent entries (spec/ast.md §18.12); 81 for WP-2470, whose `extents` section carries every row of a declaration written more than once under one id: a later row repeats the record and position of the row before it, with bit 7 of its end byte set (spec/ast.md §19.1); 80 for WP-2326, whose `refs` section carries the leading tokens of entries (a leading `::` and a destructor name's `~`, spec/ast.md §18.11.2); 79 for WP-2091, whose `extents` section carries the rows of requires-expression parameters and, in an image without a preamble, of the module declaration; 78 for WP-2220, whose `refs` section carries the using-directive of each per-specialization row and of each pattern entry's candidates; 77 for WP-1934, which adds the `refs` section of written references; 74 for WP-2200, whose pointer constants (`ConstRec::Ptr`) end with their union path: a count and the field records of the union members it enters, outermost first (spec/ast.md §9.1 "Union paths"); 62 for WP-2090, which adds the `extents` section of declaration extents; 61 for WP-2025, whose shadow records carry the record of the using-declaration that introduced them (the `using` word, `NONE` for none; `Ast::using_shadows`); 58 for WP-2023, whose lambda records carry the closure's owner (an eighth word, `NONE` when it is the closure's context); 56 for WP-2021, whose expression records widen the cold-annotation mask to 32 bits and carry a dependent operator expression's definition-context lookup set (`COLD_OPER`); 52 for WP-1923, which carries floating-point pragma states (a body section's `fp` table and the `fp_inits` section); 51 for WP-1791, whose predefined builtin types grow to 95 with the FP8 types; 48 for WP-1863, whose `no_sanitize` attribute words carry the `coverage` bit (bit 31); 47 for WP-1859, which adds the `nested` section of written function-type parameters; 46 for WP-1824, whose variable records carry thread storage duration (bits 3-4 of the specifier bits); 45 for WP-1806, whose attribute section gains the `xexprs` and `words` runs and whose function types carry Swift parameter ABIs; 44 for WP-1811, whose type records carry an address space (`ExtQual`) and a value-dependent one; 43 for WP-1740, whose builtin template stub kind 12 is `__builtin_common_type`; 42 before it; 41 for WP-1667 (its commit names the bump, not what it covers), 40 for WP-1630 and WP-1631, whose template state records `spec_own_header` and `ctad_class_params`, 39 for WP-1590, WP-1594 and WP-1573, a new expression flag and the Oven snapshot's table, 38 for WP-1517, whose variable specifier bits carry whether `inline` is implied (bit 13), 37 for WP-1505, whose splice expressions record a written `template` keyword, 36 for WP-1426, whose function type bits widen to u32, 35 for WP-1369, 34 for WP-1368, 33 for WP-1358, 32 for WP-1360, 31 for WP-1350, 30 for WP-1353, 29 for WP-1352, 28 for WP-1345, 27 for WP-1344, 26 for WP-1343, 25 for WP-1342, 24 for WP-1314, 23 for WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
 slice, 3 for S3, 2 for S2; rejected if different). The file
 header's kiln version and the flags fingerprint (§11.4) already reject a
 file made by another kiln or under other flags. `-fkiln-bmi-image` is
@@ -5783,8 +5851,10 @@ class template's pattern (S4). The payloads are:
 - variable: type, `VarSpec` bits (u32: storage 0-2, thread storage
   duration 3-4 as `TlsKind` since WP-1824, initialization style 5-6,
   `constexpr` 7, `constinit` 8, `inline` 9, NRVO 10, exception
-  variable 11, range-`for` 12, `inline` implied 13; storage `register`
-  and thread kind 3 are refused), the initializer (an expression
+  variable 11, range-`for` 12, `inline` implied 13, the placeholder
+  kind of a deduced type 14-15 since WP-3583 (`VarSpec::placeholder`;
+  before, a variable with it was refused and its interface replayed);
+  storage `register` and thread kind 3 are refused), the initializer (an expression
   index or `u32::MAX`) and the evaluation state (`u32::MAX` not
   evaluated, `u32::MAX - 1` not a constant, else a constant index);
 - label (S2, local only): nothing;

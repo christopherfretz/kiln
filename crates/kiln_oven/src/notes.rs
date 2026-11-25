@@ -338,7 +338,8 @@ impl Oven {
             // P3068 `note_constexpr_unhandled_exception*`); in an
             // evaluation-session run, with the call stack it left the
             // entry from (spec/eval-session.md §7, WP-2413).
-            let (loc, note) = self.uncaught_note(ast, site, *obj, *ty, what.as_deref());
+            let (loc, note) =
+                self.uncaught_note(ast, b.sources(), site, *obj, *ty, what.as_deref());
             let mut notes = vec![Note::new(loc, note)];
             if self.session_run_outermost() {
                 self.call_stack(ast, &mut notes);
@@ -1307,12 +1308,16 @@ impl Oven {
     /// exception of type 'T' with content V thrown from here" at its
     /// operand (`V` the object's value as clang's `APValue` prints it),
     /// without the content when the operand's type has size 1 (an empty
-    /// class, a `char`, a `bool`). The type is named as the
-    /// throw-expression's operand's (as written, `site.e` the
-    /// throw-expression).
+    /// class, a `char`, a `bool`). The type is the exception object's,
+    /// named by one rule however the operand was written
+    /// (`DiagNames::thrown_type_name`: canonical, an inline namespace
+    /// left out only when redundant, `(anonymous namespace)::error`, a
+    /// class declared in a function through it, `f()::error`; WP-3408);
+    /// `site.e` is the throw-expression, which gives the location.
     fn uncaught_note(
         &self,
         ast: &Ast,
+        sources: Option<&kiln_source::SourceManager>,
         site: Site,
         obj: u64,
         ty: OTy,
@@ -1326,10 +1331,12 @@ impl Oven {
             .filter(|&e| ast.exprs.get(e).kind() == ExprKind::CXXThrowExpr)
             .and_then(|e| ast.exprs.throw_operand(e));
         let loc = operand.map_or(site.loc, |x| ast.exprs.get(x).loc());
-        let name = operand
-            .map(|x| ast.exprs.get(x).ty())
-            .filter(|&q| ast.types.canonical(q).without_quals() == self.types.info(ty).q)
-            .map_or_else(|| self.tname(ast, ty), |q| Self::qname(ast, q.without_quals()));
+        let name = if self.types.is_synthetic_array(ty) {
+            self.tname(ast, ty)
+        } else {
+            kiln_ast::diag_names::DiagNames::new(ast, sources, self.clang_compat)
+                .thrown_type_name(self.types.info(ty).q)
+        };
         if self.types.size(ty) == 1 {
             return (loc, format!("unhandled exception of type '{name}' thrown from here"));
         }

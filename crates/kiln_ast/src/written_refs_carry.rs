@@ -15,8 +15,10 @@
 //! | `leads` | state: the leading `::` and `~` tokens (WP-2326), the closing `]`/`)` of an `operator` entry (WP-2820) and a friend specialization's `<` and `>` (WP-3008) |
 //! | `found_rows`, `found_sets`, `found_decls` | state: the found sets of the dependent entries (§18.12, WP-2472) |
 //! | `groups`, `group_decls` | state: the declarator groups that share an entry (§18.3.1, WP-3144) |
-//! | `adl_index`, `spec_seen`, `found_index` | rebuilt from `adl_sets`, the live rows of `specs` and `found_sets` |
-//! | `inst_target`, `spec_pending`, `spec_last`, `spec_key`, `colons` | transient: scratch of one declaration or one instantiation, empty at rest |
+//! | `subst.on` (as `keys_on`), `subst.keys`, `subst.rows`, `subst.root_spans`, `subst.root_slots`, `subst.expanded_nodes` | state: the substitution keys, their rows and their roots (§18.14, WP-3540, WP-3541); `keys_on` records whether the producer recorded keys |
+//! | `subst.not_completed` | the parse's own count, not carried (a restore starts at 0) |
+//! | `adl_index`, `spec_seen`, `found_index`, `subst.index` | rebuilt from `adl_sets`, the live rows of `specs`, `found_sets` and `subst.keys` |
+//! | `inst_target`, `spec_pending`, `spec_last`, `spec_key`, `colons`, `subst.pending`, `subst.last` | transient: scratch of one declaration or one instantiation, empty at rest |
 //! | `on` | the restoring compilation's own option |
 
 use std::collections::HashMap;
@@ -26,8 +28,9 @@ use kiln_source::Loc;
 
 use super::{
     AdlSet, AdlSetId, DeclGroupRec, FoundDecl, FoundKey, FoundSetId, FoundSetRec, PatternNode,
-    QualLink, REF_GROUP, RefExtra, RefLead, RefRole, SPEC_DEAD, SpecRef, Unrecorded, WrittenRef,
-    WrittenRefId, WrittenRefs,
+    QualLink, REF_DEPENDENT, REF_GROUP, RefExtra, RefLead, RefRole, RootSlot, RootTag, SPEC_DEAD,
+    SpecRef, SubstKey, SubstKeyId, SubstKind, SubstOutcome, SubstRef, SubstTable, Unrecorded,
+    WrittenRef, WrittenRefId, WrittenRefs,
 };
 use crate::Ast;
 use crate::ids::{DeclId, ExprId};
@@ -52,6 +55,15 @@ pub struct WrittenRefsSection {
     found_decls: Vec<FoundDecl>,
     groups: Vec<DeclGroupRec>,
     group_decls: Vec<DeclId>,
+    /// The producer recorded substitution keys (§18.14).
+    keys_on: bool,
+    subst_keys: Vec<SubstKey>,
+    subst_rows: Vec<SubstRef>,
+    /// Per key, its root's run of `subst_root_slots` (§18.14.10).
+    subst_root_spans: Vec<(u32, u32)>,
+    subst_root_slots: Vec<RootSlot>,
+    /// Sorted.
+    expanded_nodes: Vec<PatternNode>,
 }
 
 /// The schema hash of the section's payload, which `Sema`'s snapshot root
@@ -102,13 +114,108 @@ impl WrittenRefs {
             found_decls: self.found_decls.clone(),
             groups: self.groups.clone(),
             group_decls: self.group_decls.clone(),
+            keys_on: self.subst_keys_on(),
+            subst_keys: self.subst.keys.clone(),
+            subst_rows: self.subst.rows.clone(),
+            subst_root_spans: self.subst.root_spans.clone(),
+            subst_root_slots: self.subst.root_slots.clone(),
+            expanded_nodes: {
+                let mut v: Vec<PatternNode> = self.subst.expanded_nodes.iter().copied().collect();
+                v.sort_unstable();
+                v
+            },
         }
+    }
+
+    /// The keyed table a section decodes to (§18.14.5), checked against
+    /// itself: the keys' runs tile the rows in order, an identity is
+    /// interned once, `Unsatisfied` only on a satisfaction key, every row
+    /// of a `DEPENDENT` entry in range with a known set, every expanded
+    /// node a pattern node.
+    fn subst_from_section(s: &mut WrittenRefsSection) -> Result<SubstTable, &'static str> {
+        let n = s.entries.len();
+        let mut end = 0usize;
+        for k in &s.subst_keys {
+            if k.rows.0 as usize != end {
+                return Err("a substitution key's rows out of order or overlapping");
+            }
+            end = end.saturating_add(k.rows.1 as usize);
+            if end > s.subst_rows.len() {
+                return Err("a substitution key's rows out of range");
+            }
+            if k.outcome == SubstOutcome::Unsatisfied && k.kind != SubstKind::Satisfaction {
+                return Err("an unsatisfied substitution key that is no satisfaction check");
+            }
+        }
+        if end != s.subst_rows.len() {
+            return Err("a keyed row of no substitution key");
+        }
+        // Roots (§18.14.10): one span per key, the spans tiling the slots
+        // in key order; a `PartialMatch` root holds argument lists only.
+        if s.subst_root_spans.len() != s.subst_keys.len() {
+            return Err("a substitution key without its root");
+        }
+        let mut end = 0usize;
+        for (k, &(lo, len)) in s.subst_keys.iter().zip(&s.subst_root_spans) {
+            if lo as usize != end {
+                return Err("a root's slots out of order or overlapping");
+            }
+            end = end.saturating_add(len as usize);
+            let Some(slots) = s.subst_root_slots.get(lo as usize..end) else {
+                return Err("a root's slots out of range");
+            };
+            if k.kind == SubstKind::PartialMatch && slots.iter().any(|x| x.tag != RootTag::Args) {
+                return Err("a partial specialization match's root slot that is no argument list");
+            }
+        }
+        if end != s.subst_root_slots.len() {
+            return Err("a root slot of no substitution key");
+        }
+        let nsets = s.adl_sets.len();
+        let rows_ok = s.subst_rows.iter().all(|r| {
+            r.entry.index() < n
+                && s.entries[r.entry.index()].flags & REF_DEPENDENT != 0
+                && r.adl.is_none_or(|a| (a.0.get() as usize) <= nsets)
+        });
+        if !rows_ok {
+            return Err("a keyed row of an entry out of range or not dependent");
+        }
+        let mut index = HashMap::with_capacity(s.subst_keys.len());
+        for (i, k) in s.subst_keys.iter().enumerate() {
+            if index.insert(k.identity(), SubstKeyId::from_index(i)).is_some() {
+                return Err("a substitution key interned twice");
+            }
+        }
+        let nodes: std::collections::HashSet<PatternNode> =
+            s.spec_nodes.iter().map(|&(x, _)| x).collect();
+        if !s.expanded_nodes.iter().all(|x| nodes.contains(x)) {
+            return Err("an expanded node that is no pattern node");
+        }
+        Ok(SubstTable {
+            on: s.keys_on,
+            keys: std::mem::take(&mut s.subst_keys),
+            rows: std::mem::take(&mut s.subst_rows),
+            root_spans: std::mem::take(&mut s.subst_root_spans),
+            root_slots: std::mem::take(&mut s.subst_root_slots),
+            not_completed: [0; 4],
+            index,
+            expanded_nodes: s.expanded_nodes.drain(..).collect(),
+            pending: HashMap::new(),
+            last: None,
+        })
     }
 
     /// The table a section decodes to, checked against itself (every
     /// entry, row and set id in range, every qualifier before the entry
     /// it qualifies), with recording `on`.
-    fn from_section(s: WrittenRefsSection, on: bool) -> Result<WrittenRefs, &'static str> {
+    fn from_section(mut s: WrittenRefsSection, on: bool) -> Result<WrittenRefs, &'static str> {
+        let subst = Self::subst_from_section(&mut s)?;
+        Ok(WrittenRefs { subst, ..Self::from_section_main(s, on)? })
+    }
+
+    /// [`from_section`](Self::from_section) but the keyed table (left
+    /// empty).
+    fn from_section_main(s: WrittenRefsSection, on: bool) -> Result<WrittenRefs, &'static str> {
         let n = s.entries.len();
         let entry_ok = |id: WrittenRefId| id.index() < n;
         let set_ok =
@@ -211,9 +318,9 @@ impl WrittenRefs {
             spec_key: None,
             unrecorded: s.unrecorded,
             leads: s.leads,
-            colons: Vec::new(),
             groups: s.groups,
             group_decls: s.group_decls,
+            ..WrittenRefs::default()
         })
     }
 }
@@ -247,12 +354,13 @@ impl Ast {
     pub fn get_written_refs(
         &mut self,
         r: &mut Reader<'_>,
-        on: bool,
+        (on, keys): (bool, bool),
         files: u32,
     ) -> Result<(), SnapError> {
         let n = r.length()?;
         self.written_refs = WrittenRefs::default();
         self.written_refs.set_on(on);
+        self.written_refs.set_keys_on(keys);
         if !on {
             return if n == 0 { Ok(()) } else { r.skip(n) };
         }
@@ -263,16 +371,73 @@ impl Ast {
         let bytes = r.bytes(n)?;
         let mut sub = Reader::new(bytes);
         let s: WrittenRefsSection = sub.get()?;
-        let checked = self.check_ids(&sub).and_then(|()| WrittenRefs::from_section(s, on));
+        let checked = self
+            .check_ids(&sub)
+            .and_then(|()| self.check_subst_extras(&s))
+            .and_then(|()| WrittenRefs::from_section(s, on));
         let finished = sub.finish();
         match (checked, finished) {
-            (Ok(t), Ok(())) => {
+            (Ok(mut t), Ok(())) => {
+                t.restore_keys(keys, files);
                 self.written_refs = t;
                 Ok(())
             }
             (Err(why), _) => Err(r.invalid::<WrittenRefsSection>(why)),
             (_, Err(e)) => Err(e),
         }
+    }
+}
+
+impl WrittenRefs {
+    /// After a restore (§18.14.5): the consumer's sub-switch is `keys`. A
+    /// table made without keys, restored by a consumer that records them,
+    /// lists the prefix as [`Unrecorded::PrefixKeys`] and starts with no
+    /// keys; a consumer that does not record keys keeps none (and no key
+    /// gap rows).
+    fn restore_keys(&mut self, keys: bool, files: u32) {
+        let producer = self.subst.on;
+        if !keys {
+            self.subst = SubstTable::default();
+            self.unrecorded.retain(|u| !u.keys_only());
+            return;
+        }
+        if !producer {
+            self.subst = SubstTable { on: true, ..SubstTable::default() };
+            self.unrecorded.push(Unrecorded::PrefixKeys { files });
+        }
+    }
+}
+
+impl Ast {
+    /// The untyped payload of each carried substitution key (§18.14.5): a
+    /// `DefaultArg`'s parameter is a declaration, a `PartialMatch`'s
+    /// deduced list 0 or an argument list, both in this AST's arenas; and
+    /// each root slot's handle (§18.14.10): an argument list, an
+    /// expression or a type in this AST's arenas, nothing for a slot not
+    /// reached or failed.
+    fn check_subst_extras(&self, s: &WrittenRefsSection) -> Result<(), &'static str> {
+        use crate::ids::space;
+        let args = self.types.max_table_ids()[2];
+        let ok = s.subst_keys.iter().all(|k| match k.kind {
+            SubstKind::DefaultArg => k.extra != 0 && k.extra as usize <= self.decls.len(),
+            SubstKind::PartialMatch => k.extra as usize <= args,
+            SubstKind::Satisfaction | SubstKind::Alias => k.extra == 0,
+        });
+        if !ok {
+            return Err("a substitution key's payload out of range");
+        }
+        let bounds = self.id_bounds();
+        let in_space = |sp: usize, i: u32| i != 0 && i as usize <= bounds[sp];
+        let slots_ok = s.subst_root_slots.iter().all(|x| {
+            x.reserved() == 0
+                && match x.tag {
+                    RootTag::NotReached | RootTag::Failed => x.raw() == 0,
+                    RootTag::Args => in_space(space::ARG_LIST, x.raw()),
+                    RootTag::Expr => in_space(space::EXPR, x.raw()),
+                    RootTag::Type => in_space(space::TYPE, x.raw() >> 3),
+                }
+        });
+        if slots_ok { Ok(()) } else { Err("a root slot's handle out of range") }
     }
 }
 
@@ -325,17 +490,17 @@ mod tests {
         // A consumer that does not record skips the section.
         let mut back = new_ast();
         let mut r = Reader::new(&bytes);
-        back.get_written_refs(&mut r, false, 3).expect("skipped");
+        back.get_written_refs(&mut r, (false, false), 3).expect("skipped");
         assert_eq!(r.remaining(), 0);
         assert!(back.written_refs.is_empty() && back.written_refs.unrecorded().is_empty());
         // One that does gets the entries back.
         let mut r = Reader::new(&bytes);
-        back.get_written_refs(&mut r, true, 3).expect("read");
+        back.get_written_refs(&mut r, (true, false), 3).expect("read");
         assert_eq!(back.written_refs.len(), 1);
         assert!(back.written_refs.is_on());
         // An empty section read with recording on is a noted gap.
         let mut r = Reader::new(&[0]);
-        back.get_written_refs(&mut r, true, 3).expect("read");
+        back.get_written_refs(&mut r, (true, false), 3).expect("read");
         assert_eq!(back.written_refs.unrecorded(), &[Unrecorded::Prefix { files: 3 }]);
     }
 
@@ -357,7 +522,7 @@ mod tests {
         let bytes = put(&ast);
         let mut back = new_ast();
         let mut rd = Reader::new(&bytes);
-        back.get_written_refs(&mut rd, true, 0).expect("read");
+        back.get_written_refs(&mut rd, (true, false), 0).expect("read");
         assert_eq!(
             back.written_refs.found_at_definition(a),
             ast.written_refs.found_at_definition(a)
@@ -397,7 +562,7 @@ mod tests {
         let bytes = put(&ast);
         let mut back = new_ast();
         let mut rd = Reader::new(&bytes);
-        back.get_written_refs(&mut rd, true, 0).expect("read");
+        back.get_written_refs(&mut rd, (true, false), 0).expect("read");
         assert_eq!(back.written_refs.holders(id), &[tu, tu]);
         assert_eq!(back.written_refs.group(tu), Some(&[tu, tu][..]));
         let section = ast.written_refs.section();
@@ -420,7 +585,7 @@ mod tests {
         let _ = ast.written_refs.push(entry(RefQualifier::entry(first)));
         let bytes = put(&ast);
         let mut r = Reader::new(&bytes);
-        assert!(ast.get_written_refs(&mut r, true, 0).is_err());
+        assert!(ast.get_written_refs(&mut r, (true, false), 0).is_err());
     }
 
     #[test]
@@ -434,7 +599,7 @@ mod tests {
         let bytes = put(&ast);
         let mut back = new_ast();
         let mut rd = Reader::new(&bytes);
-        back.get_written_refs(&mut rd, true, 0).expect("read");
+        back.get_written_refs(&mut rd, (true, false), 0).expect("read");
         assert_eq!(back.written_refs.leads(), ast.written_refs.leads());
         assert_eq!(back.written_refs.global_colon(ea), Some(Loc::from_raw(3)));
         assert_eq!(back.written_refs.tilde(eb), Some(Loc::from_raw(4)));
@@ -445,7 +610,7 @@ mod tests {
         bad.written_refs.set_lead(ec, Some(Loc::from_raw(3)), None, None);
         let bytes = put(&bad);
         let mut rd = Reader::new(&bytes);
-        assert!(new_ast().get_written_refs(&mut rd, true, 0).is_err());
+        assert!(new_ast().get_written_refs(&mut rd, (true, false), 0).is_err());
     }
 
     /// Stage 6 (WP-2820): an `operator` entry's closing token and its
@@ -465,7 +630,7 @@ mod tests {
         let bytes = put(&ast);
         let mut back = new_ast();
         let mut rd = Reader::new(&bytes);
-        back.get_written_refs(&mut rd, true, 0).expect("read");
+        back.get_written_refs(&mut rd, (true, false), 0).expect("read");
         assert_eq!(back.written_refs.close(eo), Some(Loc::from_raw(7)));
         assert_eq!(back.written_refs.get(eo).flags, flags);
         assert_eq!(back.written_refs.get(eu).role, RefRole::UdSuffix);
@@ -475,7 +640,7 @@ mod tests {
         bad.written_refs.set_close(ec, Loc::from_raw(3));
         let bytes = put(&bad);
         let mut rd = Reader::new(&bytes);
-        assert!(new_ast().get_written_refs(&mut rd, true, 0).is_err());
+        assert!(new_ast().get_written_refs(&mut rd, (true, false), 0).is_err());
     }
 
     /// WP-3008: a friend specialization's written `<` and `>` round trip
@@ -491,7 +656,7 @@ mod tests {
         let bytes = put(&ast);
         let mut back = new_ast();
         let mut rd = Reader::new(&bytes);
-        back.get_written_refs(&mut rd, true, 0).expect("read");
+        back.get_written_refs(&mut rd, (true, false), 0).expect("read");
         assert_eq!(back.written_refs.leads(), ast.written_refs.leads());
         let args = Some((Loc::from_raw(5), Loc::from_raw(6)));
         assert_eq!(back.written_refs.template_args(ef), args);
@@ -548,7 +713,7 @@ mod tests {
         let bytes = put(&ast);
         let (mut back, _) = with_expr();
         let mut rd = Reader::new(&bytes);
-        back.get_written_refs(&mut rd, true, 0).expect("read");
+        back.get_written_refs(&mut rd, (true, false), 0).expect("read");
         let t = &back.written_refs;
         assert_eq!(t.pattern_entry(PatternNode::Oper(x, 0)), Some(first));
         assert_eq!(t.pattern_entry(PatternNode::Oper(x, 1)), Some(second));
@@ -569,7 +734,7 @@ mod tests {
         let bytes = put(&ast);
         let mut back = new_ast();
         let mut rd = Reader::new(&bytes);
-        back.get_written_refs(&mut rd, true, 0).expect("read");
+        back.get_written_refs(&mut rd, (true, false), 0).expect("read");
         assert_eq!(back.written_refs.leads(), ast.written_refs.leads());
         assert_eq!(back.written_refs.get(em).qualifier, RefQualifier::SPECIFIER);
         assert_eq!(back.written_refs.specifier_lo(em), Some(Loc::from_raw(3)));
@@ -580,6 +745,235 @@ mod tests {
         bad.written_refs.set_specifier_lo(ec, Loc::from_raw(3));
         let bytes = put(&bad);
         let mut rd = Reader::new(&bytes);
-        assert!(new_ast().get_written_refs(&mut rd, true, 0).is_err());
+        assert!(new_ast().get_written_refs(&mut rd, (true, false), 0).is_err());
+    }
+
+    /// An AST with one argument list (`<>`), for keys (ids are
+    /// range-checked against the reading AST).
+    fn with_args() -> (Ast, crate::ids::ArgListId) {
+        let mut ast = new_ast();
+        let l = ast.types.arg_list(&[]);
+        (ast, l)
+    }
+
+    /// spec/ast.md §18.14.5: four keys (one unsatisfied, one without
+    /// rows, one with a payload, a partial match), their rows, their roots
+    /// (§18.14.10: slots of every tag, an empty root) and an expanded node
+    /// round trip, the identity index rebuilt; a consumer without keys
+    /// keeps none.
+    #[test]
+    #[allow(clippy::many_single_char_names, reason = "test locals")]
+    fn subst_keys_round_trip() {
+        use crate::written_refs::{REF_DEPENDENT, SubstKind as K, SubstOutcome as O};
+        let tu = DeclId::new(ast_tu_index());
+        let (mut ast, l) = with_args();
+        ast.written_refs.set_on(true);
+        ast.written_refs.set_keys_on(true);
+        let dep = WrittenRef { flags: REF_DEPENDENT, ..entry(RefQualifier::NONE) };
+        let a = ast.written_refs.push(dep).unwrap();
+        let row = SubstRef {
+            entry: a,
+            entity: Some(tu),
+            found: None,
+            adl: None,
+            udir: None,
+            flags: 0,
+            how: RefLookup::Unqualified,
+        };
+        ast.written_refs.note_pattern_node(PatternNode::Decl(tu), a);
+        ast.written_refs.note_expanded_node(PatternNode::Decl(tu));
+        let t = &mut ast.written_refs;
+        let k1 = t.commit_subst(K::Alias, O::Substituted, tu, l, 0, &[row], &[]).unwrap();
+        let k2 = t.commit_subst(K::Satisfaction, O::Unsatisfied, tu, l, 0, &[], &[]).unwrap();
+        let k3 =
+            t.commit_subst(K::DefaultArg, O::Substituted, tu, l, tu.index(), &[row], &[]).unwrap();
+        let r4 = [RootSlot::args(l), RootSlot::args(l)];
+        let k4 = t.commit_subst(K::PartialMatch, O::Substituted, tu, l, 0, &[row], &r4).unwrap();
+        let bytes = put(&ast);
+        let (mut back, _) = with_args();
+        let mut rd = Reader::new(&bytes);
+        back.get_written_refs(&mut rd, (true, true), 0).expect("read");
+        let b = &back.written_refs;
+        assert!(b.subst_keys_on() && b.subst_keys_complete());
+        let keys: Vec<SubstKey> = b.subst_keys().map(|(_, k)| *k).collect();
+        let want: Vec<SubstKey> = ast.written_refs.subst_keys().map(|(_, k)| *k).collect();
+        assert_eq!(keys, want);
+        assert_eq!(b.subst_rows(k1), &[row]);
+        assert!(b.subst_rows(k2).is_empty());
+        assert_eq!(b.subst_key(k2).outcome, O::Unsatisfied);
+        assert_eq!(b.subst_rows(k3), &[row]);
+        assert_eq!(b.subst_key_of(K::DefaultArg, tu, l, tu.index()), Some(k3));
+        assert!(b.is_expanded_node(PatternNode::Decl(tu)));
+        assert!(b.subst_root(k1).is_empty() && b.subst_root(k3).is_empty());
+        assert_eq!(b.subst_root(k4), &r4);
+        assert_eq!(b.subst_rows(k4), &[row]);
+        // A consumer that records the table but not keys: none kept.
+        let (mut plain, _) = with_args();
+        let mut rd = Reader::new(&bytes);
+        plain.get_written_refs(&mut rd, (true, false), 0).expect("read");
+        assert_eq!(plain.written_refs.subst_key_len(), 0);
+        assert_eq!(plain.written_refs.subst_mem(), (0, 0));
+        assert_eq!(plain.written_refs.roots_mem(), (0, 0));
+        assert_eq!(plain.written_refs.len(), 1);
+        // Every slot tag of a key that is not a partial match.
+        let (mut ast, l) = with_args();
+        ast.written_refs.set_on(true);
+        ast.written_refs.set_keys_on(true);
+        let e = ExprId::new(1);
+        let ty = crate::ids::QualType::unqual(crate::ids::TypeId::new(12));
+        let r = [RootSlot::NOT_REACHED, RootSlot::FAILED, RootSlot::args(l), RootSlot::ty(ty)];
+        let k = ast.written_refs.commit_subst(K::Alias, O::Substituted, tu, l, 0, &[], &r).unwrap();
+        let section = ast.written_refs.section();
+        let back = WrittenRefs::from_section(section, true).expect("roots");
+        assert_eq!(back.subst_root(k), &r);
+        let mut t = WrittenRefs::default();
+        t.set_on(true);
+        t.set_keys_on(true);
+        let k = t.commit_subst(K::Alias, O::Substituted, tu, l, 0, &[], &[RootSlot::expr(e)]);
+        let back = WrittenRefs::from_section(t.section(), true).expect("expression slot");
+        assert_eq!(back.subst_root(k.unwrap()), &[RootSlot::expr(e)]);
+    }
+
+    /// §18.14.5: every check of a carried keyed table.
+    #[test]
+    fn subst_keys_are_validated() {
+        use crate::written_refs::{REF_DEPENDENT, SubstKind as K, SubstOutcome as O};
+        type Corrupt = (&'static str, fn(&mut WrittenRefsSection));
+        let tu = DeclId::new(ast_tu_index());
+        let (mut ast, l) = with_args();
+        ast.written_refs.set_on(true);
+        ast.written_refs.set_keys_on(true);
+        let dep = WrittenRef { flags: REF_DEPENDENT, ..entry(RefQualifier::NONE) };
+        let a = ast.written_refs.push(dep).unwrap();
+        let _ = ast.written_refs.push(entry(RefQualifier::NONE)).unwrap();
+        let row = SubstRef {
+            entry: a,
+            entity: Some(tu),
+            found: None,
+            adl: None,
+            udir: None,
+            flags: 0,
+            how: RefLookup::Unqualified,
+        };
+        ast.written_refs.note_pattern_node(PatternNode::Decl(tu), a);
+        let t = &mut ast.written_refs;
+        let _ = t.commit_subst(K::Alias, O::Substituted, tu, l, 0, &[row, row], &[]);
+        let _ = t.commit_subst(K::Satisfaction, O::Unsatisfied, tu, l, 0, &[], &[]);
+        let _ = t.commit_subst(K::DefaultArg, O::Substituted, tu, l, tu.index(), &[row], &[]);
+        let root = [RootSlot::args(l), RootSlot::args(l)];
+        let _ = t.commit_subst(K::PartialMatch, O::Substituted, tu, l, 0, &[], &root);
+        let section = ast.written_refs.section();
+        assert!(WrittenRefs::from_section(section.clone(), true).is_ok());
+        let corrupt: [Corrupt; 15] = [
+            ("a run that starts past the previous one's end", |s| s.subst_keys[1].rows.0 = 3),
+            ("overlapping runs", |s| s.subst_keys[2].rows.0 = 1),
+            ("a run past the rows", |s| s.subst_keys[2].rows.1 = 2),
+            ("a row of no key", |s| s.subst_rows.push(s.subst_rows[0])),
+            ("an identity twice", |s| {
+                let mut k = s.subst_keys[1];
+                k.rows = (3, 0);
+                s.subst_keys.push(k);
+            }),
+            ("unsatisfied on an alias key", |s| {
+                s.subst_keys[0].outcome = SubstOutcome::Unsatisfied;
+            }),
+            ("a row of an entry that is not dependent", |s| {
+                s.subst_rows[0].entry = WrittenRefId::from_index(1);
+            }),
+            ("a row of an entry out of range", |s| {
+                s.subst_rows[1].entry = WrittenRefId::from_index(9);
+            }),
+            ("an expanded node that is no pattern node", |s| {
+                s.expanded_nodes.push(PatternNode::Expr(ExprId::new(1)));
+            }),
+            // Roots (§18.14.10, WP-3541).
+            ("a key without its root", |s| _ = s.subst_root_spans.pop()),
+            ("a root that starts past the previous one's end", |s| s.subst_root_spans[3].0 = 1),
+            ("a root past the slots", |s| s.subst_root_spans[3].1 = 3),
+            ("a root slot of no key", |s| s.subst_root_slots.push(RootSlot::FAILED)),
+            ("a partial-match root slot that is no argument list", |s| {
+                s.subst_root_slots[1] = RootSlot::NOT_REACHED;
+            }),
+            ("a partial-match root slot that is a type", |s| {
+                s.subst_root_slots[0] =
+                    RootSlot::ty(crate::ids::QualType::unqual(crate::ids::TypeId::new(12)));
+            }),
+        ];
+        for (what, f) in corrupt {
+            let mut bad = section.clone();
+            f(&mut bad);
+            assert!(WrittenRefs::from_section(bad, true).is_err(), "{what}");
+        }
+        // The untyped payloads, checked against the reading AST.
+        for (k, extra) in [(2, 0), (2, u32::MAX >> 1), (0, 1)] {
+            let keep = ast.written_refs.subst.keys[k].extra;
+            ast.written_refs.subst.keys[k].extra = extra;
+            let bytes = put(&ast);
+            ast.written_refs.subst.keys[k].extra = keep;
+            let (mut back, _) = with_args();
+            let mut rd = Reader::new(&bytes);
+            assert!(
+                back.get_written_refs(&mut rd, (true, true), 0).is_err(),
+                "payload {k} {extra}"
+            );
+        }
+        // A root slot's handle, checked against the reading AST: past the
+        // argument lists, expressions or types; payload bits a tag does
+        // not use.
+        let bad_slots = [
+            RootSlot::args(crate::ids::ArgListId::new(999)),
+            RootSlot { tag: RootTag::Args, a: l.index(), b: 1 },
+            RootSlot { tag: RootTag::NotReached, a: 1, b: 0 },
+        ];
+        for slot in bad_slots {
+            let keep = ast.written_refs.subst.root_slots[0];
+            ast.written_refs.subst.root_slots[0] = slot;
+            let bytes = put(&ast);
+            ast.written_refs.subst.root_slots[0] = keep;
+            let (mut back, _) = with_args();
+            let mut rd = Reader::new(&bytes);
+            assert!(back.get_written_refs(&mut rd, (true, true), 0).is_err(), "{slot:?}");
+        }
+    }
+
+    /// §18.14.10: an unknown root slot tag (the one byte a not-reached
+    /// and a failed slot differ in, set to a tag no slot has) is an
+    /// error.
+    #[test]
+    fn an_unknown_root_slot_tag_is_an_error() {
+        let slot_bytes = |slot: RootSlot| {
+            let mut w = Writer::new();
+            kiln_snap::Snap::put(&slot, &mut w);
+            w.into_bytes()
+        };
+        let (mut nr, fl) = (slot_bytes(RootSlot::NOT_REACHED), slot_bytes(RootSlot::FAILED));
+        let at: Vec<usize> = (0..nr.len()).filter(|&i| nr[i] != fl[i]).collect();
+        assert_eq!(at.len(), 1);
+        nr[at[0]] = 9;
+        let mut rd = Reader::new(&nr);
+        assert!(<RootSlot as kiln_snap::Snap>::get(&mut rd).is_err());
+    }
+
+    /// §18.14.5: a table made without keys, restored by a consumer that
+    /// records them, is a key gap of the prefix's files; a table made
+    /// without recording is only the whole-table gap.
+    #[test]
+    fn a_prefix_without_keys_is_a_key_gap() {
+        let mut ast = new_ast();
+        ast.written_refs.set_on(true);
+        let _ = ast.written_refs.push(entry(RefQualifier::NONE));
+        let bytes = put(&ast);
+        let mut back = new_ast();
+        let mut rd = Reader::new(&bytes);
+        back.get_written_refs(&mut rd, (true, true), 3).expect("read");
+        assert_eq!(back.written_refs.unrecorded(), &[Unrecorded::PrefixKeys { files: 3 }]);
+        assert!(back.written_refs.subst_keys_on());
+        assert!(!back.written_refs.subst_keys_complete());
+        let mut rd = Reader::new(&bytes);
+        back.get_written_refs(&mut rd, (true, false), 3).expect("read");
+        assert!(back.written_refs.unrecorded().is_empty());
+        let mut rd = Reader::new(&[0]);
+        back.get_written_refs(&mut rd, (true, true), 3).expect("read");
+        assert_eq!(back.written_refs.unrecorded(), &[Unrecorded::Prefix { files: 3 }]);
     }
 }

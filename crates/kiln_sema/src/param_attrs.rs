@@ -106,6 +106,41 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The declaration whose parameters give the specialization of
+    /// function template `tmpl` (whose pattern is `pattern`, its first
+    /// declaration) its parameter attributes, when it is not `pattern`:
+    /// the latest declaration of the template so far (clang substitutes
+    /// the `FunctionTemplateDecl` lookup found, the most recent one
+    /// visible, `FinishTemplateArgumentDeduction` → `SubstDecl`), whose
+    /// parameters carry their own attributes and those they inherited
+    /// ([`Sema::merge_param_attrs`]). Not a friend declaration (ordinary
+    /// lookup does not find it), an invalid one or one with another
+    /// parameter count. Not for a member template of a class template
+    /// specialization: clang instantiates it from the member's
+    /// declaration in the class, so an out-of-class definition's
+    /// parameter attributes do not reach its specializations. A
+    /// declaration after the point the specialization's declaration is
+    /// formed does not exist yet; clang 19 and 22 do not add its
+    /// attributes later either (spec/sema.md §4.5 "Parameter
+    /// attributes" rule 5, WP-3407).
+    pub(crate) fn param_attrs_source(&self, tmpl: DeclId, pattern: DeclId) -> Option<DeclId> {
+        if self.inst_template(tmpl) != tmpl {
+            return None;
+        }
+        let count = |d: DeclId| self.ast.decls.function(d).map(|x| self.ast.lists.len(x.params));
+        let n = count(pattern)?;
+        self.ast
+            .redecls_of(pattern)
+            .find(|&d| {
+                let h = self.ast.decls.get(d);
+                d == pattern
+                    || (h.misc().friend() == kiln_ast::decl::FriendKind::None
+                        && !h.has(DeclFlags::INVALID)
+                        && count(d) == Some(n))
+            })
+            .filter(|&d| d != pattern)
+    }
+
     /// Whether parameter type `ty` keeps a `noescape` (clang
     /// `handleNoEscapeAttr`: a pointer, a reference, or dependent).
     fn noescape_applies(&self, ty: QualType) -> bool {

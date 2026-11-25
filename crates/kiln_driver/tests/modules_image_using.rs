@@ -132,3 +132,45 @@ fn image_keeps_hidden_shadows() {
     assert_eq!(hidden(&replay).as_deref(), Some(want), "{replay}");
     assert_eq!(hidden(&image), hidden(&replay), "the image's marks are the replay's");
 }
+
+/// WP-3403: the shadows two using-declarators of one class make for one
+/// entity through two bases (each marked hidden by the member declared
+/// after them, [namespace.udecl]/14) import from the image as the replay
+/// has them. A class template's using-declarations are not in the image
+/// (it falls back to replay), so a specialization's marks are pinned by
+/// the snapshot test in `kiln_parse/tests/using_hidden_shadow.rs`.
+#[test]
+fn image_keeps_repeated_shadow_marks() {
+    let d = scratch("repeated-hidden");
+    std::fs::write(
+        d.join("h.cppm"),
+        "export module h;\n\
+         export struct A { int f() { return 1; } int f(int) { return 2; } };\n\
+         export struct B1 : virtual A {};\n\
+         export struct B2 : virtual A {};\n\
+         export struct G : B1, B2 { using B1::f; using B2::f; int f() { return 5; } };\n",
+    )
+    .unwrap();
+    std::fs::write(
+        d.join("u.cpp"),
+        "import h;\n\
+         int g(G &g) { return g.f() + g.f(0); }\n",
+    )
+    .unwrap();
+    let v = ok(&d, &["-v", "-fkiln-bmi-image", "--precompile", "h.cppm", "-o", "h.pcm"]);
+    assert!(v.contains("with a declaration image of "), "{v}");
+
+    let use_args = ["-fkiln-memory-report", "-fmodule-file=h=h.pcm", "-fsyntax-only", "u.cpp"];
+    let image = ok(&d, &[&["-v", "-fkiln-bmi-image"][..], &use_args].concat());
+    assert!(image.lines().any(|l| l == "note: imported 'h' from its declaration image"), "{image}");
+    let replay = ok(&d, &[&["-fno-kiln-bmi-image"][..], &use_args].concat());
+    let hidden = |r: &str| -> Option<String> {
+        r.lines()
+            .find(|l| l.starts_with("memory: decls.cold.hidden_shadow "))
+            .map(|l| l.split_whitespace().take(3).collect::<Vec<_>>().join(" "))
+    };
+    // `A::f()` through each of `G`'s two using-declarators.
+    let want = "memory: decls.cold.hidden_shadow count=2";
+    assert_eq!(hidden(&replay).as_deref(), Some(want), "{replay}");
+    assert_eq!(hidden(&image), hidden(&replay), "the image's marks are the replay's");
+}

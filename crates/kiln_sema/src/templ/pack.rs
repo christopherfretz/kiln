@@ -215,6 +215,11 @@ impl Substituter<'_, '_, '_> {
                         .arg(at_least)
                         .arg(other);
                     self.sema.emit(d);
+                } else {
+                    // Deduction may yet extend it to the other's length:
+                    // clang retains the expansion, partially substituted
+                    // (§7.2), rather than failing.
+                    self.pack.partial = true;
                 }
                 return Err(SubstFail);
             }
@@ -363,6 +368,13 @@ impl Substituter<'_, '_, '_> {
             // the pattern (`[] { return sizeof(T); }()...`).
             (_, Some((0, name))) => self.sweep_empty(ellipsis, rewrap_ok, name, &mut f),
             (_, Some((n, name))) => {
+                // The explicitly given pack deduction may still extend
+                // ([`Substituter::partial_pack`]): its elements are each
+                // substituted (and so checked), but the expansion is
+                // retained, partially substituted, as clang retains it,
+                // so `X<Ts...>` is not formed with the given elements
+                // alone (WP-3380).
+                let retain = name.partial;
                 self.pack.expanding = Some((n, name));
                 let mut out = Vec::with_capacity(n as usize);
                 let mut res = Ok(());
@@ -384,7 +396,7 @@ impl Substituter<'_, '_, '_> {
                     }
                 }
                 self.sema.templ.pack_elements += u64::from(n);
-                if res.is_err() && self.pack.partial {
+                if (res.is_err() && self.pack.partial) || (res.is_ok() && retain) {
                     // A partially substituted expansion (§7.2): the
                     // pattern rebuilt once, still an expansion.
                     self.pack = PackState { ellipsis, keep: true, ..PackState::default() };
@@ -426,9 +438,13 @@ impl Substituter<'_, '_, '_> {
         // diagnostics, also those of the checking frames it pushes (the
         // prior-argument substitution of `ic<T, v>` with `T` = void and an
         // empty `v`, which clang never forms; WP-1222): only the mismatch
-        // is reported, as expanding reports it.
+        // is reported, as expanding reports it. Nor does it record into a
+        // substitution key's scope (spec/ast.md §18.14.3): an empty
+        // expansion substitutes no name.
         let held = self.sema.open_capture(true);
+        self.sema.key_scope_suspend();
         let swept = f(self);
+        self.sema.key_scope_resume();
         drop(self.sema.close_capture(held));
         if let Some((n, second, loc)) = self.pack.sweep_mismatch.take() {
             self.pack = PackState { ellipsis, expanding: Some((0, name)), ..PackState::default() };
@@ -781,8 +797,10 @@ impl Substituter<'_, '_, '_> {
     }
 
     /// `pack...[index]` ([expr.prim.pack.index]): the selected element.
-    /// Gap (spec §7.4): clang keeps a `PackIndexingExpr` around it; the
-    /// element is recorded in `pack_index_origin` for mangling.
+    /// clang keeps a `PackIndexingExpr` around it; kiln records the
+    /// element in `pack_index_origin` (the pattern's node, for mangling)
+    /// and in `pack_index_written` (the substituted index, its written
+    /// form; spec/sema-templates.md §7.4, WP-3582).
     pub(crate) fn pack_indexing_expr(
         &mut self,
         e: ExprId,
@@ -817,12 +835,18 @@ impl Substituter<'_, '_, '_> {
                 // which a dependent signature still mangles as nothing
                 // (`Y<1, 2>::g`'s `decltype(u + I...[1])` is `DTplfp_E`).
                 let _ = self.sema.ast.templates.pack_index_origin.insert(v[i], e);
+                let _ = self.sema.ast.templates.pack_index_written.insert(v[i], index);
                 Ok(v[i])
             }
         }
     }
 
-    /// `T...[index]` ([dcl.type.pack.index]): the selected element.
+    /// `T...[index]` ([dcl.type.pack.index]): the selected element, kept
+    /// as `PackIndexing` sugar over it with the pattern substituted in
+    /// keep mode (its packs named by their elements, clang's
+    /// `SubstTemplateTypeParmPackType`) and the substituted index, as
+    /// clang's `TransformPackIndexingType` builds it (spec/sema-templates.md
+    /// §7.4, WP-3582).
     pub(crate) fn pack_indexing_type(
         &mut self,
         pattern: QualType,
@@ -844,7 +868,8 @@ impl Substituter<'_, '_, '_> {
                 let name = format!("'{}'", self.sema.ty_str(pattern));
                 let at = self.sema.begin_loc(index);
                 let i = self.pack_index_value(index, v.len(), &name, at)?;
-                Ok(v[i])
+                let p = self.kept_pack_pattern(|s| s.element_ty(pattern, loc)).unwrap_or(pattern);
+                Ok(self.sema.ast.types.pack_indexing(p, index, None, Some(v[i])))
             }
         }
     }

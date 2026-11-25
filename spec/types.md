@@ -876,7 +876,16 @@ canonical form of a dependent type must identify *equivalent* types:
   section can hold is written as the value alone, as before).
   Substitution keeps a written bound it does not change (`T a[f(5)]`
   instantiated keeps the pattern's `f(5)`, no new expression); a bound
-  it substitutes (`T a[N]`) gives the value only, as before. An array
+  it substitutes, dependent (`T a[N]`, `T a[sizeof(T::s())]`) or kept
+  as instantiation-dependent (`char a[sizeof(sizeof(T::s()))]`), keeps
+  the substituted expression as `size_expr` (WP-3580; clang's
+  instance `ArrayTypeLoc`): one interned sugar node per distinct
+  substituted bound, no expression beyond the one substitution built.
+  It holds for every declarator substitution rebuilds (a member, a
+  variable, a parameter's declared type and its `Decayed` sugar, a
+  type operand) and for the current-instantiation rebuild. A variable
+  length array folded to a constant one (`check_vla_var`,
+  `fold_vla_dims`) keeps its bound expression as `size_expr` too. An array
   parameter adjusted to a pointer keeps its written bound as `Decayed` sugar, whether the bound is
   instantiation-dependent or not, a call or a literal (`int a[f(2)]`,
   `int a[3]`; WP-3101, clang's `DecayedType`): the parameter's type and
@@ -1055,7 +1064,36 @@ specialization (spec/ast.md §8.3). Each expression's subexpressions are
 `ExprArena::children`'s. The dump walks (`kiln_ast::dump::written_exprs`,
 `for_each_written_expr`) stay clang's dump, which prints no `TypeLoc`
 and no written template arguments: a client wanting every expression
-of a declaration walks its type with `written_exprs` as well.
+of a declaration walks its type with `written_exprs` as well, through
+`Ast::decl_written_exprs(d, &mut out)`.
+
+A variable whose type its initializer deduced from a placeholder
+(`auto v = w;`, `decltype(auto)`, `auto &`, `const auto *`, a structured
+binding declaration, an init-capture, a range-`for` variable;
+[dcl.type.auto.deduct]) has a deduced type, not a written one: kiln
+keeps no `auto` sugar over it (the type is the deduced type with the
+sugar it came with, so it prints as clang's does), and records the
+placeholder in its `VarSpec` instead (`VarSpec::placeholder() ->
+VarPlaceholder`: `None`, `Auto`, `DecltypeAuto`, `GnuAutoType`; bits
+14-15, 0 bytes; spec/ast.md §4 `VarData`; WP-3583). `decl_written_exprs`
+stops there: it appends nothing for such a variable, nor for a
+structured binding (`Binding`, whose type is its element's), where
+`written_exprs` on the type alone would reach the expressions written
+in the initializer's type (`w`'s `decltype(make(x))` for `auto v = w;`).
+A class template placeholder (CTAD) is no kind: its
+`DeducedTemplateSpecialization` sugar stays in the type. A pattern's
+variable whose initializer is dependent has the kind too, its type the
+dependent `auto` ([temp.dep.expr]/3); its instance deduces again. The
+kind is set when the initializer is attached, so a placeholder-typed
+variable read before that has `None`. Expressions written in the
+declarator around the placeholder (`auto (*p)[f(1)] = &a;`, a
+type-constraint's arguments `C<f(1)> auto v = w;`) are not kept once
+deduced. PCH `FORMAT_VERSION` 187, `IMAGE_VERSION` 101 (the image
+carries the bits with the variable's specifiers). Tests:
+`crates/kiln_parse/tests/written_bounds.rs`
+`a_deduced_variable_writes_no_expression`,
+`a_structured_binding_writes_no_expression`,
+`an_instantiated_deduced_variable`.
 
 ## 9. Memory accounting
 `TypeContext::memory() -> MemReport` with one row per arena: element
@@ -1153,7 +1191,11 @@ where `inner` is the declarator text so far (empty at the top):
   name as the driver names it in diagnostics;
 - `CanonTemplateTypeParm` prints `type-parameter-D-I`; sugar parameters
   print their name; `PackExpansion` appends `...`; `DependentName` prints
-  `typename T::type` (keyword only if written); `Decltype` prints
+  `typename T::type` (keyword only if written; a substituted `T::`,
+  `T = ns::S`, prints its canonical replacement: scope suppressed with
+  clang 19, `typename S::type`, fully scoped with clang 22,
+  `typename ns::S::type`, `(anonymous namespace)::A::`,
+  `ns::W<ns::S>::`; `TypeNames::scoped_subst_qualifier`, WP-3402); `Decltype` prints
   `decltype(expr)` with the expression printer; `Auto` prints `auto` /
   `decltype(auto)` / `C auto` when undeduced and the deduced type when
   deduced; `Atomic` `_Atomic(T)`; `BitInt` `_BitInt(N)`; `Vector`
@@ -1275,6 +1317,19 @@ Three printers name types, and only one is a key:
     `__PRETTY_FUNCTION__` (`AstNames::local_scopes`). A failed
     requirement names a closure type with its location, as clang does
     (`sizeof((lambda at a.cpp:6:21))`).
+  - Its thrown-type mode (`DiagNames::thrown_types`,
+    `thrown_type_name`; WP-3408) names an uncaught exception's type in
+    its note (spec/oven.md "Exceptions"): the canonical, cv-unqualified
+    type with every specialization's canonical arguments, and a class or
+    enumeration declared in a function (not a closure type) printed
+    through the function, as clang 22 prints such a class as a scope,
+    at every compatibility level and inside template arguments:
+    `f()::error`, `box<f()::error>`, `q::g(int)::o::in`. Everything else
+    is the diagnostic printer's text, so an inline namespace is left out
+    only where redundant (`lib::error`, `m::v1::e`). It is not a key
+    either (two local classes `L` of sibling blocks print alike), but no
+    spelling of a type declared in a function equals a namespace-scope
+    type's.
 - **The dump printer** (`AstNames`): the AST dump's and debug
   information's text (spec/ast-dump.md, spec/codegen.md §5.1), clang's
   for those outputs; not a key either.
@@ -1304,8 +1359,10 @@ Three printers name types, and only one is a key:
     as a cast, `S<(int *)nullptr>`, `S<(int X::*)nullptr>` (`nullptr` of
     `std::nullptr_t` stays `S<nullptr>`); a parameter with a written
     type fixes the pointer type, so `T<nullptr>` is already unique;
-  - a pointer or reference argument names its object with the same
-    scope (`P<&f()::x>` for a static local `x`).
+  - a pointer or reference argument names its object or function by
+    its declaration key (below): `P<&f()::x>` for a static local `x`,
+    `P<&f()::x#2>` for a second one of the name in a sibling block,
+    `P<&ov(long)>` for one of two overloads `ov` (WP-3481).
 
   An unnamed class's or closure's key is its location `F:L:C` (the
   presumed location of its declaration): two unnamed classes declared
@@ -1316,6 +1373,20 @@ Three printers name types, and only one is a key:
   `crates/kiln_parse/tests/type_keys.rs`; the diagnostic printer's scopes
   in `class.local/local-class-scope-printing.cpp` (clang 22) and
   `local-class-scope-printing-clang19.cpp`.
+
+  **Declaration keys** (WP-3481): `AstNames::decl_key(d)` names a
+  declaration by the same rule: its whole scope (as above) and its own
+  component; a function with its signature as a scope prints it
+  (`n::f(int)`, `k<int>()`, `C::m() const &`), never with an ordinal;
+  a static or `thread_local` variable declared in a function after the
+  first of its name there adds its ordinal (`f()::x`, `f()::x#2`, the
+  mangling's discriminator `_ZZ1fvE1x_0`); anything else its scoped
+  name (`n::v`, `Mb::a`). Two distinct declarations (first
+  declarations) never print alike, which the type key's pointer and
+  reference arguments rely on. Evaluation sessions expose both keys to
+  tooling clients as `Entity::key` (spec/eval-session.md §4.1 "Entity
+  keys"): a type entity's is its `type_key`, a declaration entity's its
+  `decl_key`.
 
 ## 13. Interface sketch
 ```rust

@@ -34,7 +34,7 @@ use kiln_ast::decl::{DeclFlags, DeclKind, DefinitionBits};
 use kiln_ast::ids::LambdaId;
 use kiln_ast::lambda::{CaptureDefault, CaptureKind, LambdaCapture, LambdaData};
 use kiln_ast::{DeclHead, DeclId, ExprId, ListId, RawId};
-use kiln_source::fx::FxHashSet;
+use kiln_source::fx::{FxHashMap, FxHashSet};
 
 use super::body::{Built, Dc, PARAM};
 use super::{DECL_FLAGS, DeclRec, Image, NONE, Pass, Payload, Rd, Res, W, Wr, Writer, bad};
@@ -135,9 +135,9 @@ pub(super) struct LamState {
     /// Lambda records whose owner was not yet recorded.
     pending_owner: Vec<(u32, DeclId)>,
     /// The tags that could not be written, and why.
-    failed: kiln_source::fx::FxHashMap<DeclId, &'static str>,
+    failed: FxHashMap<DeclId, &'static str>,
     /// Lambda → section record.
-    index: kiln_source::fx::FxHashMap<LambdaId, u32>,
+    index: FxHashMap<LambdaId, u32>,
 }
 
 fn cap_kind(k: CaptureKind) -> u8 {
@@ -769,6 +769,28 @@ pub(super) fn closure_def(img: &Image, i: u32) -> bool {
         matches!(&d.payload, Payload::Record { def: Some(df), .. }
             if df.bits & DefinitionBits::LAMBDA.bits() != 0)
     })
+}
+
+/// Per closure record whose owner is not its context (a lambda in a
+/// variable's initializer or in a default argument, WP-2023), the
+/// owner's record: a parameter word names its function (`params`, the
+/// function record of each parameter, [`super::body::param_owners`]).
+/// The template-heads enclosing the closure are the owner's (WP-3410).
+pub(super) fn closure_owners(img: &Image, params: &[u32]) -> FxHashMap<u32, u32> {
+    let mut m = FxHashMap::default();
+    for r in &img.lambdas.recs {
+        let owner = match r.owner {
+            NONE => continue,
+            w if w & PARAM == 0 => w,
+            w if w & (super::requires::REQP | super::specparam::SPECP) != 0 => continue,
+            w => match params.get((w & !PARAM) as usize) {
+                Some(&f) => f,
+                None => continue,
+            },
+        };
+        m.insert(r.closure, owner);
+    }
+    m
 }
 
 /// Whether record `x` is declared in closure record `c`.

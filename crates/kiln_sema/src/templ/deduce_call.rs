@@ -201,6 +201,25 @@ impl Sema<'_, '_> {
         held: &mut Vec<Diag>,
         f: impl FnOnce(&mut Self) -> R,
     ) -> Option<(R, Result<(), Option<Diag>>)> {
+        self.in_sfinae_frame(kind, ft, args, loc, held, false, f)
+    }
+
+    /// [`Self::in_sfinae_held`]; `keep_own`: the written-reference rows
+    /// recorded for `ft` itself survive a frame that ends without a
+    /// substitution failure (a default template argument's, re-keyed to
+    /// the specialization when the deduction forms it, spec/ast.md
+    /// §18.9.3).
+    #[allow(clippy::too_many_arguments, reason = "the frame's parts")]
+    fn in_sfinae_frame<R>(
+        &mut self,
+        kind: FrameKind,
+        ft: DeclId,
+        args: Option<ArgListId>,
+        loc: Loc,
+        held: &mut Vec<Diag>,
+        keep_own: bool,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> Option<(R, Result<(), Option<Diag>>)> {
         #[cfg(feature = "op-stats")]
         let _t = crate::templ::deduce_stats::timer("in_sfinae_held");
         if !self.push_inst_frame(kind, ft, ft, loc) {
@@ -231,6 +250,7 @@ impl Sema<'_, '_> {
         // constraints they are, satisfied or not (spec/ast.md §18.9.3).
         if let Some(m) = wmark
             && !kind.is_constraint_substitution()
+            && !(keep_own && failed.is_ok())
         {
             self.end_written_spec_sfinae(m, ft, failed.is_err());
         }
@@ -400,7 +420,11 @@ impl Sema<'_, '_> {
         // A lambda in the signature is numbered in the template's
         // pattern (spec/sema-lambda.md §3.5, WP-1077).
         let site = self.templated_function(ft).map(|p| self.begin_signature_mangling(ft, p));
+        let wmark = self.written_spec_mark();
         let r = self.deduce_spec_steps(ft, explicit, call, target, loc, &mut params);
+        if let Some(m) = wmark {
+            self.end_written_spec_deduction(m, ft, r.as_ref().ok().copied());
+        }
         if let Some(site) = site {
             self.end_signature_mangling(site);
         }
@@ -514,6 +538,15 @@ impl Sema<'_, '_> {
             for (j, &t) in tys.iter().enumerate() {
                 let Some(pat) = crate::templ::pack::type_pattern(sub.sema, t) else {
                     if names_partial(sub.sema, t) {
+                        // Kept for deduction, but checked with the
+                        // explicit arguments, the given pack retained:
+                        // `tup<Ts..., L<Us, typename T::type>...>` fails
+                        // with `T = int` even when `Us` deduces empty
+                        // (WP-3380).
+                        sub.partial_pack = partial;
+                        let r = sub.ty(t, loc);
+                        sub.partial_pack = None;
+                        r?;
                         v.push(t);
                         continue;
                     }
@@ -522,6 +555,19 @@ impl Sema<'_, '_> {
                     continue;
                 };
                 if j + 1 == tys.len() {
+                    // The trailing pack keeps its pattern for deduction,
+                    // but the explicit arguments are substituted into it
+                    // all the same ([temp.deduct.general]/2-3): with
+                    // `T = int`, `L<Ts, typename T::type>...` fails here
+                    // whatever `Ts` turns out to be, also empty, where
+                    // the final substitution never forms the pattern
+                    // (§7.2's sweep; WP-3380). The explicitly given pack
+                    // is a lower bound ([temp.arg.explicit]/9), so the
+                    // expansion is retained, not a length conflict.
+                    sub.partial_pack = partial;
+                    let r = sub.expand_pattern_at(None, |sub| sub.ty(pat, loc));
+                    sub.partial_pack = None;
+                    r?;
                     v.push(t);
                     continue;
                 }
@@ -1288,12 +1334,15 @@ impl Sema<'_, '_> {
             let _td = crate::templ::deduce_stats::timer("step-defaults");
             let prior: Vec<TemplateArg> = d.args[..j].to_vec();
             let shown = self.ast.types.arg_list(&prior);
-            let r = self.in_sfinae_held(
+            // Its written-reference rows are the specialization's once
+            // the deduction forms it (`deduce_spec`; spec/ast.md §18.9.3).
+            let r = self.in_sfinae_frame(
                 FrameKind::DeducedArgSubstitution,
                 ft,
                 Some(shown),
                 loc,
                 &mut held,
+                true,
                 |s| s.default_template_arg(ft, depth, p, def, loc, &prior),
             );
             match r {

@@ -385,8 +385,8 @@ read with `Ast::using_target`/`Ast::using_qualifier`):
   DeclId>` (the reverse). Sema writes both with
   `AstBuilder::set_using_shadows` once the declaration's last shadow is
   made: a namespace-, block- or class-scope `using N::f;` (one
-  `UsingShadow` per declaration the lookup found that was not already
-  introduced, an `UnresolvedUsingIfExists`'s for `using_if_exists`), an
+  `UsingShadow` per declaration the lookup found, a repeated one too,
+  WP-3403; none for an enumerator already a member of the class, an `UnresolvedUsingIfExists`'s for `using_if_exists`), an
   inheriting-constructor `using B::B;` (one `ConstructorUsingShadow` per
   constructor of the base, its implicit copy and move constructors
   included, one a constructor of the class hides marked hidden), and `using
@@ -409,6 +409,146 @@ read with `Ast::using_target`/`Ast::using_qualifier`):
   span per using-declaration, 4 B per shadow in the list arena and a
   reverse-map entry per shadow (9 B live each); about 24 KB on a TU of
   fifteen standard headers, spec/landed/ast/WP-2025.md.
+- **What a using-declaration names, for tooling clients** (WP-3403,
+  [namespace.udecl]/1, /4, /14). The record alone answers which members
+  a class-scope `using B::f;` names and which of them are hidden; a
+  client needs no lookup of its own. The accessors are total:
+  - `Ast::using_named(u)`: per shadow of `u`, in `using_shadows` order,
+    a `UsingNamed { shadow, target, hider }`. The *named set* of `u` is
+    the targets; the members `u` brings into its class are those whose
+    `hider` is `None`. Empty for any other declaration, for a dependent
+    using-declarator (read the `Using` of each specialization, whose
+    marks are its own), and for a class-scope `using E::A;` naming an
+    enumerator of a member enumeration: the enumerator is already a
+    member of the class, so no shadow is made.
+  - `Ast::shadow_hider(s)` (= `DeclArena::hidden_shadow`): the member
+    of `s`'s class that hides it, `None` for a visible shadow or any
+    other declaration.
+  - `Ast::shadows_hidden_by(m)`: the shadows whose hider is `m`'s first
+    declaration, in member order (a scan of the class's members, no
+    storage): what renaming or removing `m` would make visible. Empty
+    for anything but a member function or member function template.
+  - `Ast::overridden_methods(m)`: the virtual functions `m` overrides,
+    read at its first declaration, so any redeclaration answers.
+  - `Ast::shadow_named(s)` (WP-3401, [namespace.udecl]/1): the shadow
+    that `s`'s using-declarator named, when what its lookup found for
+    `s`'s target was itself a using-shadow. In `namespace acme { using
+    std::string; } using acme::string;` the second shadow's target is
+    `std::string` (kiln, like clang, makes a shadow's target the entity,
+    never a shadow), and `shadow_named` gives `acme`'s shadow. `None`
+    for a shadow whose lookup found its target directly (declared in the
+    scope searched, or made visible there by a using-directive: the
+    directive route is not recorded), for the shadows of `using enum`
+    (its enumerators are not looked up) and of an
+    `UnresolvedUsingIfExists`, and for any other declaration.
+    *Walking the chain:* the record is the first link only. A client
+    reads `shadow_named(s)`, then `shadow_named` of that shadow, and so
+    on; the chain ends at a shadow whose lookup found its target
+    directly. Every link is a shadow of the same entity (its
+    `strip_shadow` is `s`'s target), and a link is never `s` itself.
+    The record is what the lookup found, not a redeclaration link: a
+    using-declarator repeated through another base (*A repeated
+    using-declarator* below) has its own record beside its `prev`, and
+    `using B1::f;` names `B1`'s shadow only when `B1` has one. Per form:
+    - namespace, block and class scope: one record per shadow of an
+      overload set, each naming the shadow its own element was found
+      through (`using Base::f;` where `Base` has `using Mid::f;` and a
+      `void f(char);` of its own: `Base`'s shadows for `Mid::f`'s
+      overloads, none for `Base::f(char)`); a hidden shadow keeps its
+      record ([namespace.udecl]/14, either order);
+    - an inheriting constructor (`using B::B;` where `B` has `using
+      A::A;`): a `ConstructorUsingShadow` of an `A` constructor names
+      `B`'s `ConstructorUsingShadow` of it, the nominated base's shadow
+      it was inherited through (the same entry as
+      `DeclArena::ctor_shadow_nominated`, clang's
+      `getNominatedBaseClassShadowDecl`; no second row); one of a
+      constructor `B` declares names none;
+    - templates: a dependent using-declarator makes no shadows; each
+      specialization's using-declaration (class or block scope) records
+      what its own lookup found (`G<Base>`'s `using T::f;` names
+      `Base`'s shadows, `G<Mid>`'s none); a non-dependent one is redone
+      in each specialization with the pattern's records.
+
+    Storage: `ColdDeclData::shadow_named: ColdMap<DeclId, DeclId>`
+    (`UsingShadow` → the shadow found), written once by sema as the
+    shadow is made (`introduce_shadow`, from `lookup::Found::shadow`); a
+    shadow that found its target directly has no row, so the cost is a
+    map entry per chained shadow only. A PCH snapshot carries the map; a
+    module image carries it per shadow record (the `named` word,
+    spec/modules.md §11.11 kind 21). The dump is unchanged, and no list
+    changes order or targets.
+
+  The rules the record keeps:
+  - *One mark in either order.* A member declared before or after the
+    using-declarator hides the shadow when the two correspond
+    (`member_hides_using_target`, spec/sema.md "Member hiding"); the
+    shadow is made either way. In a class template specialization the
+    members are redone in declaration order, each through the parser's
+    declarator actions (`act_on_declarator`), so a member function
+    (template) redone after the using-declaration marks the shadows it
+    hides as in a non-template class (`check_using_shadow_conflict`): a
+    specialization's record has the same shape.
+  - *Dependent correspondence.* In a pattern, a member whose
+    parameter-type-list depends on a template parameter corresponds to
+    no base member (`template <class T> struct D : B { using B::f; void
+    f(T); };`: the pattern's shadow of `B::f(int)` is unmarked); each
+    specialization marks per its arguments (`D<int>`'s is hidden by
+    `D<int>::f(int)`, `D<char>`'s is not), in either order.
+  - *The hider.* The member's declaration in the member-specification,
+    which is its first declaration (`first(h) == h`), never an
+    out-of-line definition. For a member template it is the
+    `FunctionTemplate`; in a specialization, the specialization's
+    member; for an implicitly-declared member, its implicit declaration
+    (`DeclFlags::IMPLICIT`). It is exactly the member that corresponds
+    to the shadow's target: the other overloads of that name hide
+    nothing.
+  - *Implicit hiders, by the class's `}`.* A mark never depends on what
+    the unit uses. Every implicit member that can hide a shadow is
+    declared by the class's `}` at the latest, and the mark is set when
+    it is declared: the copy and move assignment operators for `using
+    B::operator=;` (WP-3146), the default, copy and move constructors for
+    `using B::B;` (declared eagerly, `HAS_INHERITED_CTOR`), in a class
+    template specialization too. The `operator==` a defaulted
+    `operator<=>` declares ([class.compare.default]/5) hides nothing:
+    it is declared only when the class declares no `operator==`, and a
+    `using B::operator==;` counts (clang 19, clang 22 and GCC 14 agree).
+  - *A virtual override* hides the shadow of the function it overrides
+    ([namespace.udecl]/14: members "override and/or hide"): one mark,
+    whose hider is the overrider, in either order;
+    `overridden_methods(hider)` tells an override from a plain hide.
+  - *A conversion function* hides only the base's conversion function
+    to the same type (the type is part of its name); a conversion
+    function template cannot be named by a using-declarator.
+  - *A repeated using-declarator.* A second class-scope
+    using-declarator naming an entity another using-declarator of the
+    class already introduced (through another class: `using B1::f;
+    using B2::f;` with a virtual base `A` declaring `f`) makes its own
+    shadow, which replaces the earlier one in lookup (as at namespace
+    scope, and as clang chains `PrevShadow`). Each using-declaration
+    keeps its shadow in its list, so both name the entity. There is no
+    redeclaration group of shadows: two shadows of one class name one
+    entity when their targets are the same declaration. A member that
+    hides one of them marks every shadow of that entity in the class
+    (`mark_hidden_shadow`).
+  - *Lookup never finds a hidden shadow; the table holds it.*
+    `Ast::lookup_local` is the raw per-context table ("no hiding") and
+    returns a hidden shadow in either order, as both orders enter the
+    shadow. Sema's lookup results never contain one (`lookup::Found`;
+    the found declaration of a reference; the written-reference table's
+    found sets, §18; an `UnresolvedLookupExpr`'s found list, §8.8,
+    whether built from a lookup or substituted from its pattern: a
+    substituted overload set leaves out an element whose shadow the
+    specialization hides).
+
+  Tests: `crates/kiln_parse/tests/using_hidden_shadow.rs` (each rule
+  above, the snapshot round trip and totality),
+  `crates/kiln_parse/tests/using_shadow_named.rs` (`shadow_named`: every
+  form above, both orders, the snapshot and module image round trips),
+  `crates/kiln_driver/tests/modules_image_using.rs` (the repeated
+  using-declarators' marks in the module image; a class template's
+  using-declarations are not in the image, spec/modules.md §11.11),
+  `tests/conformance/namespace.udecl/p14-hidden-after-using-specialization-run.cpp`,
+  `p14-repeated-using-through-bases-run.cpp`.
 - **Repeated using-declarations and namespace aliases** ([namespace.udecl],
   [namespace.alias]; WP-2025 Q14). Two using-declarations of the same
   name in one scope are two `Using` declarations, never chained: each
@@ -485,7 +625,8 @@ struct VarData {                    // 24 bytes
     redecl: Redecl,
     init: Option<ExprId>,
     spec: VarSpec,                  // u32: storage(3) tls(2) init_style(2: c/call/list/paren-list) constexpr(1) constinit(1)
-                                    //   inline(1) nrvo(1) exception_var(1) cxx_for_range(1) ...
+                                    //   inline(1) nrvo(1) exception_var(1) cxx_for_range(1) inline_implied(1)
+                                    //   placeholder(2: none/auto/decltype(auto)/__auto_type, bits 14-15)
     eval: VarEval,                  // u32, §9.2: 0 NotEvaluated | MAX Evaluating | MAX-1 NotConstant | else ConstValueId
     templ: TemplLink,
 }
@@ -1244,6 +1385,57 @@ sema is gone) sees them in a template pattern:
 Tests: `crates/kiln_parse/tests/sema_facts.rs` (a non-dependent object, an
 implicit `this->`, `p->Base::f<int>(x)` and `p->Base::f<T>(x)`).
 
+### 5.11 Type operands as written (WP-3589)
+**Stability promise.** Each type operand below is kept as written: the
+type with the sugar the source wrote (a `decltype(e)` or `typeof(e)`, a
+typedef or alias name, an array bound's written expression, a
+template-id's arguments as written), not only its canonical type. This
+holds in plain code, in a template's pattern and in its instances
+(substitution rebuilds the sugar with the substituted expressions), and
+across PCH snapshots and module images. A reader walks the operand with
+`TypeContext::written_exprs` (spec/types.md §8.4), or an argument list
+with `written_arg_exprs`, to reach every expression, and so every call,
+written in it. The accessors are part of the promise: dropping one, or
+answering with a canonical or completed type where this list says "as
+written", is an interface change (docs/AGENTS.md rule 4).
+
+| operand | expression kinds | accessor |
+|---|---|---|
+| a C-style cast's type | `CStyleCastExpr` | the node's type |
+| a named or functional cast's type | `CXXStaticCastExpr`, `CXXConstCastExpr`, `CXXReinterpretCastExpr`, `CXXDynamicCastExpr`, `CXXFunctionalCastExpr` | `ExprArena::cast_written_type(e)`, else the node's type (a glvalue cast's written type is the node's type plus `&` / `&&` by value category; §5.3) |
+| a functional cast's type in a pattern (dependent type or arguments) | `CXXUnresolvedConstructExpr` | `ExprArena::unresolved_construct_type(e)` |
+| `sizeof` / `alignof` type operand (`__alignof`, `__datasizeof`, `vec_step` the same) | `UnaryExprOrTypeTraitExpr` | `ExprArena::trait_type_arg(e)` |
+| type trait operands | `TypeTraitExpr` | `ExprArena::type_trait_args(e)` (a `ListId` of `QualType`s) |
+| `typeid` type operand | `CXXTypeidExpr` | `ExprArena::typeid_operand(e)` (`TypeidOperand::Type`) |
+| `new`'s allocated type | `CXXNewExpr` | `ExprArena::new_extra(e).allocated_ty` (an array new's element type; its first bound is `array_size`, an expression, §5.7) |
+| a compound literal's type | `CompoundLiteralExpr` | `ExprArena::compound_literal_written_type(e)` |
+| a name's explicit template arguments | `DeclRefExpr`, `MemberExpr`; in a pattern `UnresolvedLookupExpr`, `CXXDependentScopeMemberExpr`, `DependentScopeDeclRefExpr` | `ExprArena::decl_ref_extra(e).template_args`; an overloaded member access's `Ast::member_access_name(e).template_args` (§5.10); a dependent name's `TemplateTables::expr_targs` |
+| a concept-id's arguments | `ConceptSpecializationExpr` | `ExprArena::concept_spec_args(e)` |
+
+A compound literal of an array of unknown bound (`(T[]){1, 2}`, a GNU
+extension in C++) has the type its list completes (`T[2]`,
+[dcl.init.aggr]/4) as its node type; the written `T[]` is then kept in
+the cold map `compound_literal_written: ColdMap<ExprId, QualType>`
+(`AstBuilder::set_compound_literal_written`, recorded only when it
+differs from the node's type, like `cast_written`), and instantiation
+substitutes the written type (clang `TransformCompoundLiteralExpr` reads
+`getTypeSourceInfo`). PCH snapshots carry the map (`FORMAT_VERSION`
+187); a module image carries no compound literal yet (an interface
+holding one in a body the image writes is replayed from source, which
+keeps it); memory row `cold.compound_literal_written`.
+
+Other type operands carry no promise yet: `va_arg`'s type,
+`__builtin_offsetof`'s, `__builtin_bit_cast`'s and
+`__builtin_convertvector`'s, an array type trait's, a pseudo-destructor
+name's, a value-initialization `T()` and a temporary object `T{...}`.
+A declaration's type is no operand: spec/types.md §8.4 and
+`Ast::decl_written_exprs` cover it (nothing for a deduced variable).
+
+Tests: `crates/kiln_parse/tests/written_bounds.rs`
+`every_type_operand_is_kept_as_written` (each operand in plain code and
+in a function template's pattern and instance),
+`a_compound_literal_keeps_its_unknown_bound`.
+
 ## 6. Statements
 ```rust
 struct StmtNode { kind: StmtKind /*u8*/, /* 1 padding byte */ aux: u16, loc: Loc, a: u32, b: u32 }  // 16 bytes
@@ -1604,6 +1796,80 @@ reachable from the `Ast` or names the row that puts it there.
 - location-only tables (keyword, placeholder, `...` and attribute
   positions of pattern syntax whose tree is on the `Ast`): not yet, row
   WP-3123, only if a tooling client asks.
+
+### 8.8 The using-shadows of an unresolved name (WP-3400)
+An `UnresolvedLookupExpr` (§5: a dependent call's callee, a function
+template-id, an overload set resolved at the call) holds the
+declarations its lookup found, the targets: a using-declaration's
+shadow is looked through ([namespace.udecl]/1), so `legacy::forward<T>`
+after `namespace legacy { using std::forward; }` lists `std::forward`
+itself. The node also keeps, per element, the declaration lookup
+actually found when that is a using-shadow (clang's `FoundDecl` in
+`UnresolvedLookupExpr::decls()`): a tooling client tells
+`legacy::forward<T>` from `acme::forward<T>` (one entity, two shadows)
+and from `std::forward<T>` (no shadow). The using-directive route is not
+kept here (§18.7, §18.9.1 for the written-reference table's).
+
+- **Storage** (design choice: a parallel cold list, not pairs).
+  `templates.unresolved_found: ColdMap<ExprId, ListId>` (map name
+  `unresolved_found`, memory row of that name): a list of `DeclId`s
+  parallel to the node's declaration list, each the `UsingShadow` (or
+  `ConstructorUsingShadow`) through which the element at that index was
+  found, else the element itself. An entry exists only when at least one
+  element was found through a shadow, so a node without shadows costs
+  nothing: its header, its declaration list, their order and targets are
+  what they were before WP-3400.
+- **Written** by sema where a node is built from a lookup result
+  (`lookup::Found::found`, parallel to `decls`): an unqualified or
+  namespace-qualified function template name, an overload set
+  (`build_overload_ref`), a widened function template-id
+  (`widen_function_template_id_dn`), an assumed template-id
+  ([temp.names]/3) and an operator-function-id template-id, and a
+  dependent call's single callee (from the `DeclRefExpr`'s
+  `found_decl`). `Ast::note_unresolved_found(e, found)` keeps an element
+  only when it is a shadow of the same entity as the declaration at its
+  index; it writes nothing for a node that is not an
+  `UnresolvedLookupExpr`, a list of another length, no shadow, or a
+  node that already has an entry.
+- **Substitution** keeps it: a rebuilt node naming the declarations of
+  its pattern (a namespace-scope dependent call, a qualified overload
+  set, a generic lambda's body substituted still dependent) takes the
+  pattern's shadows, element by element (by entity when the lengths
+  differ); a shadow that is a member of a class template's pattern
+  becomes the shadow the instantiated using-declaration introduced in
+  the enclosing specialization (dropped if none). That map is structural:
+  the specialization's shadow may be hidden there by a member of the
+  specialization (`Ast::shadow_hider`, §4.2). A rebuilt overload set
+  leaves out an element the pattern found through a shadow the
+  specialization hides, since lookup in the specialization finds the
+  hider, which the set has: in `template <class T> struct D : B { using
+  B::m; static int m(T); int call(T t) { return m(t); } };`, `D<int>`'s
+  `m(t)` lists `D<int>::m(int)` and `B::m(double)` through `D<int>`'s
+  shadow, not `B::m(int)` (WP-3403; before, the call was ambiguous). So
+  no found list names a hidden shadow. A node made by a new lookup at
+  instantiation records that lookup's shadows.
+- **Snapshots and images.** PCH snapshots carry the map (§17). Module
+  images carry it per node (`COLD_SHADOWS`, spec/modules.md §11.11); the
+  importer records it through `note_unresolved_found`, so the same
+  checks apply.
+- **Query** (total, for any expression of the `Ast`):
+  `Ast::unresolved_shadow(e, i) -> Option<DeclId>`: the shadow of
+  element `i` of `Ast::unresolved_decls(e)`. `None` when `e` is not an
+  `UnresolvedLookupExpr`; when `i` is not an index of its declarations;
+  when the element was not found through a using-declaration: declared
+  in the scope searched, made visible by a using-directive, or not found
+  by a lookup at all (a set kiln forms without one: a typo correction's
+  candidates, a structured binding's `get`, a literal operator's
+  templates, a splice, the two-phase recovery retry).
+  `Ast::unresolved_found_pairs(e) -> impl Iterator<Item = (DeclId,
+  Option<DeclId>)>`: every element with its shadow, in the node's order
+  (unqualified: newest first, spec/sema-overload.md §2.1); empty when
+  `e` is not an `UnresolvedLookupExpr`.
+
+Tests: `crates/kiln_parse/tests/unresolved_found.rs` (qualified and
+unqualified, an inline namespace, two shadows of one entity, a class
+using-declaration and its instantiation, a generic lambda substituted,
+totality, the PCH snapshot and module image round trips).
 
 ## 9. Constant values
 ### 9.1 `ConstStore` (`kiln_ast::consts`, WP-043)
@@ -2923,6 +3189,47 @@ stage 1.
   matched per specialization. A member template of a dependent class
   (`n::D<T>::template w<U>`, `T::template f<U>`) stays `DEPENDENT` with
   no definition-context lookup.
+  **The rule, every form (WP-3405).** The template name of such a
+  template-id has its one entry at the name token (§18.1: the whole
+  template-id is no second entry; its arguments' names are their own
+  entries, before it), and a rename of the template claims it with the
+  rule a rename already uses: an entry whose `entity` or `found` is the
+  template (the non-dependent `n::v<int>` names the specialization,
+  `found` the template; the dependent `n::v<T>` names the template), and,
+  for a function template-id, an entry of `entries_finding` (§18.12.1).
+  So the entry is the template's in each context: qualified and
+  unqualified, through a using-directive (`udir=`, §18.7.3) or a
+  using-declaration; a type context, a template argument (`n::I<n::v<T>>`),
+  a default template argument, an unevaluated operand, a
+  requires-expression; a concept-id in a requires-clause, a nested
+  requirement, a type-constraint, a constrained placeholder and a
+  return-type-requirement; nested template-ids (`n::v<m::w<T>>`: `w` and
+  `v` each name their template, `w`'s entry first). A member variable
+  template of the current instantiation ([temp.dep.type]/1) follows the
+  rule §18.12.2 gives members of the current instantiation: class member
+  lookup at the definition found it, and that result is final
+  ([temp.dep.type]/6) in a class without a dependent base, and also in
+  one with a dependent base when the class declares the name itself:
+  class member lookup returns the declaration set of a class that
+  declares the name, before any base, dependent or not, so a base's
+  member of the same name is hidden ([class.member.lookup]/2; WP-3450).
+  So `mw<T>`, `S::mw<T>`, `this->mw<T>` and `this->template mw<T>` name
+  the template (the last two with `MEMBER`; a using-declaration's shadow
+  in `found`), in a nested class of a class template too. A
+  using-declaration in the class of a non-dependent base's member is a
+  declaration of the class (`using P::pw;`: `this->pw<T>` names `P::pw`,
+  `found` the shadow); one of a dependent base's member (`using
+  B<T>::mw;`) is not, as only the instantiation resolves it. Only when
+  the class does not declare the name and has a dependent base, which
+  could supply it, does a `this->` name stay `DEPENDENT` with its found
+  set and `+base` (the instantiation looks it up again). A member function template stays an overload set
+  (`this->template mf<T>()`: `DEPENDENT`, its found set), and a member
+  template of an unknown specialization (`t.template w<T>` with `t` a
+  `D<T>`) has no definition-context lookup. A partial specialization's
+  member is its own. An entry that names its template has no
+  per-specialization rows (§18.9): each specialization is that template's,
+  and a client that needs the specialization forms it from the
+  template and the arguments.
 - **PCH and modules.** Stage 5 (§18.10) carries both tables in PCH
   snapshots and module images: a TU restored from a snapshot continues
   the prefix's table, and an importer built from an image merges the
@@ -2982,7 +3289,20 @@ template specializations matched, dependent and never instantiated),
 specialization's members), `spec-target-overloads` (an explicit
 specialization and instantiation of the second of two overloaded
 templates), `var-template-id` (variable template-ids with dependent
-arguments); stage 6: the `operators-*` tests and `udl`, §18.13.9).
+arguments); WP-3405: `template-id-dependent-args` (every context and
+form of §18.5's rule, nested ids, function template-ids' found sets,
+`T::template x<int>`), `template-id-current-inst` (members of the current
+instantiation, with and without a dependent base, an unknown
+specialization, a partial specialization's member);
+WP-3450: `this-member-dependent-base` (the class's own member variable
+template with a dependent base, with and without `template`, hiding a
+dependent base's, in a nested class; using-declarations of a dependent
+and a non-dependent base's member; data and static members; overload
+sets the class or a non-dependent base declares),
+`template-id-concepts`, and the carriage goldens `template-id-pch`,
+`template-id-pch-include`, `template-id-module-image` and
+`template-id-module-replay`; `crates/kiln_parse/tests/written_refs.rs`
+`rename_claims_dependent_template_ids`; stage 6: the `operators-*` tests and `udl`, §18.13.9).
 
 ### 18.7 Lookup provenance (WP-2130)
 
@@ -3406,7 +3726,7 @@ a separate table: the main table keeps one entry per written name.
 
   | field | type | meaning |
   |---|---|---|
-  | `entry` | `WrittenRefId` (4) | the pattern's main-table entry: `DEPENDENT`, no entity |
+  | `entry` | `WrittenRefId` (4) | the pattern's main-table entry: `DEPENDENT`, no entity; or a member qualifier's component the definition resolved and the instantiation looked up again in the object's class (below) |
   | `spec` | `DeclId` (4) | the specialization whose instantiation resolved the name (§18.9.2) |
   | `entity` | `Option<DeclId>` (4) | what the name denotes there, as §18.2's `entity` (a function template's specialization, a class's first declaration, ...); `None`: unresolved (§18.9.3) |
   | `found` | `Option<DeclId>` (4) | what lookup found, when it differs from `entity` (the template of a specialization) |
@@ -3417,6 +3737,18 @@ a separate table: the main table keeps one entry per written name.
 
   Not recorded per specialization: `Injected` (an injected-class-name
   names the pattern's class, which is not dependent).
+- **Member qualifiers looked up again.** In `t.acme::B::f()` on a
+  type-dependent object, the definition finds `acme` by unqualified
+  lookup only, and the pattern's `acme` and `B` entries keep that
+  resolution (namespace `acme`, `acme::B`). A specialization whose
+  object's class has its own `acme` binds the qualifier there
+  ([basic.lookup.qual.general]/2-3, spec/sema-templates.md "Dependent
+  forms"): each component it formed so (`TemplState::relooked_nns`)
+  gets a row on its resolved pattern entry when it names something else
+  than the entry (`W::acme`, `W::acme::B`), with the member's row
+  (`WB::f`). A specialization whose class has no `acme` adds no
+  qualifier rows (WP-3406;
+  `tests/conformance/written_refs/spec-member-qualifier-object-class.cpp`).
 - **The using-directive.** Ordinary unqualified lookup of a dependent
   name runs at the pattern's definition ([temp.dep.candidate]/1,
   [temp.res.general]/1); only argument-dependent lookup runs at the
@@ -3486,7 +3818,15 @@ instantiation stack (§8.4) from the innermost frame:
 - an alias template's aliased type: an alias template specialization is
   not a declaration ([temp.alias]/2), so the key is the alias template,
   one row per distinct resolution;
-- a default template argument: the template whose parameter it is; a
+- a default template argument: the template whose parameter it is,
+  except a function template's default that a deduction uses
+  ([temp.deduct.general]/5): the specialization the deduction forms
+  (`call<n::S, 4>`). That default is substituted before the
+  specialization exists, so its rows are keyed by the template until
+  the deduction ends; `deduce_spec` then re-keys them to the
+  specialization it formed, or drops them when it failed
+  (`end_written_spec_deduction`, §18.9.3). A call with the argument
+  written explicitly substitutes no default and gets no row for it; a
   default function argument used by a call ([temp.inst]/12): the called
   function (`from<P>`, `Holder<P>::pick`); a default member initializer
   ([temp.inst]/4): the field of the specialization;
@@ -3495,7 +3835,11 @@ instantiation stack (§8.4) from the innermost frame:
   (`outer(const One &)::(lambda)::operator()<Two>`). The enclosing
   template's instantiation rebuilds the lambda's body with the name
   still dependent; the rebuilt node then stands for the same entry
-  (§18.9.4) and each call operator specialization resolves it;
+  (§18.9.4) and each call operator specialization resolves it. A name
+  the enclosing instantiation resolves (an unqualified call whose
+  arguments depend only on the enclosing template's parameters, `f(t)`,
+  found by argument-dependent lookup) gets its row from that
+  instantiation, keyed as a non-generic lambda's would be;
 - a member template of a class template ([temp.mem]/1): its
   specialization, the innermost (`Box<Small>::convert<Wide>`), for every
   name of its body, dependent on the inner parameters or only on the
@@ -3536,7 +3880,9 @@ body substitution, a structured binding's initializer) are transparent.
 A frame that is a check, not an instantiation, stops the walk with no
 key, so nothing is recorded: partial specialization matching,
 default-argument checking, template template argument matching,
-building deduction guides, `std::meta::substitute`.
+building deduction guides, `std::meta::substitute`. A partial
+specialization match has no `specs()` key; with keys on it is recorded
+in the keyed table, under its `PartialMatch` key (§18.14).
 
 #### 18.9.3 Failures
 
@@ -3545,7 +3891,24 @@ building deduction guides, `std::meta::substitute`.
   template `ft`'s deduction ends (`in_sfinae_held`), the rows it
   recorded keyed by `ft` itself are dropped, and when it failed also
   those keyed by the specializations of `ft` it formed; a lookup that
-  fails inside a SFINAE context records no unresolved row. What the
+  fails inside a SFINAE context records no unresolved row. The frame
+  of a default template argument the deduction substitutes keeps its
+  rows keyed by `ft` when it succeeds, until the deduction ends: they
+  become the formed specialization's, or are dropped with a deduction
+  that fails at a later step (§18.9.2). Rows belong to the
+  specializations that are formed: every candidate whose deduction
+  succeeds forms its specialization ([temp.over]/1), and keeps the rows
+  of its signature and its default template arguments whether or not
+  overload resolution then chooses it; a candidate whose deduction
+  fails keeps none, and so does one whose deduction never runs: at
+  clang compat 22 a function template candidate named without explicit
+  template arguments is deferred while the set may still have a perfect
+  match (`overload/defer.rs`, spec/sema-overload.md §4.4), and when a
+  non-template candidate is that match the template is never deduced,
+  so no specialization of it is formed and its signature records no row.
+  At compat 19, or when no candidate is a perfect match, the deferred
+  template is deduced and keeps its specialization and rows as above
+  (`written_refs/inst-deferred-candidate.cpp`). What the
   real instantiations nested in the deduction recorded stays (a class
   template specialization instantiated while the signature was
   substituted is instantiated, [temp.inst]/2), as do an alias
@@ -3564,6 +3927,22 @@ building deduction guides, `std::meta::substitute`.
   started and outside a SFINAE context, gets a row with no entity
   (`UNRESOLVED`). A rebuild given up without a diagnostic (a trial
   substitution) records nothing.
+- **A reused alias substitution** records nothing again. An alias
+  template specialization is a substitution, not an instantiation
+  ([temp.alias]/2), and kiln substitutes it once per argument list (the
+  sugared converted list at clang compat 22, the canonical one at 19;
+  spec/sema-templates.md §4.10): its rows are recorded at that first
+  substitution, keyed by the alias template (§18.9.2), and a later use
+  of the same specialization takes the cached type and records none. A
+  substitution that checked access, or whose error a SFINAE context
+  trapped, is not cached and is redone (its rows are kept once,
+  §18.9.1). When a declaration between two uses would change what the
+  substitution finds (a better function for argument-dependent lookup
+  of a dependent call in the aliased type), the program is ill-formed,
+  no diagnostic required ([temp.dep.candidate]/1): kiln keeps the first
+  result and its rows, as GCC does, where clang substitutes again at
+  each use (`written_refs/inst-alias-first-use.cpp`). Default template
+  arguments are not cached: each use substitutes them again.
 - **A name that stays unresolved** at instantiation gets a row with no
   entity: a dependent call no viable function matched (with the
   argument-dependent set its lookup computed, §18.7.4), a member the
@@ -3598,7 +3977,17 @@ building deduction guides, `std::meta::substitute`.
   for an overloaded member call's failure the member call's own); a
   node still dependent (a generic lambda's body, a member template
   substituted with the outer arguments only) becomes a further pattern
-  node of the same entry. A rebuild that fails reports per §18.9.3.
+  node of the same entry. Whether a rebuilt overload set is still
+  dependent is decided by its call, not by the context: in a context
+  that is itself a pattern (a constraint, which satisfaction substitutes
+  with the template as context; a generic lambda's body, which the
+  enclosing instantiation rebuilds) the set is noted as a further node
+  and also awaits resolution (`defer_spec`). A call whose arguments are
+  no longer dependent resolves it, by ordinary or by argument-dependent
+  lookup, which records the row and drops the node
+  (`forget_pattern_node`); a call that stays dependent keeps the node
+  (`act_on_call`, `written_spec_call_dependent`), and so does a set that
+  is not called (WP-3584). A rebuild that fails reports per §18.9.3.
 - **Qualifiers.** After a qualified name's row, the dependent
   components of the entry's qualifier chain are paired from the right
   with the substituted nested-name-specifier's components, and each
@@ -3622,14 +4011,54 @@ building deduction guides, `std::meta::substitute`.
   operator specialization's instantiation, which substitutes the rebuilt
   type at the same anchor (a rebuilt type has no §5.8 locations of its
   own), resolves it and records the row keyed as §18.9.2 says for a
-  generic lambda. A member template's signature and body need no
-  further node: the class's instantiation substitutes its declaration
-  with the outer arguments (still dependent, no row), but the member
-  template specialization substitutes the pattern's (§18.9.2,
-  `Box<A>::conv<B>`).
+  generic lambda.
+- **Further nodes.** A rebuild that leaves a node still dependent adds a
+  further pattern node of the same entry only when the rebuilt node
+  differs from the one substituted. A member template's signature and
+  body therefore add none: the class's instantiation substitutes its
+  declaration with the outer arguments, which gives a name that depends
+  on the member template's own parameters back as the same node (no
+  node, no row; a name that resolves gets the class specialization's
+  row, §18.9.2), and the member template specialization substitutes the
+  pattern's declaration (§18.9.2, `Box<A>::conv<B>`). A generic lambda's
+  body, which the enclosing instantiation rebuilds, adds a further node
+  for each rebuilt node that stays dependent, and records a row for each
+  that resolves, whether by ordinary lookup or by argument-dependent
+  lookup (`f(t)` with `t` of the enclosing template's parameter type).
+  No further node is added for:
+  - a rebuild that resolves: it records a row (an overload set, in any
+    context, once its call resolves it; see "Expressions");
+  - a rebuild that returns the pattern node unchanged (the class's
+    instantiation over a member template);
+  - a rebuild that fails (§18.9.3);
+  - an entry that is not `DEPENDENT` (resolved at the definition);
+  - anything while recording is off or pattern nodes are suspended
+    (`no_nodes`, §18.8);
+  - a type other than through `ty_node`'s `DependentName` and
+    `DependentTemplateSpecialization` branches
+    (`note_spec_still_dependent`, see "Types");
+  - an operator token: `PatternNode::Oper` nodes are noted by the
+    operator sites (§18.13.6), not by this rule;
+  - a node read from a module image: the importer registers it again
+    (`bmi_image/refs.rs`), no rebuild is involved.
 - **Argument-dependent lookup.** A dependent unqualified call's row gets
   §18.7.4's `how` and set from the facts `resolve_unresolved_call`
   reports, as the main table's call entries do.
+- **One candidate.** A rebuilt call whose lookup found exactly one
+  non-template function takes `resolve_unresolved_call`'s direct path,
+  which checks the arguments only when `act_on_call` converts them. Its
+  row waits until then (`SingleWrittenSpec`, parked by the direct path):
+  arguments that convert make the row name the function, as overload
+  resolution choosing it would; arguments that do not (the candidate is
+  not viable, [over.match.viable]/4) leave the name unresolved, as a
+  set of two with no viable function does: no row inside a SFINAE
+  context or a constraint, an `UNRESOLVED` row with the
+  argument-dependent set after an error (§18.9.3). A call that ends
+  before its arguments are converted (a builtin's custom checking, an
+  implicit member call) records the function when `act_on_call`
+  returns. The other one-candidate paths are not calls (the address of
+  a single function, `resolve_single_overload_candidate`) and resolve at
+  once.
 - **Using-declarations.** The class template specialization's
   instantiation redoes each dependent using-declarator
   (`member_using`, `member_using_typename`) and records its row keyed
@@ -3739,7 +4168,8 @@ The 29 `bench/oven` entries' `-fconstexpr-report` counters (all but
 #### 18.9.7 Tests
 
 `crates/kiln_ast/src/written_refs.rs` (the row is 28 bytes, off records
-no pattern node, a row is kept once and an update that duplicates
+no pattern node, a forgotten pattern node is only its own entry's, a
+row is kept once and an update that duplicates
 another merges into it, a SFINAE drop removes one specialization's rows
 only, truncation drops the rows and pattern nodes of the entries it
 drops), `crates/kiln_parse/tests/written_refs.rs` (rename by table:
@@ -3757,12 +4187,25 @@ generic lambda (`inst-generic-lambda`), variable and alias templates
 (`inst-var-template`), explicit instantiation (`inst-explicit`), a
 member template of a class template (`inst-nested`), a substitution
 failure (`inst-sfinae`), an instantiation error (`inst-error`),
+function template default template arguments used by deduction, with
+several candidates, carried by a precompiled header and a module
+image (`inst-default-targ`, `inst-default-targ-pch`,
+`inst-default-targ-module-*`), a dependent call with one candidate, viable or not, in a constraint, a deduction and a body
+(`inst-adl-single`, `inst-adl-single-error`),
 using-directives at file, namespace and block scope, with
 argument-dependent lookup and both (`inst-udir`), dependent types a
 generic lambda's body rebuilds still dependent (`inst-rebuilt`),
 using-declarations with a dependent qualifier and the names they
 introduce (`inst-using`), names in constraints and requires-expressions,
-with a satisfaction-cache hit (`inst-constraint`), and the
+with a satisfaction-cache hit (`inst-constraint`), an unqualified call
+found by argument-dependent lookup in a requires-clause, a nested
+requirement and a constraint checked with a definition
+(`inst-adl-constraint`) and in a generic lambda, resolved by the
+enclosing instantiation or still dependent (`inst-adl-generic-lambda`),
+a template candidate never deduced beside a perfect non-template match
+and one deduced beside an imperfect one (`inst-deferred-candidate`), an
+alias specialization reused after a better candidate is declared
+(`inst-alias-first-use`, compared with GCC), and the
 order of instantiation swapped (`inst-order-a`, `inst-order-b`, whose
 goldens differ only in the lines of `run`), also with the
 specializations first named through an alias in one and through the
@@ -3791,8 +4234,12 @@ names to be carried.
   rows, dropped rows included so every `SpecRefId` stays; the pattern
   nodes and their candidates' using-directives (§18.9.1); the unrecorded rows (§18.10.3); the leads (§18.11.2); the found sets, their
   elements and the (entry, set) rows (§18.12.6); the declarator groups of
-  the shared entries (`groups`, `group_decls`, §18.3.1, WP-3144). Maps are written as their
-  entries sorted by key, so the bytes do not depend on hashing.
+  the shared entries (`groups`, `group_decls`, §18.3.1, WP-3144); the
+  substitution keys, their rows and their roots (one span per key and
+  the slots) and the expanded nodes (§18.14.5, WP-3540, WP-3541): a key
+  is carried with its rows and its root, or not at all. Maps are
+  written as their entries sorted by key, so the bytes do not depend on
+  hashing.
   **Rebuilt** on read: the set index, the found-set index and the row
   de-duplication index, from the sets and the live rows. **Transient**: the scratch of one
   declaration or one instantiation (`inst_target`, `spec_pending`,
@@ -3830,7 +4277,9 @@ names to be carried.
   own sources after its preamble, their provenance, the
   per-specialization rows of its carried specializations, the
   pattern nodes of its dependent entries and their found sets
-  (§18.12.6). The preamble's names (the
+  (§18.12.6), and, with keys on, the substitution keys with their rows
+  and roots (§18.14.5): a key is carried with its rows and its root, or
+  not at all (left out and counted). The preamble's names (the
   module declaration, the imports, and with them the names the imported
   units' replays recorded) are not carried: the importer replays the
   preamble (spec/modules.md §11.11 "Imports and re-exports") and
@@ -3881,6 +4330,9 @@ The dump prints each row first, `unrecorded  precompiled prefix (<n>
 files)` and `unrecorded  module <key> (<main file's base name>, <n>
 files)`. A table with an unrecorded row is still carried by a later
 snapshot (the rows with it); a module unit with one fails its image.
+The substitution keys' own gaps (`PrefixKeys`, `ModuleKeys`,
+`ModuleKeysLeftOut`, §18.14.5) are listed the same way and do not fail
+an image.
 
 #### 18.10.4 Cost
 
@@ -4260,7 +4712,7 @@ instantiated. The found set is that result.
 | `(f)(t)`, `::f(t)`, `N::f(t)` with several overloads | unqualified (parenthesized) or qualified lookup | none: closed, every instantiation selects from it |
 | a friend function template specialization with dependent arguments or type (`friend void f<>(T);`, `friend void n::f<T>(T);`, §18.4) | the function templates ordinary or qualified lookup of the name found at the definition | none: closed, each instantiation matches one of them ([temp.friend]/1.3) |
 | one visible `f` with argument-dependent lookup suppressed (a block-scope declaration, a class member), one member found by `this->a(t)` | no set: resolved at the definition, the entry has its entity | |
-| `this->a(t)`, `C::a(t)`, `a(t)` (implicit `this`), `this->mt(t)`, `this->template mt<T>(t)`: members of the current instantiation (`CXXDependentScopeMemberExpr`, or an overloaded member access) | class member lookup in the current instantiation: members of the pattern class and its non-dependent bases | none when the class searched has no dependent base; else `DEPENDENT_BASE`: the instantiation looks the name up again, and a different result is ill-formed ([temp.dep.type]/6; not diagnosed, §18.12.6) |
+| `this->a(t)`, `C::a(t)`, `a(t)` (implicit `this`), `this->mt(t)`, `this->template mt<T>(t)`: members of the current instantiation (`CXXDependentScopeMemberExpr`, or an overloaded member access) | class member lookup in the current instantiation: members of the pattern class and its non-dependent bases | none when the class searched has no dependent base, or declares the name itself (its declaration set is the result, a base's member of the name is hidden, [class.member.lookup]/2; a using-declaration of a non-dependent base's member counts, one of a dependent base's member does not; WP-3450); else `DEPENDENT_BASE`: the instantiation looks the name up again, and a different result is ill-formed ([temp.dep.type]/6; not diagnosed, §18.12.6) |
 | a name a dependent using-declarator introduces (`using B<T>::bm; ... bm(t)`) | the class's lookup result, the `UnresolvedUsingValue` an element | `UNRESOLVED_USING`: what it names exists per specialization only |
 | `T::x`, `B<T>::bm(t)` (a dependent qualifier), `t.m(t)`, `this->bm(t)` naming nothing the class declares in a class with a dependent base (a member of an unknown specialization), `using B<T>::bm;` itself, `typename T::ty`, a dependent nested-name-specifier component | no set (`None`): no lookup runs at the definition; all knowledge is per specialization (§18.9) | |
 | a dependent operator `t + t`, a fold's operator, a `co_await` in a coroutine template (§18.13.6) | the definition-context lookup of `operator@` (`Ast::dependent_oper_candidates`, §8.5; for `co_await`, the unqualified lookup of `operator co_await` re-run at the recording site) | `ADL` |
@@ -4395,7 +4847,10 @@ using-declaration and a using-directive (`found-several`), none
 overload (`found-later-overload`), closed sets and a block-scope
 declaration (`found-closed`), members of the current instantiation
 (`found-this`) and with a dependent base, an unknown specialization and
-a dependent using-declarator (`found-this-base`), function template-ids
+a dependent using-declarator (`found-this-base`), every `this->`,
+qualified and unqualified form in a class with a dependent base, closed
+when the class declares the name, `+base` when a non-dependent base
+does (`this-member-dependent-base`, WP-3450), function template-ids
 and an assumed template name (`found-template-id`), an
 operator-function-id call and an operator expression
 (`found-operator`), and the carriage goldens through a PCH and as text
@@ -4606,6 +5061,13 @@ type-dependent operand is a dependent name ([temp.dep.general]/2,
   the operator is still dependent (a generic lambda's pattern inside a
   specialization) re-keys its rebuilt node (`PatternNode::Oper`,
   §18.9.4) for the next level.
+- **Keyed rows** (§18.14). An operator token in a partial
+  specialization's argument list is reached by a match, not by a
+  specialization: with keys on, the match's `PartialMatch` key gets the
+  token's row, with the same facts (`shl<T, void_t<decltype(val<T>() <<
+  val<T>())>>` matched by `shl<a::X>`: `'<<' -> a::operator<<
+  key=partial:shl@...<a::X, void> how=adl`), and the key's root holds
+  the operator call with its callee.
 - **Reached.** For an instantiated specialization a row exists exactly
   when the instantiation reached the token. A discarded `if
   constexpr` branch ([stmt.if]/2) is never reached and has none; a
@@ -4932,6 +5394,451 @@ goldens (`Inputs/refs_pch.h`, `Inputs/refs_mod.cppm`: a class's own
 image). The entries reuse the role, qualifier, lead and pattern-node
 shapes of stages 1 to 6b, so neither carriage changes (no
 `FORMAT_VERSION` or `IMAGE_VERSION` bump).
+
+### 18.14 Substitution keys (WP-3540)
+
+A per-specialization row (§18.9) says what a dependent name resolved to
+when a *specialization* was instantiated. Four substitutions of a
+template pattern form no specialization of their own, and their rows
+are keyed by the template today (§18.9.2): matching a class or variable
+template partial specialization against a specialization's arguments
+([temp.spec.partial.match]), checking associated constraints or a
+concept-id for satisfaction ([temp.constr.constr]), substituting a
+default template argument ([temp.param]/10) and substituting an alias
+template's type-id ([temp.alias]/2). Tooling clients need, for each such
+substitution that completed, what each dependent name of the pattern
+bound to under it. The keyed table records that beside `specs()`, opt-in
+under the table: `-fkiln-written-ref-keys` (driver),
+`ParseOptions::written_ref_keys`, `FrontEndOptions::written_ref_keys`;
+it implies `-fkiln-written-refs`.
+
+`specs()`, its rows, their ids and their dump lines are not changed by
+the keyed table, with the sub-switch on or off.
+
+Stage 0 (WP-3540) built the table, its key scopes, its carriage and its
+dump. Stage 1 (WP-3541) opens the scopes of the first kind,
+`PartialMatch`, and gives every key a root (§18.14.10). Each later stage
+opens the scopes of one more kind at the sites of §18.14.3's table and
+states which completed substitutions of that kind get a key.
+
+#### 18.14.1 The key
+
+`WrittenRefs::subst_keys()` yields the keys (`SubstKey`, 24 bytes, a
+`size_of` unit test), in commit order (not part of the contract: compare
+sorted):
+
+| field | type | meaning |
+|---|---|---|
+| `kind` | `SubstKind` (1) | `PartialMatch` (1), `Satisfaction` (2), `DefaultArg` (3), `Alias` (4) |
+| `outcome` | `SubstOutcome` (1) | `Substituted` (1): matched, satisfied or substituted; `Unsatisfied` (2), on a `Satisfaction` key only: the check completed with the answer "not satisfied" |
+| `template` | `DeclId` (4) | first declaration: the partial specialization; the concept or the constrained declaration as the satisfaction check gets it (a template, a partial specialization, a member of a class template specialization as itself); the template whose parameter has the default; the alias template |
+| `args` | `ArgListId` (4) | the canonical arguments (`Types::canonical_args`): the specialization's being matched; the check's; the arguments before the defaulted parameter; the alias template's converted arguments |
+| `extra` | `u32` (4) | `PartialMatch`: the deduced argument list (`SubstKey::deduced`, a payload); `DefaultArg`: the parameter (`SubstKey::parameter`); else 0 |
+| (rows) | `(u32, u32)` (8) | the key's run of rows: start and length, which may be 0 |
+
+A key's **identity** is (kind, template, arguments, and the parameter of
+a `DefaultArg`); `outcome` and a `PartialMatch`'s deduced list are not
+part of it. One identity has one key. Keys are formed for **concrete
+arguments only**: a substitution with a dependent argument is part of
+parsing the enclosing pattern, and its names are resolved again by a
+later substitution with a key of its own. A key exists for a
+substitution that **completed**, whether or not any row was recorded
+under it, and for no substitution that failed: a satisfaction check that
+completed unsatisfied has a key (`Unsatisfied`), a partial specialization
+that did not match has none.
+
+**Which substitutions get a key.** The general rule, for every kind: a
+completed substitution with concrete arguments whose pattern is
+instantiation-dependent. A partial specialization's argument list always
+names the partial's parameters, so for `PartialMatch` the rule is: every
+match that completed has a key, whether or not a row was recorded under
+it, and there is no test of the pattern's entries. A match **completed**
+when deduction succeeded, the substituted argument list equals the
+specialization's arguments ([temp.spec.partial.match]/2,
+[temp.deduct.type]/1), the substitution did not fail and the partial
+specialization's associated constraints are satisfied. Class and
+variable template partial specializations are alike. For `PartialMatch`:
+`template` is the partial specialization's first declaration, `args` the
+specialization's canonical arguments, `extra` the deduced argument list.
+A member partial specialization of a class template specialization
+(the partial specialization instantiated with its enclosing class) is
+keyed by that member of the specialization, as the match gets it.
+Stage 1 opens `PartialMatch` scopes only; the other kinds' rows below
+arrive with their stages.
+
+Read side: `subst_key(id)`, `subst_key_len()`, `subst_key_of(kind,
+template, args, extra)` (the identity index), `subst_rows(id)` (the run,
+contiguous), `subst_rows_of(entry)`, `subst_rows_naming(decl)` (as
+`entity` or `found`), `subst_adl_set(row)`, `subst_keys_on()`,
+`subst_keys_complete()` (§18.14.5). A `DefaultArg`'s parameter and a
+`PartialMatch`'s deduced list are read through `SubstKey::parameter()`
+and `SubstKey::deduced()`; the partial specialization's primary template
+through `Ast::partial_spec_info(key.template)`; the key's root through
+`subst_root(id)` (§18.14.10).
+
+#### 18.14.2 The row
+
+`subst_rows(key)` yields the key's rows (`SubstRef`, 24 bytes, a
+`size_of` unit test): a `SpecRef` (§18.9.1) without `spec`, with the
+same fields and meanings.
+
+A keyed row carries what a per-specialization row (§18.9.1) carries:
+the pattern's entry (`entry`); the entity the name denotes under the key
+(`entity`), with `found` when lookup found something else; for an
+unqualified call the lookup facts of the key's substitution, `how` and
+the associated set (`adl`), the definition-time found set being the
+entry's (`found_at_definition(entry)`, §18.12) and the row one selection
+from it (§18.12.4); `udir`; and, for an entry that was substituted and
+is still dependent, `SUBST_DEPENDENT` with no entity.
+
+`flags` holds `SpecRef::flags`' bits and two of its own, in bits
+`SpecRef` does not use:
+
+- `SUBST_DEPENDENT` (1): the entry was substituted under the key and is
+  still dependent; its name is resolved by a later substitution. No
+  entity, `how` `None`.
+- `SUBST_EXPANDED` (64): the row's entry is not written in the key's own
+  template. It was reached through an alias template-id that the key's
+  pattern keeps only as its expansion ([temp.alias]/2). The table notes
+  the pattern nodes so reached (`expanded_nodes`, filled only with keys
+  on): a node a rebuild leaves dependent while the innermost frame is an
+  alias template's, or one rebuilt from such a node. A row made from one
+  gets the flag unless its key is the `Alias` key of the template that
+  holds the entry.
+
+Under a key, an entry has a row when its name bound during the key's
+substitution; an entry the substitution did not reach, or whose name
+did not bind, has none. A name that resolves to nothing fails the
+substitution (§18.14.3), so a committed key of the kinds other than
+`Satisfaction` has no unresolved row.
+
+#### 18.14.3 Key scopes
+
+The substituter keeps a stack of **key scopes** (`Sema::key_scopes`,
+transient, empty at rest and at a snapshot point), one per keyed
+substitution in progress, each with a private row buffer
+(`kiln_sema::written_keys`):
+
+- **Opening** (`key_scope_open(kind, template, args, extra, payload)`), where
+  the substitution's frame has its arguments. The scope is owned by the
+  innermost instantiation frame (`InstFrame::key_scope`). It records
+  (`Record`) unless its identity is already committed or already open
+  further out (`Skip`: the outer run substitutes everything itself).
+  With the sub-switch off it returns `None` after one bool test.
+- **Attribution** (`Sema::written_row_keys`). A name resolved now has up
+  to two row targets: the specialization `written_spec_key()` gives
+  (§18.9.2, unchanged) and the key scope found by one walk from the
+  innermost frame: a lambda substitution, a structured binding's
+  initializer and a requirement's instantiation are transparent; a frame
+  that owns a scope gives it; a constraint substitution continues
+  outward only to the satisfaction check of the same entity; any other
+  frame, every real instantiation included, ends the walk with none. A
+  nested real instantiation therefore records in `specs()` under its own
+  specialization and nothing in the enclosing key. Every recording site
+  of §18.9.4 and §18.13.7 builds the row once and gives it to each
+  target. With no scope open the walk is one test of an empty stack.
+- **Kept once.** A row equal to one already in the buffer is not added.
+  An overload set resolved later (§18.9.4's deferred resolution) patches
+  its buffered row while the scope is open; if the scope closed
+  meanwhile the keyed half is dropped.
+- **Failure inside.** Under a scope, a name that resolves to nothing (an
+  unresolved name, a failed call, a substitution failure the table
+  records nothing for, §18.9.3) adds no row and *poisons* the scope.
+- **Closing** (`key_scope_close(id, completed)`), in stack order, where
+  the outcome is known. The buffer is committed as the key's run, also
+  when empty, when the substitution completed, the scope records, it is
+  not poisoned and no error was diagnosed since the open; otherwise the
+  buffer is dropped and nothing is written to the table. A committed
+  identity is never recorded again: later runs open `Skip`.
+- **Suspended** (`key_scope_suspend`/`resume`): a check run inside a
+  substitution that is not part of it records into no scope. A
+  suspension is a depth: it silences the scopes open when it began (the
+  scope stack's depth is remembered, nested suspensions keep the deepest);
+  a scope opened during the suspension records as usual, so its key is
+  not committed with rows missing.
+- **The context of a scope.** For a row whose only target is a key scope,
+  the declaration context the scope was opened in is the substitution's
+  own, not a template pattern of its own (`written_ctx_dependent`); for
+  a row with a specialization the test is §18.9.4's.
+
+A key's outcome and rows are those of its first completed run, first in
+translation order: the earliest point in the translation of the unit at
+which the substitution is performed. Two parses of the same text
+therefore give the same keys, outcomes and rows.
+
+**`PartialMatch`** (stage 1). `deduce_partial` (`templ/order.rs`) opens
+the scope after the deduced arguments are set on the deduction frame,
+before the partial's arguments are substituted and compared
+(`partial_args_match`), and closes it exactly once on every path after
+the open: with `completed` false when the comparison fails or the
+substitution fails, or when the constraint check fails; true otherwise.
+The scope outlives the deduction frame: the frame is popped before the
+partial's associated constraints are checked, and the constraint check
+runs while the scope is open but reaches no frame that owns it, so the
+names of the partial's requires-clause have no `PartialMatch` row (their
+satisfaction is keyed by `Satisfaction`, a later stage). Partial
+ordering ([temp.spec.partial.order]) substitutes and deduces again
+without an instantiation frame of its own: it runs suspended and records
+nothing. A repeated match of one (partial specialization, arguments)
+opens `Skip`.
+
+Where each kind's scope opens and closes (stage 1 opens `PartialMatch`
+only):
+
+| kind | open | completed |
+|---|---|---|
+| `PartialMatch` | after the deduced arguments are set in `deduce_partial` (`templ/order.rs`) | the substituted arguments equal the specialization's, no substitution failure, the partial's constraints satisfied |
+| `Satisfaction` | after the check's arguments are set in `satisfy` (`templ/concepts/sat.rs`), not for dependent levels, a partly failed parameter mapping or a translation-unit entity | the check produced an answer, satisfied or not |
+| `DefaultArg` | after the prior arguments are set in `default_template_arg_in` (`templ/args.rs`) | substituted, and converted where the site checks |
+| `Alias` | after the alias template's frame is pushed in `alias_template_type` (`templ/class.rs`), arguments not dependent | the type-id substituted |
+
+#### 18.14.4 Row order
+
+`subst_rows(key)` is in the order the key's own substitution reached the
+names, an atomic constraint answered from the cache contributing its
+rows at the atom's position in the order its evaluation recorded them.
+A key's root (§18.14.10) has its slots in the order of the written
+arguments.
+The order depends on the key's pattern and arguments only: not on other
+keys, not on the order of instantiations, not on which answers came from
+a cache. (A buffer holds one key's rows in recording order.) The order
+*of keys* is commit order and is not part of the contract.
+
+#### 18.14.5 Rollback, carriage and gaps
+
+**Rollback.** `WrittenRefs::truncate` drops every key with a row of a
+dropped entry, whole, and compacts the rows; the other keys keep their
+order and are found again by identity. Expanded nodes of dropped entries
+go. A dropped key's root goes with it (its span and slots; the slots of
+the keys kept are compacted). No key is committed inside a tentative
+parse that is then rolled back past its template (debug-asserted).
+
+**PCH snapshot.** The section (§18.10.1) carries `keys_on` (whether the
+producer recorded keys), the keys and rows as they are, the roots (one
+span per key and the slots; whole arenas are carried, so a root's nodes
+are there) and the expanded nodes (sorted); the identity index is
+rebuilt. A restore checks, each an `Invalid` error: the keys' runs tile
+the rows in order (an empty run starts where the next one does), no
+identity twice, `Unsatisfied` only on a `Satisfaction` key, every row's
+entry in range and `DEPENDENT`, every set in range, every expanded node
+a pattern node, one root span per key, the spans contiguous in key order
+and ending at the slot count, a known slot tag, only `Args` slots on a
+`PartialMatch` key, and the typed ids against the restored arenas (a
+`DefaultArg`'s parameter a declaration, a `PartialMatch`'s deduced list
+0 or an argument list, the other kinds' `extra` 0, a slot's argument
+list, expression or type in range and its unused payload 0). There is
+no "keys without roots" state: a key is carried with its rows and its
+root, or not at all. A consumer without keys drops what was carried;
+a consumer with keys continues the prefix's keys (their ids kept, the
+main file's appended).
+
+**Module images.** The `refs` section (spec/modules.md §11.11) carries
+`keys_on`, the keys (kind, outcome, template record, arguments,
+parameter record or deduced list, root slots) and their rows, under the
+rules of `specs`, and the counts of the keys it left out. A key is
+carried with its rows and its root, or not at all: one whose template,
+parameter, arguments, a row's entry, entity, set or using-directive, or
+a root slot the image cannot carry is left out and counted. A root's
+argument lists are written as a declaration's written arguments are
+(sugar kept: an alias template-id with its arguments, a `decltype` with
+its operand's expression), and its nodes are those the image reaches.
+An importer that records keys maps each key and commits it (an identity
+it already has is kept as it is); one it cannot map is counted with the
+left-out ones. The matches the importer re-runs while it builds the
+image's declarations are the unit's own: a scope opened meanwhile
+commits nothing, so the image's key, with its rows and root, is the one
+kept. Off, the section is skipped undecoded.
+
+**Key gaps.** `WrittenRefs::unrecorded()` (§18.10.3) gains three variants,
+listed only when the consumer records keys:
+
+- `Unrecorded::PrefixKeys { files }`: the snapshot was made with the
+  table but without keys. Nothing the prefix substituted has a key.
+- `Unrecorded::ModuleKeys { module, files }`: the unit's image was made
+  with the table but without keys.
+- `Unrecorded::ModuleKeysLeftOut { module, keys, rows }`: the unit's
+  image was made with keys and left `keys` keys out, holding `rows`
+  rows.
+
+`Prefix` and `Module` already imply the key gap and are not doubled.
+The three do not fail a module unit's image (`Unrecorded::keys_only()`).
+`subst_keys_complete()` is true when no gap of either kind is listed.
+
+#### 18.14.6 The dump
+
+With keys on, after an entry's `spec=` lines (§18.9.5), its keyed rows,
+sorted and without duplicates, each printed as a `spec=` line with
+`key=` in its place:
+
+```
+key=partial:can_swap@4:30<n::S, void>     the primary template's name, the partial specialization's position, the specialization's arguments
+key=sat:Sw@3:28<n::S>
+key=default:call@2:40<n::S>#1             #<parameter index>
+key=alias:A@2:26<n::S>
+```
+
+`-> (dependent)` for a `SUBST_DEPENDENT` row, ` unsatisfied` after a row
+of an `Unsatisfied` key and a trailing ` expanded` for `SUBST_EXPANDED`.
+Arguments print canonical, as §18.9.5's. Every key prints, after the
+entries, in the `keys` block: one line `keys  key=<...> rows=<n>` (with
+` unsatisfied` for an `Unsatisfied` key), then one line per root slot,
+`keys  key=<...> root[<i>]=<text>`, in slot order. The blocks are sorted
+by their key. A slot's text: an `Args` slot's elements as written, not
+canonicalised (an alias template-id with its arguments, a `decltype`
+with its operand), comma-separated, `<empty>` for none; `-` for
+`NotReached`; `failed` for `Failed`; a type as written for `Type`; the
+expression for `Expr`. A root's text has no source position.
+The gaps print first, with §18.10.3's: `unrecorded  precompiled prefix
+keys (<n> files)`, `unrecorded  module <key> keys (<main file's base
+name>, <n> files)`, `unrecorded  module <key> keys left out (<k> keys,
+<r> rows)`. With keys off the dump is byte-identical to the dump without
+the keyed table, and with keys on it differs only by these lines.
+
+```
+22:59-22:61  operator  '<<' -> a::operator<<@15:5 key=partial:shl@22:27<a::X, void> how=adl
+keys  key=partial:shl@22:27<a::X, void> rows=3
+keys  key=partial:shl@22:27<a::X, void> root[0]=a::X
+keys  key=partial:shl@22:27<a::X, void> root[1]=void_t<decltype(val<a::X>() << val<a::X>())>
+```
+
+#### 18.14.7 The switch and cost
+
+Off (the table on, keys off), nothing is kept: the keyed table allocates
+nothing (`subst_mem() == (0, 0)`), the memory report has no new row, and
+every recording site pays one bool test or one test of the empty scope
+stack. Fixed costs that exist whatever the switch: `InstFrame` grows by
+4 bytes (frames are transient), the snapshot section by one byte and
+three empty lengths, the image's section by one byte, two empty lengths
+and two `u32` counts. The sub-switch is outside a precompiled header's
+identity, like `-fkiln-written-refs`, and part of an implicit module's
+cache key (`written-ref-keys`).
+
+On, a key is 24 bytes plus its identity-index slot, a row 24 bytes. The
+memory report's `written_refs.subst` row (count: keyed rows; bytes: keys,
+rows, the identity index, the expanded nodes and the pending overload
+sets) is shown only with keys on, and its bytes are not in the
+`written_refs` row. Every stage that opens a kind's scopes reports that
+row on `<bits/stdc++.h>`.
+
+Roots (§18.14.10) are recorded exactly when keys are. On, a root is
+one 8-byte span per key plus 12 bytes per slot; the memory report's
+`written_refs.roots` row (count: slots; bytes: spans and slots) and
+`written_refs.subst.not_completed` row (count: runs; no bytes) are shown
+only with keys on. Off, the snapshot section grows by two empty lengths
+and the image's key record by nothing (no key is carried).
+
+Versions: PCH `FORMAT_VERSION` 184, `IMAGE_VERSION` 98 (stage 0); 276
+and 200 (stage 1: the roots).
+
+#### 18.14.8 Changes to `specs()`
+
+A change that adds, removes or re-keys rows of `specs()` lists, with the
+change, the new rows a `specs()` reader sees: per changed golden of
+`tests/conformance/written_refs/`, the added and removed `spec=` lines,
+and a one-line rule saying which names gain or lose rows. A change to
+the keyed table alone shows the opposite: the `spec=` lines of the
+whole corpus unchanged.
+
+Stage 1 (`PartialMatch` keys and roots) changes the keyed table alone:
+it adds no `specs()` row and removes none. With keys on, the corpus's
+dumps differ from those with keys off only by key lines.
+
+#### 18.14.9 Tests
+
+`crates/kiln_ast/src/written_refs_subst.rs` (both sizes; a commit makes
+one contiguous run, an empty run is a key between two keys and as the
+last, an identity is committed once and a `PartialMatch`'s deduced list
+is no part of it; truncation drops whole keys; keys off allocates
+nothing and has no memory row; the gaps), `written_refs_carry.rs` (keys,
+rows and expanded nodes round trip through the section and the index is
+rebuilt; each validation; a consumer without keys keeps none; a section
+made without keys is `PrefixKeys`), `crates/kiln_sema/src/written_keys.rs`
+(the scope API driven directly: a completed close commits, with rows and
+without; nothing on failure, on poison, on an error diagnosed inside;
+`Skip` for a committed and for a re-entrant identity; kept once;
+suspended scopes record nothing; the innermost frame decides),
+`crates/kiln_sema/src/bmi_image/refs.rs` (keys round trip, every
+validation, a unit without keys), `crates/kiln_parse/tests/written_refs.rs`
+(keys off allocates nothing after a parse; keys on, the same dump and a
+`written_refs.subst` row of 0 rows) and
+`crates/kiln_driver/tests/written_refs_carry.rs` (every compiling file of
+`tests/conformance/written_refs/` dumps the same with the sub-switch; a
+snapshot made without keys is a `PrefixKeys` gap and one made with keys
+is none; a module unit compiled without keys is a `ModuleKeys` gap and
+one compiled with them is none).
+
+Stage 1 adds: in `written_refs_subst.rs`, the slot size, roots committed
+with their keys (an empty root, a refused commit, truncation) and the
+not-completed counts; in `written_refs_carry.rs`, roots round trip with
+every tag and each root validation; in `written_keys.rs`, suspension as
+a depth and a root committed with its key; in `bmi_image/refs.rs`, roots
+round trip and each root validation; in
+`crates/kiln_parse/tests/written_refs.rs`, a `PartialMatch` key through
+the API (its rows, partial specialization, arguments, deduced list and
+a root slot reaching the call, both orders), roots reaching an operator
+and a constructor, a match inside a template definition and a generic
+lambda's closure; in `crates/kiln_driver/tests/written_refs_carry.rs`, a
+snapshot made without keys over a prefix with partial matches; and the
+`subst-partial-*` files of `tests/conformance/written_refs/` (ADL,
+operators, a constructor, qualified names, two matching partials, a
+constrained partial, a non-match, zero-row keys, an empty pack, a
+variable template, nested matches, a match in a template, a generic
+lambda, both use orders, keys off, a PCH and a module image and
+replay).
+
+#### 18.14.10 Roots
+
+A key's rows say what each written name of the pattern bound to. A
+substitution also makes selections no written name has a row for: an
+operator's function, a constructor, a conversion. A **root** is a handle
+on what the key's substitution built, so a reader can walk the built
+nodes and see every selection. `WrittenRefs::subst_root(id)` gives the
+key's root: a slice of `RootSlot`s (12 bytes, a `size_of` unit test).
+
+| tag | `RootTag` | holds |
+|---|---|---|
+| 0 | `NotReached` | nothing: the substitution did not reach this part |
+| 1 | `Failed` | nothing: this part failed (a kind that completes with one) |
+| 2 | `Expr` | an `ExprId` (`RootSlot::expr`, `as_expr`) |
+| 3 | `Type` | a `QualType` (`RootSlot::ty`, `as_type`) |
+| 4 | `Args` | an `ArgListId` (`RootSlot::args`, `as_args`) |
+
+`RootTag` is non-exhaustive. A key always has its root, and the number
+of its slots is fixed by the key's pattern:
+
+| kind | slots |
+|---|---|
+| `PartialMatch` | one `Args` slot per written argument of the partial specialization, in order: a written pack group element by element; a pack expansion's slot holds its elements in order, possibly none; a bare non-type template parameter's slot holds the deduced value; any other argument's slot holds the argument as substituted |
+| `Satisfaction`, `DefaultArg`, `Alias` | arrive with their keys |
+
+What a reader may rely on: a root's nodes are built by the same builders
+as an instantiated body's; the names and calls in them are resolved (no
+unresolved lookup node in a root reached from concrete arguments, also
+when the match is triggered inside a template definition); operands are
+unevaluated: nothing in a root is odr-used and no definition is
+instantiated for a function it names; a generic lambda's closure type is
+a valid declaration, reachable from the root. A root is built from the
+canonical deduced arguments, so it holds nothing of how any use spelled
+its arguments; it keeps the partial specialization's own sugar (an alias
+template-id with its written arguments, a `decltype` with its operand).
+The root of a key is that of its first completed run (§18.14.3).
+
+A limit: an `Args` slot holds an expression argument as substituted,
+before the conversion to the primary template's parameter type that the
+comparison with the specialization's arguments may run
+([temp.arg.nontype]/1); the converted value is the key's `args`.
+
+Roots are recorded exactly when keys are: one switch. The match builds
+a root only for a scope that records (`key_scope_records`); the scope
+keeps its slots (`key_scope_set_root`, pooled like the row buffer) and
+the close commits them with the rows. A run that records and then
+commits nothing (a match whose deduction succeeded and that then did not
+complete: the comparison, the substitution or the constraints failed) is
+counted per kind, `subst_not_completed(kind)` and the memory row
+`written_refs.subst.not_completed` (count: the sum; no bytes). It counts
+runs, not identities; it is this parse's own and is not carried. A match
+rejected before any substitution (the shape prefilter or deduction) is
+not counted.
 
 ## 19. The declaration-extent table (WP-2090)
 
@@ -6011,7 +6918,11 @@ cv- and ref-qualifiers, `...`, literal values, `<dependent type>`,
   `-fclang-compat=19`), the call operator the `Name` `operator()`; as a
   type, `(lambda at F:L:C)` is one synthesized entry, path included.
 - A function as a scope (a local class's member): a `Scope` entry for
-  the function, the names of its printed parameters one depth in.
+  the function, the names of its printed parameters one depth in. The
+  parameters print as their declarations write them (spec/sema.md §7.8),
+  so a typedef or alias names the typedef or alias and a `decltype`
+  operand's names their declarations; an instantiation's are the
+  written types with its arguments substituted (WP-3402).
 - Return and parameter types are printed as the pattern writes them: a
   typedef or alias name names the typedef or alias, a template-id the
   alias or class template (arguments one depth in), an injected-class-name
@@ -6122,7 +7033,10 @@ entity exists, that a plain entry's bytes are its entity's identifier,
 and the converse: every identifier in the bytes outside all entries
 (not part of a number, character or string literal) is in a closed list
 of keywords, builtin type spellings and fixed printer words, or a
-builtin type family (`__SV`, `__clang_sv`, `__rvv_`, `__builtin_`).
+builtin type family (`__SV`, `__clang_sv`, `__rvv_`, `__builtin_`); a
+builtin type spelled with a scope (`std::meta::info`, the reflection
+type, which has no declaration) is skipped whole when none of it is in
+an entry (WP-3402).
 Under `KILN_FN_NAMES_VERIFY=1` a mismatch or a failed check is the error
 `sema_fn_names_verify_failed`. The lane runs over `tests/conformance`
 (`KILN_FN_NAMES_VERIFY=1 cargo xtask test tests/conformance`: every

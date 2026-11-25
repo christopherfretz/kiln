@@ -25,7 +25,7 @@ use kiln_ast::consts::Scalar;
 use kiln_ast::decl::{
     Access, ConstexprKind, CtorInitKind, DeclFlags, DeclKind, Defaulted, DefinitionBits, EnumData,
     FnSpec, FnStorage, FriendKind, FriendTarget, InitStyle, ParamData, TagKind, TemplLinkKind,
-    TlsKind, VarSpec, VarStorage,
+    TlsKind, VarPlaceholder, VarSpec, VarStorage,
 };
 use kiln_ast::modules::{Owner, UnitKind};
 use kiln_ast::names::{DeclName, DeclNameView, OverloadedOperator};
@@ -103,7 +103,7 @@ pub(crate) use locs::Locs;
 use locs::{FileRec, LocTable, SlocRec};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 95;
+pub(crate) const IMAGE_VERSION: u32 = 101;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -645,11 +645,14 @@ enum Payload {
     /// introduced it, or [`NONE`] (WP-2025, `Ast::using_shadows`);
     /// `hidden` is the record of the member of the same class that hides
     /// it ([namespace.udecl]/14, `DeclArena::hidden_shadow`), or [`NONE`]
-    /// (WP-3145).
+    /// (WP-3145); `named` is the record of the shadow the
+    /// using-declarator's lookup found for the target, when it found one
+    /// (`Ast::shadow_named`), or [`NONE`] (WP-3401).
     Shadow {
         target: u32,
         using: u32,
         hidden: u32,
+        named: u32,
     },
     /// A using-directive (S6) nominating namespace record `ns` (a first
     /// declaration).
@@ -1004,7 +1007,7 @@ fn param_abis_of(types: &TypeContext, info: FuncInfo, n: usize) -> Vec<u8> {
 /// thread storage duration (`__thread` / `_Thread_local` static TLS,
 /// `thread_local` dynamic TLS; WP-1824), the initialization style,
 /// `constexpr`, `constinit`, `inline` (and whether it is implied), NRVO
-/// and range-`for` variables.
+/// and range-`for` variables, and the placeholder kind of a deduced type.
 fn var_spec(bits: u32) -> Option<VarSpec> {
     let storage = match bits & 7 {
         0 => VarStorage::None,
@@ -1037,7 +1040,14 @@ fn var_spec(bits: u32) -> Option<VarSpec> {
         .with_exception_var(bit(11))
         .with_cxx_for_range(bit(12))
         // `inline` implied, not written (WP-1517).
-        .with_inline_implied(bit(13));
+        .with_inline_implied(bit(13))
+        // The placeholder the type was deduced from (WP-3583).
+        .with_placeholder(match (bits >> 14) & 3 {
+            0 => VarPlaceholder::None,
+            1 => VarPlaceholder::Auto,
+            2 => VarPlaceholder::DecltypeAuto,
+            _ => VarPlaceholder::GnuAutoType,
+        });
     (spec.bits() == bits & !specinit::INIT_SECT).then_some(spec)
 }
 
@@ -1351,10 +1361,11 @@ fn encode_decl(w: &mut Wr, d: &DeclRec) {
             w.u8(u8::from(*typename));
             w.steps(steps);
         }
-        Payload::Shadow { target, using, hidden } => {
+        Payload::Shadow { target, using, hidden, named } => {
             w.u32(*target);
             w.u32(*using);
             w.u32(*hidden);
+            w.u32(*named);
         }
         Payload::AnonObj { rec: x }
         | Payload::Indirect { obj: x }
@@ -1917,7 +1928,9 @@ fn decode_decl(r: &mut Rd<'_>) -> Res<DeclRec> {
             };
             Payload::DepUsing { typename, steps: r.steps()? }
         }
-        K_SHADOW => Payload::Shadow { target: r.u32()?, using: r.u32()?, hidden: r.u32()? },
+        K_SHADOW => {
+            Payload::Shadow { target: r.u32()?, using: r.u32()?, hidden: r.u32()?, named: r.u32()? }
+        }
         K_ANON_OBJ => Payload::AnonObj { rec: r.u32()? },
         K_INDIRECT => Payload::Indirect { obj: r.u32()? },
         K_ASM => Payload::Asm { string: r.u32()? },
@@ -2624,6 +2637,8 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
     let mut claimed = vec![false; nd];
     // WP-1292: per pattern record, its template record.
     let pats = membertempl::template_patterns(img);
+    // WP-3410: per closure with an owner, the owner's record.
+    let cowners = lambdas::closure_owners(img, &owners);
     classtempl::validate_class_specs(img, &qref_at, &mut claimed)?;
     declocs::validate_decl_locs(img)?;
     extents::validate_extents(img)?;
@@ -2848,7 +2863,14 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
             c.flags & DEP != 0 && matches!(c.payload, Payload::Record { .. } | Payload::Enum { .. })
         });
         if dep_class {
-            if d.flags & DEP == 0 || !claimed[owner_class as usize] {
+            // A generic lambda's conversion function and static invoker
+            // templates (and their patterns), which sema declares outside
+            // the template scope, are not dependent themselves in a
+            // dependent closure (WP-1350, WP-3410).
+            let thunk = d.flags & DeclFlags::IMPLICIT.bits() != 0
+                && !lambdas::closure_def(img, i as u32)
+                && lambdas::implicit_ok(img, i as u32);
+            if (d.flags & DEP == 0 && !thunk) || !claimed[owner_class as usize] {
                 return bad("a member of an unclaimed dependent class");
             }
             // A member template's pattern and parameters are its
@@ -2872,7 +2894,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                     Some(Payload::Template { params, .. }) => params.len(),
                     _ => 0,
                 };
-                membertempl::claim_outer_heads(img, &pats, i, own, &mut claimed)?;
+                membertempl::claim_outer_heads(img, &pats, &cowners, i, own, &mut claimed)?;
             }
         } else if (local_tag || lambdas::closure_def(img, i as u32)) && d.flags & DEP != 0 {
             // A closure type or local class of a template's pattern
@@ -3041,6 +3063,18 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 || img.decls.get(hidden as usize).is_none_or(|h| h.ctx != d.ctx))
         {
             return bad("bad hidden shadow's member");
+        }
+        // WP-3401: the shadow a shadow's lookup found is another shadow
+        // record, before or after it.
+        if let Payload::Shadow { named, .. } = d.payload
+            && named != NONE
+            && (named as usize == i
+                || !img
+                    .decls
+                    .get(named as usize)
+                    .is_some_and(|n| matches!(n.payload, Payload::Shadow { .. })))
+        {
+            return bad("bad shadow's named shadow");
         }
         let ident = |n: u32| (n as usize) < img.names.len();
         let name_ok = match &d.payload {
@@ -3318,7 +3352,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 let p = *pattern as usize;
                 // WP-1284: a concept, at namespace scope, has no pattern.
                 let concept = *kind == constraints::CONCEPT_KIND;
-                let lvl = membertempl::level(img, &pats, friend::head_ctx(d));
+                let lvl = membertempl::level(img, &pats, &cowners, friend::head_ctx(d));
                 let prev_pat = match kind_of(d.prev).map(|x| &x.payload) {
                     _ if d.prev == NONE => Some(NONE),
                     Some(Payload::Template { kind: k, pattern: pp, .. }) if k == kind => Some(*pp),
@@ -3335,7 +3369,12 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 } else {
                     *kind <= 3
                         && lvl == Some(usize::from(*depth))
-                        && (d.flags & DEP != 0) == (*depth > 0)
+                        && ((d.flags & DEP != 0) == (*depth > 0)
+                            // A generic lambda's conversion function or
+                            // invoker template in a template (WP-3410).
+                            || (d.flags & DEP == 0
+                                && d.flags & DeclFlags::IMPLICIT.bits() != 0
+                                && lambdas::implicit_ok(img, i as u32)))
                         && (scope(d.ctx) || in_class)
                         && prev_pat.is_some()
                         && (*kind == 0 || p + 1 == i)
@@ -3648,6 +3687,11 @@ impl Writer<'_, '_, '_> {
     }
 
     fn qref(&mut self, q: QualType) -> W<QRef> {
+        // A substituted pack index's sugar (WP-3582) is not carried: the
+        // importer sees the selected element, as before.
+        if let TypeView::PackIndexing { selected: Some(s), .. } = self.s.ast.types.view(q.ty()) {
+            return self.qref(QualType::new(s.ty(), s.quals_bits() | q.quals_bits()));
+        }
         let ty = self.ty(q.ty())?;
         let quals = q.quals_bits();
         if quals != 0
@@ -3747,6 +3791,12 @@ impl Writer<'_, '_, '_> {
         }
         if let Some(r) = self.uncarried_subst(t) {
             return self.ty(r);
+        }
+        // See [`Self::qref`] (WP-3582); a qualified element goes there.
+        if let TypeView::PackIndexing { selected: Some(s), .. } = self.s.ast.types.view(t)
+            && s.quals_bits() == 0
+        {
+            return self.ty(s.ty());
         }
         if let Some(rec) = self.template_ty(t)? {
             let i = BUILTINS + 1 + self.img.types.len() as u32;
@@ -3974,6 +4024,7 @@ impl Writer<'_, '_, '_> {
                 target: class_shadow.ok_or(classusing::CLASS_USING)?,
                 using: NONE,
                 hidden: NONE,
+                named: NONE,
             },
             DeclKind::UsingShadow => {
                 let t = rec(ast.using_target(d))
@@ -3981,7 +4032,7 @@ impl Writer<'_, '_, '_> {
                 if self.img.decls[t as usize].flags & DEP != 0 {
                     return Err("a using-declaration naming a template pattern");
                 }
-                Payload::Shadow { target: t, using: NONE, hidden: NONE }
+                Payload::Shadow { target: t, using: NONE, hidden: NONE, named: NONE }
             }
             DeclKind::UsingDirective => {
                 let ns = rec(ast.using_target(d).map(|x| ast.first(x)))
@@ -5035,6 +5086,7 @@ impl Writer<'_, '_, '_> {
         }
         self.shadow_usings()?;
         self.shadow_hiders()?;
+        self.shadow_nameds()?;
         self.friend_lists()?;
         self.anon_typedefs()?;
         self.decl_locs()?;
@@ -5318,6 +5370,32 @@ impl Writer<'_, '_, '_> {
             };
             if let Payload::Shadow { hidden, .. } = &mut self.img.decls[si as usize].payload {
                 *hidden = hi;
+            }
+        }
+        Ok(())
+    }
+
+    /// WP-3401: the `named` word of each shadow record whose
+    /// using-declarator's lookup found a shadow (`Ast::shadow_named`), so
+    /// that the importer has the first link of the chain as the replay
+    /// does. A named shadow without a record is a fallback, never a
+    /// dropped link.
+    fn shadow_nameds(&mut self) -> W<()> {
+        let ast = &self.s.ast;
+        let mut named: Vec<(u32, DeclId)> = self
+            .recs
+            .iter()
+            .filter(|&(&d, _)| ast.decls.get(d).kind() == DeclKind::UsingShadow)
+            .filter_map(|(&d, &i)| Some((i, ast.decls.cold.shadow_named.get(d).copied()?)))
+            .collect();
+        named.sort_unstable();
+        for (si, f) in named {
+            let Some(&fi) = self.recs.get(&f) else {
+                self.miss(si, "a using-shadow whose named shadow is not carried")?;
+                continue;
+            };
+            if let Payload::Shadow { named, .. } = &mut self.img.decls[si as usize].payload {
+                *named = fi;
             }
         }
         Ok(())
@@ -5869,7 +5947,11 @@ impl Sema<'_, '_> {
 
     fn build_image(&mut self, img: &Image, main: &Locs, files: &[FileId]) {
         let saved = self.image_texprs_enter(img, main);
+        // The matches the records re-run are the unit's: their keys come
+        // from the image (spec/ast.md §18.14.5).
+        self.key_scopes.image_builds += 1;
         self.build_image_records(img, main, files);
+        self.key_scopes.image_builds -= 1;
         self.image_texprs = saved;
     }
 
@@ -6437,6 +6519,14 @@ impl Sema<'_, '_> {
                 && hidden != NONE
             {
                 let _ = self.ast.decls.set_hidden_shadow(ids[i], ids[hidden as usize]);
+            }
+        }
+        // WP-3401: the shadow each shadow's lookup found.
+        for (i, r) in img.decls.iter().enumerate() {
+            if let Payload::Shadow { named, .. } = r.payload
+                && named != NONE
+            {
+                let _ = self.ast.decls.set_shadow_named(ids[i], ids[named as usize]);
             }
         }
         if let Some((e, computed)) = open.take() {
@@ -7574,13 +7664,13 @@ mod tests {
         };
         img.decls.extend([
             rec(1, Payload::Using { steps: vec![NnsRec::Ns(0)] }),
-            rec(1, Payload::Shadow { target: 2, using: 10, hidden: NONE }),
+            rec(1, Payload::Shadow { target: 2, using: 10, hidden: NONE, named: NONE }),
             rec(na, Payload::NsAlias { target: 0 }),
             rec(2, Payload::UsingEnum { e: 3 }),
             rec(NONE, Payload::UsingDir { ns: 0 }),
             rec(5, Payload::Using { steps: vec![NnsRec::Global, NnsRec::Alias(12)] }),
-            rec(5, Payload::Shadow { target: 6, using: 15, hidden: NONE }),
-            rec(1, Payload::Shadow { target: 11, using: NONE, hidden: NONE }),
+            rec(5, Payload::Shadow { target: 6, using: 15, hidden: NONE, named: NONE }),
+            rec(1, Payload::Shadow { target: 11, using: NONE, hidden: NONE, named: 11 }),
         ]);
         img.decls[14].owner = 1;
         img.gated = gated_names(&img);
@@ -7614,24 +7704,38 @@ mod tests {
         let img = using_sample();
         assert!(img.gated.contains(&(img.names.len() as u32 - 1)));
         assert_eq!(decode(&encode(&img)), Ok(img));
-        let corrupt: [Corrupt; 15] = [
+        let corrupt: [Corrupt; 17] = [
+            ("shadow naming itself", |i| {
+                i.decls[11].payload =
+                    Payload::Shadow { target: 2, using: 10, hidden: NONE, named: 11 }
+            }),
+            ("shadow naming a non-shadow", |i| {
+                i.decls[11].payload =
+                    Payload::Shadow { target: 2, using: 10, hidden: NONE, named: 2 }
+            }),
             ("hidden shadow outside a class", |i| {
-                i.decls[11].payload = Payload::Shadow { target: 2, using: 10, hidden: 2 }
+                i.decls[11].payload =
+                    Payload::Shadow { target: 2, using: 10, hidden: 2, named: NONE }
             }),
             ("shadow of a later declaration", |i| {
-                i.decls[11].payload = Payload::Shadow { target: 16, using: 10, hidden: NONE }
+                i.decls[11].payload =
+                    Payload::Shadow { target: 16, using: 10, hidden: NONE, named: NONE }
             }),
             ("shadow of itself", |i| {
-                i.decls[11].payload = Payload::Shadow { target: 11, using: 10, hidden: NONE }
+                i.decls[11].payload =
+                    Payload::Shadow { target: 11, using: 10, hidden: NONE, named: NONE }
             }),
             ("shadow of a namespace", |i| {
-                i.decls[11].payload = Payload::Shadow { target: 0, using: 10, hidden: NONE }
+                i.decls[11].payload =
+                    Payload::Shadow { target: 0, using: 10, hidden: NONE, named: NONE }
             }),
             ("shadow of a later using-declaration", |i| {
-                i.decls[11].payload = Payload::Shadow { target: 2, using: 15, hidden: NONE }
+                i.decls[11].payload =
+                    Payload::Shadow { target: 2, using: 15, hidden: NONE, named: NONE }
             }),
             ("shadow whose using-declaration is an alias", |i| {
-                i.decls[16].payload = Payload::Shadow { target: 6, using: 12, hidden: NONE }
+                i.decls[16].payload =
+                    Payload::Shadow { target: 6, using: 12, hidden: NONE, named: NONE }
             }),
             ("shadow under another name", |i| i.decls[11].name = 2),
             ("directive naming an export block", |i| {

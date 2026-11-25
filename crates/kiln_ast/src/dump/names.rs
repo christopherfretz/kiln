@@ -182,6 +182,29 @@ impl<'a> AstNames<'a> {
         s
     }
 
+    /// The key of declaration `d` (spec/types.md §12.1 "Declaration
+    /// keys"): its whole scope and its own component, a function with
+    /// its signature as a scope prints it (`n::f(int)`, `k<int>()`,
+    /// `C::m() const &`), a static local after the first of its name in
+    /// its function with its ordinal (`f()::x#2`). A pointer or
+    /// reference template argument names its object so in a type's key.
+    pub fn decl_key(&self, d: DeclId) -> String {
+        let names = AstNames { key: true, ..*self };
+        let mut s = String::new();
+        names.write_key_decl(d, &mut s);
+        s
+    }
+
+    /// [`Self::decl_key`] into `out`.
+    pub(crate) fn write_key_decl(&self, d: DeclId, out: &mut String) {
+        if self.ast.decls.get(d).kind().is_function() {
+            self.write_key_scope(self.ast.decls.get(d).ctx(), 0, out);
+            self.write_key_function(d, out);
+        } else {
+            self.write_key_name(d, out);
+        }
+    }
+
     /// The key printer's name of declaration `d`: its whole scope
     /// ([`Self::write_key_scope`]) and its own component.
     pub(crate) fn write_key_name(&self, d: DeclId, out: &mut String) {
@@ -211,19 +234,36 @@ impl<'a> AstNames<'a> {
             return;
         }
         self.write_name(d, out);
-        if tag {
-            let n = self.local_tag_ordinal(d);
+        if tag || self.is_static_local(d) {
+            let n = self.local_ordinal(d, tag);
             if n > 0 {
                 let _ = write!(out, "#{}", n + 1);
             }
         }
     }
 
-    /// How many classes and enumerations of the name of local tag `d`
-    /// its function declares before it (0 for other declarations): the
-    /// discriminator the mangling gives (`_ZZ1fvE1L_0`), counted over
-    /// the declarations made between the function and `d`.
-    fn local_tag_ordinal(&self, d: DeclId) -> u32 {
+    /// Whether `d` is a variable with static or thread storage duration
+    /// declared in a function (`static`, `thread_local`; an `extern`
+    /// local names a namespace-scope variable).
+    fn is_static_local(&self, d: DeclId) -> bool {
+        let n = self.ast.decls.get(d);
+        if n.kind() != DeclKind::Var
+            || !n.ctx().is_some_and(|c| self.ast.decls.get(c).kind().is_function())
+        {
+            return false;
+        }
+        self.ast.decls.var(d).is_some_and(|v| {
+            v.spec.storage() == crate::decl::VarStorage::Static
+                || v.spec.tls() != crate::decl::TlsKind::None
+        })
+    }
+
+    /// How many classes and enumerations (`tag`) or static locals of
+    /// the name of local `d` its function declares before it (0 for
+    /// other declarations): the discriminator the mangling gives
+    /// (`_ZZ1fvE1L_0`, `_ZZ1fvE1x_0`), counted over the declarations
+    /// made between the function and `d`.
+    fn local_ordinal(&self, d: DeclId, tag: bool) -> u32 {
         let first = self.ast.first(d);
         let n = self.ast.decls.get(first);
         let Some(f) = n.ctx().filter(|&c| self.ast.decls.get(c).kind().is_function()) else {
@@ -234,8 +274,13 @@ impl<'a> AstNames<'a> {
         for i in f.index() + 1..first.index() {
             let x = DeclId::new(i);
             let xn = self.ast.decls.get(x);
+            let kind = if tag {
+                matches!(xn.kind(), DeclKind::CXXRecord | DeclKind::Enum)
+            } else {
+                self.is_static_local(x)
+            };
             if xn.ctx() == Some(f)
-                && matches!(xn.kind(), DeclKind::CXXRecord | DeclKind::Enum)
+                && kind
                 && xn.name().as_ident() == Some(name)
                 && self.ast.first(x) == x
             {
@@ -265,43 +310,7 @@ impl<'a> AstNames<'a> {
         match kind {
             DeclKind::Enum if self.ast.is_transparent(c) => {}
             k if k.is_function() => {
-                self.write_key_component(c, out);
-                if let Some((_, info)) = self.ast.spec_info(c) {
-                    let args = self.ast.types.canonical_args(info.args);
-                    crate::types::write_arg_list_scoped_of(&self.ast.types, self, c, args, out);
-                }
-                out.push('(');
-                if let Some(p) = n.ty().and_then(|t| self.ast.types.proto(t)) {
-                    let params = self.ast.types.params(p);
-                    for (i, &q) in params.iter().enumerate() {
-                        if i > 0 {
-                            out.push_str(", ");
-                        }
-                        write_type(&self.ast.types, self, q, PrintOptions::CANONICAL, out);
-                    }
-                    if p.variadic() {
-                        out.push_str(if params.is_empty() { "..." } else { ", ..." });
-                    }
-                    out.push(')');
-                    let info = p.info();
-                    let quals = info.this_quals();
-                    for (on, s) in [
-                        (quals.is_const(), " const"),
-                        (quals.is_volatile(), " volatile"),
-                        (quals.is_restrict(), " __restrict"),
-                    ] {
-                        if on {
-                            out.push_str(s);
-                        }
-                    }
-                    out.push_str(match info.ref_qual() {
-                        crate::types::RefQual::LValue => " &",
-                        crate::types::RefQual::RValue => " &&",
-                        crate::types::RefQual::None => "",
-                    });
-                } else {
-                    out.push(')');
-                }
+                self.write_key_function(c, out);
                 out.push_str("::");
             }
             DeclKind::Namespace
@@ -316,6 +325,51 @@ impl<'a> AstNames<'a> {
                 out.push_str("::");
             }
             _ => {}
+        }
+    }
+
+    /// A function as a key names it (a scope component, and a function
+    /// entity's own key): `f<args>(params) quals`, its name (an ordinal
+    /// never applies), a specialization's canonical arguments, its
+    /// canonical parameter types, and its cv- and ref-qualifiers.
+    fn write_key_function(&self, c: DeclId, out: &mut String) {
+        let n = self.ast.decls.get(c);
+        self.write_key_component(c, out);
+        if let Some((_, info)) = self.ast.spec_info(c) {
+            let args = self.ast.types.canonical_args(info.args);
+            crate::types::write_arg_list_scoped_of(&self.ast.types, self, c, args, out);
+        }
+        out.push('(');
+        if let Some(p) = n.ty().and_then(|t| self.ast.types.proto(t)) {
+            let params = self.ast.types.params(p);
+            for (i, &q) in params.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                write_type(&self.ast.types, self, q, PrintOptions::CANONICAL, out);
+            }
+            if p.variadic() {
+                out.push_str(if params.is_empty() { "..." } else { ", ..." });
+            }
+            out.push(')');
+            let info = p.info();
+            let quals = info.this_quals();
+            for (on, s) in [
+                (quals.is_const(), " const"),
+                (quals.is_volatile(), " volatile"),
+                (quals.is_restrict(), " __restrict"),
+            ] {
+                if on {
+                    out.push_str(s);
+                }
+            }
+            out.push_str(match info.ref_qual() {
+                crate::types::RefQual::LValue => " &",
+                crate::types::RefQual::RValue => " &&",
+                crate::types::RefQual::None => "",
+            });
+        } else {
+            out.push(')');
         }
     }
 
@@ -783,7 +837,12 @@ impl<'a> AstNames<'a> {
     }
 
     /// Appends the scope prefix of a function used as a scope:
-    /// `f(char, int *)`.
+    /// `f(char, int *)`. The parameter types are those of `f`'s parameter
+    /// declarations, as declared (clang `printNestedNameSpecifier`:
+    /// `FD->getParamDecl(i)->getType()`): `g(decltype(ns::S::value))`, an
+    /// instantiation's with its arguments substituted into the written
+    /// types (`t2(int, decltype(ns::S::value))`), never the canonical
+    /// prototype's (WP-3402).
     fn write_function_scope(&self, f: DeclId, out: &mut String) {
         out.push('(');
         if let Some(sink) = self.spans {
@@ -791,7 +850,15 @@ impl<'a> AstNames<'a> {
         }
         let proto = self.ast.decls.get(f).ty().and_then(|t| self.ast.types.proto(t));
         if let Some(p) = proto {
-            let params = self.ast.types.params(p);
+            let params: Vec<QualType> = match self.ast.decls.function(f) {
+                Some(x) if x.params != ListId::EMPTY => self
+                    .ast
+                    .lists
+                    .iter::<DeclId>(x.params)
+                    .filter_map(|d| self.ast.decls.get(d).ty())
+                    .collect(),
+                _ => self.ast.types.params(p).to_vec(),
+            };
             for (i, &q) in params.iter().enumerate() {
                 if i > 0 {
                     out.push_str(", ");
@@ -2182,6 +2249,13 @@ impl TypeNames for AstNames<'_> {
         self.spans
     }
 
+    /// clang 22's fully scoped substituted qualifier goes with its other
+    /// rules for function names and failed requirements
+    /// ([`Self::local_scopes`]).
+    fn scoped_subst_qualifier(&self) -> bool {
+        self.local_scopes
+    }
+
     fn is_anonymous_namespace(&self, ns: DeclId) -> bool {
         self.ast
             .decls
@@ -2216,8 +2290,9 @@ impl PrintEnv for AstNames<'_> {
         // binding (`b`, `n::b.y`).
         let decl = self.ast.holding_object_binding(decl).unwrap_or(decl);
         if self.key {
-            // `&x` of a static local `x` names its function (`&f()::x`).
-            self.write_key_name(decl, out);
+            // `&x` of a static local `x` names its function (`&f()::x`),
+            // a function its signature (`&f(int)`).
+            self.write_key_decl(decl, out);
             return;
         }
         self.write_qualified_spec_name(decl, out);

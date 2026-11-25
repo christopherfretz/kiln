@@ -1,0 +1,17 @@
+12:43-12:44  type  'T' -> T@12:17 in=Small@12:28
+13:20-13:21  type  'T' -> T@13:17 in=make@13:22
+18:18-18:19  type  'T' -> T@17:17 in=K@19:8
+18:12-18:17  concept  'Small' -> Small@12:28 in=K@19:8
+19:10-19:11  type  'T' -> T@17:17 in=K@19:8
+19:32-19:33  type  'T' -> T@17:17 in=K@19:8
+19:27-19:31  expr  'make' -> (dependent) in=K@19:8 def=1+adl
+19:27-19:31  expr  'make' def=make@13:22
+19:27-19:31  expr  'make' -> make<int>@13:22 found=make@13:22 key=partial:K@19:8<int, void> adl-ns=
+19:8-19:9  spec-target  'K' -> K@14:41 in=K@19:8
+22:15-22:16  nns  'K' -> K@14:41 in=static_assert@22:1
+22:23-22:24  expr  'v' -> K<int>::v@20:20 q=22:15 in=static_assert@22:1
+23:15-23:16  nns  'K' -> K@14:41 in=static_assert@23:1
+23:26-23:27  expr  'v' -> K<double>::v@15:20 q=23:15 in=static_assert@23:1
+keys  key=partial:K@19:8<int, void> rows=1
+keys  key=partial:K@19:8<int, void> root[0]=int
+keys  key=partial:K@19:8<int, void> root[1]=decltype(void(make<int>()))
