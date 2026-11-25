@@ -707,11 +707,14 @@ impl Sema<'_, '_> {
             .or_else(|| self.entered_partial_by_converted_args(tmpl, ty, loc))
     }
 
-    /// `list` with each non-dependent expression argument given its
-    /// canonical profile: a dependent specialization `X<T, 1>` is not
-    /// converted ([temp.arg]), so its non-type arguments compare as
-    /// expressions ([temp.over.link]/5) and two declarations writing the
-    /// same `X<T, 1>` name the same type.
+    /// `list` with each expression argument not profiled yet given its
+    /// canonical profile, so it compares as an expression
+    /// ([temp.over.link]/5) and two declarations writing the same
+    /// `X<T, N + 1>` name the same type. A dependent specialization's
+    /// arguments that can be converted are values by then
+    /// ([`Sema::dependent_class_spec_type`]); the rest (a value-dependent
+    /// one, one for a parameter whose type is still dependent, any when a
+    /// pack is involved) are profiled here.
     pub(crate) fn profile_value_args(&mut self, list: ArgListId) -> ArgListId {
         let args = self.ast.types.args(list).to_vec();
         if !args.iter().any(|a| matches!(a.view(), ArgView::Expr { profile: None, .. })) {
@@ -1275,22 +1278,44 @@ impl Sema<'_, '_> {
     /// ([temp.dep.type]/9), however it is written: a simple-type-specifier
     /// (`It<T, true> *p;`, `friend It<T, true>;`) or an
     /// elaborated-type-specifier (`friend class It<T, true>;`,
-    /// `struct It<T, true> *q;`). Its non-dependent value arguments are
-    /// profiled ([`Sema::profile_value_args`]), the parameters not written
-    /// take their defaults, and a partial specialization's own arguments
-    /// name its current instantiation, so every spelling of one
-    /// template-id is one canonical type ([temp.type]/1,
-    /// [temp.over.link]/5; spec/sema-templates.md §2.2, WP-3270).
+    /// `struct It<T, true> *q;`). `converted` is the argument list
+    /// [`Sema::check_dependent_template_args_converted`] gave: the
+    /// canonical type takes its values, so `It<T, 1 == 1>` and
+    /// `It<T, true>` are one type ([temp.type]/1) while the written
+    /// arguments stay as sugar. Without one (a pack is involved) its
+    /// non-dependent value arguments are profiled
+    /// ([`Sema::profile_value_args`]) and the parameters not written take
+    /// their defaults. A partial specialization's own arguments name its
+    /// current instantiation, so every spelling of one template-id is one
+    /// canonical type ([temp.type]/1, [temp.over.link]/5;
+    /// spec/sema-templates.md §2.2, WP-3270, WP-3321).
     pub(crate) fn dependent_class_spec_type(
         &mut self,
         name: TemplateNameId,
         tmpl: DeclId,
         args: &[TemplateArg],
+        converted: Option<&[TemplateArg]>,
         l: Loc,
     ) -> QualType {
         let list = self.ast.types.arg_list(args);
         let list = self.profile_value_args(list);
-        let mut canon = self.dependent_spec_canon(name, tmpl, args, l);
+        let mut canon = match converted {
+            Some(conv) => {
+                let conv = self.ast.types.arg_list(conv);
+                let conv = self.profile_value_args(conv);
+                (self.ast.types.canonical_args(conv) != self.ast.types.canonical_args(list)).then(
+                    || {
+                        // A partial specialization's current instantiation
+                        // first, as without a conversion.
+                        let t = self.ast.types.template_specialization(name, list, None, false);
+                        self.partial_current_instantiation_canon(tmpl, t, l).unwrap_or_else(|| {
+                            self.ast.types.template_specialization(name, conv, None, false)
+                        })
+                    },
+                )
+            }
+            None => self.dependent_spec_canon(name, tmpl, args, l),
+        };
         if canon.is_none() {
             let t = self.ast.types.template_specialization(name, list, None, false);
             canon = self.partial_current_instantiation_canon(tmpl, t, l);
@@ -1466,18 +1491,17 @@ impl Sema<'_, '_> {
                 if ttp {
                     self.check_ttp_arity(d, args, l)?;
                 } else if dep_args {
-                    self.check_dependent_template_args(d, args, l)?;
+                    let conv = self.check_dependent_template_args_converted(d, args, l)?;
+                    let t = self.dependent_class_spec_type(name, d, args, conv.as_deref(), l);
+                    return Ok(TemplateIdRef::Type(t));
                 } else {
                     let locs = self.take_template_arg_locs();
                     let t = self.class_template_type(name, d, args, &locs, l)?;
                     return Ok(TemplateIdRef::Type(t));
                 }
-                if ttp {
-                    return Ok(TemplateIdRef::Type(
-                        self.ast.types.template_specialization(name, list, None, false),
-                    ));
-                }
-                Ok(TemplateIdRef::Type(self.dependent_class_spec_type(name, d, args, l)))
+                Ok(TemplateIdRef::Type(
+                    self.ast.types.template_specialization(name, list, None, false),
+                ))
             }
             DeclKind::TypeAliasTemplate => {
                 // [temp.alias]/2: the alias is substituted even with

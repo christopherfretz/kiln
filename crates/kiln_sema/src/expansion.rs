@@ -1038,18 +1038,23 @@ impl Substituter<'_, '_, '_> {
             let init = data.init.map(|x| self.stmt(x));
             let exprs: Vec<ExprId> = self.sema.ast.lists.iter::<ExprId>(data.exprs).collect();
             let mark = self.sema.expansion_init_mark();
+            // The temporaries of a subexpression shared with the pattern
+            // are copied, as for a variable's initializer: the range's
+            // declaration (or each element's) extends its own, which a
+            // second specialization would otherwise take over
+            // ([`Substituter::unsharing_temporaries`], WP-3291).
             let src = if let Some(e) = data.range_init {
                 // [class.temporary]/9: a lifetime-extending context, as
                 // when parsed.
                 let collect = self.sema.begin_for_range_init(true);
-                let r = self.expr(e);
+                let r = self.unsharing_temporaries(|s| s.expr(e));
                 let _ = self.sema.end_for_range_init(collect);
                 ExpansionSource::Expr(r?)
             } else {
                 // A lifetime-extending context, as when parsed
                 // (`materialize_discarded`).
                 let collect = self.sema.begin_for_range_init(true);
-                let l = self.expansion_list(&exprs);
+                let l = self.unsharing_temporaries(|s| s.expansion_list(&exprs));
                 let _ = self.sema.end_for_range_init(collect);
                 ExpansionSource::List(l?)
             };

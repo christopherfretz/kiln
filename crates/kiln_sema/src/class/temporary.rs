@@ -393,9 +393,9 @@ impl Sema<'_, '_> {
         let vty = self.ast.decls.get(v).ty().unwrap_or(QualType::ERROR);
         let mut found = Vec::new();
         if self.ast.types.is_reference(vty) {
-            self.temporaries_bound_by(init, &mut found, 0);
+            self.temporaries_bound_by(init, &mut found);
         } else {
-            self.temporaries_in_aggregate(init, &mut found, 0);
+            self.temporaries_in_aggregate(init, &mut found);
         }
         if found.is_empty() {
             return;
@@ -647,10 +647,9 @@ impl Sema<'_, '_> {
                 let c2 = self.fresh_temporaries(common, depth + 1);
                 let f2 = self.fresh_temporaries(f, depth + 1);
                 let (cond, t) = match c2 {
-                    Some(c2) => (
-                        self.rebind_opaque(cond, common, c2, depth + 1)?,
-                        self.rebind_opaque(t, common, c2, depth + 1)?,
-                    ),
+                    Some(c2) => {
+                        (self.rebind_opaque(cond, common, c2)?, self.rebind_opaque(t, common, c2)?)
+                    }
                     None if f2.is_some() => (cond, t),
                     None => return None,
                 };
@@ -680,27 +679,43 @@ impl Sema<'_, '_> {
     /// `e` with the `OpaqueValueExpr`s bound to `old` bound to `new`
     /// instead (the nodes above them copied); `None` when a node on the
     /// way is of a kind [`kiln_ast::ExprArena::clone_with_children`] does
-    /// not copy.
-    fn rebind_opaque(&mut self, e: ExprId, old: ExprId, new: ExprId, depth: u32) -> Option<ExprId> {
-        if depth > 64 {
-            return None;
+    /// not copy. The walk keeps its own stack (no depth limit).
+    fn rebind_opaque(&mut self, e: ExprId, old: ExprId, new: ExprId) -> Option<ExprId> {
+        enum Step {
+            Enter(ExprId),
+            /// A node whose children's results are on `out` from `base`.
+            Exit(ExprId, Vec<ExprId>, usize),
         }
-        let ex = &self.ast.exprs;
-        if ex.get(e).kind() == ExprKind::OpaqueValueExpr {
-            return Some(match ex.opaque_source(e) {
-                Some(s) if s == old => self.ast.exprs.clone_opaque(e, new),
-                _ => e,
-            });
+        let mut todo = vec![Step::Enter(e)];
+        let mut out: Vec<ExprId> = Vec::new();
+        while let Some(step) = todo.pop() {
+            match step {
+                Step::Enter(x) => {
+                    let ex = &self.ast.exprs;
+                    if ex.get(x).kind() == ExprKind::OpaqueValueExpr {
+                        let r = match ex.opaque_source(x) {
+                            Some(s) if s == old => self.ast.exprs.clone_opaque(x, new),
+                            _ => x,
+                        };
+                        out.push(r);
+                        continue;
+                    }
+                    let kids = ex.children(x, &self.ast.lists);
+                    todo.push(Step::Exit(x, kids.clone(), out.len()));
+                    todo.extend(kids.into_iter().rev().map(Step::Enter));
+                }
+                Step::Exit(x, kids, base) => {
+                    let new_kids = out.split_off(base);
+                    let r = if new_kids == kids {
+                        x
+                    } else {
+                        self.ast.exprs.clone_with_children(x, &mut self.ast.lists, &new_kids)?
+                    };
+                    out.push(r);
+                }
+            }
         }
-        let kids = ex.children(e, &self.ast.lists);
-        let mut new_kids = Vec::with_capacity(kids.len());
-        for &k in &kids {
-            new_kids.push(self.rebind_opaque(k, old, new, depth + 1)?);
-        }
-        if new_kids == kids {
-            return Some(e);
-        }
-        self.ast.exprs.clone_with_children(e, &mut self.ast.lists, &new_kids)
+        out.pop()
     }
 
     /// A copy of `e`, a subexpression of a variable's initializer that
@@ -727,90 +742,151 @@ impl Sema<'_, '_> {
     /// (the pattern's temporaries then stay shared). Nested
     /// full-expressions and unevaluated operands are not entered, as in
     /// [`Sema::extend_init_temporaries`]; the `ExprWithCleanups` of the
-    /// whole initializer is.
+    /// whole initializer is. The walk keeps its own stack, so a tree of
+    /// any depth is copied (WP-3292: it stopped below 256 levels, whose
+    /// temporaries stayed shared).
     pub(crate) fn unshare_temporaries(&mut self, e: ExprId) -> Option<ExprId> {
         let collect = self.extend_collector.is_some() && self.unevaluated == 0;
         if self.ast.exprs.get(e).kind() == ExprKind::ExprWithCleanups {
             let o = self.ast.exprs.operand(e);
-            let r = self.unshare_walk(o, collect, 0)?;
+            let r = self.unshare_walk(o, collect)?;
             return self.ast.exprs.clone_with_children(e, &mut self.ast.lists, &[r]);
         }
-        self.unshare_walk(e, collect, 0)
+        self.unshare_walk(e, collect)
     }
 
-    /// The walk of [`Sema::unshare_temporaries`].
-    fn unshare_walk(&mut self, e: ExprId, collect: bool, depth: u32) -> Option<ExprId> {
-        const MAX_DEPTH: u32 = 256;
-        if depth > MAX_DEPTH {
-            return None;
+    /// The walk of [`Sema::unshare_temporaries`], in postorder (operands
+    /// first, left to right, the order the collector records), on an
+    /// explicit stack: each node's result is `Some(copy)` or `None`
+    /// (shared: it holds no temporary to copy, or could not be copied).
+    fn unshare_walk(&mut self, e: ExprId, collect: bool) -> Option<ExprId> {
+        enum Step {
+            Enter(ExprId),
+            /// A `MaterializeTemporaryExpr`, its operand's result on top.
+            Temporary(ExprId),
+            /// `a ?: b`, the results of its common expression and arms
+            /// on top.
+            BinaryConditional(ExprId),
+            /// Any other node, its children's results on `out` from `base`.
+            Node(ExprId, Vec<ExprId>, usize),
         }
+        let mut todo = vec![Step::Enter(e)];
+        let mut out: Vec<Option<ExprId>> = Vec::new();
+        while let Some(step) = todo.pop() {
+            let r = match step {
+                Step::Enter(x) => {
+                    let ex = &self.ast.exprs;
+                    match ex.get(x).kind() {
+                        ExprKind::ExprWithCleanups
+                        | ExprKind::ConstantExpr
+                        | ExprKind::LambdaExpr
+                        | ExprKind::StmtExpr
+                        | ExprKind::UnaryExprOrTypeTraitExpr
+                        | ExprKind::CXXNoexceptExpr
+                        | ExprKind::ExpressionTraitExpr
+                        | ExprKind::RequiresExpr
+                        | ExprKind::ConceptSpecializationExpr => None,
+                        ExprKind::CXXTypeidExpr if !ex.typeid_potentially_evaluated(x) => None,
+                        ExprKind::MaterializeTemporaryExpr => {
+                            let o = ex.operand(x);
+                            todo.push(Step::Temporary(x));
+                            todo.push(Step::Enter(o));
+                            continue;
+                        }
+                        ExprKind::CXXDefaultArgExpr | ExprKind::CXXDefaultInitExpr => {
+                            if !collect && ex.default_arg_rewritten(x).is_none() {
+                                None
+                            } else {
+                                self.ast.exprs.clone_with_children(x, &mut self.ast.lists, &[])
+                            }
+                        }
+                        ExprKind::BinaryConditionalOperator => {
+                            let [common, _, t, f] =
+                                ex.binary_conditional_operands(x, &self.ast.lists);
+                            todo.push(Step::BinaryConditional(x));
+                            todo.extend([f, t, common].map(Step::Enter));
+                            continue;
+                        }
+                        _ => {
+                            let kids = ex.children(x, &self.ast.lists);
+                            todo.push(Step::Node(x, kids.clone(), out.len()));
+                            todo.extend(kids.into_iter().rev().map(Step::Enter));
+                            continue;
+                        }
+                    }
+                }
+                Step::Temporary(x) => {
+                    let inner = out.pop().flatten();
+                    self.unshare_temporary(x, inner, collect)
+                }
+                Step::BinaryConditional(x) => {
+                    let f2 = out.pop().flatten();
+                    let t2 = out.pop().flatten();
+                    let c2 = out.pop().flatten();
+                    self.unshare_binary_conditional(x, c2, t2, f2)
+                }
+                Step::Node(x, kids, base) => {
+                    let rs = out.split_off(base);
+                    if rs.iter().all(Option::is_none) {
+                        None
+                    } else {
+                        let new: Vec<ExprId> =
+                            rs.iter().zip(&kids).map(|(r, &k)| r.unwrap_or(k)).collect();
+                        self.ast.exprs.clone_with_children(x, &mut self.ast.lists, &new)
+                    }
+                }
+            };
+            out.push(r);
+        }
+        out.pop().flatten()
+    }
+
+    /// [`Sema::unshare_walk`] at `MaterializeTemporaryExpr` `e`, whose
+    /// operand's copy is `inner`: an extended temporary (every one while
+    /// collecting) is a fresh unextended copy, collected; any other is
+    /// copied only above a copy.
+    fn unshare_temporary(
+        &mut self,
+        e: ExprId,
+        inner: Option<ExprId>,
+        collect: bool,
+    ) -> Option<ExprId> {
         let ex = &self.ast.exprs;
-        let kind = ex.get(e).kind();
-        match kind {
-            ExprKind::ExprWithCleanups
-            | ExprKind::ConstantExpr
-            | ExprKind::LambdaExpr
-            | ExprKind::StmtExpr
-            | ExprKind::UnaryExprOrTypeTraitExpr
-            | ExprKind::CXXNoexceptExpr
-            | ExprKind::ExpressionTraitExpr
-            | ExprKind::RequiresExpr
-            | ExprKind::ConceptSpecializationExpr => return None,
-            ExprKind::CXXTypeidExpr if !ex.typeid_potentially_evaluated(e) => return None,
-            ExprKind::MaterializeTemporaryExpr => {
-                let extended = ex.lifetime_extended_temporary(e).is_some();
-                let o = ex.operand(e);
-                let inner = self.unshare_walk(o, collect, depth + 1);
-                if !extended && !collect {
-                    let r = inner?;
-                    return self.ast.exprs.clone_with_children(e, &mut self.ast.lists, &[r]);
-                }
-                let m = self.ast.exprs.clone_unextended(e, inner.unwrap_or(o));
-                if let Some(c) = self.extend_collector.as_mut().filter(|_| collect) {
-                    c.push(m);
-                }
-                return Some(m);
-            }
-            ExprKind::CXXDefaultArgExpr | ExprKind::CXXDefaultInitExpr => {
-                if !collect && ex.default_arg_rewritten(e).is_none() {
-                    return None;
-                }
-                return self.ast.exprs.clone_with_children(e, &mut self.ast.lists, &[]);
-            }
-            ExprKind::BinaryConditionalOperator => {
-                let [common, cond, t, f] = ex.binary_conditional_operands(e, &self.ast.lists);
-                let c2 = self.unshare_walk(common, collect, depth + 1);
-                let t2 = self.unshare_walk(t, collect, depth + 1);
-                let f2 = self.unshare_walk(f, collect, depth + 1);
-                let (cond, t) = match c2 {
-                    Some(c2) => (
-                        self.rebind_opaque(cond, common, c2, depth + 1)?,
-                        self.rebind_opaque(t2.unwrap_or(t), common, c2, depth + 1)?,
-                    ),
-                    None if t2.is_some() || f2.is_some() => (cond, t2.unwrap_or(t)),
-                    None => return None,
-                };
-                let kids = [c2.unwrap_or(common), cond, t, f2.unwrap_or(f)];
-                return self.ast.exprs.clone_with_children(e, &mut self.ast.lists, &kids);
-            }
-            _ => {}
+        let extended = ex.lifetime_extended_temporary(e).is_some();
+        let o = ex.operand(e);
+        if !extended && !collect {
+            let r = inner?;
+            return self.ast.exprs.clone_with_children(e, &mut self.ast.lists, &[r]);
         }
-        let kids = ex.children(e, &self.ast.lists);
-        let mut changed = false;
-        let mut new = Vec::with_capacity(kids.len());
-        for k in kids {
-            match self.unshare_walk(k, collect, depth + 1) {
-                Some(r) => {
-                    changed = true;
-                    new.push(r);
-                }
-                None => new.push(k),
-            }
+        let m = self.ast.exprs.clone_unextended(e, inner.unwrap_or(o));
+        if let Some(c) = self.extend_collector.as_mut().filter(|_| collect) {
+            c.push(m);
         }
-        if !changed {
-            return None;
-        }
-        self.ast.exprs.clone_with_children(e, &mut self.ast.lists, &new)
+        Some(m)
+    }
+
+    /// [`Sema::unshare_walk`] at `a ?: b` `e`, given the copies of its
+    /// common expression and arms: the condition and the true arm read
+    /// the common expression through `OpaqueValueExpr`s, rebound to its
+    /// copy.
+    fn unshare_binary_conditional(
+        &mut self,
+        e: ExprId,
+        c2: Option<ExprId>,
+        t2: Option<ExprId>,
+        f2: Option<ExprId>,
+    ) -> Option<ExprId> {
+        let [common, cond, t, f] = self.ast.exprs.binary_conditional_operands(e, &self.ast.lists);
+        let (cond, t) = match c2 {
+            Some(c2) => (
+                self.rebind_opaque(cond, common, c2)?,
+                self.rebind_opaque(t2.unwrap_or(t), common, c2)?,
+            ),
+            None if t2.is_some() || f2.is_some() => (cond, t2.unwrap_or(t)),
+            None => return None,
+        };
+        let kids = [c2.unwrap_or(common), cond, t, f2.unwrap_or(f)];
+        self.ast.exprs.clone_with_children(e, &mut self.ast.lists, &kids)
     }
 
     /// The returned-reference-to-temporary diagnostic: P2748R5 made it
@@ -921,15 +997,44 @@ impl Sema<'_, '_> {
     /// (through the forms of [`Sema::extension_operands`],
     /// [class.temporary]/6), followed by those bound by the reference
     /// members of an aggregate temporary.
-    pub(crate) fn temporaries_bound_by(&mut self, e: ExprId, out: &mut Vec<ExprId>, depth: u32) {
-        if depth > 256 {
-            return;
+    pub(crate) fn temporaries_bound_by(&mut self, e: ExprId, out: &mut Vec<ExprId>) {
+        self.extension_walk(ExtensionStep::Bound(e), out);
+    }
+
+    /// The temporaries bound by the reference members of the aggregate
+    /// prvalue `e` (an `InitListExpr` or parenthesized aggregate
+    /// initialization, through no-op casts), recursively.
+    fn temporaries_in_aggregate(&mut self, e: ExprId, out: &mut Vec<ExprId>) {
+        self.extension_walk(ExtensionStep::Aggregate(e), out);
+    }
+
+    /// The walk of [`Sema::temporaries_bound_by`] and
+    /// [`Sema::temporaries_in_aggregate`], in preorder (a temporary
+    /// before the ones its aggregate's reference members bind; operands
+    /// left to right), on an explicit stack: a binding of any depth is
+    /// followed to its temporaries (WP-3292: below 256 levels they were
+    /// not extended).
+    fn extension_walk(&mut self, root: ExtensionStep, out: &mut Vec<ExprId>) {
+        use ExtensionStep::{Aggregate, Bound};
+        let mut todo = vec![root];
+        // Pushed in reverse, so that they are visited in order.
+        let mut next: Vec<ExtensionStep> = Vec::new();
+        while let Some(step) = todo.pop() {
+            match step {
+                Bound(e) => self.bound_step(e, out, &mut next),
+                Aggregate(e) => self.aggregate_step(e, &mut next),
+            }
+            todo.extend(next.drain(..).rev());
         }
+    }
+
+    /// One node of [`Sema::temporaries_bound_by`]: `e`'s temporary
+    /// recorded, the operands to visit (in order) on `next`.
+    fn bound_step(&mut self, e: ExprId, out: &mut Vec<ExprId>, next: &mut Vec<ExtensionStep>) {
         match self.extension_operands(e) {
-            ExtensionOperands::One(x) => return self.temporaries_bound_by(x, out, depth + 1),
+            ExtensionOperands::One(x) => return next.push(ExtensionStep::Bound(x)),
             ExtensionOperands::Two([t, f]) => {
-                self.temporaries_bound_by(t, out, depth + 1);
-                return self.temporaries_bound_by(f, out, depth + 1);
+                return next.extend([ExtensionStep::Bound(t), ExtensionStep::Bound(f)]);
             }
             ExtensionOperands::None => {}
         }
@@ -938,46 +1043,42 @@ impl Sema<'_, '_> {
                 if self.ast.exprs.lifetime_extended_temporary(e).is_none() {
                     out.push(e);
                 }
-                self.temporaries_in_aggregate(self.ast.exprs.operand(e), out, depth + 1);
+                next.push(ExtensionStep::Aggregate(self.ast.exprs.operand(e)));
             }
             ExprKind::CXXDefaultInitExpr => {
                 if let Some(r) = self.rebuilt_default_init(e) {
-                    self.temporaries_bound_by(r, out, depth + 1);
+                    next.push(ExtensionStep::Bound(r));
                 }
             }
             _ => {}
         }
     }
 
-    /// The temporaries bound by the reference members of the aggregate
-    /// prvalue `e` (an `InitListExpr` or parenthesized aggregate
-    /// initialization, through no-op casts), recursively.
-    fn temporaries_in_aggregate(&mut self, e: ExprId, out: &mut Vec<ExprId>, depth: u32) {
-        if depth > 256 {
-            return;
-        }
+    /// One node of [`Sema::temporaries_in_aggregate`]: the operands to
+    /// visit (in order) on `next`.
+    fn aggregate_step(&mut self, e: ExprId, next: &mut Vec<ExtensionStep>) {
+        use ExtensionStep::{Aggregate, Bound};
         let n = *self.ast.exprs.get(e);
         match n.kind() {
             ExprKind::ParenExpr
             | ExprKind::ExprWithCleanups
             | ExprKind::CXXBindTemporaryExpr
             | ExprKind::ConstantExpr => {
-                self.temporaries_in_aggregate(self.ast.exprs.operand(e), out, depth + 1);
+                next.push(Aggregate(self.ast.exprs.operand(e)));
             }
             k if k.is_cast() && self.ast.exprs.cast_kind(e) == CastKind::NoOp => {
-                self.temporaries_in_aggregate(self.ast.exprs.operand(e), out, depth + 1);
+                next.push(Aggregate(self.ast.exprs.operand(e)));
             }
             // Both arms of a prvalue conditional (clang's
             // `visitLocalsRetainedByInitializer`).
             ExprKind::ConditionalOperator => {
                 let [t, f] = self.ast.exprs.cond_arms(e);
-                self.temporaries_in_aggregate(t, out, depth + 1);
-                self.temporaries_in_aggregate(f, out, depth + 1);
+                next.extend([Aggregate(t), Aggregate(f)]);
             }
             // The backing array of a `std::initializer_list` is extended
             // like a reference bound to it ([dcl.init.list]/6).
             ExprKind::CXXStdInitializerListExpr => {
-                self.temporaries_bound_by(self.ast.exprs.operand(e), out, depth + 1);
+                next.push(Bound(self.ast.exprs.operand(e)));
             }
             // Only an aggregate or a `std::initializer_list` member can
             // hold a temporary its initializer extends.
@@ -986,7 +1087,7 @@ impl Sema<'_, '_> {
                     || self.ast.types.is_array(n.ty()) =>
             {
                 if let Some(r) = self.rebuilt_default_init(e) {
-                    self.temporaries_in_aggregate(r, out, depth + 1);
+                    next.push(Aggregate(r));
                 }
             }
             ExprKind::InitListExpr | ExprKind::CXXParenListInitExpr => {
@@ -997,9 +1098,7 @@ impl Sema<'_, '_> {
                 };
                 let inits: Vec<ExprId> = self.ast.lists.iter::<ExprId>(list).collect();
                 if self.ast.types.is_array(n.ty()) {
-                    for i in inits {
-                        self.temporaries_in_aggregate(i, out, depth + 1);
-                    }
+                    next.extend(inits.into_iter().map(Aggregate));
                     return;
                 }
                 let Some(r) = self.ast.types.as_record(n.ty()) else { return };
@@ -1015,21 +1114,30 @@ impl Sema<'_, '_> {
                 }
                 for (i, &init) in inits.iter().enumerate() {
                     if i < nbases {
-                        self.temporaries_in_aggregate(init, out, depth + 1);
+                        next.push(Aggregate(init));
                         continue;
                     }
                     let Some(&f) = fields.get(i - nbases) else { break };
                     let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
                     if self.ast.types.is_reference(fty) {
-                        self.temporaries_bound_by(init, out, depth + 1);
+                        next.push(Bound(init));
                     } else {
-                        self.temporaries_in_aggregate(init, out, depth + 1);
+                        next.push(Aggregate(init));
                     }
                 }
             }
             _ => {}
         }
     }
+}
+
+/// A node of [`Sema::extension_walk`]: a glvalue a reference binds
+/// ([`Sema::temporaries_bound_by`]) or an aggregate prvalue whose
+/// reference members bind ([`Sema::temporaries_in_aggregate`]).
+#[derive(Clone, Copy, Debug)]
+enum ExtensionStep {
+    Bound(ExprId),
+    Aggregate(ExprId),
 }
 
 /// What [`Sema::extension_operands`] passes lifetime extension on to.

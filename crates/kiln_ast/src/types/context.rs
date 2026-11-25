@@ -1409,6 +1409,19 @@ impl TypeContext {
             | TypeView::Decayed { adjusted: named, .. } => add(named),
             TypeView::QualifiedArray { .. } => self.canonical(q),
             TypeView::SubstTemplateTypeParm { replacement, .. } => add(replacement),
+            // A dependent specialization whose canonical form is another
+            // spelling's (its converted arguments or the defaults filled
+            // in, a specialization still written with sugar) is not
+            // sugar: clang's `TemplateSpecializationType::isSugared` holds
+            // for a dependent one only when it is an alias or names the
+            // current instantiation (whose canonical type kiln stores
+            // canonical, §3.4).
+            TypeView::TemplateSpecialization { underlying: Some(u), alias: false, .. }
+                if self.kind(u.ty()) == TypeKind::TemplateSpecialization
+                    && self.canonical(u) != u =>
+            {
+                q
+            }
             TypeView::TemplateSpecialization { underlying: Some(u), .. } => add(u),
             TypeView::Decltype { underlying, .. } if self.is_canonical_decltype_sugar(q) => {
                 add(underlying)

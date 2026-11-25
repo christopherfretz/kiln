@@ -643,6 +643,16 @@ pub struct Sema<'a, 'sm> {
     /// odr-uses ([basic.def.odr]/4): resolved at the end of the
     /// full-expression (spec/sema.md §5.2).
     pub(crate) pending_odr: Vec<ExprId>,
+    /// The `DeclRefExpr`s of [`Sema::pending_odr`] naming a variable of
+    /// reference type whose initializer that very naming instantiated (a
+    /// variable template specialization or a static data member of a class
+    /// template specialization, defined at its first reference): they stay
+    /// odr-uses at the end of the full-expression although the reference
+    /// is usable in constant expressions by then, as clang decides a
+    /// reference's non-odr-use when it builds the `DeclRefExpr`, before it
+    /// instantiates the definition (`BuildDeclRefExpr`, then
+    /// `MarkDeclRefReferenced`; spec/sema.md §5.2, WP-3290).
+    pub(crate) ref_odr_at_build: kiln_source::fx::FxHashSet<ExprId>,
     /// `DeclRefExpr`s of the current full-expression, in a dependent
     /// context inside a lambda, naming an enclosing local that might be
     /// usable in constant expressions: the potential captures decided at
@@ -1713,6 +1723,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             discarding_init: false,
             std: kiln_lex::Std::Cxx26,
             pending_odr: Vec::new(),
+            ref_odr_at_build: kiln_source::fx::FxHashSet::default(),
             potential_caps: Vec::new(),
             misaligned: Vec::new(),
             imm: consteval::ImmState::default(),
@@ -2031,13 +2042,16 @@ impl<'a, 'sm> Sema<'a, 'sm> {
                 d = d.with_note(n);
             }
         }
+        // The error `incomplete_note` asked to drop is this one, also when
+        // a capture would hold it: held, the request would outlive it and
+        // drop the next error printed, perhaps the only one (WP-3283).
+        if self.inst.suppress_next_error.replace(false) {
+            return;
+        }
         if let Some(c) = self.diag_capture.borrow_mut().as_mut()
             && self.capture_holds(c)
         {
             c.held.push(d);
-            return;
-        }
-        if self.inst.suppress_next_error.replace(false) {
             return;
         }
         let mut inst_notes = Vec::new();

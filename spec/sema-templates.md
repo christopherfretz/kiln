@@ -2066,20 +2066,56 @@ the running `Substituter` instead.
 
 With dependent args, steps 2–3 are skipped. The result is a dependent
 `TemplateSpecialization` type, unless it names the current instantiation
-(§3.4). Its arguments are not converted, so a non-dependent expression
-argument (the `1` of `X<T, 1>`) carries its canonical profile and compares
-as an expression ([temp.over.link]/5): two declarations writing `X<T, 1>`
-name the same type and redeclare the same function template
-(`tests/conformance/temp.over.link/non-type-literal-arg-in-dependent-specialization.cpp`).
-Divergence: clang converts such arguments first, so `X<T, true>` and
-`X<T, 1>` for a `bool` parameter are equivalent there and distinct here.
+(§3.4). Its arguments are still checked against the parameters (§3.3, §10.5,
+`Sema::check_dependent_template_args_converted`), and the canonical type
+takes the converted list that check gives ([temp.type]/1; clang's
+`CheckTemplateIdType` on the converted arguments; WP-3321):
+- a non-dependent non-type argument for a parameter whose type is known
+  is converted to that type and evaluated, and compares as its value:
+  `X<T, 1 == 1>`, `X<T, true>` and `X<T, 1>` for a `bool` parameter are
+  one type, as are `V<T, 2>` and `V<T, 2u>` for an `unsigned` one, an
+  enumerator and its cast value, `nullptr` and `(int *)0` for a pointer,
+  `&x` and `(&x)`, and two equal class-type values (`P{1}`, `P{0 + 1}`);
+  the parameters not written take their converted defaults (`Q<T>` and
+  `Q<T, 1u>` for `template<class, long = 1>`);
+- a value-dependent argument stays an expression with its canonical
+  profile ([temp.over.link]/5), so two declarations writing `X<T, N + 1>`
+  name the same type;
+- so does a non-dependent argument for a parameter whose type depends on
+  a dependent argument before it (`W<T, 1>` and `W<T, 1u>` for
+  `template<class U, U v>` are two types until `T` is substituted, as in
+  clang);
+- with a pack expansion argument or a parameter pack, nothing is
+  converted: the value arguments are profiled as written and the
+  defaults completed (`Sema::dependent_spec_canon`).
+The written arguments stay as the sugar (printing, `args_as_written`,
+written references); such a specialization is not sugar for its
+canonical form (`TypeContext::desugar_once`, clang's
+`TemplateSpecializationType::isSugared`), so the AST dump and an `aka`
+print `X<T, (3 > 2)>` alone, as they print `D<T>` for
+`template<class, class = void> struct D` alone
+(`tests/conformance/templates/parse/temp.names-greater-in-parens.cpp`).
+A mangled signature takes the canonical list,
+so `It<T, 1 == 1>` mangles `2ItIT_Lb1EE` as clang's does
+(`tests/mangle/dependent_converted_value_args.cpp`). Two declarations
+spelling one template-id differently redeclare one function template,
+and an out-of-line member written `It<T, 1 == 1>::f` is the partial
+specialization `It<T, true>`'s
+(`tests/conformance/temp.type/converted-value-args-dependent-specialization-run.cpp`,
+`tests/conformance/temp.over.link/non-type-literal-arg-in-dependent-specialization.cpp`,
+`crates/kiln_parse/tests/dependent_spec_converted_args.rs`).
 Every spelling of a dependent template-id is formed this one way
 (`Sema::dependent_class_spec_type`): a simple-type-specifier
 (`It<T, true> *p;`, `friend It<T, true>;`, a friend function's parameter)
 and an elaborated-type-specifier (`friend class It<T, true>;`,
 `struct It<T, true> *q;`, a friend naming a member template's
-`In<T, 2>`) profile their value arguments, complete the defaults and name
-a partial specialization's current instantiation alike, so a friend
+`In<T, 2>`) check and convert their arguments, with the same
+diagnostics at the same places (the kind of each argument, the arity, a
+value that does not convert; WP-3322,
+`tests/conformance/temp.arg.general/elaborated-dependent-template-id-args-checked.cpp`,
+`tests/conformance/temp.arg.nontype/elaborated-dependent-template-id-conversion.cpp`),
+complete the defaults and name a partial specialization's current
+instantiation alike, so a friend
 declaration befriends exactly the canonical type the same template-id
 names anywhere else ([temp.type]/1, [temp.friend]/1; WP-3270,
 `crates/kiln_parse/tests/friend_spec_canonical.rs`,
@@ -4312,14 +4348,19 @@ here because the GCC cases reaching them are template tests:
   `tests/conformance/class.temporary/run-template-shared-operand-temporary-destroyed.cpp`.
   The exception is a lifetime-extended temporary (WP-3271, spec/ast.md
   "Lifetime-extended temporaries of instantiations"): in an
-  instantiated variable's initializer and a range-based `for`'s
-  range-initializer (`Substituter::unsharing_temporaries`), a shared
+  instantiated variable's initializer, a range-based `for`'s
+  range-initializer and an expansion statement's expansion-initializer
+  or expansion-init-list (WP-3291; `Substituter::unsharing_temporaries`), a shared
   subtree holding a temporary that is or will be extended is copied up
   to it, so the instantiated variable extends its own. Tests:
   `crates/kiln_parse/tests/instantiated_temporaries.rs`,
   `tests/conformance/class.temporary/run-instantiation-own-extended-temporaries.cpp`,
   `.../instantiation-extended-temporary-names-ir.cpp`,
-  `tests/conformance/stmt.ranged/p2718-template-own-temporaries-run.cpp`.
+  `tests/conformance/stmt.ranged/p2718-template-own-temporaries-run.cpp`,
+  `tests/conformance/stmt.expand/specialization-own-extended-temporaries-run.cpp`,
+  `.../stmt.expand/constexpr-static-range-per-specialization-run.cpp`,
+  `tests/conformance/class.temporary/deep-binding-extended-temporary-run.cpp`
+  (300 levels, WP-3292).
 - **Dependent forms** are resolved:
   - `DependentScopeDeclRefExpr` becomes qualified lookup;
   - `UnresolvedLookupExpr` becomes an overload set plus ADL (§3.5);
@@ -5268,6 +5309,44 @@ its statement, `ctx` the instantiated function); the iterating thunk of
 a reflection intrinsic (`meta/iterate.rs`; the body is discarded on
 failure, `ctx` the intrinsic's specialization). Any other invalidation
 the ledger finds under a trap is kind 6 as well.
+
+**Hard use of a silent failure (WP-3283).** The specialization memo
+keeps a trapped failure (kinds 1-4) so that every later substitution
+fails the same way without redoing it. A later use that is not itself
+trapped (`Sema::trap_now` is `None`) must still be diagnosed, as it
+would have been had it come first: the program's diagnostics never
+depend on whether a SFINAE context or a dropped capture (the empty-pack
+sweep, a verify-only trial) met the specialization before
+([temp.spec.partial.match]/1, [temp.deduct.general]/8).
+`Sema::take_silent_failure(d, kinds)` answers, once per declaration,
+whether such a use is the first to need the report: `d`'s entry still
+waits with an open SFINAE context, a capture or a discard scope, or was
+confirmed, or the Ast marks it with one of `kinds` (a snapshot's). The
+memo hits that ask it:
+
+- `instantiate_class_as` on an invalid class specialization (kind 4):
+  the partial-specialization choice is made again at the use's point of
+  instantiation, printing "ambiguous partial specializations of
+  'X<int, int>'" and its notes; the caller's incomplete-type error stays
+  suppressed (`undefined_diagnosed`), as for a first use;
+- `get_var_spec` on an invalid variable specialization (kind 3): the
+  same, at the template-id;
+- `get_function_spec_signature` on an invalid function specialization
+  (kinds 1 and 2): the first error the trap held (`fn_spec_failures`)
+  is emitted. No caller reaches this outside a trap today (deduction
+  runs it in a SFINAE frame; the generic lambda conversion and the
+  structural re-formation of a member specialization use arguments a
+  successful deduction formed); it keeps a future caller from failing
+  without a diagnostic.
+
+The memo stays (the specialization keeps `INVALID` and its mark: the
+trap printed nothing), and so does the once-only report: clang 19 also
+reports an ambiguity at the first use only; clang 22 forms the class
+specialization again at every use and reports each, and neither clang
+reports a variable's ambiguity after a SFINAE failure, nor clang 19 a
+class's (the tests pin kiln's rule with `xfail(clang)`). A failure an
+error printed while its trap was open is not reported again (the error
+explains it).
 
 The checker's rule A (spec/ast.md §4.1) needs one record from Sema:
 `Sema::note_scratch_head` keeps each friend class template head that

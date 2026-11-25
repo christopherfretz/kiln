@@ -871,8 +871,15 @@ which extension then gives the instantiated variable's own record
 (mangled `_ZGR<the specialization's name>_`, as clang). Copying stops
 where a new full-expression or unevaluated operand starts (a nested
 `ExprWithCleanups`, a `ConstantExpr`, a lambda, a statement expression,
-`sizeof`, `noexcept`, a requires-expression, ...) and below 256 levels.
-Constant evaluation is unchanged: the copies are the same expressions.
+`sizeof`, `noexcept`, a requires-expression, ...). The walk keeps its
+own stack, so a tree of any depth is copied (WP-3292: it stopped below
+256 levels), as does the walk that finds the temporaries a reference
+binds (`Sema::temporaries_bound_by`, `temporaries_in_aggregate`: below
+256 levels the temporary was not extended at all). The same copy is
+made for an expansion statement's expansion-initializer and
+expansion-init-list (WP-3291), whose range variable or element
+declarations extend them. Constant evaluation is unchanged: the copies
+are the same expressions.
 
 Builtin *functions* (`__builtin_memcpy`, `__builtin_is_constant_evaluated`,
 `__builtin_is_within_lifetime`, `__builtin_constant_p`, ...) are ordinary

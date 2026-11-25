@@ -130,6 +130,10 @@ pub(crate) struct SubstLedger {
     scratch_heads: Vec<kiln_ast::TemplateParamListId>,
     /// Whether to keep `formations` and `scratch_heads`.
     verifying: bool,
+    /// The silent failures a hard use has reported
+    /// ([`Sema::take_silent_failure`]): each is reported once. Not
+    /// carried by a snapshot (a consumer reports its own uses).
+    reported: kiln_source::fx::FxHashSet<DeclId>,
 }
 
 impl SubstLedger {
@@ -341,6 +345,37 @@ impl Sema<'_, '_> {
             return;
         }
         self.file_pending(moved);
+    }
+
+    /// Whether `d` was made invalid inside a trap that has printed no error
+    /// about it, with one of `kinds`: its entry still waits in an open
+    /// SFINAE context, a capture or a discard scope, or was confirmed, or
+    /// the Ast marks it (a snapshot's).
+    fn silent_kind(&self, d: DeclId, kinds: &[SubstFailedKind]) -> bool {
+        let mine = |p: &Pending| p.decl == d && p.kind.is_some_and(|k| kinds.contains(&k));
+        if self.ast.decls.subst_failed(d).is_some_and(|k| kinds.contains(&k)) {
+            return true;
+        }
+        let l = self.subst_ledger.borrow();
+        l.confirmed.iter().any(mine)
+            || l.captured.iter().any(|(_, p)| mine(p))
+            || l.discards.iter().any(|(_, ps)| ps.iter().any(mine))
+            || self.inst.sfinae.borrow().iter().any(|s| s.pending.iter().any(mine))
+    }
+
+    /// A use of `d`, invalid, that is no substitution (no trap is in
+    /// effect) and so must be diagnosed: true, once per declaration, when
+    /// `d` failed silently with one of `kinds` (spec/sema-templates.md
+    /// §5.7.3 "Hard use of a silent failure"; WP-3283). The caller then
+    /// reports the failure, which no earlier use printed: the error a use
+    /// in the other order would have printed ([temp.spec.partial.match]/1,
+    /// [temp.deduct.general]/8). A memo hit inside a trap, or after the
+    /// failure was reported, stays quiet.
+    pub(crate) fn take_silent_failure(&self, d: DeclId, kinds: &[SubstFailedKind]) -> bool {
+        if self.trap_now().is_some() || !self.silent_kind(d, kinds) {
+            return false;
+        }
+        self.subst_ledger.borrow_mut().reported.insert(d)
     }
 
     /// A signature failed to form (kind 1 or 2) inside the current trap:

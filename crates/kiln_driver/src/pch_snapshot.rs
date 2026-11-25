@@ -143,8 +143,10 @@ pub(crate) const MAGIC: [u8; 8] = *b"KILNSNAP";
 /// version 176 (WP-3281) the subst-failed marks of silent failures;
 /// version 177 (WP-3272, WP-3274) the guide-scope and undefined-qualifier
 /// diagnostics; version 178 (WP-3280) the function-name self-check's
-/// diagnostic.
-pub(crate) const FORMAT_VERSION: u32 = 178;
+/// diagnostic;
+/// version 179 (WP-3290) the uses of references odr-used when built
+/// (`Sema::ref_odr_at_build`).
+pub(crate) const FORMAT_VERSION: u32 = 179;
 /// The length of the magic and the format version.
 pub(crate) const HEADER_LEN: usize = 12;
 

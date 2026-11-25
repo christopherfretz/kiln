@@ -1334,6 +1334,13 @@ impl Sema<'_, '_> {
         let Some((tmpl, mut args)) = self.spec_args(spec) else { return false };
         let kind = self.ast.spec_info(spec).map(|(_, s)| s.kind);
         if self.ast.decls.get(spec).has(DeclFlags::INVALID) {
+            // An ambiguity only a trap saw (a SFINAE context, a dropped
+            // capture): this use is the first that must report it, as it
+            // would had it come first ([temp.spec.partial.match]/1;
+            // WP-3283). The choice is made again, printing the error.
+            if self.take_silent_failure(spec, &[SubstFailedKind::ClassPartialAmbiguity]) {
+                let _ = self.select_partial_spec(tmpl, spec, poi);
+            }
             self.inst.undefined_diagnosed.set(Some(spec));
             return false;
         }

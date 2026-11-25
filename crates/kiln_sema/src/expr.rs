@@ -896,7 +896,10 @@ impl Sema<'_, '_> {
             }
             let is_ref =
                 self.ast.types.is_reference(self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR));
-            if (is_ref || constant.contains(r)) && self.usable_in_constant_expressions(d) {
+            if (is_ref || constant.contains(r))
+                && !self.ref_odr_at_build.remove(&r)
+                && self.usable_in_constant_expressions(d)
+            {
                 let _ = self.ast.exprs.set_non_odr_use(r, NonOdrUse::Constant);
                 continue;
             }
@@ -1199,6 +1202,13 @@ impl Sema<'_, '_> {
                 _ => return e,
             }
         }
+    }
+
+    /// Whether variable `d` or one of its redeclarations has an
+    /// initializer (the one [`Sema::usable_in_constant_expressions`]
+    /// reads).
+    pub(crate) fn var_has_init(&self, d: DeclId) -> bool {
+        self.ast.redecls_of(d).any(|x| self.ast.decls.var(x).is_some_and(|y| y.init.is_some()))
     }
 
     /// [expr.const]/4: a `constexpr` variable, or a `const`, non-volatile
@@ -2925,6 +2935,15 @@ impl Sema<'_, '_> {
         if !defer {
             self.ast.decls.set_flags(d, DeclFlags::REFERENCED);
         }
+        // clang `BuildDeclRefExpr` decides a reference's non-odr-use
+        // before `MarkDeclRefReferenced` instantiates its definition: a
+        // reference whose initializer this naming instantiates stays an
+        // odr-use (`ref_odr_at_build`).
+        let ref_init_missing = n.kind() == DeclKind::Var
+            && self.unevaluated == 0
+            && !self.in_template()
+            && self.ast.types.is_reference(declared)
+            && !self.var_has_init(d);
         if n.kind() == DeclKind::Var {
             self.note_var_referenced(d, loc);
         } else {
@@ -3009,7 +3028,12 @@ impl Sema<'_, '_> {
                     self.mark_function_referenced(d, at);
                     self.note_immediate_ref(e, d);
                 }
-                DeclKind::Var | DeclKind::ParmVar => self.pending_odr.push(e),
+                DeclKind::Var | DeclKind::ParmVar => {
+                    if ref_init_missing && self.var_has_init(d) {
+                        self.ref_odr_at_build.insert(e);
+                    }
+                    self.pending_odr.push(e);
+                }
                 _ => {}
             }
         } else if matches!(n.kind(), DeclKind::Function | DeclKind::CXXMethod) {

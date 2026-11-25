@@ -142,6 +142,26 @@ hand before 1.0 (WP-313 to WP-1171) are in
 [perf-history.md](perf-history.md); see perf-history.md for any section
 named "WP-NNN" that used to be on this page.
 
+## Deep glvalue conditional chains (WP-3292, open)
+
+A reference bound to a chain of N nested glvalue conditionals
+(`k ? static_cast<const S &&>(g0) : k ? ... : static_cast<const S &&>(S(7))`)
+compiles in time growing about quadratically in N with kiln (about
+10 times clang 19's at 1024 levels); clang's peak RSS grows about
+quadratically instead (144 / 284 / 837 MB at 256 / 512 / 1024 levels,
+kiln 73 / 158 / 509 MB). TU: the corpus test
+`tests/conformance/class.temporary/deep-binding-extended-temporary-run.cpp`
+with its 300 levels made 1024:
+`sed 's/#define C300(x) C256(C32(C8(C4(x))))/#define C300(x) C256(C256(C256(C256(x))))/' <test> > deep1024.cpp`.
+Commands: `kiln++ -std=c++26 -fsyntax-only deep1024.cpp` and
+`clang++-19 -std=c++26 -fsyntax-only deep1024.cpp` (no include dirs).
+Measured 11-23 on the aarch64 container under load, kiln a debug
+(`dev` profile) build of wp/3290: kiln 12.65 s / 510 MB peak RSS, clang 19
+1.42 s / 820 MB; with `-c` kiln 19.39 s / 511 MB, clang 1.57 s / 838 MB.
+At 256 / 512 / 1024 levels (`-c`, debug): kiln 0.97 / 3.51 / 13.77 s,
+clang 0.13 / 0.32 / 1.25 s. Re-measure with a release build before
+acting on it.
+
 ## Peak RSS since 1.1.0 (WP-1891)
 
 The question: the small `oven` entries measured 5-14% above their peak-RSS
