@@ -339,6 +339,7 @@ impl Sema<'_, '_> {
         id: DiagId,
     ) -> bool {
         let declared = self.ast.decls.get(v).ty().unwrap_or(QualType::ERROR);
+        self.note_var_placeholder(v, declared);
         let (items, kind, init_ty) = match &init {
             Initializer::Expr(e) => (vec![Some(*e)], AutoInit::Expr, self.ety(*e)),
             Initializer::List(l) => {

@@ -8681,6 +8681,7 @@ impl Sema<'_, '_> {
         if self.ast.decls.decomp_bindings(v).is_some()
             && let Some(t) = self.decomp_array_type(ty, &init, direct)
         {
+            self.note_var_placeholder(v, ty);
             self.init_decomposition_array(v, t, &init);
             return;
         }
@@ -8696,6 +8697,7 @@ impl Sema<'_, '_> {
         }
         let deduced = self.contains_undeduced_auto(ty);
         if deduced {
+            self.note_var_placeholder(v, ty);
             ty = self.deduce_var_auto(v, ty, &init, loc, direct).unwrap_or(QualType::ERROR);
             self.ast.decls.set_ty(v, ty);
             // A deduced sizeless type is checked as a written one (clang
@@ -8844,6 +8846,24 @@ impl Sema<'_, '_> {
             }
             _ => v,
         }
+    }
+
+    /// Records on variable `v` the placeholder its declared type
+    /// `declared` deduces from (`VarSpec::placeholder`, spec/ast.md §4;
+    /// WP-3583): its type is then deduced, not written, and
+    /// `Ast::decl_written_exprs` stops at it (spec/types.md §8.4).
+    pub(crate) fn note_var_placeholder(&mut self, v: DeclId, declared: QualType) {
+        use kiln_ast::decl::{VarPlaceholder, VarSpec};
+        if self.ast.decls.var(v).is_none() {
+            return;
+        }
+        let kind = match self.placeholder_keyword(declared) {
+            Some(AutoKeyword::Auto) => VarPlaceholder::Auto,
+            Some(AutoKeyword::DecltypeAuto) => VarPlaceholder::DecltypeAuto,
+            Some(AutoKeyword::GnuAutoType) => VarPlaceholder::GnuAutoType,
+            None => return,
+        };
+        self.ast.decls.mark_var(v, VarSpec::new().with_placeholder(kind));
     }
 
     /// `auto x = e;` ([dcl.type.auto.deduct]): deduces through the

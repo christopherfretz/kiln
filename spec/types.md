@@ -1064,7 +1064,36 @@ specialization (spec/ast.md §8.3). Each expression's subexpressions are
 `ExprArena::children`'s. The dump walks (`kiln_ast::dump::written_exprs`,
 `for_each_written_expr`) stay clang's dump, which prints no `TypeLoc`
 and no written template arguments: a client wanting every expression
-of a declaration walks its type with `written_exprs` as well.
+of a declaration walks its type with `written_exprs` as well, through
+`Ast::decl_written_exprs(d, &mut out)`.
+
+A variable whose type its initializer deduced from a placeholder
+(`auto v = w;`, `decltype(auto)`, `auto &`, `const auto *`, a structured
+binding declaration, an init-capture, a range-`for` variable;
+[dcl.type.auto.deduct]) has a deduced type, not a written one: kiln
+keeps no `auto` sugar over it (the type is the deduced type with the
+sugar it came with, so it prints as clang's does), and records the
+placeholder in its `VarSpec` instead (`VarSpec::placeholder() ->
+VarPlaceholder`: `None`, `Auto`, `DecltypeAuto`, `GnuAutoType`; bits
+14-15, 0 bytes; spec/ast.md §4 `VarData`; WP-3583). `decl_written_exprs`
+stops there: it appends nothing for such a variable, nor for a
+structured binding (`Binding`, whose type is its element's), where
+`written_exprs` on the type alone would reach the expressions written
+in the initializer's type (`w`'s `decltype(make(x))` for `auto v = w;`).
+A class template placeholder (CTAD) is no kind: its
+`DeducedTemplateSpecialization` sugar stays in the type. A pattern's
+variable whose initializer is dependent has the kind too, its type the
+dependent `auto` ([temp.dep.expr]/3); its instance deduces again. The
+kind is set when the initializer is attached, so a placeholder-typed
+variable read before that has `None`. Expressions written in the
+declarator around the placeholder (`auto (*p)[f(1)] = &a;`, a
+type-constraint's arguments `C<f(1)> auto v = w;`) are not kept once
+deduced. PCH `FORMAT_VERSION` 187, `IMAGE_VERSION` 101 (the image
+carries the bits with the variable's specifiers). Tests:
+`crates/kiln_parse/tests/written_bounds.rs`
+`a_deduced_variable_writes_no_expression`,
+`a_structured_binding_writes_no_expression`,
+`an_instantiated_deduced_variable`.
 
 ## 9. Memory accounting
 `TypeContext::memory() -> MemReport` with one row per arena: element

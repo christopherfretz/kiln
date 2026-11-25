@@ -1020,9 +1020,31 @@ pub enum InitStyle {
     ParenList = 3,
 }
 
+/// The placeholder a variable's type was deduced from
+/// ([dcl.spec.auto], [dcl.type.auto.deduct]; spec/ast.md §4 `VarData`,
+/// WP-3583): set when the variable's initializer deduces it (in a
+/// template, a dependent initializer deduces the dependent `auto`, which
+/// sets it too); a placeholder-typed variable not initialized yet has
+/// `None`. A class template placeholder (CTAD) is no kind here: its
+/// `DeducedTemplateSpecialization` sugar stays in the type.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+#[repr(u8)]
+pub enum VarPlaceholder {
+    /// The type is written (or a class template placeholder's).
+    #[default]
+    None = 0,
+    /// `auto`, under any declarator (`auto &`, `const auto *`, `C auto`,
+    /// a structured binding declaration's `auto`, an init-capture).
+    Auto = 1,
+    /// `decltype(auto)`.
+    DecltypeAuto = 2,
+    /// GNU `__auto_type`.
+    GnuAutoType = 3,
+}
+
 /// `VarData.spec`: `storage(3) tls(2) init_style(2) constexpr(1)
 /// constinit(1) inline(1) nrvo(1) exception_var(1) cxx_for_range(1)
-/// inline_implied(1)`.
+/// inline_implied(1) placeholder(2)`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug, kiln_snap::Snap)]
 pub struct VarSpec(u32);
 
@@ -1076,6 +1098,20 @@ impl VarSpec {
     pub const fn with_init_style(self, s: InitStyle) -> Self {
         VarSpec((self.0 & !(3 << 5)) | ((s as u32) << 5))
     }
+    /// The placeholder the type was deduced from ([`VarPlaceholder`]).
+    pub const fn placeholder(self) -> VarPlaceholder {
+        match (self.0 >> 14) & 3 {
+            1 => VarPlaceholder::Auto,
+            2 => VarPlaceholder::DecltypeAuto,
+            3 => VarPlaceholder::GnuAutoType,
+            _ => VarPlaceholder::None,
+        }
+    }
+    /// With placeholder kind `p`.
+    #[must_use]
+    pub const fn with_placeholder(self, p: VarPlaceholder) -> Self {
+        VarSpec((self.0 & !(3 << 14)) | ((p as u32) << 14))
+    }
     /// The bits [`DeclArena::mark_var`] may set after creation: `nrvo`,
     /// the `Call` init style of a default-initialized class variable
     /// (set over `C` only, with its `CXXConstructExpr`), `ParenList` (set
@@ -1085,9 +1121,10 @@ impl VarSpec {
     /// instantiated static data member becomes inline with its deferred
     /// initializer and takes its form, [temp.inst]/4),
     /// and `cxx_for_range` (a for-range-declaration is known as one after
-    /// it is declared, clang `ActOnCXXForRangeDecl`).
+    /// it is declared, clang `ActOnCXXForRangeDecl`), and the placeholder
+    /// kind (set when the initializer deduces the type).
     pub const LATE: VarSpec =
-        VarSpec((1 << 13) | (1 << 12) | (1 << 10) | (1 << 9) | (1 << 6) | (1 << 5));
+        VarSpec((3 << 14) | (1 << 13) | (1 << 12) | (1 << 10) | (1 << 9) | (1 << 6) | (1 << 5));
 }
 
 bit_accessors!(VarSpec:

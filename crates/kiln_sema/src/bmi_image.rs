@@ -25,7 +25,7 @@ use kiln_ast::consts::Scalar;
 use kiln_ast::decl::{
     Access, ConstexprKind, CtorInitKind, DeclFlags, DeclKind, Defaulted, DefinitionBits, EnumData,
     FnSpec, FnStorage, FriendKind, FriendTarget, InitStyle, ParamData, TagKind, TemplLinkKind,
-    TlsKind, VarSpec, VarStorage,
+    TlsKind, VarPlaceholder, VarSpec, VarStorage,
 };
 use kiln_ast::modules::{Owner, UnitKind};
 use kiln_ast::names::{DeclName, DeclNameView, OverloadedOperator};
@@ -103,7 +103,7 @@ pub(crate) use locs::Locs;
 use locs::{FileRec, LocTable, SlocRec};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 100;
+pub(crate) const IMAGE_VERSION: u32 = 101;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -1007,7 +1007,7 @@ fn param_abis_of(types: &TypeContext, info: FuncInfo, n: usize) -> Vec<u8> {
 /// thread storage duration (`__thread` / `_Thread_local` static TLS,
 /// `thread_local` dynamic TLS; WP-1824), the initialization style,
 /// `constexpr`, `constinit`, `inline` (and whether it is implied), NRVO
-/// and range-`for` variables.
+/// and range-`for` variables, and the placeholder kind of a deduced type.
 fn var_spec(bits: u32) -> Option<VarSpec> {
     let storage = match bits & 7 {
         0 => VarStorage::None,
@@ -1040,7 +1040,14 @@ fn var_spec(bits: u32) -> Option<VarSpec> {
         .with_exception_var(bit(11))
         .with_cxx_for_range(bit(12))
         // `inline` implied, not written (WP-1517).
-        .with_inline_implied(bit(13));
+        .with_inline_implied(bit(13))
+        // The placeholder the type was deduced from (WP-3583).
+        .with_placeholder(match (bits >> 14) & 3 {
+            0 => VarPlaceholder::None,
+            1 => VarPlaceholder::Auto,
+            2 => VarPlaceholder::DecltypeAuto,
+            _ => VarPlaceholder::GnuAutoType,
+        });
     (spec.bits() == bits & !specinit::INIT_SECT).then_some(spec)
 }
 

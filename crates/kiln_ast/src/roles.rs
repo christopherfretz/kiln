@@ -1131,6 +1131,7 @@ pub static COLD_MAPS: &[ColdMapRoles] = &[
     cold("ColdExprData", "use_imm", E, Role::Record("Box<[UseImmediate]>")),
     cold("ColdExprData", "union_field", E, D),
     cold("ColdExprData", "cast_written", E, T),
+    cold("ColdExprData", "compound_literal_written", E, T),
     cold(
         "ColdExprData",
         "offsetof_pattern",

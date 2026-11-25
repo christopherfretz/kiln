@@ -894,25 +894,30 @@ impl Sema<'_, '_> {
         if self.is_err_expr(init) {
             return self.recover(ty, &[init], lparen);
         }
+        // The list completes an array of unknown bound; the type as
+        // written is kept beside it (spec/ast.md §5.11, WP-3589).
+        let written = ty;
         let ty = if matches!(self.ast.types.canonical_view(ty), TypeView::IncompleteArray(_)) {
             self.ety(init)
         } else {
             ty
         };
-        if file_scope {
+        let e = if file_scope {
             if !self.check_constant_literal_init(ty, init, lparen, l.lbrace) {
                 // An lvalue, as the literal: its decay is no temporary.
                 return self.builder().recovery(Some(ty), ValueCategory::LValue, &[init], lparen);
             }
             // The object's context is the enclosing namespace.
             let ctx = self.literal_object_ctx();
-            return self.builder().file_scope_compound_literal(ctx, ty, init, lparen).0;
-        }
-        if self.is_c() {
+            self.builder().file_scope_compound_literal(ctx, ty, init, lparen).0
+        } else if self.is_c() {
             // C17 6.5.2.5p4: an lvalue of automatic storage duration.
-            return self.builder().c_compound_literal(ty, init, lparen);
-        }
-        self.builder().compound_literal(ty, init, lparen)
+            self.builder().c_compound_literal(ty, init, lparen)
+        } else {
+            self.builder().compound_literal(ty, init, lparen)
+        };
+        self.builder().set_compound_literal_written(e, written);
+        e
     }
 
     /// clang's `CheckForConstantInitializer` for a namespace-scope

@@ -6,7 +6,8 @@
 //! its value) and the same written array bounds, whether the
 //! declarations came from source, an imported module's declaration image
 //! or a precompiled header ([module.interface], [temp.spec.partial],
-//! [temp.expl.spec], [dcl.array]/1, [dcl.fct]/5).
+//! [temp.expl.spec], [dcl.array]/1, [dcl.fct]/5). A deduced variable's
+//! placeholder kind is carried too (WP-3583, [dcl.type.auto.deduct]).
 
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -44,13 +45,15 @@ template <> int fh<f(6)>() { return 6; }
   template <class U, int N> struct In { static constexpr int k = 0; };
   template <class U> struct In<U, f(7)> { static constexpr int k = 7; };
 };
+@inline long dv(long w) { decltype(auto) dv2 = w; return dv2; }
 ";
 
 const USE: &str = "int use() {\n\
   TA<int> ta{};\n\
   int three[3] = {1, 2, 3};\n\
   return by_ref(arr) + par(three) + lit(three) + P<int, 2>::k + P<char, 1>::k + P<char, 3>::k\n\
-    + v<int, 4> + v<char, 3> + fh<6>() + O<long>::In<char, 7>::k + int(sizeof(ta.a));\n\
+    + v<int, 4> + v<char, 3> + fh<6>() + O<long>::In<char, 7>::k + int(sizeof(ta.a))\n\
+    + int(dv(1));\n\
 }\n";
 
 fn shapes(export: bool) -> String {
@@ -214,6 +217,11 @@ fn report(ast: &Ast) -> Vec<(String, String)> {
             out.push((format!("{name} {kind:?} bounds"), written_bounds(ast, d)));
         }
     }
+    // WP-3583: the placeholder `dv2`'s type was deduced from.
+    for d in named(ast, "dv2", DeclKind::Var) {
+        let kind = ast.decls.var(d).map(|v| v.spec.placeholder());
+        out.push(("dv2 placeholder".to_owned(), format!("{kind:?}")));
+    }
     out.sort();
     out
 }
@@ -243,6 +251,7 @@ fn source_report() -> Vec<(String, String)> {
     // [dcl.fct]/5 (WP-3101): the adjusted parameter's written bound.
     assert!(get("par Function bounds")[0].contains("CallExpr"), "{r:?}");
     assert!(get("b ParmVar bounds")[0].contains("IntegerLiteral=4"), "{r:?}");
+    assert_eq!(get("dv2 placeholder"), ["Some(DecltypeAuto)"], "{r:?}");
     r
 }
 

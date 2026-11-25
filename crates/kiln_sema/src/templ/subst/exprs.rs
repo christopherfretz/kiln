@@ -1124,7 +1124,9 @@ impl Substituter<'_, '_, '_> {
                 // element initializing the class ([dcl.init.list]/3.2).
                 let o = ex(self).compound_literal_init(e);
                 let p = self.peel_initializer(o);
-                let ty = self.ty(n.ty(), loc)?;
+                // The type as written (`T[]` for a list-completed bound,
+                // spec/ast.md §5.11): its sugar reaches the instance.
+                let ty = self.ty(ex(self).compound_literal_written_type(e), loc)?;
                 let l = match ex(self).get(p).kind() {
                     ExprKind::InitListExpr => self.init_list(p)?,
                     ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr

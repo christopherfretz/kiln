@@ -138,6 +138,7 @@ const COLD_MAP_NAMES: &[&str] = &[
     "cast_written",
     "closure_owner",
     "compound_literal",
+    "compound_literal_written",
     "contract_sites",
     "contracts",
     "conversion_spec_target",

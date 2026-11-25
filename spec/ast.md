@@ -625,7 +625,8 @@ struct VarData {                    // 24 bytes
     redecl: Redecl,
     init: Option<ExprId>,
     spec: VarSpec,                  // u32: storage(3) tls(2) init_style(2: c/call/list/paren-list) constexpr(1) constinit(1)
-                                    //   inline(1) nrvo(1) exception_var(1) cxx_for_range(1) ...
+                                    //   inline(1) nrvo(1) exception_var(1) cxx_for_range(1) inline_implied(1)
+                                    //   placeholder(2: none/auto/decltype(auto)/__auto_type, bits 14-15)
     eval: VarEval,                  // u32, §9.2: 0 NotEvaluated | MAX Evaluating | MAX-1 NotConstant | else ConstValueId
     templ: TemplLink,
 }
@@ -1383,6 +1384,57 @@ sema is gone) sees them in a template pattern:
 
 Tests: `crates/kiln_parse/tests/sema_facts.rs` (a non-dependent object, an
 implicit `this->`, `p->Base::f<int>(x)` and `p->Base::f<T>(x)`).
+
+### 5.11 Type operands as written (WP-3589)
+**Stability promise.** Each type operand below is kept as written: the
+type with the sugar the source wrote (a `decltype(e)` or `typeof(e)`, a
+typedef or alias name, an array bound's written expression, a
+template-id's arguments as written), not only its canonical type. This
+holds in plain code, in a template's pattern and in its instances
+(substitution rebuilds the sugar with the substituted expressions), and
+across PCH snapshots and module images. A reader walks the operand with
+`TypeContext::written_exprs` (spec/types.md §8.4), or an argument list
+with `written_arg_exprs`, to reach every expression, and so every call,
+written in it. The accessors are part of the promise: dropping one, or
+answering with a canonical or completed type where this list says "as
+written", is an interface change (docs/AGENTS.md rule 4).
+
+| operand | expression kinds | accessor |
+|---|---|---|
+| a C-style cast's type | `CStyleCastExpr` | the node's type |
+| a named or functional cast's type | `CXXStaticCastExpr`, `CXXConstCastExpr`, `CXXReinterpretCastExpr`, `CXXDynamicCastExpr`, `CXXFunctionalCastExpr` | `ExprArena::cast_written_type(e)`, else the node's type (a glvalue cast's written type is the node's type plus `&` / `&&` by value category; §5.3) |
+| a functional cast's type in a pattern (dependent type or arguments) | `CXXUnresolvedConstructExpr` | `ExprArena::unresolved_construct_type(e)` |
+| `sizeof` / `alignof` type operand (`__alignof`, `__datasizeof`, `vec_step` the same) | `UnaryExprOrTypeTraitExpr` | `ExprArena::trait_type_arg(e)` |
+| type trait operands | `TypeTraitExpr` | `ExprArena::type_trait_args(e)` (a `ListId` of `QualType`s) |
+| `typeid` type operand | `CXXTypeidExpr` | `ExprArena::typeid_operand(e)` (`TypeidOperand::Type`) |
+| `new`'s allocated type | `CXXNewExpr` | `ExprArena::new_extra(e).allocated_ty` (an array new's element type; its first bound is `array_size`, an expression, §5.7) |
+| a compound literal's type | `CompoundLiteralExpr` | `ExprArena::compound_literal_written_type(e)` |
+| a name's explicit template arguments | `DeclRefExpr`, `MemberExpr`; in a pattern `UnresolvedLookupExpr`, `CXXDependentScopeMemberExpr`, `DependentScopeDeclRefExpr` | `ExprArena::decl_ref_extra(e).template_args`; an overloaded member access's `Ast::member_access_name(e).template_args` (§5.10); a dependent name's `TemplateTables::expr_targs` |
+| a concept-id's arguments | `ConceptSpecializationExpr` | `ExprArena::concept_spec_args(e)` |
+
+A compound literal of an array of unknown bound (`(T[]){1, 2}`, a GNU
+extension in C++) has the type its list completes (`T[2]`,
+[dcl.init.aggr]/4) as its node type; the written `T[]` is then kept in
+the cold map `compound_literal_written: ColdMap<ExprId, QualType>`
+(`AstBuilder::set_compound_literal_written`, recorded only when it
+differs from the node's type, like `cast_written`), and instantiation
+substitutes the written type (clang `TransformCompoundLiteralExpr` reads
+`getTypeSourceInfo`). PCH snapshots carry the map (`FORMAT_VERSION`
+187); a module image carries no compound literal yet (an interface
+holding one in a body the image writes is replayed from source, which
+keeps it); memory row `cold.compound_literal_written`.
+
+Other type operands carry no promise yet: `va_arg`'s type,
+`__builtin_offsetof`'s, `__builtin_bit_cast`'s and
+`__builtin_convertvector`'s, an array type trait's, a pseudo-destructor
+name's, a value-initialization `T()` and a temporary object `T{...}`.
+A declaration's type is no operand: spec/types.md §8.4 and
+`Ast::decl_written_exprs` cover it (nothing for a deduced variable).
+
+Tests: `crates/kiln_parse/tests/written_bounds.rs`
+`every_type_operand_is_kept_as_written` (each operand in plain code and
+in a function template's pattern and instance),
+`a_compound_literal_keeps_its_unknown_bound`.
 
 ## 6. Statements
 ```rust

@@ -5,15 +5,18 @@
 //! as written) reaches every call written in it, also once a constant
 //! bound or a non-type argument folded to a value; the canonical types
 //! and the converted arguments are unchanged ([dcl.array]/1,
-//! [temp.spec.partial.general], [temp.expl.spec]).
+//! [temp.spec.partial.general], [temp.expl.spec]). A deduced variable's
+//! type is no written one (spec/types.md §8.4, WP-3583), and every type
+//! operand is kept as written, in plain code and in instances (spec/ast.md
+//! §5.11 "Type operands as written", WP-3589).
 
 use std::sync::Arc;
 
-use kiln_ast::decl::DeclKind;
-use kiln_ast::expr::ExprKind;
+use kiln_ast::decl::{DeclKind, VarPlaceholder};
+use kiln_ast::expr::{ExprKind, TypeidOperand};
 use kiln_ast::templates::SpecKind;
 use kiln_ast::types::ArgView;
-use kiln_ast::{Ast, DeclId, ExprId};
+use kiln_ast::{Ast, DeclId, ExprId, QualType};
 use kiln_diag::{DiagEngine, DiagOptions, MemorySink};
 use kiln_parse::{ConstexprLimits, ParseOptions, parse_tu};
 use kiln_sema::target::{Arch, Target};
@@ -56,12 +59,17 @@ struct Tu {
 }
 
 fn parse(src: &str) -> Tu {
+    parse_at(src, ParseOptions::default().clang_compat)
+}
+
+/// [`parse`] at clang compatibility level `compat`.
+fn parse_at(src: &str, compat: u32) -> Tu {
     let sm = SourceManager::new();
     let file = sm.add_virtual("t.cpp", src.to_owned()).expect("location space");
     let interner = Arc::new(Interner::new());
     let sink = MemorySink::new();
     let engine = DiagEngine::new(&sm, &DiagOptions::default(), sink.clone());
-    let opts = ParseOptions::default();
+    let opts = ParseOptions { clang_compat: compat, ..ParseOptions::default() };
     let target = Target::for_arch(Arch::X86_64);
     let tu = parse_tu(&sm, &interner, file, &engine, target, &opts, ConstexprLimits::default());
     let errors = engine.error_count();
@@ -119,20 +127,52 @@ impl Tu {
                 continue;
             }
             seen.push(e);
-            let x = ast.exprs.get(e);
-            let held = match x.kind() {
-                ExprKind::CXXNewExpr => Some(ast.exprs.new_extra(e).allocated_ty),
-                ExprKind::UnaryExprOrTypeTraitExpr => ast.exprs.trait_type_arg(e),
-                // A C-style cast's type is its type as written.
-                ExprKind::CStyleCastExpr => Some(x.ty()),
-                _ => ast.exprs.cast_written_type(e),
-            };
-            if let Some(t) = held {
+            let (held, args) = self.type_operands(e);
+            for t in held {
                 ast.types.written_exprs(t, &mut todo);
+            }
+            if let Some(l) = args {
+                ast.types.written_arg_exprs(l, &mut todo);
             }
             todo.extend(ast.exprs.children(e, &ast.lists));
         }
         seen
+    }
+
+    /// The type operands as written of expression `e` (spec/ast.md §5.11,
+    /// each through its accessor) and its template arguments as written.
+    fn type_operands(&self, e: ExprId) -> (Vec<QualType>, Option<kiln_ast::ArgListId>) {
+        let ast = self.ast();
+        let x = ast.exprs.get(e);
+        let k = x.kind();
+        let held = match k {
+            ExprKind::CXXNewExpr => vec![ast.exprs.new_extra(e).allocated_ty],
+            ExprKind::UnaryExprOrTypeTraitExpr => ast.exprs.trait_type_arg(e).into_iter().collect(),
+            // A C-style cast's type is its type as written.
+            ExprKind::CStyleCastExpr => vec![x.ty()],
+            ExprKind::CXXTypeidExpr => match ast.exprs.typeid_operand(e) {
+                TypeidOperand::Type(t) => vec![t],
+                TypeidOperand::Expr(_) => Vec::new(),
+            },
+            ExprKind::TypeTraitExpr => {
+                ast.lists.iter::<QualType>(ast.exprs.type_trait_args(e)).collect()
+            }
+            ExprKind::CompoundLiteralExpr => vec![ast.exprs.compound_literal_written_type(e)],
+            ExprKind::CXXUnresolvedConstructExpr => vec![ast.exprs.unresolved_construct_type(e)],
+            k if k.is_cast() && k != ExprKind::ImplicitCastExpr => {
+                vec![ast.exprs.cast_written_type(e).unwrap_or(x.ty())]
+            }
+            _ => ast.exprs.cast_written_type(e).into_iter().collect(),
+        };
+        let args = match k {
+            ExprKind::ConceptSpecializationExpr => ast.exprs.concept_spec_args(e),
+            ExprKind::DeclRefExpr | ExprKind::MemberExpr => {
+                ast.exprs.decl_ref_extra(e).and_then(|x| x.template_args)
+            }
+            // A dependent name's, in a pattern.
+            _ => ast.templates.expr_targs.get(e).copied(),
+        };
+        (held, args)
     }
 
     /// The lines of the calls of a function named `callee` among the
@@ -164,9 +204,7 @@ impl Tu {
     fn decl_roots(&self, d: DeclId) -> Vec<ExprId> {
         let ast = self.ast();
         let mut roots = Vec::new();
-        if let Some(t) = ast.decls.get(d).ty() {
-            ast.types.written_exprs(t, &mut roots);
-        }
+        ast.decl_written_exprs(d, &mut roots);
         roots.extend(ast.decls.var(d).and_then(|v| v.init));
         roots
     }
@@ -676,4 +714,235 @@ fn a_pack_index_survives_the_module_image() {
     let _ = std::fs::remove_dir_all(&dir);
     assert!(imports.is_empty(), "replayed, not built from an image");
     assert_eq!(count(&got.ast), 1, "the imported instance keeps its index");
+}
+
+/// The shapes of a deduced variable ([dcl.spec.auto], [dcl.type.auto.deduct],
+/// [dcl.struct.bind]), one per line; `w`'s type is written, so its
+/// `decltype` operand is its own, and a variable deduced from `w` writes
+/// none (spec/types.md §8.4, WP-3583).
+const DEDUCED: &str = "\
+long make(int);
+int x;
+decltype(make(x)) w = 0;
+auto v = w;
+decltype(auto) v2 = w;
+auto &r = w;
+const auto *p = &w;
+struct Pr { decltype(make(x)) a, b; };
+Pr pr{};
+auto [a, b] = pr;
+decltype(make(x)) arr[2] = {};
+auto [c, d] = arr;
+decltype(make(x)) ctrl = w;
+template <class T> long tf(T t) {
+  decltype(make(t)) tw = 0;
+  auto tv = tw;
+  decltype(make(t)) ta[1] = {tw}; for (auto e : ta) { tv += e; }
+  return tv;
+}
+long inst = tf(1);
+auto lam = [cap = w] { return cap; };
+";
+
+/// [dcl.type.auto.deduct]/4: the deduced type is no written one, so the
+/// walk from the declaration does not reach `w`'s `decltype(make(x))`
+/// through it; the written control and `w` itself do.
+#[test]
+fn a_deduced_variable_writes_no_expression() {
+    let t = parse(DEDUCED);
+    let ast = t.ast();
+    let roots = |d: DeclId| {
+        let mut out = Vec::new();
+        ast.decl_written_exprs(d, &mut out);
+        out
+    };
+    let place = |d: DeclId| ast.decls.var(d).unwrap().spec.placeholder();
+    for (name, kind) in [
+        ("v", VarPlaceholder::Auto),
+        ("v2", VarPlaceholder::DecltypeAuto),
+        ("r", VarPlaceholder::Auto),
+        ("p", VarPlaceholder::Auto),
+        // [expr.prim.lambda.capture]/6: an init-capture deduces as `auto`.
+        ("cap", VarPlaceholder::Auto),
+    ] {
+        let d = t.one(name, DeclKind::Var);
+        assert_eq!(place(d), kind, "{name}");
+        assert!(roots(d).is_empty(), "{name}: {:?}", roots(d));
+    }
+    // The type keeps `w`'s sugar (it prints as clang's does); only the
+    // declaration walk stops at it.
+    for name in ["v", "v2"] {
+        let d = t.one(name, DeclKind::Var);
+        let mut leak = Vec::new();
+        ast.types.written_exprs(ast.decls.get(d).ty().unwrap(), &mut leak);
+        assert_eq!(t.calls(leak, "make"), [3], "{name}");
+    }
+    for (name, line) in [("w", 3), ("ctrl", 13)] {
+        let d = t.one(name, DeclKind::Var);
+        assert_eq!(place(d), VarPlaceholder::None, "{name}");
+        assert_eq!(t.calls(roots(d), "make"), [line], "{name}");
+    }
+}
+
+/// [dcl.struct.bind]/1: the structured binding declaration's `auto` is a
+/// placeholder (a class and an array initializer); the bindings' types
+/// are their elements', written elsewhere.
+#[test]
+fn a_structured_binding_writes_no_expression() {
+    let t = parse(DEDUCED);
+    let ast = t.ast();
+    for (name, line) in [("a", 10), ("c", 12)] {
+        let b = t.one(name, DeclKind::Binding);
+        let mut out = Vec::new();
+        ast.decl_written_exprs(b, &mut out);
+        assert!(out.is_empty(), "{name}: {out:?}");
+        let e = ast.decls.binding_decomp(b).expect("the decomposition");
+        assert_eq!(ast.decls.var(e).unwrap().spec.placeholder(), VarPlaceholder::Auto, "{name}");
+        ast.decl_written_exprs(e, &mut out);
+        assert!(out.is_empty(), "{name} (line {line}): {out:?}");
+    }
+}
+
+/// [temp.inst], [temp.dep.expr]/3: a pattern's variable with a dependent
+/// initializer has the kind with its dependent `auto` type; the
+/// instance's is deduced; neither walks into its type; a range-`for`
+/// variable is deduced too ([stmt.ranged]/1).
+#[test]
+fn an_instantiated_deduced_variable() {
+    let t = parse(DEDUCED);
+    let ast = t.ast();
+    let tv = t.named("tv", DeclKind::Var);
+    assert_eq!(tv.len(), 2, "the pattern's and tf<int>'s");
+    let kinds: Vec<_> = tv.iter().map(|&d| ast.decls.var(d).unwrap().spec.placeholder()).collect();
+    assert_eq!(kinds, [VarPlaceholder::Auto, VarPlaceholder::Auto]);
+    for &d in &tv {
+        let mut out = Vec::new();
+        ast.decl_written_exprs(d, &mut out);
+        assert!(out.is_empty(), "{d:?}: {out:?}");
+    }
+    let tw = t.named("tw", DeclKind::Var);
+    assert_eq!(tw.len(), 2);
+    for &d in &tw {
+        assert_eq!(t.calls(t.decl_roots(d), "make"), [15], "{d:?}");
+    }
+    let e = t.named("e", DeclKind::Var);
+    assert_eq!(e.len(), 2);
+    assert_eq!(ast.decls.var(e[1]).unwrap().spec.placeholder(), VarPlaceholder::Auto);
+}
+
+/// Every type operand, one per line, in plain code and in a function
+/// template's pattern and instance (spec/ast.md §5.11, WP-3589).
+const OPERANDS: &str = "\
+namespace std { class type_info; }
+long make(int);
+int x;
+template <class T> concept C = true;
+template <int N> int vt = N;
+struct O { template <int N> static int m() { return N; } } o;
+template <class T> long tf(T t) {
+  long sc = static_cast<decltype(make(t))>(1);
+  long cc = (decltype(make(t)))1;
+  long fc = decltype(make(t))(1);
+  unsigned long so = sizeof(decltype(make(t)));
+  unsigned long ao = alignof(decltype(make(t)));
+  bool tt = __is_same(decltype(make(t)), long);
+  const std::type_info &ti = typeid(decltype(make(t)));
+  long *np = new decltype(make(t))(1);
+  long cl = (decltype(make(t))[]){1, 2}[0];
+  int dr = vt<sizeof(make(t))>;
+  int mr = o.m<sizeof(make(t))>();
+  bool ci = C<decltype(make(t))>;
+  return sc + cc + fc + so + ao + tt + *np + cl + dr + mr + ci + (&ti != nullptr);
+}
+long inst = tf(1);
+void plain() {
+  long sc = static_cast<decltype(make(x))>(1);
+  long cc = (decltype(make(x)))1;
+  long fc = decltype(make(x))(1);
+  unsigned long so = sizeof(decltype(make(x)));
+  unsigned long ao = alignof(decltype(make(x)));
+  bool tt = __is_same(decltype(make(x)), long);
+  const std::type_info &ti = typeid(decltype(make(x)));
+  long *np = new decltype(make(x))(1);
+  long cl = (decltype(make(x))[]){1, 2}[0];
+  int dr = vt<sizeof(make(x))>;
+  int mr = o.m<sizeof(make(x))>();
+  bool ci = C<decltype(make(x))>;
+}
+";
+
+/// [expr.static.cast], [expr.cast], [expr.type.conv], [expr.sizeof],
+/// [expr.alignof], [expr.typeid], [expr.new], [temp.names], [temp.names]/8
+/// (concept-id), and the GNU compound literal: the type operand as written
+/// (through its accessor, spec/ast.md §5.11) reaches the `make` call in
+/// its `decltype` or bound, in plain code (`plain`) and in the pattern and
+/// the instance of `tf`, three times per name, at clang compatibility 22
+/// and 19.
+#[test]
+fn every_type_operand_is_kept_as_written() {
+    for compat in [22, 19] {
+        every_type_operand_at(compat);
+    }
+}
+
+fn every_type_operand_at(compat: u32) {
+    let t = parse_at(OPERANDS, compat);
+    let ast = t.ast();
+    for (i, name) in
+        ["sc", "cc", "fc", "so", "ao", "tt", "ti", "np", "cl", "dr", "mr", "ci"].iter().enumerate()
+    {
+        let vars = t.named(name, DeclKind::Var);
+        assert_eq!(vars.len(), 3, "{name}: the pattern's, tf<int>'s and plain's");
+        for &d in &vars {
+            let line = 8 + i as u32;
+            let line = if ast.decls.get(d).ctx()
+                == t.named("plain", DeclKind::Function).first().copied()
+            {
+                line + 16
+            } else {
+                line
+            };
+            assert_eq!(t.calls(t.decl_roots(d), "make"), [line], "{name} {d:?} at {compat}");
+        }
+    }
+}
+
+/// GNU compound literal, [dcl.init.aggr]/4: `(T[]){1, 2}` has the
+/// completed type `T[2]`; its written `T[]` is kept beside it, also in an
+/// instance; a literal written with its bound keeps its node type.
+#[test]
+fn a_compound_literal_keeps_its_unknown_bound() {
+    let t = parse(OPERANDS);
+    let ast = t.ast();
+    let lits: Vec<ExprId> = (1..=ast.exprs.len() as u32)
+        .map(ExprId::new)
+        .filter(|&e| ast.exprs.get(e).kind() == ExprKind::CompoundLiteralExpr)
+        .collect();
+    assert_eq!(lits.len(), 3, "the pattern's, tf<int>'s and plain's");
+    // spec/pch.md: a PCH snapshot carries the written type.
+    let bytes = kiln_snap::to_bytes(ast);
+    let restored = kiln_snap::from_bytes::<Ast>(&bytes).expect("the snapshot decodes");
+    for &e in &lits {
+        assert_eq!(
+            restored.exprs.compound_literal_written_type(e),
+            ast.exprs.compound_literal_written_type(e)
+        );
+    }
+    for e in lits {
+        let w = ast.exprs.compound_literal_written_type(e);
+        assert!(ast.types.is_array(w));
+        assert_eq!(ast.types.array_size(w), None, "T[] as written: {e:?}");
+        let n = ast.exprs.get(e).ty();
+        if !ast.types.is_dependent(n) {
+            assert_eq!(ast.types.array_size(n), Some(2), "the completed type: {e:?}");
+        }
+    }
+    let t = parse("int f(int);\nint g() { return (int[2]){f(1), 2}[0]; }\n");
+    let ast = t.ast();
+    let e = (1..=ast.exprs.len() as u32)
+        .map(ExprId::new)
+        .find(|&e| ast.exprs.get(e).kind() == ExprKind::CompoundLiteralExpr)
+        .unwrap();
+    assert_eq!(ast.exprs.compound_literal_written_type(e), ast.exprs.get(e).ty());
+    assert!(ast.exprs.cold.compound_literal_written.get(e).is_none());
 }

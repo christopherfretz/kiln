@@ -1552,6 +1552,11 @@ pub struct ColdExprData {
     /// non-class `CI{1}` / `static_cast<CI>(x)` whose prvalue drops the
     /// qualifiers and sugar of `CI`, a reference named by an alias.
     pub cast_written: ColdMap<ExprId, QualType>,
+    /// The type as written of a `CompoundLiteralExpr` whose node type is
+    /// not it (spec/ast.md §5.11, WP-3589): `(T[]){1, 2}`, whose node
+    /// type is the array type the list completed (`T[2]`, [dcl.init.aggr]/4)
+    /// while `T[]` is what the source wrote (clang `getTypeSourceInfo`).
+    pub compound_literal_written: ColdMap<ExprId, QualType>,
     /// A value-dependent `OffsetOfExpr`: the operand type and the
     /// designator as written, rebuilt at instantiation (clang keeps its
     /// `OffsetOfNode`s; spec/sema.md §5.8).
@@ -1775,6 +1780,7 @@ impl Default for ColdExprData {
             use_imm: ColdMap::new("use_imm"),
             union_field: ColdMap::new("union_field"),
             cast_written: ColdMap::new("cast_written"),
+            compound_literal_written: ColdMap::new("compound_literal_written"),
             offsetof_pattern: ColdMap::new("offsetof_pattern"),
             offsetof_layout: ColdMap::new("offsetof_layout"),
             offsetof_designator: ColdMap::new("offsetof_designator"),
@@ -2772,6 +2778,9 @@ impl ExprArena {
         if let Some(&x) = cold.cast_written.get(e) {
             let _ = cold.cast_written.insert(id, x);
         }
+        if let Some(&x) = cold.compound_literal_written.get(e) {
+            let _ = cold.compound_literal_written.insert(id, x);
+        }
         if let Some(&x) = cold.trait_rhs_loc.get(e) {
             let _ = cold.trait_rhs_loc.insert(id, x);
         }
@@ -3103,6 +3112,13 @@ impl ExprArena {
             ExprKind::TypeTraitExpr | ExprKind::ArrayTypeTraitExpr | ExprKind::ExpressionTraitExpr
         ));
         TypeTrait::from_u8(n.aux).expect("invariant: the builder stores a valid TypeTrait in aux")
+    }
+
+    /// The template arguments as written of a `ConceptSpecializationExpr`
+    /// (`C<decltype(f(x)), N>`; spec/ast.md §5.11, WP-3589): sugared, so
+    /// a written `decltype` or bound is still there in an instance.
+    pub fn concept_spec_args(&self, e: ExprId) -> Option<ArgListId> {
+        ArgListId::from_raw(self.expect_kind(e, ExprKind::ConceptSpecializationExpr).b)
     }
 
     /// The type operands of a `TypeTraitExpr` (a `ListId` of `QualType`s).
@@ -3739,6 +3755,7 @@ impl HeapSize for ExprArena {
         r.push(self.cold.default_imm.mem_row().prefixed("cold"));
         r.push(self.cold.use_imm.mem_row().prefixed("cold"));
         r.push(self.cold.cast_written.mem_row().prefixed("cold"));
+        r.push(self.cold.compound_literal_written.mem_row().prefixed("cold"));
         r.push(self.cold.offsetof_pattern.mem_row().prefixed("cold"));
         r.push(self.cold.offsetof_layout.mem_row().prefixed("cold"));
         r.push(self.cold.offsetof_designator.mem_row().prefixed("cold"));
@@ -3941,6 +3958,15 @@ impl ExprArena {
     /// The `InitListExpr` of a `CompoundLiteralExpr`.
     pub fn compound_literal_init(&self, e: ExprId) -> ExprId {
         ExprId::new(self.expect_kind(e, ExprKind::CompoundLiteralExpr).a)
+    }
+
+    /// The type as written of `CompoundLiteralExpr` `e` (spec/ast.md
+    /// §5.11, WP-3589): `T[]` for `(T[]){1, 2}`, whose node type is the
+    /// completed `T[2]`; otherwise the node's type, which is the written
+    /// one ([`ColdExprData::compound_literal_written`]).
+    pub fn compound_literal_written_type(&self, e: ExprId) -> QualType {
+        let n = self.expect_kind(e, ExprKind::CompoundLiteralExpr);
+        self.cold.compound_literal_written.get(e).copied().unwrap_or(n.ty())
     }
 
     /// The implicit static-storage variable of a namespace-scope array
