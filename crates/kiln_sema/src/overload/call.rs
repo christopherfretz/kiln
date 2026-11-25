@@ -255,8 +255,8 @@ impl Sema<'_, '_> {
         let named = self.ignore_parens(callee);
         let wref = self.pending_written_ref(named);
         // In an instantiation, the rebuilt name's per-specialization entry
-        // (stage 4, §18.9.4).
-        let wspec = wref.is_none() && self.pending_written_spec(named).is_some();
+        // (stage 4, §18.9.4), or its key scope's row alone (§18.14.3).
+        let wspec = wref.is_none() && self.pending_written_spec(named);
         let mut facts = None;
         let explain = wref.is_some() || wspec;
         let parked = self.ovl.single_specs.len();

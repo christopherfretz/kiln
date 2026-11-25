@@ -364,8 +364,7 @@ fn without_key_lines(dump: &str) -> String {
 
 /// spec/ast.md §18.14.8: the sub-switch `-fkiln-written-ref-keys`
 /// changes no line of the dump but its own, on every compiling file of
-/// the corpus; in stage 0, where no compiler path opens a key scope, it
-/// adds none either.
+/// the corpus: with keys on, the only lines added are key lines.
 #[test]
 fn keys_leave_the_corpus_dump_unchanged() {
     let dir = scratch("keys-corpus");
@@ -389,15 +388,20 @@ fn keys_leave_the_corpus_dump_unchanged() {
         let path = f.to_string_lossy().into_owned();
         let fl = flags(&src);
         let fl: Vec<&str> = fl.iter().map(String::as_str).collect();
+        // Off: a file whose `args:` turn keys on (subst-partial-*.cpp) is
+        // compiled with the table alone.
+        let plain: Vec<&str> = fl
+            .iter()
+            .map(|&a| if a == "-fkiln-written-ref-keys" { "-fkiln-written-refs" } else { a })
+            .collect();
         let dump = ["-fsyntax-only", "-fkiln-dump-written-refs"];
-        let off = kiln(&dir, &[&fl[..], &dump, &[&path]].concat());
+        let off = kiln(&dir, &[&plain[..], &dump, &[&path]].concat());
         let on = kiln(&dir, &[&fl[..], &dump, &["-fkiln-written-ref-keys", &path]].concat());
         if off.code != 0 || on.code != 0 {
             let _ = writeln!(failures, "{name}: exit {} / {}:\n{}", off.code, on.code, on.stderr);
             continue;
         }
-        // Stage 0: no key line at all (a later stage keeps the first test).
-        if without_key_lines(&on.stdout) != off.stdout || on.stdout != off.stdout {
+        if without_key_lines(&on.stdout) != off.stdout {
             let _ = writeln!(
                 failures,
                 "{name}: the dump with keys differs\n--- off\n{}--- on\n{}",
@@ -444,6 +448,60 @@ fn a_prefix_without_keys_is_a_key_gap() {
         assert_eq!(plain.code, 0, "{}", plain.stderr);
         assert!(!plain.stdout.contains("unrecorded"), "{}", plain.stdout);
         assert_eq!(without_key_lines(&keyed.stdout), plain.stdout);
+    }
+}
+
+/// spec/ast.md §18.14.5, §18.14.10: a snapshot of a prefix with a
+/// partial specialization match, made without keys, restored by a
+/// compile that records keys: a `PrefixKeys` gap, and the only key is
+/// the main file's new match (with its root); the prefix's match, used
+/// again, has none. Made with keys, both matches have keys.
+#[test]
+fn a_prefix_without_keys_has_no_partial_match_keys() {
+    let dir = scratch("keys-partial-prefix");
+    let header = std::fs::read_to_string(corpus().join("Inputs/subst_partial_pch.h")).unwrap();
+    std::fs::write(dir.join("p.h"), header).unwrap();
+    std::fs::write(
+        dir.join("m.cpp"),
+        "bool again = can_swap<sp::S>::value;\nbool anew = can_swap<sp::V>::value;\n",
+    )
+    .unwrap();
+    let key = |dump: &str, of: &str| {
+        dump.lines().any(|l| l.starts_with("keys  ") && l.contains(&format!("<sp::{of}, void>")))
+    };
+    for (producer, pch) in
+        [("-fkiln-written-refs", "plain.pch"), ("-fkiln-written-ref-keys", "keys.pch")]
+    {
+        let made = kiln(&dir, &["-std=c++26", producer, "-x", "c++-header", "p.h", "-o", pch]);
+        assert_eq!(made.code, 0, "{}", made.stderr);
+        let keyed = kiln(
+            &dir,
+            &[
+                "-std=c++26",
+                "-fsyntax-only",
+                "-fkiln-dump-written-refs",
+                "-fkiln-written-ref-keys",
+                "-include-pch",
+                pch,
+                "m.cpp",
+            ],
+        );
+        assert_eq!(keyed.code, 0, "{}", keyed.stderr);
+        let first = keyed.stdout.lines().next().unwrap_or_default();
+        let plain = pch == "plain.pch";
+        assert_eq!(
+            first.starts_with("unrecorded  precompiled prefix keys ("),
+            plain,
+            "{}",
+            keyed.stdout
+        );
+        assert_eq!(key(&keyed.stdout, "S"), !plain, "{}", keyed.stdout);
+        assert!(key(&keyed.stdout, "V"), "{}", keyed.stdout);
+        assert!(
+            keyed.stdout.lines().any(|l| l.contains("<sp::V, void> root[1]=")),
+            "{}",
+            keyed.stdout
+        );
     }
 }
 

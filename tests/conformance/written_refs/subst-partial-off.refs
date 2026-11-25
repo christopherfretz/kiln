@@ -1,0 +1,20 @@
+12:11-12:12  type  'S' -> n::S@11:8 in=(anonymous)@12:14
+12:16-12:17  type  'S' -> n::S@11:8 in=(anonymous)@12:19
+15:20-15:21  type  'T' -> T@15:17 in=declval@15:24
+20:17-20:18  type  'T' -> T@19:17 in=can_swap@20:8
+20:29-20:33  expr  'swap' -> (dependent) in=can_swap@20:8 def=0+adl
+20:42-20:43  type  'T' -> T@19:17 in=can_swap@20:8
+20:34-20:41  expr  'declval' -> (dependent) in=can_swap@20:8 def=1+adl
+20:34-20:41  expr  'declval' def=declval@15:24
+20:58-20:59  type  'T' -> T@19:17 in=can_swap@20:8
+20:50-20:57  expr  'declval' -> (dependent) in=can_swap@20:8 def=1+adl
+20:50-20:57  expr  'declval' def=declval@15:24
+20:8-20:16  spec-target  'can_swap' -> can_swap@16:41 in=can_swap@20:8
+23:24-23:25  nns  'n' -> n@10:11 in=static_assert@23:1
+23:27-23:28  type  'S' -> n::S@11:8 q=23:24 in=static_assert@23:1
+23:15-23:23  nns  'can_swap' -> can_swap@16:41 in=static_assert@23:1
+23:31-23:36  expr  'value' -> can_swap<n::S>::value@21:25 q=23:15 in=static_assert@23:1
+24:25-24:26  nns  'n' -> n@10:11 in=static_assert@24:1
+24:28-24:29  type  'U' -> n::U@13:8 q=24:25 in=static_assert@24:1
+24:16-24:24  nns  'can_swap' -> can_swap@16:41 in=static_assert@24:1
+24:32-24:37  expr  'value' -> can_swap<n::U>::value@17:25 q=24:16 in=static_assert@24:1

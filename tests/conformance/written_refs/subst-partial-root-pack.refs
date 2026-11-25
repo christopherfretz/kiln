@@ -1,0 +1,22 @@
+15:38-15:40  type  'Ts' -> Ts@15:20 in=R@15:31
+15:31-15:32  spec-target  'R' -> R@12:40 in=R@15:31
+16:34-16:36  expr  'Ts' -> Ts@15:20 in=R::v@16:20
+18:22-18:23  type  'A' -> A@10:8 in=static_assert@18:1
+18:25-18:26  type  'B' -> B@11:8 in=static_assert@18:1
+18:15-18:16  nns  'R' -> R@12:40 in=static_assert@18:1
+18:29-18:30  expr  'v' -> R<int, A, B>::v@16:20 q=18:15 in=static_assert@18:1
+19:22-19:23  type  'B' -> B@11:8 in=static_assert@19:1
+19:25-19:26  type  'A' -> A@10:8 in=static_assert@19:1
+19:15-19:16  nns  'R' -> R@12:40 in=static_assert@19:1
+19:29-19:30  expr  'v' -> R<int, B, A>::v@16:20 q=19:15 in=static_assert@19:1
+20:15-20:16  nns  'R' -> R@12:40 in=static_assert@20:1
+20:23-20:24  expr  'v' -> R<int>::v@16:20 q=20:15 in=static_assert@20:1
+keys  key=partial:R@15:31<int, A, B> rows=0
+keys  key=partial:R@15:31<int, A, B> root[0]=int
+keys  key=partial:R@15:31<int, A, B> root[1]=A, B
+keys  key=partial:R@15:31<int, B, A> rows=0
+keys  key=partial:R@15:31<int, B, A> root[0]=int
+keys  key=partial:R@15:31<int, B, A> root[1]=B, A
+keys  key=partial:R@15:31<int> rows=0
+keys  key=partial:R@15:31<int> root[0]=int
+keys  key=partial:R@15:31<int> root[1]=<empty>

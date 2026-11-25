@@ -849,16 +849,13 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// The pattern entry and specialization of the rebuilt overload set
-    /// `x` while it awaits resolution in an instantiation (stage 4; one
-    /// branch when nothing is pending).
+    /// Whether the rebuilt overload set `x` awaits resolution in an
+    /// instantiation (stage 4) or in a key scope's substitution
+    /// (spec/ast.md §18.14.3), with no specialization's row then: one
+    /// branch when nothing is pending.
     #[inline]
-    pub(crate) fn pending_written_spec(&self, x: ExprId) -> Option<(WrittenRefId, DeclId)> {
-        if self.ast.written_refs.has_spec_pending() {
-            self.ast.written_refs.spec_pending_for(x)
-        } else {
-            None
-        }
+    pub(crate) fn pending_written_spec(&self, x: ExprId) -> bool {
+        self.ast.written_refs.has_spec_pending() && self.ast.written_refs.is_spec_pending(x)
     }
 
     /// The non-dependent call whose callee's entry is `w` failed: a name

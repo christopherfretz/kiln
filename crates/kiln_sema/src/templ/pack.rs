@@ -438,9 +438,13 @@ impl Substituter<'_, '_, '_> {
         // diagnostics, also those of the checking frames it pushes (the
         // prior-argument substitution of `ic<T, v>` with `T` = void and an
         // empty `v`, which clang never forms; WP-1222): only the mismatch
-        // is reported, as expanding reports it.
+        // is reported, as expanding reports it. Nor does it record into a
+        // substitution key's scope (spec/ast.md §18.14.3): an empty
+        // expansion substitutes no name.
         let held = self.sema.open_capture(true);
+        self.sema.key_scope_suspend();
         let swept = f(self);
+        self.sema.key_scope_resume();
         drop(self.sema.close_capture(held));
         if let Some((n, second, loc)) = self.pack.sweep_mismatch.take() {
             self.pack = PackState { ellipsis, expanding: Some((0, name)), ..PackState::default() };

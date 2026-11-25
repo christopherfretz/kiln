@@ -1,0 +1,38 @@
+subst_partial_pch.h:5:11-5:12  type  'S' -> sp::S@subst_partial_pch.h:4:8 in=(anonymous)@subst_partial_pch.h:5:14
+subst_partial_pch.h:5:16-5:17  type  'S' -> sp::S@subst_partial_pch.h:4:8 in=(anonymous)@subst_partial_pch.h:5:19
+subst_partial_pch.h:7:11-7:12  type  'V' -> sp::V@subst_partial_pch.h:6:8 in=(anonymous)@subst_partial_pch.h:7:14
+subst_partial_pch.h:7:16-7:17  type  'V' -> sp::V@subst_partial_pch.h:6:8 in=(anonymous)@subst_partial_pch.h:7:19
+subst_partial_pch.h:9:20-9:21  type  'T' -> T@subst_partial_pch.h:9:17 in=ref@subst_partial_pch.h:9:23
+subst_partial_pch.h:13:36-13:37  type  'T' -> T@subst_partial_pch.h:13:17 in=can_swap@subst_partial_pch.h:13:27
+subst_partial_pch.h:13:48-13:52  expr  'swap' -> (dependent) in=can_swap@subst_partial_pch.h:13:27 def=0+adl
+subst_partial_pch.h:13:48-13:52  expr  'swap' -> sp::swap@subst_partial_pch.h:5:6 key=partial:can_swap@subst_partial_pch.h:13:27<sp::S, void> how=adl adl-ns=sp@subst_partial_pch.h:3:11 adl-cls=sp::S@subst_partial_pch.h:4:8
+subst_partial_pch.h:13:48-13:52  expr  'swap' -> sp::swap@subst_partial_pch.h:7:6 key=partial:can_swap@subst_partial_pch.h:13:27<sp::V, void> how=adl adl-ns=sp@subst_partial_pch.h:3:11 adl-cls=sp::V@subst_partial_pch.h:6:8
+subst_partial_pch.h:13:57-13:58  type  'T' -> T@subst_partial_pch.h:13:17 in=can_swap@subst_partial_pch.h:13:27
+subst_partial_pch.h:13:53-13:56  expr  'ref' -> (dependent) in=can_swap@subst_partial_pch.h:13:27 def=1+adl
+subst_partial_pch.h:13:53-13:56  expr  'ref' def=ref@subst_partial_pch.h:9:23
+subst_partial_pch.h:13:53-13:56  expr  'ref' -> ref<sp::S>@subst_partial_pch.h:9:23 found=ref@subst_partial_pch.h:9:23 key=partial:can_swap@subst_partial_pch.h:13:27<sp::S, void> adl-ns=
+subst_partial_pch.h:13:53-13:56  expr  'ref' -> ref<sp::V>@subst_partial_pch.h:9:23 found=ref@subst_partial_pch.h:9:23 key=partial:can_swap@subst_partial_pch.h:13:27<sp::V, void> adl-ns=
+subst_partial_pch.h:13:67-13:68  type  'T' -> T@subst_partial_pch.h:13:17 in=can_swap@subst_partial_pch.h:13:27
+subst_partial_pch.h:13:63-13:66  expr  'ref' -> (dependent) in=can_swap@subst_partial_pch.h:13:27 def=1+adl
+subst_partial_pch.h:13:63-13:66  expr  'ref' def=ref@subst_partial_pch.h:9:23
+subst_partial_pch.h:13:63-13:66  expr  'ref' -> ref<sp::S>@subst_partial_pch.h:9:23 found=ref@subst_partial_pch.h:9:23 key=partial:can_swap@subst_partial_pch.h:13:27<sp::S, void> adl-ns=
+subst_partial_pch.h:13:63-13:66  expr  'ref' -> ref<sp::V>@subst_partial_pch.h:9:23 found=ref@subst_partial_pch.h:9:23 key=partial:can_swap@subst_partial_pch.h:13:27<sp::V, void> adl-ns=
+subst_partial_pch.h:13:27-13:35  spec-target  'can_swap' -> can_swap@subst_partial_pch.h:10:41 in=can_swap@subst_partial_pch.h:13:27
+subst_partial_pch.h:16:34-16:36  nns  'sp' -> sp@subst_partial_pch.h:3:11 in=in_prefix@subst_partial_pch.h:16:13
+subst_partial_pch.h:16:38-16:39  type  'S' -> sp::S@subst_partial_pch.h:4:8 q=subst_partial_pch.h:16:34 in=in_prefix@subst_partial_pch.h:16:13
+subst_partial_pch.h:16:25-16:33  nns  'can_swap' -> can_swap@subst_partial_pch.h:10:41 in=in_prefix@subst_partial_pch.h:16:13
+subst_partial_pch.h:16:42-16:47  expr  'value' -> can_swap<sp::S>::value@subst_partial_pch.h:14:21 q=subst_partial_pch.h:16:25 in=in_prefix@subst_partial_pch.h:16:13
+12:23-12:25  nns  'sp' -> sp@subst_partial_pch.h:3:11 in=again@12:6
+12:27-12:28  type  'S' -> sp::S@subst_partial_pch.h:4:8 q=12:23 in=again@12:6
+12:14-12:22  nns  'can_swap' -> can_swap@subst_partial_pch.h:10:41 in=again@12:6
+12:31-12:36  expr  'value' -> can_swap<sp::S>::value@subst_partial_pch.h:14:21 q=12:14 in=again@12:6
+13:22-13:24  nns  'sp' -> sp@subst_partial_pch.h:3:11 in=anew@13:6
+13:26-13:27  type  'V' -> sp::V@subst_partial_pch.h:6:8 q=13:22 in=anew@13:6
+13:13-13:21  nns  'can_swap' -> can_swap@subst_partial_pch.h:10:41 in=anew@13:6
+13:30-13:35  expr  'value' -> can_swap<sp::V>::value@subst_partial_pch.h:14:21 q=13:13 in=anew@13:6
+keys  key=partial:can_swap@subst_partial_pch.h:13:27<sp::S, void> rows=3
+keys  key=partial:can_swap@subst_partial_pch.h:13:27<sp::S, void> root[0]=sp::S
+keys  key=partial:can_swap@subst_partial_pch.h:13:27<sp::S, void> root[1]=decltype(swap(ref<sp::S>(), ref<sp::S>()))
+keys  key=partial:can_swap@subst_partial_pch.h:13:27<sp::V, void> rows=3
+keys  key=partial:can_swap@subst_partial_pch.h:13:27<sp::V, void> root[0]=sp::V
+keys  key=partial:can_swap@subst_partial_pch.h:13:27<sp::V, void> root[1]=decltype(swap(ref<sp::V>(), ref<sp::V>()))

@@ -1885,6 +1885,9 @@ impl Ast {
         if let Some(row) = self.written_refs.subst_mem_row() {
             r.push(row);
         }
+        for row in self.written_refs.roots_mem_rows().into_iter().flatten() {
+            r.push(row);
+        }
         if let Some(row) = self.decl_extents.mem_row() {
             r.push(row);
         }

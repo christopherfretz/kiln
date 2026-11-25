@@ -1,0 +1,24 @@
+15:29-15:30  type  'T' -> T@15:17 in=Q@15:27
+15:41-15:42  nns  'T' -> T@15:17 in=Q@15:27
+15:44-15:48  type  'type' -> (dependent) q=15:41 in=Q@15:27
+15:44-15:48  type  'type' -> A::type@19:9 key=partial:Q@15:27<A, void, void>
+15:44-15:48  type  'type' -> B::type@23:9 key=partial:Q@15:27<B, void, void>
+15:64-15:65  nns  'T' -> T@15:17 in=Q@15:27
+15:67-15:72  expr  'value' -> (dependent) q=15:64 in=Q@15:27
+15:67-15:72  expr  'value' -> A::value@20:24 key=partial:Q@15:27<A, void, void>
+15:67-15:72  expr  'value' -> B::value@24:24 key=partial:Q@15:27<B, void, void>
+15:27-15:28  spec-target  'Q' -> Q@12:55 in=Q@15:27
+26:17-26:18  type  'A' -> A@18:8 in=static_assert@26:1
+26:15-26:16  nns  'Q' -> Q@12:55 in=static_assert@26:1
+26:21-26:22  expr  'v' -> Q<A>::v@16:20 q=26:15 in=static_assert@26:1
+27:17-27:18  type  'B' -> B@22:8 in=static_assert@27:1
+27:15-27:16  nns  'Q' -> Q@12:55 in=static_assert@27:1
+27:21-27:22  expr  'v' -> Q<B>::v@16:20 q=27:15 in=static_assert@27:1
+keys  key=partial:Q@15:27<A, void, void> rows=2
+keys  key=partial:Q@15:27<A, void, void> root[0]=A
+keys  key=partial:Q@15:27<A, void, void> root[1]=typename A::type
+keys  key=partial:Q@15:27<A, void, void> root[2]=decltype(void(A::value))
+keys  key=partial:Q@15:27<B, void, void> rows=2
+keys  key=partial:Q@15:27<B, void, void> root[0]=B
+keys  key=partial:Q@15:27<B, void, void> root[1]=typename B::type
+keys  key=partial:Q@15:27<B, void, void> root[2]=decltype(void(B::value))

@@ -52,6 +52,20 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   report a `written_refs.subst` row. No compiler path opens a key yet;
   `specs()` and every dump are unchanged with the sub-switch on or off.
   PCH `FORMAT_VERSION` 184, `IMAGE_VERSION` 98.
+- Substitution keys, stage 1 (WP-3541, spec/ast.md §18.14.10): a
+  partial specialization match opens a `PartialMatch` key. Its rows are
+  what each written name of the partial's arguments bound to under the
+  deduced arguments (ADL sets, qualified names, operators, nested
+  matches), and every key has a root, `WrittenRefs::subst_root(id)`: one
+  `RootSlot` per written argument, the arguments as substituted, so a
+  reader walks to the operator function, constructor or conversion no
+  written name selects (`RootTag`, `RootSlot::{as_args, as_expr,
+  as_type}`). Partial ordering and an empty pack expansion record
+  nothing. Runs that record and do not complete are counted
+  (`subst_not_completed`); the memory report gains `written_refs.roots`
+  and `written_refs.subst.not_completed`. Roots are carried in PCH
+  snapshots and module images; `specs()` is unchanged. PCH
+  `FORMAT_VERSION` 186, `IMAGE_VERSION` 100.
 - What a using-declaration names, for tooling clients (WP-3403,
   spec/ast.md §4.2): total accessors `Ast::using_named(u)` (each shadow
   with its target and the member that hides it, `UsingNamed`),

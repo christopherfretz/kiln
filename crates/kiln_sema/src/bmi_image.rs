@@ -103,7 +103,7 @@ pub(crate) use locs::Locs;
 use locs::{FileRec, LocTable, SlocRec};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 99;
+pub(crate) const IMAGE_VERSION: u32 = 100;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -5940,7 +5940,11 @@ impl Sema<'_, '_> {
 
     fn build_image(&mut self, img: &Image, main: &Locs, files: &[FileId]) {
         let saved = self.image_texprs_enter(img, main);
+        // The matches the records re-run are the unit's: their keys come
+        // from the image (spec/ast.md §18.14.5).
+        self.key_scopes.image_builds += 1;
         self.build_image_records(img, main, files);
+        self.key_scopes.image_builds -= 1;
         self.image_texprs = saved;
     }
 

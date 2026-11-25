@@ -3828,7 +3828,9 @@ body substitution, a structured binding's initializer) are transparent.
 A frame that is a check, not an instantiation, stops the walk with no
 key, so nothing is recorded: partial specialization matching,
 default-argument checking, template template argument matching,
-building deduction guides, `std::meta::substitute`.
+building deduction guides, `std::meta::substitute`. A partial
+specialization match has no `specs()` key; with keys on it is recorded
+in the keyed table, under its `PartialMatch` key (§18.14).
 
 #### 18.9.3 Failures
 
@@ -4180,8 +4182,12 @@ names to be carried.
   rows, dropped rows included so every `SpecRefId` stays; the pattern
   nodes and their candidates' using-directives (§18.9.1); the unrecorded rows (§18.10.3); the leads (§18.11.2); the found sets, their
   elements and the (entry, set) rows (§18.12.6); the declarator groups of
-  the shared entries (`groups`, `group_decls`, §18.3.1, WP-3144). Maps are written as their
-  entries sorted by key, so the bytes do not depend on hashing.
+  the shared entries (`groups`, `group_decls`, §18.3.1, WP-3144); the
+  substitution keys, their rows and their roots (one span per key and
+  the slots) and the expanded nodes (§18.14.5, WP-3540, WP-3541): a key
+  is carried with its rows and its root, or not at all. Maps are
+  written as their entries sorted by key, so the bytes do not depend on
+  hashing.
   **Rebuilt** on read: the set index, the found-set index and the row
   de-duplication index, from the sets and the live rows. **Transient**: the scratch of one
   declaration or one instantiation (`inst_target`, `spec_pending`,
@@ -4219,7 +4225,9 @@ names to be carried.
   own sources after its preamble, their provenance, the
   per-specialization rows of its carried specializations, the
   pattern nodes of its dependent entries and their found sets
-  (§18.12.6). The preamble's names (the
+  (§18.12.6), and, with keys on, the substitution keys with their rows
+  and roots (§18.14.5): a key is carried with its rows and its root, or
+  not at all (left out and counted). The preamble's names (the
   module declaration, the imports, and with them the names the imported
   units' replays recorded) are not carried: the importer replays the
   preamble (spec/modules.md §11.11 "Imports and re-exports") and
@@ -5001,6 +5009,13 @@ type-dependent operand is a dependent name ([temp.dep.general]/2,
   the operator is still dependent (a generic lambda's pattern inside a
   specialization) re-keys its rebuilt node (`PatternNode::Oper`,
   §18.9.4) for the next level.
+- **Keyed rows** (§18.14). An operator token in a partial
+  specialization's argument list is reached by a match, not by a
+  specialization: with keys on, the match's `PartialMatch` key gets the
+  token's row, with the same facts (`shl<T, void_t<decltype(val<T>() <<
+  val<T>())>>` matched by `shl<a::X>`: `'<<' -> a::operator<<
+  key=partial:shl@...<a::X, void> how=adl`), and the key's root holds
+  the operator call with its callee.
 - **Reached.** For an instantiated specialization a row exists exactly
   when the instantiation reached the token. A discarded `if
   constexpr` branch ([stmt.if]/2) is never reached and has none; a
@@ -5348,11 +5363,11 @@ it implies `-fkiln-written-refs`.
 `specs()`, its rows, their ids and their dump lines are not changed by
 the keyed table, with the sub-switch on or off.
 
-Stage 0 (WP-3540) builds the table, its key scopes, its carriage and
-its dump. **No compiler path opens a key scope yet**, so a compilation
-commits no key; each later stage opens the scopes of one kind at the
-sites of §18.14.3's table and states which completed substitutions of
-that kind get a key.
+Stage 0 (WP-3540) built the table, its key scopes, its carriage and its
+dump. Stage 1 (WP-3541) opens the scopes of the first kind,
+`PartialMatch`, and gives every key a root (§18.14.10). Each later stage
+opens the scopes of one more kind at the sites of §18.14.3's table and
+states which completed substitutions of that kind get a key.
 
 #### 18.14.1 The key
 
@@ -5380,6 +5395,25 @@ under it, and for no substitution that failed: a satisfaction check that
 completed unsatisfied has a key (`Unsatisfied`), a partial specialization
 that did not match has none.
 
+**Which substitutions get a key.** The general rule, for every kind: a
+completed substitution with concrete arguments whose pattern is
+instantiation-dependent. A partial specialization's argument list always
+names the partial's parameters, so for `PartialMatch` the rule is: every
+match that completed has a key, whether or not a row was recorded under
+it, and there is no test of the pattern's entries. A match **completed**
+when deduction succeeded, the substituted argument list equals the
+specialization's arguments ([temp.spec.partial.match]/2,
+[temp.deduct.type]/1), the substitution did not fail and the partial
+specialization's associated constraints are satisfied. Class and
+variable template partial specializations are alike. For `PartialMatch`:
+`template` is the partial specialization's first declaration, `args` the
+specialization's canonical arguments, `extra` the deduced argument list.
+A member partial specialization of a class template specialization
+(the partial specialization instantiated with its enclosing class) is
+keyed by that member of the specialization, as the match gets it.
+Stage 1 opens `PartialMatch` scopes only; the other kinds' rows below
+arrive with their stages.
+
 Read side: `subst_key(id)`, `subst_key_len()`, `subst_key_of(kind,
 template, args, extra)` (the identity index), `subst_rows(id)` (the run,
 contiguous), `subst_rows_of(entry)`, `subst_rows_naming(decl)` (as
@@ -5387,7 +5421,8 @@ contiguous), `subst_rows_of(entry)`, `subst_rows_naming(decl)` (as
 `subst_keys_complete()` (§18.14.5). A `DefaultArg`'s parameter and a
 `PartialMatch`'s deduced list are read through `SubstKey::parameter()`
 and `SubstKey::deduced()`; the partial specialization's primary template
-through `Ast::partial_spec_info(key.template)`.
+through `Ast::partial_spec_info(key.template)`; the key's root through
+`subst_root(id)` (§18.14.10).
 
 #### 18.14.2 The row
 
@@ -5464,7 +5499,11 @@ substitution in progress, each with a private row buffer
   buffer is dropped and nothing is written to the table. A committed
   identity is never recorded again: later runs open `Skip`.
 - **Suspended** (`key_scope_suspend`/`resume`): a check run inside a
-  substitution that is not part of it records into no scope.
+  substitution that is not part of it records into no scope. A
+  suspension is a depth: it silences the scopes open when it began (the
+  scope stack's depth is remembered, nested suspensions keep the deepest);
+  a scope opened during the suspension records as usual, so its key is
+  not committed with rows missing.
 - **The context of a scope.** For a row whose only target is a key scope,
   the declaration context the scope was opened in is the substitution's
   own, not a template pattern of its own (`written_ctx_dependent`); for
@@ -5475,7 +5514,24 @@ translation order: the earliest point in the translation of the unit at
 which the substitution is performed. Two parses of the same text
 therefore give the same keys, outcomes and rows.
 
-Where each kind's scope opens and closes (stage 0 opens none):
+**`PartialMatch`** (stage 1). `deduce_partial` (`templ/order.rs`) opens
+the scope after the deduced arguments are set on the deduction frame,
+before the partial's arguments are substituted and compared
+(`partial_args_match`), and closes it exactly once on every path after
+the open: with `completed` false when the comparison fails or the
+substitution fails, or when the constraint check fails; true otherwise.
+The scope outlives the deduction frame: the frame is popped before the
+partial's associated constraints are checked, and the constraint check
+runs while the scope is open but reaches no frame that owns it, so the
+names of the partial's requires-clause have no `PartialMatch` row (their
+satisfaction is keyed by `Satisfaction`, a later stage). Partial
+ordering ([temp.spec.partial.order]) substitutes and deduces again
+without an instantiation frame of its own: it runs suspended and records
+nothing. A repeated match of one (partial specialization, arguments)
+opens `Skip`.
+
+Where each kind's scope opens and closes (stage 1 opens `PartialMatch`
+only):
 
 | kind | open | completed |
 |---|---|---|
@@ -5489,6 +5545,8 @@ Where each kind's scope opens and closes (stage 0 opens none):
 `subst_rows(key)` is in the order the key's own substitution reached the
 names, an atomic constraint answered from the cache contributing its
 rows at the atom's position in the order its evaluation recorded them.
+A key's root (§18.14.10) has its slots in the order of the written
+arguments.
 The order depends on the key's pattern and arguments only: not on other
 keys, not on the order of instantiations, not on which answers came from
 a cache. (A buffer holds one key's rows in recording order.) The order
@@ -5499,31 +5557,45 @@ a cache. (A buffer holds one key's rows in recording order.) The order
 **Rollback.** `WrittenRefs::truncate` drops every key with a row of a
 dropped entry, whole, and compacts the rows; the other keys keep their
 order and are found again by identity. Expanded nodes of dropped entries
-go. No key is committed inside a tentative parse that is then rolled
-back past its template (debug-asserted).
+go. A dropped key's root goes with it (its span and slots; the slots of
+the keys kept are compacted). No key is committed inside a tentative
+parse that is then rolled back past its template (debug-asserted).
 
 **PCH snapshot.** The section (§18.10.1) carries `keys_on` (whether the
-producer recorded keys), the keys and rows as they are, and the expanded
-nodes (sorted); the identity index is rebuilt. A restore checks, each an
-`Invalid` error: the keys' runs tile the rows in order (an empty run
-starts where the next one does), no identity twice, `Unsatisfied` only
-on a `Satisfaction` key, every row's entry in range and `DEPENDENT`,
-every set in range, every expanded node a pattern node, and the typed
-ids against the restored arenas (a `DefaultArg`'s parameter a
-declaration, a `PartialMatch`'s deduced list 0 or an argument list, the
-other kinds' `extra` 0). A consumer without keys drops what was carried;
+producer recorded keys), the keys and rows as they are, the roots (one
+span per key and the slots; whole arenas are carried, so a root's nodes
+are there) and the expanded nodes (sorted); the identity index is
+rebuilt. A restore checks, each an `Invalid` error: the keys' runs tile
+the rows in order (an empty run starts where the next one does), no
+identity twice, `Unsatisfied` only on a `Satisfaction` key, every row's
+entry in range and `DEPENDENT`, every set in range, every expanded node
+a pattern node, one root span per key, the spans contiguous in key order
+and ending at the slot count, a known slot tag, only `Args` slots on a
+`PartialMatch` key, and the typed ids against the restored arenas (a
+`DefaultArg`'s parameter a declaration, a `PartialMatch`'s deduced list
+0 or an argument list, the other kinds' `extra` 0, a slot's argument
+list, expression or type in range and its unused payload 0). There is
+no "keys without roots" state: a key is carried with its rows and its
+root, or not at all. A consumer without keys drops what was carried;
 a consumer with keys continues the prefix's keys (their ids kept, the
 main file's appended).
 
 **Module images.** The `refs` section (spec/modules.md §11.11) carries
 `keys_on`, the keys (kind, outcome, template record, arguments,
-parameter record or deduced list) and their rows, under the rules of
-`specs`, and the counts of the keys it left out. A key is carried whole
-or not at all: one whose template, parameter, arguments, or a row's
-entry, entity, set or using-directive the image cannot carry is left out
-and counted. An importer that records keys maps each key and commits it
-(an identity it already has is kept as it is); one it cannot map is
-counted with the left-out ones. Off, the section is skipped undecoded.
+parameter record or deduced list, root slots) and their rows, under the
+rules of `specs`, and the counts of the keys it left out. A key is
+carried with its rows and its root, or not at all: one whose template,
+parameter, arguments, a row's entry, entity, set or using-directive, or
+a root slot the image cannot carry is left out and counted. A root's
+argument lists are written as a declaration's written arguments are
+(sugar kept: an alias template-id with its arguments, a `decltype` with
+its operand's expression), and its nodes are those the image reaches.
+An importer that records keys maps each key and commits it (an identity
+it already has is kept as it is); one it cannot map is counted with the
+left-out ones. The matches the importer re-runs while it builds the
+image's declarations are the unit's own: a scope opened meanwhile
+commits nothing, so the image's key, with its rows and root, is the one
+kept. Off, the section is skipped undecoded.
 
 **Key gaps.** `WrittenRefs::unrecorded()` (§18.10.3) gains three variants,
 listed only when the consumer records keys:
@@ -5555,13 +5627,27 @@ key=alias:A@2:26<n::S>
 
 `-> (dependent)` for a `SUBST_DEPENDENT` row, ` unsatisfied` after a row
 of an `Unsatisfied` key and a trailing ` expanded` for `SUBST_EXPANDED`.
-Arguments print canonical, as §18.9.5's. A key without rows prints once,
-after the entries, in the `keys` block: `keys  key=<...> rows=0`, sorted.
+Arguments print canonical, as §18.9.5's. Every key prints, after the
+entries, in the `keys` block: one line `keys  key=<...> rows=<n>` (with
+` unsatisfied` for an `Unsatisfied` key), then one line per root slot,
+`keys  key=<...> root[<i>]=<text>`, in slot order. The blocks are sorted
+by their key. A slot's text: an `Args` slot's elements as written, not
+canonicalised (an alias template-id with its arguments, a `decltype`
+with its operand), comma-separated, `<empty>` for none; `-` for
+`NotReached`; `failed` for `Failed`; a type as written for `Type`; the
+expression for `Expr`. A root's text has no source position.
 The gaps print first, with §18.10.3's: `unrecorded  precompiled prefix
 keys (<n> files)`, `unrecorded  module <key> keys (<main file's base
 name>, <n> files)`, `unrecorded  module <key> keys left out (<k> keys,
 <r> rows)`. With keys off the dump is byte-identical to the dump without
 the keyed table, and with keys on it differs only by these lines.
+
+```
+22:59-22:61  operator  '<<' -> a::operator<<@15:5 key=partial:shl@22:27<a::X, void> how=adl
+keys  key=partial:shl@22:27<a::X, void> rows=3
+keys  key=partial:shl@22:27<a::X, void> root[0]=a::X
+keys  key=partial:shl@22:27<a::X, void> root[1]=void_t<decltype(val<a::X>() << val<a::X>())>
+```
 
 #### 18.14.7 The switch and cost
 
@@ -5582,7 +5668,15 @@ sets) is shown only with keys on, and its bytes are not in the
 `written_refs` row. Every stage that opens a kind's scopes reports that
 row on `<bits/stdc++.h>`.
 
-Versions: PCH `FORMAT_VERSION` 184, `IMAGE_VERSION` 98.
+Roots (§18.14.10) are recorded exactly when keys are. On, a root is
+one 8-byte span per key plus 12 bytes per slot; the memory report's
+`written_refs.roots` row (count: slots; bytes: spans and slots) and
+`written_refs.subst.not_completed` row (count: runs; no bytes) are shown
+only with keys on. Off, the snapshot section grows by two empty lengths
+and the image's key record by nothing (no key is carried).
+
+Versions: PCH `FORMAT_VERSION` 184, `IMAGE_VERSION` 98 (stage 0); 276
+and 200 (stage 1: the roots).
 
 #### 18.14.8 Changes to `specs()`
 
@@ -5592,6 +5686,10 @@ change, the new rows a `specs()` reader sees: per changed golden of
 and a one-line rule saying which names gain or lose rows. A change to
 the keyed table alone shows the opposite: the `spec=` lines of the
 whole corpus unchanged.
+
+Stage 1 (`PartialMatch` keys and roots) changes the keyed table alone:
+it adds no `specs()` row and removes none. With keys on, the corpus's
+dumps differ from those with keys off only by key lines.
 
 #### 18.14.9 Tests
 
@@ -5616,6 +5714,79 @@ validation, a unit without keys), `crates/kiln_parse/tests/written_refs.rs`
 snapshot made without keys is a `PrefixKeys` gap and one made with keys
 is none; a module unit compiled without keys is a `ModuleKeys` gap and
 one compiled with them is none).
+
+Stage 1 adds: in `written_refs_subst.rs`, the slot size, roots committed
+with their keys (an empty root, a refused commit, truncation) and the
+not-completed counts; in `written_refs_carry.rs`, roots round trip with
+every tag and each root validation; in `written_keys.rs`, suspension as
+a depth and a root committed with its key; in `bmi_image/refs.rs`, roots
+round trip and each root validation; in
+`crates/kiln_parse/tests/written_refs.rs`, a `PartialMatch` key through
+the API (its rows, partial specialization, arguments, deduced list and
+a root slot reaching the call, both orders), roots reaching an operator
+and a constructor, a match inside a template definition and a generic
+lambda's closure; in `crates/kiln_driver/tests/written_refs_carry.rs`, a
+snapshot made without keys over a prefix with partial matches; and the
+`subst-partial-*` files of `tests/conformance/written_refs/` (ADL,
+operators, a constructor, qualified names, two matching partials, a
+constrained partial, a non-match, zero-row keys, an empty pack, a
+variable template, nested matches, a match in a template, a generic
+lambda, both use orders, keys off, a PCH and a module image and
+replay).
+
+#### 18.14.10 Roots
+
+A key's rows say what each written name of the pattern bound to. A
+substitution also makes selections no written name has a row for: an
+operator's function, a constructor, a conversion. A **root** is a handle
+on what the key's substitution built, so a reader can walk the built
+nodes and see every selection. `WrittenRefs::subst_root(id)` gives the
+key's root: a slice of `RootSlot`s (12 bytes, a `size_of` unit test).
+
+| tag | `RootTag` | holds |
+|---|---|---|
+| 0 | `NotReached` | nothing: the substitution did not reach this part |
+| 1 | `Failed` | nothing: this part failed (a kind that completes with one) |
+| 2 | `Expr` | an `ExprId` (`RootSlot::expr`, `as_expr`) |
+| 3 | `Type` | a `QualType` (`RootSlot::ty`, `as_type`) |
+| 4 | `Args` | an `ArgListId` (`RootSlot::args`, `as_args`) |
+
+`RootTag` is non-exhaustive. A key always has its root, and the number
+of its slots is fixed by the key's pattern:
+
+| kind | slots |
+|---|---|
+| `PartialMatch` | one `Args` slot per written argument of the partial specialization, in order: a written pack group element by element; a pack expansion's slot holds its elements in order, possibly none; a bare non-type template parameter's slot holds the deduced value; any other argument's slot holds the argument as substituted |
+| `Satisfaction`, `DefaultArg`, `Alias` | arrive with their keys |
+
+What a reader may rely on: a root's nodes are built by the same builders
+as an instantiated body's; the names and calls in them are resolved (no
+unresolved lookup node in a root reached from concrete arguments, also
+when the match is triggered inside a template definition); operands are
+unevaluated: nothing in a root is odr-used and no definition is
+instantiated for a function it names; a generic lambda's closure type is
+a valid declaration, reachable from the root. A root is built from the
+canonical deduced arguments, so it holds nothing of how any use spelled
+its arguments; it keeps the partial specialization's own sugar (an alias
+template-id with its written arguments, a `decltype` with its operand).
+The root of a key is that of its first completed run (§18.14.3).
+
+A limit: an `Args` slot holds an expression argument as substituted,
+before the conversion to the primary template's parameter type that the
+comparison with the specialization's arguments may run
+([temp.arg.nontype]/1); the converted value is the key's `args`.
+
+Roots are recorded exactly when keys are: one switch. The match builds
+a root only for a scope that records (`key_scope_records`); the scope
+keeps its slots (`key_scope_set_root`, pooled like the row buffer) and
+the close commits them with the rows. A run that records and then
+commits nothing (a match whose deduction succeeded and that then did not
+complete: the comparison, the substitution or the constraints failed) is
+counted per kind, `subst_not_completed(kind)` and the memory row
+`written_refs.subst.not_completed` (count: the sum; no bytes). It counts
+runs, not identities; it is this parse's own and is not carried. A match
+rejected before any substitution (the shape prefilter or deduction) is
+not counted.
 
 ## 19. The declaration-extent table (WP-2090)
 

@@ -158,7 +158,10 @@ pub(crate) const MAGIC: [u8; 8] = *b"KILNSNAP";
 /// and the key scopes (transient).
 /// version 185 (WP-3582) the substituted index of a pack-index
 /// expression's selected element (`TemplateTables::pack_index_written`).
-pub(crate) const FORMAT_VERSION: u32 = 185;
+/// version 186 (WP-3541) the substitution keys' roots (the root spans
+/// and slots of the written-reference section) and the key scopes'
+/// suspension depths (transient).
+pub(crate) const FORMAT_VERSION: u32 = 186;
 /// The length of the magic and the format version.
 pub(crate) const HEADER_LEN: usize = 12;
 

@@ -15,7 +15,7 @@ use std::num::NonZeroU32;
 
 use kiln_source::{FileId, Loc, SourceManager, Span};
 
-use crate::ids::{ArgListId, DeclId, ExprId, QualType};
+use crate::ids::{ArgListId, DeclId, ExprId, QualType, RawId};
 use crate::mem::MemRow;
 use crate::types::TypeNames;
 
@@ -642,6 +642,14 @@ struct SubstTable {
     keys: Vec<SubstKey>,
     /// The keyed rows, one contiguous run per key.
     rows: Vec<SubstRef>,
+    /// Per key (parallel to `keys`), its root: start and length in
+    /// `root_slots` (§18.14.10).
+    root_spans: Vec<(u32, u32)>,
+    /// The roots' slots, one contiguous run per key.
+    root_slots: Vec<RootSlot>,
+    /// Per kind (`SubstKind as usize - 1`), the recording runs that
+    /// closed without committing (this parse's own, never carried).
+    not_completed: [u32; 4],
     /// The keys by identity (rebuilt after a restore).
     index: HashMap<SubstIdentity, SubstKeyId>,
     /// The pattern nodes reached through an alias template-id kept only
@@ -1018,6 +1026,106 @@ pub const SUBST_DEPENDENT: u8 = 1;
 /// template. It was reached through an alias template-id that the key's
 /// pattern keeps only as its expansion ([temp.alias]/2).
 pub const SUBST_EXPANDED: u8 = 64;
+
+/// What one slot of a key's root holds (spec/ast.md §18.14.10).
+/// `PartialMatch` keys write `Args` only; the other tags arrive with
+/// their kinds' keys, and a later tag may be added (hence
+/// `non_exhaustive`).
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, kiln_snap::Snap)]
+#[repr(u8)]
+pub enum RootTag {
+    /// The substitution never reached the slot.
+    NotReached = 0,
+    /// The slot's substitution failed.
+    Failed = 1,
+    /// An expression ([`ExprId`]).
+    Expr = 2,
+    /// A type ([`QualType`]).
+    Type = 3,
+    /// A template argument list ([`ArgListId`], interned, not
+    /// canonical).
+    Args = 4,
+}
+
+impl RootTag {
+    /// The tag of discriminant `b`.
+    pub fn from_u8(b: u8) -> Option<RootTag> {
+        match b {
+            0 => Some(RootTag::NotReached),
+            1 => Some(RootTag::Failed),
+            2 => Some(RootTag::Expr),
+            3 => Some(RootTag::Type),
+            4 => Some(RootTag::Args),
+            _ => None,
+        }
+    }
+}
+
+/// One slot of a key's root (spec/ast.md §18.14.10; 12 bytes): a handle
+/// on what the key's substitution built for one place of its pattern.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, kiln_snap::Snap)]
+pub struct RootSlot {
+    /// What the slot holds.
+    pub tag: RootTag,
+    /// The handle's raw id (0 for `NotReached` and `Failed`).
+    a: u32,
+    /// Reserved (0).
+    b: u32,
+}
+
+impl RootSlot {
+    /// A slot the substitution never reached.
+    pub const NOT_REACHED: RootSlot = RootSlot { tag: RootTag::NotReached, a: 0, b: 0 };
+    /// A slot whose substitution failed.
+    pub const FAILED: RootSlot = RootSlot { tag: RootTag::Failed, a: 0, b: 0 };
+
+    /// A slot holding argument list `l`.
+    pub fn args(l: ArgListId) -> RootSlot {
+        RootSlot { tag: RootTag::Args, a: l.raw(), b: 0 }
+    }
+
+    /// A slot holding expression `e`.
+    pub fn expr(e: ExprId) -> RootSlot {
+        RootSlot { tag: RootTag::Expr, a: e.raw(), b: 0 }
+    }
+
+    /// A slot holding type `q`.
+    pub fn ty(q: QualType) -> RootSlot {
+        RootSlot { tag: RootTag::Type, a: q.raw(), b: 0 }
+    }
+
+    /// The argument list of an `Args` slot.
+    pub fn as_args(&self) -> Option<ArgListId> {
+        (self.tag == RootTag::Args).then(|| ArgListId::try_new(self.a)).flatten()
+    }
+
+    /// The expression of an `Expr` slot.
+    pub fn as_expr(&self) -> Option<ExprId> {
+        (self.tag == RootTag::Expr).then(|| ExprId::try_new(self.a)).flatten()
+    }
+
+    /// The type of a `Type` slot.
+    pub fn as_type(&self) -> Option<QualType> {
+        (self.tag == RootTag::Type).then(|| QualType::from_raw(self.a)).flatten()
+    }
+
+    /// The handle's raw id (0 for `NotReached` and `Failed`).
+    pub fn raw(&self) -> u32 {
+        self.a
+    }
+
+    /// The slot with tag `tag` and raw handle `a` (an image's or a
+    /// snapshot's), unchecked: the reader validates the handle.
+    pub fn from_raw(tag: RootTag, a: u32) -> RootSlot {
+        RootSlot { tag, a, b: 0 }
+    }
+
+    /// The reserved word (0 in every slot kiln writes).
+    pub fn reserved(&self) -> u32 {
+        self.b
+    }
+}
 
 impl WrittenRefs {
     /// True when names are recorded.
@@ -1723,6 +1831,12 @@ impl WrittenRefs {
         self.spec_pending.get(&x).copied()
     }
 
+    /// Whether the rebuilt overload set `x` awaits resolution, for a
+    /// specialization's row, a key scope's row (§18.14.3) or both.
+    pub fn is_spec_pending(&self, x: ExprId) -> bool {
+        self.spec_pending.contains_key(&x) || self.subst.pending.contains_key(&x)
+    }
+
     /// Takes the pending resolution of `x` (it is being resolved).
     pub fn take_spec_pending(&mut self, x: ExprId) -> Option<(WrittenRefId, DeclId)> {
         if self.spec_pending.is_empty() { None } else { self.spec_pending.remove(&x) }
@@ -2375,7 +2489,7 @@ impl WrittenRefs {
                 self.dump_keyed(r, v, &head, ast, &canon, &pos, &canon_decl, &mut out);
             }
         }
-        self.dump_rowless_keys(ast, &canon, &pos, &mut out);
+        self.dump_key_blocks(ast, &canon, &names, &pos, &mut out);
         out
     }
 

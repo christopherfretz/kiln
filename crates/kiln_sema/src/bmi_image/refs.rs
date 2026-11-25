@@ -22,10 +22,11 @@
 //! declarator groups the carried shared entries name (§18.3.1, WP-3144),
 //! each a list of declaration words. Then the substitution keys
 //! (spec/ast.md §18.14, WP-3540): whether the unit recorded them, each
-//! key with its template, arguments, parameter or deduced list, outcome
-//! and rows, and the keys left out. A key is
-//! carried whole or left out and counted: the importer then lists it as
-//! a gap, since it does not make the key again.
+//! key with its template, arguments, parameter or deduced list, outcome,
+//! rows and root (§18.14.10, WP-3541: a slot's argument list as written,
+//! an expression argument as its expression), and the keys left out. A
+//! key is carried whole or left out and counted: the importer then lists
+//! it as a gap, since it does not make the key again.
 
 use super::body::PARAM;
 use super::{ArgRec, Image, LEX_TU, Locs, NONE, QRef, Rd, Res, W, Wr, Writer, bad};
@@ -33,8 +34,8 @@ use crate::Sema;
 use kiln_ast::types::TemplateArg;
 use kiln_ast::written_refs::{
     AdlSet, AdlSetId, FoundDecl, FoundSetId, PatternNode, QualLink, REF_DEPENDENT, REF_GROUP,
-    RefLookup, RefQualifier, RefRole, SpecRef, SubstKind, SubstOutcome, SubstRef, Unrecorded,
-    WrittenRef, WrittenRefId,
+    RefLookup, RefQualifier, RefRole, RootSlot, RootTag, SpecRef, SubstKind, SubstOutcome,
+    SubstRef, Unrecorded, WrittenRef, WrittenRefId,
 };
 use kiln_ast::{ArgListId, DeclId, QualType, RawId as _};
 use kiln_source::fx::FxHashMap;
@@ -55,8 +56,9 @@ const FOUND_SET_BYTES: usize = 2 + 4;
 const FOUND_ROW_BYTES: usize = 2 * 4;
 /// The smallest group: its count and two declarations.
 const GROUP_BYTES: usize = 1 + 2 * 4;
-/// The smallest key (no arguments, no deduced list) and a keyed row.
-const KEY_BYTES: usize = 2 + 4 + 4 + 4 + 1 + 4;
+/// The smallest key (no arguments, no deduced list, no root slot) and a
+/// keyed row.
+const KEY_BYTES: usize = 2 + 4 + 4 + 4 + 1 + 4 + 4;
 const KEY_ROW_BYTES: usize = 5 * 4 + 2;
 
 /// One entry: `lo, hi, entity, found, enclosing, qualifier, udir, adl`
@@ -141,8 +143,8 @@ pub(super) struct RefsRec {
 /// One substitution key (spec/ast.md §18.14.1): kind, outcome, the
 /// template's word, the canonical arguments (a pack as [`ArgRec::Pack`]
 /// and its elements), a `DefaultArg`'s parameter word (else 0), a
-/// `PartialMatch`'s deduced list, and its number of rows (the next of
-/// `key_rows`).
+/// `PartialMatch`'s deduced list, its number of rows (the next of
+/// `key_rows`) and its root's slots (§18.14.10).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(super) struct KeyRec {
     kind: u8,
@@ -152,6 +154,19 @@ pub(super) struct KeyRec {
     extra: u32,
     deduced: Option<Vec<ArgRec>>,
     rows: u32,
+    root: Vec<SlotRec>,
+}
+
+/// One root slot (spec/ast.md §18.14.10) by its tag: an argument list as
+/// written (an expression argument as its expression, [`ArgRec::Expr`]),
+/// an expression's section, a type.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(super) enum SlotRec {
+    NotReached,
+    Failed,
+    Expr(u32),
+    Type(QRef),
+    Args(Vec<ArgRec>),
 }
 
 /// One keyed row: `entry, entity, found, adl, udir`, flags, `how`.
@@ -362,6 +377,10 @@ impl Writer<'_, '_, '_> {
                     Some(l) => Some(self.spec_arg_recs(l).ok()?),
                     None => None,
                 };
+                let mut root = Vec::with_capacity(t.subst_root(id).len());
+                for slot in t.subst_root(id) {
+                    root.push(self.slot_rec(slot)?);
+                }
                 let key = KeyRec {
                     kind: k.kind as u8,
                     outcome: k.outcome as u8,
@@ -370,6 +389,7 @@ impl Writer<'_, '_, '_> {
                     extra,
                     deduced,
                     rows: u32::try_from(recs.len()).ok()?,
+                    root,
                 };
                 Some((key, recs))
             })();
@@ -381,6 +401,19 @@ impl Writer<'_, '_, '_> {
                 out.keys_left_out[1] += k.row_len();
             }
         }
+    }
+
+    /// The record of root slot `x` (spec/ast.md §18.14.10); `None` when
+    /// the image cannot carry what it holds (its key is then left out).
+    fn slot_rec(&mut self, x: &RootSlot) -> Option<SlotRec> {
+        Some(match x.tag {
+            RootTag::NotReached => SlotRec::NotReached,
+            RootTag::Failed => SlotRec::Failed,
+            RootTag::Expr => SlotRec::Expr(self.texpr(x.as_expr()?).ok()?),
+            RootTag::Type => SlotRec::Type(self.qref(x.as_type()?).ok()?),
+            RootTag::Args => SlotRec::Args(self.written_arg_recs(x.as_args()?).ok()?),
+            _ => return None,
+        })
     }
 
     /// The declarator groups the section's shared entries name
@@ -613,6 +646,25 @@ fn encode_keys(b: &mut Wr, t: &RefsRec) {
             }
         }
         b.u32(k.rows);
+        b.len(k.root.len());
+        for x in &k.root {
+            match x {
+                SlotRec::NotReached => b.u8(0),
+                SlotRec::Failed => b.u8(1),
+                SlotRec::Expr(e) => {
+                    b.u8(2);
+                    b.u32(*e);
+                }
+                SlotRec::Type(q) => {
+                    b.u8(3);
+                    b.q(*q);
+                }
+                SlotRec::Args(l) => {
+                    b.u8(4);
+                    b.args(l);
+                }
+            }
+        }
     }
     b.len(t.key_rows.len());
     for r in &t.key_rows {
@@ -697,6 +749,17 @@ pub(super) fn decode_refs(r: &mut Rd, want: bool) -> Res<Refs> {
         }
         t.groups.push(g);
     }
+    decode_keys(&mut r, &mut t)?;
+    if !r.0.is_empty() {
+        return bad("trailing bytes in the written references");
+    }
+    Ok(Refs::Table(Box::new(t)))
+}
+
+/// The substitution keys at the end of the section (spec/ast.md
+/// §18.14.5): `keys_on`, the keys with their roots, their rows and the
+/// counts of the keys left out.
+fn decode_keys(r: &mut Rd<'_>, t: &mut RefsRec) -> Res<()> {
     t.keys_on = match r.u8()? {
         0 => false,
         1 => true,
@@ -711,7 +774,19 @@ pub(super) fn decode_refs(r: &mut Rd, want: bool) -> Res<Refs> {
             1 => Some(r.args()?),
             _ => return bad("bad written-reference key"),
         };
-        t.keys.push(KeyRec { kind, outcome, template, args, extra, deduced, rows: r.u32()? });
+        let rows = r.u32()?;
+        let mut root = Vec::new();
+        for _ in 0..r.count(1)? {
+            root.push(match r.u8()? {
+                0 => SlotRec::NotReached,
+                1 => SlotRec::Failed,
+                2 => SlotRec::Expr(r.u32()?),
+                3 => SlotRec::Type(r.q()?),
+                4 => SlotRec::Args(r.args()?),
+                _ => return bad("bad written-reference root slot"),
+            });
+        }
+        t.keys.push(KeyRec { kind, outcome, template, args, extra, deduced, rows, root });
     }
     for _ in 0..r.count(KEY_ROW_BYTES)? {
         let mut words = [0; 5];
@@ -721,10 +796,7 @@ pub(super) fn decode_refs(r: &mut Rd, want: bool) -> Res<Refs> {
         t.key_rows.push(KeyRowRec { words, flags: r.u8()?, how: r.u8()? });
     }
     t.keys_left_out = [r.u32()?, r.u32()?];
-    if !r.0.is_empty() {
-        return bad("trailing bytes in the written references");
-    }
-    Ok(Refs::Table(Box::new(t)))
+    Ok(())
 }
 
 /// Every word of the section is in range: declarations are records, the
@@ -852,9 +924,26 @@ fn keys_ok(
         }
         true
     };
+    // A root slot's argument list may hold an expression argument as
+    // written (§18.14.10); a `PartialMatch` root holds argument lists only.
+    let nt = img.texprs.len() as u32;
+    let slot_arg_ok = |a: &ArgRec| match *a {
+        ArgRec::Expr(e, _) => e < nt,
+        ref a => one_ok(a),
+    };
+    let root_ok = |k: &KeyRec, kind: Option<SubstKind>| {
+        k.root.iter().all(|x| match x {
+            SlotRec::Args(l) => l.iter().all(slot_arg_ok),
+            _ if kind == Some(SubstKind::PartialMatch) => false,
+            SlotRec::NotReached | SlotRec::Failed => true,
+            SlotRec::Expr(e) => *e < nt,
+            SlotRec::Type(q) => qref_ok(*q),
+        })
+    };
     t.keys.iter().all(|k| {
         let kind = SubstKind::from_u8(k.kind);
-        kind.is_some()
+        root_ok(k, kind)
+            && kind.is_some()
             && match SubstOutcome::from_u8(k.outcome) {
                 Some(SubstOutcome::Substituted) => true,
                 Some(SubstOutcome::Unsatisfied) => kind == Some(SubstKind::Satisfaction),
@@ -1067,6 +1156,10 @@ impl Sema<'_, '_> {
                     }
                     _ => 0,
                 };
+                let mut root = Vec::with_capacity(k.root.len());
+                for x in &k.root {
+                    root.push(self.image_root_slot(img, tys, cx.ids, x)?);
+                }
                 for r in recs {
                     let [entry, entity, found, adl, udir] = r.words;
                     let adl = if adl == NONE { None } else { Some(set(adl)?) };
@@ -1080,8 +1173,10 @@ impl Sema<'_, '_> {
                         how: RefLookup::from_u8(r.how).unwrap_or_default(),
                     });
                 }
-                let _ =
-                    self.ast.written_refs.commit_subst(kind, outcome, template, args, extra, &rows);
+                let _ = self
+                    .ast
+                    .written_refs
+                    .commit_subst(kind, outcome, template, args, extra, &rows, &root);
                 Some(())
             })();
             if ok.is_none() {
@@ -1136,6 +1231,43 @@ impl Sema<'_, '_> {
         }
         let sugared = self.ast.types.arg_list(&list);
         Some(self.ast.types.canonical_args(sugared))
+    }
+
+    /// Root slot `x` of a carried key (spec/ast.md §18.14.10): an
+    /// argument list as written (not canonical); `None` for a slot the
+    /// importer cannot build (the key is then counted as left out).
+    fn image_root_slot(
+        &mut self,
+        img: &Image,
+        tys: &mut Vec<QualType>,
+        ids: &[DeclId],
+        x: &SlotRec,
+    ) -> Option<RootSlot> {
+        let error = TemplateArg::ty(QualType::ERROR);
+        Some(match x {
+            SlotRec::NotReached => RootSlot::NOT_REACHED,
+            SlotRec::Failed => RootSlot::FAILED,
+            SlotRec::Expr(e) => RootSlot::expr(self.image_texpr(*e)?),
+            SlotRec::Type(q) => {
+                let q = self.image_ty(img, tys, ids, *q);
+                if q == QualType::ERROR {
+                    return None;
+                }
+                RootSlot::ty(q)
+            }
+            SlotRec::Args(recs) => {
+                let mut v = Vec::with_capacity(recs.len());
+                for a in recs {
+                    let ty = self.image_ty(img, tys, ids, a.q());
+                    let arg = self.image_targ(ids, ty, a);
+                    if arg == TemplateArg::NULL || arg == error {
+                        return None;
+                    }
+                    v.push(arg);
+                }
+                RootSlot::args(self.ast.types.arg_list(&v))
+            }
+        })
     }
 
     /// The declarator groups of the unit's shared entries (spec/ast.md
@@ -1210,7 +1342,9 @@ mod tests {
     /// for record 1; entry 1 is dependent, with substitution keys of
     /// record 7: an alias key with two rows, a default-argument key
     /// (parameter record 1) without rows and a partial-match key with a
-    /// deduced list.
+    /// deduced list; the alias key's root has a type, a not-reached and a
+    /// failed slot, the default-argument key's none, the partial-match
+    /// key's one argument list (spec/ast.md §18.14.10).
     fn with_table() -> Image {
         let mut img = sample();
         let int = QRef { ty: kiln_ast::types::BuiltinType::Int as u32, quals: 0 };
@@ -1259,6 +1393,7 @@ mod tests {
                     extra: 0,
                     deduced: None,
                     rows: 2,
+                    root: vec![SlotRec::Type(int), SlotRec::NotReached, SlotRec::Failed],
                 },
                 KeyRec {
                     kind: SubstKind::DefaultArg as u8,
@@ -1268,6 +1403,7 @@ mod tests {
                     extra: 1,
                     deduced: None,
                     rows: 0,
+                    root: Vec::new(),
                 },
                 KeyRec {
                     kind: SubstKind::PartialMatch as u8,
@@ -1277,6 +1413,7 @@ mod tests {
                     extra: 0,
                     deduced: Some(vec![ArgRec::Type(int)]),
                     rows: 0,
+                    root: vec![SlotRec::Args(vec![ArgRec::Type(int)])],
                 },
             ],
             key_rows: vec![
@@ -1317,7 +1454,7 @@ mod tests {
     #[test]
     fn written_refs_section_is_validated() {
         type Corrupt = (&'static str, fn(&mut RefsRec));
-        let corrupt: [Corrupt; 43] = [
+        let corrupt: [Corrupt; 48] = [
             ("qualifier after its entry", |t| t.entries[0].words[5] = 0),
             ("unknown role", |t| t.entries[0].role = 99),
             ("unknown lookup", |t| t.entries[1].how = 99),
@@ -1370,6 +1507,21 @@ mod tests {
             ("keyed row set past the sets", |t| t.key_rows[0].words[3] = 1),
             ("keyed row of an unknown lookup", |t| t.key_rows[1].how = 99),
             ("keys from a unit that did not record them", |t| t.keys_on = false),
+            // Roots (spec/ast.md §18.14.10, WP-3541).
+            ("a partial-match root slot that is no argument list", |t| {
+                t.keys[2].root[0] = SlotRec::NotReached;
+            }),
+            ("root type of no type", |t| {
+                t.keys[0].root[0] = SlotRec::Type(QRef { ty: 999_999, quals: 0 });
+            }),
+            ("root expression past the sections", |t| t.keys[0].root[1] = SlotRec::Expr(0)),
+            ("root argument of no type", |t| {
+                t.keys[2].root[0] =
+                    SlotRec::Args(vec![ArgRec::Type(QRef { ty: 999_999, quals: 0 })]);
+            }),
+            ("root expression argument past the sections", |t| {
+                t.keys[2].root[0] = SlotRec::Args(vec![ArgRec::Expr(0, false)]);
+            }),
         ];
         for (what, f) in corrupt {
             let mut img = with_table();
@@ -1387,6 +1539,17 @@ mod tests {
         let off = encode(&img);
         assert_eq!(decode(&off).as_ref(), Ok(&img));
         assert!(off.len() < encode(&with_table()).len());
+        // An unknown root slot tag: the one byte a not-reached and a
+        // failed slot differ in, set to a tag no slot has.
+        let mut failed = with_table();
+        table(&mut failed).keys[0].root[1] = SlotRec::Failed;
+        let (mut bytes, other) = (encode(&with_table()), encode(&failed));
+        assert_eq!(bytes.len(), other.len());
+        let at: Vec<usize> = (0..bytes.len()).filter(|&i| bytes[i] != other[i]).collect();
+        assert_eq!((at.len(), bytes[at[0]], other[at[0]]), (1, 0, 1));
+        bytes[at[0]] = 9;
+        assert!(decode(&bytes).is_err());
+        assert!(decode_with(&bytes, false).is_ok());
         // A section whose length runs past the image.
         let mut bytes = encode(&with_table());
         bytes.truncate(bytes.len() - 1);

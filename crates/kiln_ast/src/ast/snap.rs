@@ -81,7 +81,7 @@ impl Ast {
     /// The largest valid index of each id space ([`space`]), for the range
     /// check of decoded ids. Call it on a checked AST (its arenas keep
     /// their dummies).
-    fn id_bounds(&self) -> [usize; space::COUNT] {
+    pub(crate) fn id_bounds(&self) -> [usize; space::COUNT] {
         let mut b = [0; space::COUNT];
         let [names, nns, args, profiles] = self.types.max_table_ids();
         b[space::DECL] = self.decls.len();

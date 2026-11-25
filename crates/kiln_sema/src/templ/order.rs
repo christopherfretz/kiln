@@ -111,7 +111,14 @@ impl Sema<'_, '_> {
         match matched.len() {
             0 => Ok(None),
             1 => Ok(Some(matched[0])),
-            _ => self.most_specialized_partial(who, args, &matched, poi).map(Some),
+            _ => {
+                // Partial ordering records into no key scope (spec/ast.md
+                // §18.14.3): it pushes no instantiation frame of its own.
+                self.key_scope_suspend();
+                let r = self.most_specialized_partial(who, args, &matched, poi);
+                self.key_scope_resume();
+                r.map(Some)
+            }
         }
     }
 
@@ -168,17 +175,53 @@ impl Sema<'_, '_> {
                     partial, list.depth, &params, &d.args, poi,
                 );
         }
+        // The match's key scope (spec/ast.md §18.14.3), opened once the
+        // deduced arguments are set and closed exactly once below, after
+        // the frame is gone: completed only when the arguments match and
+        // the constraints are satisfied.
+        let mut key = None;
         let r = if ok {
             let deduced = self.ast.types.arg_list(&d.args);
             self.set_frame_args(deduced);
-            self.partial_args_match(&p, list.depth, deduced, canonical, false, poi)
+            key = self.key_scope_open(
+                kiln_ast::written_refs::SubstKind::PartialMatch,
+                self.ast.first(partial),
+                canonical,
+                0,
+                Some(deduced),
+            );
+            self.partial_args_match(&p, list.depth, deduced, canonical, false, poi, key)
                 .then_some(deduced)
         } else {
             None
         };
         let failed = self.pop_sfinae_state().errors > 0;
         self.pop_inst_frame();
-        let deduced = r.filter(|_| !failed)?;
+        let r = r.filter(|_| !failed);
+        let r = match r {
+            Some(deduced) => self.partial_constraints_ok(partial, &p, list, deduced, who, poi),
+            None => None,
+        };
+        if let Some(k) = key {
+            let _ = self.key_scope_close(k, r.is_some());
+        }
+        r
+    }
+
+    /// The tail of [`Self::deduce_partial`]: `Some(deduced)` when the
+    /// associated constraints of partial specialization `partial` (row
+    /// `p`, parameter list `list`) are satisfied with its deduced
+    /// arguments ([temp.spec.partial.match]/2).
+    fn partial_constraints_ok(
+        &mut self,
+        partial: DeclId,
+        p: &kiln_ast::templates::PartialSpecInfo,
+        list: kiln_ast::templates::TemplateParamList,
+        deduced: ArgListId,
+        who: DeclId,
+        poi: Loc,
+    ) -> Option<ArgListId> {
+        let tmpl = p.template;
         // [temp.spec.partial.match]/2: the partial specialization's
         // associated constraints must be satisfied (§8.3).
         // A partial specialization of a member template redeclared in a
@@ -343,7 +386,12 @@ impl Sema<'_, '_> {
     /// `canonical` ([temp.spec.partial.match]/2: non-deduced contexts
     /// must match too). With `ordering`, `deduced` and `canonical` name
     /// another partial specialization's synthesized parameters
-    /// ([temp.deduct.partial]/12) and are compared without conversion.
+    /// ([temp.deduct.partial]/12) and are compared without conversion,
+    /// and no key scope records (spec/ast.md §18.14.3). `key` is the
+    /// match's key scope: when it records, the substituted written
+    /// arguments are its root, one slot per written argument
+    /// (§18.14.10).
+    #[allow(clippy::too_many_arguments, reason = "the match's state")]
     fn partial_args_match(
         &mut self,
         p: &kiln_ast::templates::PartialSpecInfo,
@@ -352,13 +400,29 @@ impl Sema<'_, '_> {
         canonical: ArgListId,
         ordering: bool,
         loc: Loc,
+        key: Option<crate::written_keys::KeyScopeId>,
     ) -> bool {
+        if ordering {
+            self.key_scope_suspend();
+            let r = self.partial_args_match_in(p, depth, deduced, canonical, true, loc, None);
+            self.key_scope_resume();
+            return r;
+        }
+        self.partial_args_match_in(p, depth, deduced, canonical, false, loc, key)
+    }
+
+    /// The arguments partial specialization `p` was written with, a
+    /// converted pack (`X<T, Ts...>` of a variadic primary) element by
+    /// element (its elements are substituted, then converted again), and
+    /// whether there was one.
+    fn partial_written_args(
+        &self,
+        p: &kiln_ast::templates::PartialSpecInfo,
+    ) -> (Vec<TemplateArg>, bool) {
         let mut written: Vec<TemplateArg> = Vec::new();
         let mut packed = false;
         for &a in self.ast.types.args(p.args) {
             match a.view() {
-                // A converted pack (`X<T, Ts...>` of a variadic primary):
-                // its elements are substituted, then converted again.
                 ArgView::Pack(l) => {
                     packed = true;
                     written.extend_from_slice(self.ast.types.args(l));
@@ -366,6 +430,25 @@ impl Sema<'_, '_> {
                 _ => written.push(a),
             }
         }
+        (written, packed)
+    }
+
+    /// [`Self::partial_args_match`] without the suspension.
+    #[allow(clippy::too_many_arguments, reason = "the match's state")]
+    fn partial_args_match_in(
+        &mut self,
+        p: &kiln_ast::templates::PartialSpecInfo,
+        depth: u16,
+        deduced: ArgListId,
+        canonical: ArgListId,
+        ordering: bool,
+        loc: Loc,
+        key: Option<crate::written_keys::KeyScopeId>,
+    ) -> bool {
+        // The root's slot bounds in `out`, only when the key records.
+        let key = key.filter(|&k| self.key_scope_records(k));
+        let mut bounds: Vec<(usize, usize)> = Vec::new();
+        let (written, packed) = self.partial_written_args(p);
         let deduced_elems: Vec<TemplateArg> = self.ast.types.args(deduced).to_vec();
         let mut args = Self::outer_levels(p.template, depth);
         args.push(deduced, p.partial, LevelMode::Substitute);
@@ -377,8 +460,12 @@ impl Sema<'_, '_> {
         {
             let mut s = Substituter::new(self, &args);
             for &a in &written {
+                let before = out.len();
                 if let Some(i) = s.sema.bare_nttp_index(a, depth) {
                     out.push(deduced_elems.get(usize::from(i)).copied().unwrap_or(a));
+                    if key.is_some() {
+                        bounds.push((before, out.len()));
+                    }
                     continue;
                 }
                 match s.expand_arg(a, loc) {
@@ -387,6 +474,9 @@ impl Sema<'_, '_> {
                         has_expr = true;
                         expanded = true;
                         out.extend(v);
+                        if key.is_some() {
+                            bounds.push((before, out.len()));
+                        }
                         continue;
                     }
                     Ok(None) => {}
@@ -401,11 +491,28 @@ impl Sema<'_, '_> {
                 };
                 has_expr |= matches!(x.view(), ArgView::Expr { .. } | ArgView::Pack(_));
                 out.push(x);
+                if key.is_some() {
+                    bounds.push((before, out.len()));
+                }
             }
         }
         self.ast.templates.dependent_depth = saved;
         if failed {
             return false;
+        }
+        // The root (spec/ast.md §18.14.10): one slot per written argument
+        // (a written pack group element by element), each the substituted
+        // argument as written, before any conversion below; a pack
+        // expansion's elements in order; a bare non-type parameter's
+        // deduced value.
+        if let Some(k) = key {
+            let slots: Vec<kiln_ast::written_refs::RootSlot> = bounds
+                .iter()
+                .map(|&(lo, hi)| {
+                    kiln_ast::written_refs::RootSlot::args(self.ast.types.arg_list(&out[lo..hi]))
+                })
+                .collect();
+            self.key_scope_set_root(k, &slots);
         }
         let types = &self.ast.types;
         let want = types.args(canonical);
@@ -712,7 +819,7 @@ impl Sema<'_, '_> {
             // `X<T, when<f(T)>>` is not deduced from `X<M, when<c>>`
             // (Boost.Hana's `when<condition>` dispatch; WP-787).
             let deduced = self.ast.types.arg_list(&d.args);
-            ok = self.partial_args_match(&pb, lb.depth, deduced, pa.canonical, true, loc);
+            ok = self.partial_args_match(&pb, lb.depth, deduced, pa.canonical, true, loc, None);
         }
         let failed = self.pop_sfinae_state().errors > 0;
         let r = ok && !failed;
@@ -794,7 +901,7 @@ impl Sema<'_, '_> {
             }
             let deduced = s.ast.types.arg_list(&d.args);
             let injected = s.ast.types.arg_list(&as_);
-            s.partial_args_match(&info, lp.depth, deduced, injected, true, loc)
+            s.partial_args_match(&info, lp.depth, deduced, injected, true, loc, None)
         };
         if !self.args_deduce(&ps, &as_, lp, false, loc, finish) {
             return false;

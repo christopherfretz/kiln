@@ -1,0 +1,23 @@
+13:10-13:11  type  'S' -> n::S@12:8 in=(anonymous)@13:11
+15:20-15:21  type  'T' -> T@15:17 in=val@15:22
+19:33-19:34  type  'T' -> T@19:17 in=trait@19:27
+19:50-19:54  expr  'pick' -> (dependent) in=trait@19:27 def=0+adl
+19:50-19:54  expr  'pick' -> n::pick@13:5 key=partial:trait@19:27<n::S, void> how=adl adl-ns=n@11:11 adl-cls=n::S@12:8
+19:59-19:60  type  'T' -> T@19:17 in=trait@19:27
+19:55-19:58  expr  'val' -> (dependent) in=trait@19:27 def=1+adl
+19:55-19:58  expr  'val' def=val@15:22
+19:55-19:58  expr  'val' -> val<n::S>@15:22 found=val@15:22 key=partial:trait@19:27<n::S, void> adl-ns=
+19:27-19:32  spec-target  'trait' -> trait@16:41 in=trait@19:27
+22:45-22:46  type  'T' -> T@22:17 in=holder@22:62
+22:39-22:44  nns  'trait' -> trait@16:41 in=holder@22:62
+22:49-22:53  type  'type' -> (dependent) q=22:39 in=holder@22:62
+22:49-22:53  type  'type' -> trait<n::S>::type@20:9 spec=holder@22:62
+23:3-23:4  type  'U' -> U@22:26 in=holder::u@23:5
+25:8-25:9  nns  'n' -> n@11:11 in=h@25:14
+25:11-25:12  type  'S' -> n::S@12:8 q=25:8 in=h@25:14
+25:1-25:7  template  'holder' -> holder@22:62 in=h@25:14
+26:22-26:23  expr  'h' -> h@25:14 in=static_assert@26:1
+26:24-26:25  member  'u' -> holder<n::S>::u@23:5 in=static_assert@26:1
+keys  key=partial:trait@19:27<n::S, void> rows=2
+keys  key=partial:trait@19:27<n::S, void> root[0]=n::S
+keys  key=partial:trait@19:27<n::S, void> root[1]=decltype(void(pick(val<n::S>())))

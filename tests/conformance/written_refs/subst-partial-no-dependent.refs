@@ -1,0 +1,8 @@
+12:29-12:30  type  'T' -> T@12:17 in=P@12:27
+12:27-12:28  spec-target  'P' -> P@9:27 in=P@12:27
+15:15-15:16  nns  'P' -> P@9:27 in=static_assert@15:1
+15:25-15:26  expr  'v' -> P<int *>::v@13:20 q=15:15 in=static_assert@15:1
+16:15-16:16  nns  'P' -> P@9:27 in=static_assert@16:1
+16:24-16:25  expr  'v' -> P<char>::v@10:20 q=16:15 in=static_assert@16:1
+keys  key=partial:P@12:27<int *> rows=0
+keys  key=partial:P@12:27<int *> root[0]=int *

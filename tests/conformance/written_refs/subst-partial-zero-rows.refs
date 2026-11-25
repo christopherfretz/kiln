@@ -1,0 +1,20 @@
+18:39-18:41  type  'Ts' -> Ts@18:20 in=X@18:31
+18:33-18:38  template  'tuple' -> tuple@9:28 in=X@18:31
+18:61-18:63  nns  'Ts' -> Ts@18:20 in=(anonymous)@18:72
+18:65-18:69  type  'type' -> (dependent) q=18:61 in=(anonymous)@18:72
+18:65-18:69  type  'type' -> n::S::type@12:9 key=partial:X@18:31<tuple<n::S>, void (int)>
+18:31-18:32  spec-target  'X' -> X@15:36 in=X@18:31
+21:17-21:22  template  'tuple' -> tuple@9:28 in=static_assert@21:1
+21:15-21:16  nns  'X' -> X@15:36 in=static_assert@21:1
+21:35-21:36  expr  'v' -> X<tuple<>, void ()>::v@19:20 q=21:15 in=static_assert@21:1
+22:23-22:24  nns  'n' -> n@10:11 in=static_assert@22:1
+22:26-22:27  type  'S' -> n::S@11:8 q=22:23 in=static_assert@22:1
+22:17-22:22  template  'tuple' -> tuple@9:28 in=static_assert@22:1
+22:15-22:16  nns  'X' -> X@15:36 in=static_assert@22:1
+22:42-22:43  expr  'v' -> X<tuple<n::S>, void (int)>::v@19:20 q=22:15 in=static_assert@22:1
+keys  key=partial:X@18:31<tuple<>, void ()> rows=0
+keys  key=partial:X@18:31<tuple<>, void ()> root[0]=tuple<>
+keys  key=partial:X@18:31<tuple<>, void ()> root[1]=void ()
+keys  key=partial:X@18:31<tuple<n::S>, void (int)> rows=1
+keys  key=partial:X@18:31<tuple<n::S>, void (int)> root[0]=tuple<n::S>
+keys  key=partial:X@18:31<tuple<n::S>, void (int)> root[1]=void (typename n::S::type)

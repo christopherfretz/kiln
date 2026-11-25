@@ -1,0 +1,26 @@
+19:11-19:12  type  'S' -> n::S@18:8 in=(anonymous)@19:14
+19:16-19:17  type  'S' -> n::S@18:8 in=(anonymous)@19:19
+22:20-22:21  type  'T' -> T@22:17 in=declval@22:24
+27:17-27:18  type  'T' -> T@26:17 in=can_swap@27:8
+27:29-27:33  expr  'swap' -> (dependent) in=can_swap@27:8 def=0+adl
+27:29-27:33  expr  'swap' -> n::swap@19:6 key=partial:can_swap@27:8<n::S, void> how=adl adl-ns=n@17:11 adl-cls=n::S@18:8
+27:42-27:43  type  'T' -> T@26:17 in=can_swap@27:8
+27:34-27:41  expr  'declval' -> (dependent) in=can_swap@27:8 def=1+adl
+27:34-27:41  expr  'declval' def=declval@22:24
+27:34-27:41  expr  'declval' -> declval<n::S &>@22:24 found=declval@22:24 key=partial:can_swap@27:8<n::S, void> adl-ns=
+27:58-27:59  type  'T' -> T@26:17 in=can_swap@27:8
+27:50-27:57  expr  'declval' -> (dependent) in=can_swap@27:8 def=1+adl
+27:50-27:57  expr  'declval' def=declval@22:24
+27:50-27:57  expr  'declval' -> declval<n::S &>@22:24 found=declval@22:24 key=partial:can_swap@27:8<n::S, void> adl-ns=
+27:8-27:16  spec-target  'can_swap' -> can_swap@23:41 in=can_swap@27:8
+30:24-30:25  nns  'n' -> n@17:11 in=static_assert@30:1
+30:27-30:28  type  'S' -> n::S@18:8 q=30:24 in=static_assert@30:1
+30:15-30:23  nns  'can_swap' -> can_swap@23:41 in=static_assert@30:1
+30:31-30:36  expr  'value' -> can_swap<n::S>::value@28:25 q=30:15 in=static_assert@30:1
+31:25-31:26  nns  'n' -> n@17:11 in=static_assert@31:1
+31:28-31:29  type  'U' -> n::U@20:8 q=31:25 in=static_assert@31:1
+31:16-31:24  nns  'can_swap' -> can_swap@23:41 in=static_assert@31:1
+31:32-31:37  expr  'value' -> can_swap<n::U>::value@24:25 q=31:16 in=static_assert@31:1
+keys  key=partial:can_swap@27:8<n::S, void> rows=3
+keys  key=partial:can_swap@27:8<n::S, void> root[0]=n::S
+keys  key=partial:can_swap@27:8<n::S, void> root[1]=decltype(swap(declval<n::S &>(), declval<n::S &>()))

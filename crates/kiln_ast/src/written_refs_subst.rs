@@ -16,9 +16,9 @@ use std::fmt::Write as _;
 use kiln_source::Loc;
 
 use super::{
-    AdlSet, PatternNode, RefMark, SPEC_BUILTIN, SUBST_DEPENDENT, SUBST_EXPANDED, SubstIdentity,
-    SubstKey, SubstKeyId, SubstKind, SubstOutcome, SubstRef, Unrecorded, WrittenRef, WrittenRefId,
-    WrittenRefs, dump_adl, dump_rewrite_flags, dump_udir,
+    AdlSet, PatternNode, RefMark, RootSlot, RootTag, SPEC_BUILTIN, SUBST_DEPENDENT, SUBST_EXPANDED,
+    SubstIdentity, SubstKey, SubstKeyId, SubstKind, SubstOutcome, SubstRef, Unrecorded, WrittenRef,
+    WrittenRefId, WrittenRefs, dump_adl, dump_rewrite_flags, dump_udir,
 };
 use crate::ids::{ArgListId, DeclId};
 use crate::mem::MemRow;
@@ -39,11 +39,13 @@ impl WrittenRefs {
     }
 
     /// Commits the key (`kind`, `template`, canonical `args`, `extra`)
-    /// with `outcome` and `rows` as one contiguous run (possibly empty: a
-    /// substitution that completed and bound nothing still has its key).
-    /// `None` when keys are off or the identity is already committed (the
-    /// first completed run's rows are the key's). The caller decides that
-    /// the substitution is eligible for a key (§18.14.3).
+    /// with `outcome`, `rows` as one contiguous run (possibly empty: a
+    /// substitution that completed and bound nothing still has its key)
+    /// and its root `root` as another (§18.14.10). `None` when keys are
+    /// off or the identity is already committed (the first completed
+    /// run's rows and root are the key's). The caller decides that the
+    /// substitution is eligible for a key (§18.14.3).
+    #[allow(clippy::too_many_arguments, reason = "a key's fields, its rows and its root")]
     pub fn commit_subst(
         &mut self,
         kind: SubstKind,
@@ -52,6 +54,7 @@ impl WrittenRefs {
         args: ArgListId,
         extra: u32,
         rows: &[SubstRef],
+        root: &[RootSlot],
     ) -> Option<SubstKeyId> {
         if !self.subst_keys_on() {
             return None;
@@ -67,6 +70,10 @@ impl WrittenRefs {
         let start = u32::try_from(self.subst.rows.len()).expect("keyed row table exhausted");
         let len = u32::try_from(rows.len()).expect("keyed row table exhausted");
         self.subst.rows.extend_from_slice(rows);
+        let slot = u32::try_from(self.subst.root_slots.len()).expect("root table exhausted");
+        let slots = u32::try_from(root.len()).expect("root table exhausted");
+        self.subst.root_slots.extend_from_slice(root);
+        self.subst.root_spans.push((slot, slots));
         let id = SubstKeyId::from_index(self.subst.keys.len());
         self.subst.keys.push(SubstKey { kind, outcome, template, args, extra, rows: (start, len) });
         self.subst.index.insert(identity, id);
@@ -110,6 +117,31 @@ impl WrittenRefs {
         let (start, len) = self.subst.keys[id.index()].rows;
         let lo = start as usize;
         &self.subst.rows[lo..lo + len as usize]
+    }
+
+    /// The root of key `id` (§18.14.10): its slots, in the order of the
+    /// key's pattern (one per written argument for a `PartialMatch`).
+    pub fn subst_root(&self, id: SubstKeyId) -> &[RootSlot] {
+        let (start, len) = self.subst.root_spans[id.index()];
+        let lo = start as usize;
+        &self.subst.root_slots[lo..lo + len as usize]
+    }
+
+    /// The recording runs of `kind` that closed without committing a key
+    /// (§18.14.10): matches whose deduction succeeded and that then did
+    /// not complete. It counts runs, not identities, and is this parse's
+    /// own (not carried).
+    pub fn subst_not_completed(&self, kind: SubstKind) -> u32 {
+        self.subst.not_completed[kind as usize - 1]
+    }
+
+    /// Counts one recording run of `kind` that closed without committing
+    /// (nothing when keys are off).
+    pub fn note_subst_not_completed(&mut self, kind: SubstKind) {
+        if self.subst_keys_on() {
+            let n = &mut self.subst.not_completed[kind as usize - 1];
+            *n = n.saturating_add(1);
+        }
     }
 
     /// Every keyed row of pattern entry `entry`, with its key.
@@ -183,14 +215,19 @@ impl WrittenRefs {
         if t.keys.iter().any(|k| gone(k, &t.rows)) {
             let mut keys = Vec::with_capacity(t.keys.len());
             let mut rows = Vec::with_capacity(t.rows.len());
-            for k in &t.keys {
+            let mut spans = Vec::with_capacity(t.root_spans.len());
+            let mut slots = Vec::with_capacity(t.root_slots.len());
+            for (k, &(lo, len)) in t.keys.iter().zip(&t.root_spans) {
                 if gone(k, &t.rows) {
                     continue;
                 }
-                let lo = k.rows.0 as usize;
+                let r = k.rows.0 as usize;
                 let start = rows.len() as u32;
-                rows.extend_from_slice(&t.rows[lo..lo + k.rows.1 as usize]);
+                rows.extend_from_slice(&t.rows[r..r + k.rows.1 as usize]);
                 keys.push(SubstKey { rows: (start, k.rows.1), ..*k });
+                // Its root goes with it; the slots are compacted.
+                spans.push((slots.len() as u32, len));
+                slots.extend_from_slice(&t.root_slots[lo as usize..(lo + len) as usize]);
             }
             t.index = keys
                 .iter()
@@ -199,6 +236,8 @@ impl WrittenRefs {
                 .collect();
             t.keys = keys;
             t.rows = rows;
+            t.root_spans = spans;
+            t.root_slots = slots;
         }
         // No key is committed inside a tentative parse that is then rolled
         // back past its template.
@@ -239,6 +278,35 @@ impl WrittenRefs {
         }
         let (live, reserved) = self.subst_mem();
         Some(MemRow::new("written_refs.subst", self.subst.rows.len() as u64, live, reserved))
+    }
+
+    /// The bytes (live, reserved) of the keys' roots (§18.14.10): the
+    /// spans and the slots (the argument lists they name are the type
+    /// context's).
+    pub fn roots_mem(&self) -> (u64, u64) {
+        let t = &self.subst;
+        let span = size_of::<(u32, u32)>() as u64;
+        let slot = size_of::<RootSlot>() as u64;
+        (
+            t.root_spans.len() as u64 * span + t.root_slots.len() as u64 * slot,
+            t.root_spans.capacity() as u64 * span + t.root_slots.capacity() as u64 * slot,
+        )
+    }
+
+    /// The memory rows `written_refs.roots` (count: slots) and
+    /// `written_refs.subst.not_completed` (count: the runs of every kind
+    /// that did not complete; no bytes), only when keys are recorded.
+    pub fn roots_mem_rows(&self) -> Option<[MemRow; 2]> {
+        if !self.subst_keys_on() {
+            return None;
+        }
+        let (live, reserved) = self.roots_mem();
+        let slots = self.subst.root_slots.len() as u64;
+        let failed: u64 = self.subst.not_completed.iter().map(|&n| u64::from(n)).sum();
+        Some([
+            MemRow::new("written_refs.roots", slots, live, reserved),
+            MemRow::new("written_refs.subst.not_completed", failed, 0, 0),
+        ])
     }
 
     /// The keyed rows grouped by pattern entry, for the dump.
@@ -344,35 +412,86 @@ impl WrittenRefs {
         }
     }
 
-    /// The `keys` lines (§18.14.6): every key without rows, once, sorted,
-    /// after the entries.
-    pub(super) fn dump_rowless_keys(
+    /// The `keys` block (§18.14.6), after the entries: per key one line
+    /// `keys  key=<...> rows=<n>`, then one line per slot of its root
+    /// (`root[<i>]=<text>`, as written: [`Self::write_root_slot`]); the
+    /// blocks sorted by their first line, each once.
+    pub(super) fn dump_key_blocks(
         &self,
         ast: &crate::Ast,
-        names: &crate::diag_names::DiagNames<'_>,
+        canon: &crate::diag_names::DiagNames<'_>,
+        written: &crate::diag_names::DiagNames<'_>,
         pos: &dyn Fn(Loc) -> String,
         out: &mut String,
     ) {
-        let mut lines: Vec<String> = self
-            .subst
-            .keys
-            .iter()
-            .filter(|k| k.rows.1 == 0)
-            .map(|k| {
-                let mut l = String::from("keys  key=");
-                Self::write_key(k, ast, names, pos, &mut l);
-                l.push_str(" rows=0");
+        let mut blocks: Vec<(String, String)> = self
+            .subst_keys()
+            .map(|(id, k)| {
+                let mut key = String::from("key=");
+                Self::write_key(k, ast, canon, pos, &mut key);
+                let mut l = format!("keys  {key} rows={}", k.rows.1);
                 if k.outcome == SubstOutcome::Unsatisfied {
                     l.push_str(" unsatisfied");
                 }
                 l.push('\n');
-                l
+                let mut body = String::new();
+                for (i, slot) in self.subst_root(id).iter().enumerate() {
+                    let _ = write!(body, "keys  {key} root[{i}]=");
+                    Self::write_root_slot(slot, ast, written, &mut body);
+                    body.push('\n');
+                }
+                (l, body)
             })
             .collect();
-        lines.sort();
-        lines.dedup();
-        for l in lines {
+        blocks.sort();
+        blocks.dedup();
+        for (l, body) in blocks {
             out.push_str(&l);
+            out.push_str(&body);
+        }
+    }
+
+    /// A root slot's dump text (§18.14.6): an `Args` slot's elements as
+    /// written (not canonical), comma-separated, `<empty>` for none; `-`
+    /// for `NotReached`, `failed` for `Failed`; an `Expr` or `Type` slot
+    /// as written. No source position.
+    fn write_root_slot(
+        slot: &RootSlot,
+        ast: &crate::Ast,
+        names: &crate::diag_names::DiagNames<'_>,
+        out: &mut String,
+    ) {
+        match slot.tag {
+            RootTag::NotReached => out.push('-'),
+            RootTag::Failed => out.push_str("failed"),
+            RootTag::Args => match slot.as_args() {
+                Some(l) if !ast.types.args(l).is_empty() => {
+                    let mut s = String::new();
+                    crate::types::write_arg_list_scoped(&ast.types, names, l, &mut s);
+                    // `<a, b>` without its brackets.
+                    let inner = s
+                        .strip_prefix('<')
+                        .and_then(|x| x.strip_suffix('>'))
+                        .unwrap_or(&s)
+                        .trim_end_matches(' ');
+                    out.push_str(inner);
+                }
+                _ => out.push_str("<empty>"),
+            },
+            RootTag::Type => match slot.as_type() {
+                Some(q) => crate::types::write_type(
+                    &ast.types,
+                    names,
+                    q,
+                    crate::types::PrintOptions::default(),
+                    out,
+                ),
+                None => out.push('?'),
+            },
+            RootTag::Expr => match slot.as_expr() {
+                Some(e) => names.write_expr(e, out),
+                None => out.push('?'),
+            },
         }
     }
 
@@ -434,6 +553,69 @@ mod tests {
     fn sizes() {
         assert_eq!(size_of::<SubstKey>(), 24);
         assert_eq!(size_of::<SubstRef>(), 24);
+        // §18.14.10: a root slot is 12 bytes, a root's span 8.
+        assert_eq!(size_of::<RootSlot>(), 12);
+    }
+
+    /// §18.14.10: a root is committed with its key, one span per key (an
+    /// empty root too), read back by `subst_root`; a refused commit keeps
+    /// no slot; a rollback keeps the kept keys' roots and drops the
+    /// others'; the memory row counts slots.
+    #[test]
+    fn roots_are_committed_with_their_keys() {
+        let mut t = table(true);
+        let first = dep_entry(&mut t);
+        let mark = t.mark(5);
+        let second = dep_entry(&mut t);
+        let (pm, done) = (SubstKind::PartialMatch, SubstOutcome::Substituted);
+        let r1 = [RootSlot::args(args(4)), RootSlot::args(args(5))];
+        let r3 = [
+            RootSlot::NOT_REACHED,
+            RootSlot::FAILED,
+            RootSlot::ty(crate::ids::QualType::unqual(crate::ids::TypeId::new(12))),
+        ];
+        let k1 = t.commit_subst(pm, done, DeclId::new(3), args(1), 0, &[row(second, 7)], &r1);
+        let k2 = t.commit_subst(pm, done, DeclId::new(3), args(2), 0, &[], &[]);
+        let k3 = t.commit_subst(pm, done, DeclId::new(3), args(3), 0, &[row(first, 8)], &r3);
+        let (k1, k2, k3) = (k1.unwrap(), k2.unwrap(), k3.unwrap());
+        assert_eq!(t.subst_root(k1), &r1);
+        assert!(t.subst_root(k2).is_empty());
+        assert_eq!(t.subst_root(k3), &r3);
+        assert_eq!(t.subst_root(k1)[1].as_args(), Some(args(5)));
+        assert_eq!(t.subst_root(k3)[0].as_args(), None);
+        assert_eq!(t.commit_subst(pm, done, DeclId::new(3), args(1), 0, &[], &r3), None);
+        let rows = t.roots_mem_rows().expect("keys on");
+        assert_eq!((rows[0].name.as_str(), rows[0].count), ("written_refs.roots", 5));
+        assert_eq!(rows[0].live_bytes, 3 * 8 + 5 * 12);
+        // Rolled back past the second entry: the first key goes, its root
+        // with it.
+        t.truncate(mark);
+        let kept: Vec<(u32, Vec<RootSlot>)> =
+            t.subst_keys().map(|(id, k)| (k.args.index(), t.subst_root(id).to_vec())).collect();
+        assert_eq!(kept, [(2, vec![]), (3, r3.to_vec())]);
+        assert_eq!(t.roots_mem_rows().expect("keys on")[0].count, 3);
+    }
+
+    /// §18.14.10: the runs that did not complete are counted by kind (keys
+    /// on only), into a row without bytes.
+    #[test]
+    fn not_completed_runs_are_counted() {
+        let mut t = table(true);
+        t.note_subst_not_completed(SubstKind::PartialMatch);
+        t.note_subst_not_completed(SubstKind::PartialMatch);
+        t.note_subst_not_completed(SubstKind::Alias);
+        assert_eq!(t.subst_not_completed(SubstKind::PartialMatch), 2);
+        assert_eq!(t.subst_not_completed(SubstKind::Alias), 1);
+        assert_eq!(t.subst_not_completed(SubstKind::DefaultArg), 0);
+        let rows = t.roots_mem_rows().expect("keys on");
+        assert_eq!(
+            (rows[1].name.as_str(), rows[1].count, rows[1].live_bytes),
+            ("written_refs.subst.not_completed", 3, 0)
+        );
+        let mut off = table(false);
+        off.note_subst_not_completed(SubstKind::PartialMatch);
+        assert_eq!(off.subst_not_completed(SubstKind::PartialMatch), 0);
+        assert!(off.roots_mem_rows().is_none());
     }
 
     /// §18.14.4: a commit makes one contiguous run, read back by
@@ -452,10 +634,12 @@ mod tests {
             args(1),
             0,
             &[row(first, 7), row(second, 8)],
+            &[],
         );
-        let k2 = t.commit_subst(SubstKind::DefaultArg, done, DeclId::new(3), args(1), 9, &[]);
-        let k3 = t.commit_subst(alias, done, DeclId::new(3), args(2), 0, &[row(second, 9)]);
-        let k4 = t.commit_subst(SubstKind::PartialMatch, done, DeclId::new(4), args(2), 5, &[]);
+        let k2 = t.commit_subst(SubstKind::DefaultArg, done, DeclId::new(3), args(1), 9, &[], &[]);
+        let k3 = t.commit_subst(alias, done, DeclId::new(3), args(2), 0, &[row(second, 9)], &[]);
+        let k4 =
+            t.commit_subst(SubstKind::PartialMatch, done, DeclId::new(4), args(2), 5, &[], &[]);
         let (k1, k2, k3, k4) = (k1.unwrap(), k2.unwrap(), k3.unwrap(), k4.unwrap());
         assert_eq!(t.subst_rows(k1), &[row(first, 7), row(second, 8)]);
         assert!(t.subst_rows(k2).is_empty());
@@ -466,13 +650,14 @@ mod tests {
         assert_eq!(t.subst_key(k4).deduced(), Some(args(5)));
         // Refused: the same identity, whatever the rows; a `PartialMatch`'s
         // payload is not part of its identity, a `DefaultArg`'s is.
-        assert_eq!(t.commit_subst(alias, done, DeclId::new(3), args(1), 0, &[]), None);
+        assert_eq!(t.commit_subst(alias, done, DeclId::new(3), args(1), 0, &[], &[]), None);
         assert_eq!(
-            t.commit_subst(SubstKind::PartialMatch, done, DeclId::new(4), args(2), 6, &[]),
+            t.commit_subst(SubstKind::PartialMatch, done, DeclId::new(4), args(2), 6, &[], &[]),
             None
         );
         assert!(
-            t.commit_subst(SubstKind::DefaultArg, done, DeclId::new(3), args(1), 10, &[]).is_some()
+            t.commit_subst(SubstKind::DefaultArg, done, DeclId::new(3), args(1), 10, &[], &[])
+                .is_some()
         );
         assert_eq!(t.subst_key_of(alias, DeclId::new(3), args(2), 0), Some(k3));
         assert_eq!(t.subst_key_of(SubstKind::PartialMatch, DeclId::new(4), args(2), 77), Some(k4));
@@ -500,9 +685,10 @@ mod tests {
             args(1),
             0,
             &[row(first, 7), row(second, 8)],
+            &[],
         );
-        let _ = t.commit_subst(alias, done, DeclId::new(3), args(2), 0, &[]);
-        let _ = t.commit_subst(alias, done, DeclId::new(3), args(3), 0, &[row(first, 9)]);
+        let _ = t.commit_subst(alias, done, DeclId::new(3), args(2), 0, &[], &[]);
+        let _ = t.commit_subst(alias, done, DeclId::new(3), args(3), 0, &[row(first, 9)], &[]);
         t.note_pattern_node(PatternNode::Decl(DeclId::new(2)), second);
         t.note_expanded_node(PatternNode::Decl(DeclId::new(2)));
         t.truncate(mark);
@@ -527,7 +713,7 @@ mod tests {
         let a = dep_entry(&mut t);
         let s = SubstOutcome::Substituted;
         assert_eq!(
-            t.commit_subst(SubstKind::Alias, s, DeclId::new(3), args(1), 0, &[row(a, 7)]),
+            t.commit_subst(SubstKind::Alias, s, DeclId::new(3), args(1), 0, &[row(a, 7)], &[]),
             None
         );
         t.note_expanded_node(PatternNode::Decl(DeclId::new(2)));
