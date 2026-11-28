@@ -16,7 +16,7 @@
 use kiln_ast::types::Nns;
 use kiln_ast::{DeclId, NnsId, QualType};
 
-use super::{Image, NnsRec, QRef, Rd, Res, Wr, Writer, bad};
+use super::{Image, NnsRec, Payload, QRef, Rd, Res, W, Wr, Writer, bad};
 use crate::Sema;
 use crate::templ::written::{NestedParam, WrittenKey};
 
@@ -121,6 +121,63 @@ impl Writer<'_, '_, '_> {
         }
         false
     }
+
+    /// Carries `ColdDeclData::written_decl_type` for every carried
+    /// declaration that has one (spec/types.md §8.4, spec/modules.md
+    /// §11.11, WP-3640), in ascending record order.
+    pub(super) fn written_decl_types(&mut self) -> W<()> {
+        let mut pairs: Vec<(u32, QualType)> = self
+            .s
+            .ast
+            .decls
+            .cold
+            .written_decl_type
+            .iter()
+            .filter_map(|(d, &ty)| self.recs.get(&d).map(|&r| (r, ty)))
+            .collect();
+        pairs.sort_unstable_by_key(|&(r, _)| r);
+        let mut rows = Vec::with_capacity(pairs.len());
+        for (r, ty) in pairs {
+            rows.push((r, self.qref(ty)?));
+        }
+        self.img.written_decls = rows;
+        Ok(())
+    }
+}
+
+pub(super) fn encode_written_decls(w: &mut Wr, rows: &[(u32, QRef)]) {
+    w.len(rows.len());
+    for &(r, q) in rows {
+        w.u32(r);
+        w.q(q);
+    }
+}
+
+pub(super) fn decode_written_decls(r: &mut Rd<'_>) -> Res<Vec<(u32, QRef)>> {
+    let n = r.count(9)?;
+    let mut v = Vec::with_capacity(n);
+    for _ in 0..n {
+        v.push((r.u32()?, r.q()?));
+    }
+    Ok(v)
+}
+
+/// Checks each `written_decls` entry: ascending distinct variable or
+/// function records, each type in range.
+pub(super) fn validate_written_decls(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Res<()> {
+    let mut last = None;
+    for &(r, q) in &img.written_decls {
+        let ok = last.is_none_or(|l| l < r)
+            && qref_ok(q)
+            && img.decls.get(r as usize).is_some_and(|d| {
+                matches!(d.payload, Payload::Var { .. } | Payload::Function { .. })
+            });
+        if !ok {
+            return bad("bad written declaration type row");
+        }
+        last = Some(r);
+    }
+    Ok(())
 }
 
 pub(super) fn encode_written(w: &mut Wr, v: &[WrittenRec]) {
@@ -263,6 +320,21 @@ impl Sema<'_, '_> {
             }
         }
     }
+
+    /// Enters `img`'s `written_decls` rows into
+    /// `ColdDeclData::written_decl_type` (WP-3640).
+    pub(super) fn image_written_decls(
+        &mut self,
+        img: &Image,
+        tys: &mut Vec<QualType>,
+        ids: &[DeclId],
+    ) {
+        for &(rec, q) in &img.written_decls {
+            let Some(&d) = ids.get(rec as usize) else { continue };
+            let ty = self.image_ty(img, tys, ids, q);
+            self.builder().set_written_decl_type(d, ty);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -322,5 +394,32 @@ mod tests {
         assert_eq!(decode(&encode(&img)), Ok(img.clone()));
         img.nested[0].ty = QRef { ty: 9999, quals: 0 };
         assert!(decode(&encode(&img)).is_err(), "type out of range");
+    }
+
+    /// spec/types.md §8.4, spec/modules.md §11.11 (WP-3640):
+    /// `written_decls` round-trips; a row naming a non-var/non-function
+    /// record, a duplicate record, or an out-of-range type is rejected.
+    #[test]
+    fn written_decl_types_round_trip() {
+        type Corrupt = (&'static str, fn(&mut Image));
+        let mut img = template_sample();
+        let f = img
+            .decls
+            .iter()
+            .position(|d| matches!(d.payload, Payload::Function { .. }))
+            .expect("a function record") as u32;
+        let int = QRef { ty: kiln_ast::types::BuiltinType::Int as u32, quals: 0 };
+        img.written_decls = vec![(f, int)];
+        assert_eq!(decode(&encode(&img)), Ok(img.clone()));
+        let corrupt: [Corrupt; 3] = [
+            ("duplicate", |i| i.written_decls.push(i.written_decls[0])),
+            ("not var or fn", |i| i.written_decls[0].0 = 0),
+            ("type out of range", |i| i.written_decls[0].1.ty = 9999),
+        ];
+        for (what, mutate) in corrupt {
+            let mut bad = img.clone();
+            mutate(&mut bad);
+            assert!(decode(&encode(&bad)).is_err(), "{what}");
+        }
     }
 }

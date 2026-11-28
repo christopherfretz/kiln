@@ -164,7 +164,9 @@ pub(crate) const MAGIC: [u8; 8] = *b"KILNSNAP";
 /// version 187 (WP-3583, WP-3589) a variable's placeholder kind
 /// (`VarSpec` bits 14-15) and a compound literal's written type
 /// (`ColdExprData::compound_literal_written`).
-pub(crate) const FORMAT_VERSION: u32 = 187;
+/// version 188 (WP-3640) the declared type as written of a deduced
+/// placeholder declaration (`ColdDeclData::written_decl_type`).
+pub(crate) const FORMAT_VERSION: u32 = 188;
 /// The length of the magic and the format version.
 pub(crate) const HEADER_LEN: usize = 12;
 

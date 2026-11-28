@@ -103,7 +103,7 @@ pub(crate) use locs::Locs;
 use locs::{FileRec, LocTable, SlocRec};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 101;
+pub(crate) const IMAGE_VERSION: u32 = 102;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -807,6 +807,10 @@ struct Image {
     /// WP-1923: the FP pragma states of mem-initializers, default member
     /// initializers and default arguments ([`fpstate`]).
     fp_inits: Vec<fpstate::FpInit>,
+    /// WP-3640: the declared type as written of a variable or function
+    /// whose type (or return type) was deduced from a placeholder
+    /// (`ColdDeclData::written_decl_type`), in ascending record order.
+    written_decls: Vec<(u32, QRef)>,
 }
 
 const K_NAMESPACE: u8 = 1;
@@ -1610,6 +1614,7 @@ fn encode(img: &Image) -> Vec<u8> {
     fnsugar::encode_fn_sugars(&mut w, &img.fsugar);
     specbase::encode_member_classes(&mut w, &img.mclasses);
     fpstate::encode_fp_inits(&mut w, &img.fp_inits);
+    written::encode_written_decls(&mut w, &img.written_decls);
     extents::encode_extents(&mut w, &img.extents);
     splits::encode_splits(&mut w, &img.splits);
     refs::encode_refs(&mut w, &img.refs);
@@ -2348,6 +2353,7 @@ fn decode_with(bytes: &[u8], want_refs: bool) -> Res<Image> {
     img.fsugar = fnsugar::decode_fn_sugars(&mut r)?;
     img.mclasses = specbase::decode_member_classes(&mut r)?;
     img.fp_inits = fpstate::decode_fp_inits(&mut r)?;
+    img.written_decls = written::decode_written_decls(&mut r)?;
     img.extents = extents::decode_extents(&mut r)?;
     img.splits = splits::decode_splits(&mut r)?;
     img.refs = refs::decode_refs(&mut r, want_refs)?;
@@ -3554,6 +3560,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
     written::validate_nested(img, &|q| qref_ok(q, nt))?;
     exprs::validate_late_nx(img)?;
     fpstate::validate_fp_inits(img)?;
+    written::validate_written_decls(img, &|q| qref_ok(q, nt))?;
     body::validate_bodies(img, &|q| qref_ok(q, nt))
 }
 
@@ -5104,6 +5111,7 @@ impl Writer<'_, '_, '_> {
         }
         self.walk_roots()?;
         self.lambda_contexts()?;
+        self.written_decl_types()?;
         self.written_section();
         self.fp_inits();
         self.extents_section()?;
@@ -6662,6 +6670,7 @@ impl Sema<'_, '_> {
             }
         }
         self.image_fp_inits(img, &ids);
+        self.image_written_decls(img, &mut tys, &ids);
         self.image_spec_defaults(img, &ids, main);
         self.image_defaulted_cmps(img, &ids, main);
         self.image_explicit_insts(img, &mut tys, &ids, main);
@@ -7324,6 +7333,7 @@ mod tests {
             fsugar: fnsugar::FnSugars::default(),
             mclasses: specbase::MemberClasses::default(),
             fp_inits: Vec::new(),
+            written_decls: Vec::new(),
             cons: constraints::Constraints::default(),
             reqs: requires::ReqBodies::default(),
             written: Vec::new(),

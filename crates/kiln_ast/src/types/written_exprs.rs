@@ -35,6 +35,14 @@ impl TypeContext {
         self.written_exprs_in(q, out, 0);
     }
 
+    /// True if [`Self::written_exprs`] appends at least one expression for
+    /// `q`. Allocates nothing when `q` contains no written expression.
+    pub fn has_written_exprs(&self, q: QualType) -> bool {
+        let mut out = Vec::new();
+        self.written_exprs_in(q, &mut out, 0);
+        !out.is_empty()
+    }
+
     fn written_exprs_in(&self, q: QualType, out: &mut Vec<ExprId>, depth: u32) {
         if depth > MAX_DEPTH {
             return;
@@ -188,26 +196,51 @@ impl TypeContext {
             }
         }
     }
+
+    /// Appends only the expressions written in the return type of function
+    /// type `q` (skipping transparent top-level sugar), for a deduced
+    /// return type whose written form carries expressions around its
+    /// placeholder (spec/types.md §8.4, WP-3640).
+    fn written_return_exprs(&self, mut q: QualType, out: &mut Vec<ExprId>) {
+        for depth in 0..=MAX_DEPTH {
+            match self.view(q.ty()) {
+                TypeView::Attributed { modified: x, .. }
+                | TypeView::Paren(x)
+                | TypeView::ExtQual { base: x, .. } => q = x,
+                TypeView::Function(p) => {
+                    self.written_exprs_in(p.ret(), out, depth + 1);
+                    return;
+                }
+                _ => return,
+            }
+        }
+    }
 }
 
 impl crate::Ast {
     /// Appends to `out` the expressions written in declaration `d`'s type
-    /// (spec/types.md §8.4, WP-3583, WP-3641): [`TypeContext::written_exprs`]
-    /// of its type, except that a deduced type is no written one, so nothing
-    /// is appended for a variable whose type its initializer deduced from
-    /// a placeholder ([`crate::decl::VarSpec::placeholder`] is not
-    /// `None`: `auto v = w;`, `decltype(auto)`, `auto &`, `const auto *`,
-    /// a structured binding declaration, an init-capture) nor for a
-    /// structured binding (`Binding`, whose type is its element's), and a
-    /// function whose return type was deduced
-    /// ([`crate::decl::FnSpec::return_deduced`]) appends only its parameter
-    /// types' and `noexcept(e)` expressions, never its return type.
+    /// (spec/types.md §8.4, WP-3583, WP-3640, WP-3641):
+    /// [`TypeContext::written_exprs`] of its type, except that a deduced
+    /// type is no written one. For a structured binding (`Binding`),
+    /// nothing is appended. For a variable deduced from a placeholder
+    /// ([`crate::decl::VarSpec::placeholder`] is not `None`), only the
+    /// expressions written around the placeholder
+    /// ([`crate::decl::DeclArena::written_decl_type`], if any) are
+    /// appended. For a function whose return type was deduced
+    /// ([`crate::decl::FnSpec::return_deduced`]), any expressions written
+    /// around the return placeholder are appended first, then its
+    /// parameter types' and `noexcept(e)` expressions, never its deduced
+    /// return type.
     pub fn decl_written_exprs(&self, d: DeclId, out: &mut Vec<ExprId>) {
         use crate::decl::{DeclKind, VarPlaceholder};
         let n = self.decls.get(d);
-        if n.kind() == DeclKind::Binding
-            || self.decls.var(d).is_some_and(|v| v.spec.placeholder() != VarPlaceholder::None)
-        {
+        if n.kind() == DeclKind::Binding {
+            return;
+        }
+        if self.decls.var(d).is_some_and(|v| v.spec.placeholder() != VarPlaceholder::None) {
+            if let Some(w) = self.decls.written_decl_type(d) {
+                self.types.written_exprs(w, out);
+            }
             return;
         }
         let Some(t) = n.ty() else { return };
@@ -216,6 +249,13 @@ impl crate::Ast {
                 .redecls_of(d)
                 .any(|r| self.decls.function(r).is_some_and(|f| f.spec.return_deduced()))
         {
+            if let Some(w) = self
+                .decls
+                .written_decl_type(d)
+                .or_else(|| self.redecls_of(d).find_map(|r| self.decls.written_decl_type(r)))
+            {
+                self.types.written_return_exprs(w, out);
+            }
             self.types.written_exprs_without_return(t, out);
         } else {
             self.types.written_exprs(t, out);

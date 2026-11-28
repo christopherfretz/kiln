@@ -46,6 +46,11 @@ template <> int fh<f(6)>() { return 6; }
   template <class U> struct In<U, f(7)> { static constexpr int k = 7; };
 };
 @inline long dv(long w) { decltype(auto) dv2 = w; return dv2; }
+@template <class, int> concept WC = true;
+@int wa[1] = {0};
+@auto (*wp)[f(1)] = &wa;
+@WC<f(1)> auto wcv = wa[0];
+@inline WC<f(1)> auto wcg() { return 0; }
 ";
 
 const USE: &str = "int use() {\n\
@@ -53,7 +58,7 @@ const USE: &str = "int use() {\n\
   int three[3] = {1, 2, 3};\n\
   return by_ref(arr) + par(three) + lit(three) + P<int, 2>::k + P<char, 1>::k + P<char, 3>::k\n\
     + v<int, 4> + v<char, 3> + fh<6>() + O<long>::In<char, 7>::k + int(sizeof(ta.a))\n\
-    + int(dv(1));\n\
+    + int(dv(1)) + (*wp)[0] + wcv + wcg();\n\
 }\n";
 
 fn shapes(export: bool) -> String {
@@ -170,7 +175,7 @@ fn written_args(ast: &Ast, d: DeclId) -> String {
 /// The expressions written in `d`'s type.
 fn written_bounds(ast: &Ast, d: DeclId) -> String {
     let mut roots = Vec::new();
-    ast.types.written_exprs(ast.decls.get(d).ty().expect("a type"), &mut roots);
+    ast.decl_written_exprs(d, &mut roots);
     let mut out = String::new();
     for e in roots {
         expr(ast, e, &mut out);
@@ -222,6 +227,13 @@ fn report(ast: &Ast) -> Vec<(String, String)> {
         let kind = ast.decls.var(d).map(|v| v.spec.placeholder());
         out.push(("dv2 placeholder".to_owned(), format!("{kind:?}")));
     }
+    // WP-3640: expressions written around a deduced placeholder.
+    for (name, kind) in [("wp", DeclKind::Var), ("wcv", DeclKind::Var), ("wcg", DeclKind::Function)]
+    {
+        for d in named(ast, name, kind) {
+            out.push((format!("{name} {kind:?} written"), written_bounds(ast, d)));
+        }
+    }
     out.sort();
     out
 }
@@ -252,6 +264,9 @@ fn source_report() -> Vec<(String, String)> {
     assert!(get("par Function bounds")[0].contains("CallExpr"), "{r:?}");
     assert!(get("b ParmVar bounds")[0].contains("IntegerLiteral=4"), "{r:?}");
     assert_eq!(get("dv2 placeholder"), ["Some(DecltypeAuto)"], "{r:?}");
+    for k in ["wp Var written", "wcv Var written", "wcg Function written"] {
+        assert!(get(k).iter().any(|w| w.contains("CallExpr") && w.contains("=f")), "{k}: {r:?}");
+    }
     r
 }
 

@@ -214,6 +214,7 @@ impl Substituter<'_, '_, '_> {
         }
         let Some(v) = self.sema.act_on_declarator(&ds, ty, &dr) else { return Err(SubstFail) };
         self.copy_begin_loc(d, v, ty);
+        self.copy_deduced_written_type(d, v, t, loc);
         self.locals.insert(d, DeclOrPack::Decl(v));
         if ctx == DeclaratorContext::Member {
             // A static data member's attributes, `[[deprecated]]` among
@@ -374,6 +375,36 @@ impl Substituter<'_, '_, '_> {
             }
         }
         Ok(v)
+    }
+
+    /// When pattern variable `d` was already deduced from a placeholder
+    /// (non-dependent initializer in a template), carries its placeholder
+    /// kind and substitutes its `written_decl_type` onto `v` (WP-3640).
+    fn copy_deduced_written_type(&mut self, d: DeclId, v: DeclId, pty: QualType, loc: Loc) {
+        use kiln_ast::decl::{VarPlaceholder, VarSpec};
+        if self.sema.contains_placeholder(pty) {
+            return;
+        }
+        let Some(kind) = self
+            .sema
+            .ast
+            .decls
+            .var(d)
+            .map(|x| x.spec.placeholder())
+            .filter(|&k| k != VarPlaceholder::None)
+        else {
+            return;
+        };
+        if self.sema.ast.decls.var(v).is_none() {
+            return;
+        }
+        self.sema.ast.decls.mark_var(v, VarSpec::new().with_placeholder(kind));
+        if let Some(pw) = self.sema.ast.decls.written_decl_type(d)
+            && let Ok(sw) = self.ty(pw, loc)
+            && self.sema.ast.types.has_written_exprs(sw)
+        {
+            self.sema.builder().set_written_decl_type(v, sw);
+        }
     }
 
     /// [dcl.meaning.general]/5 ([temp.inst]/17): a variable or static data

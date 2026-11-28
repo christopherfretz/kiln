@@ -1937,6 +1937,12 @@ pub struct ColdDeclData {
     /// to form (`DeclArena::subst_failed`, spec/ast.md §4.1 "Silent
     /// failures"; WP-3281). Every key is `INVALID`.
     pub subst_failed: ColdMap<DeclId, SubstFailedKind>,
+    /// The declared type as written (sugar and placeholder included) of a
+    /// variable whose type was deduced from a placeholder or a function
+    /// whose return type was deduced from a placeholder, recorded only
+    /// when the deduced part contains at least one written expression
+    /// (`DeclArena::written_decl_type`, spec/types.md §8.4; WP-3640).
+    pub written_decl_type: ColdMap<DeclId, QualType>,
 }
 
 impl Default for ColdDeclData {
@@ -1981,12 +1987,13 @@ impl Default for ColdDeclData {
             written_ns: ColdMap::new("written_ns"),
             friend_form: ColdMap::new("friend_form"),
             subst_failed: ColdMap::new("subst_failed"),
+            written_decl_type: ColdMap::new("written_decl_type"),
         }
     }
 }
 
 impl ColdDeclData {
-    fn rows(&self) -> [MemRow; 39] {
+    fn rows(&self) -> [MemRow; 40] {
         [
             self.lexical_ctx.mem_row(),
             self.written_ns.mem_row(),
@@ -2027,6 +2034,7 @@ impl ColdDeclData {
             self.closure_owner.mem_row(),
             self.friend_form.mem_row(),
             self.subst_failed.mem_row(),
+            self.written_decl_type.mem_row(),
         ]
     }
 }
@@ -2758,6 +2766,14 @@ impl DeclArena {
     /// [`Self::set_written_ns`], else `ctx`.
     pub fn written_ns(&self, d: DeclId) -> Option<DeclId> {
         self.cold.written_ns.get(d).copied().or_else(|| self.get(d).ctx())
+    }
+
+    /// The declared type as written (sugar and placeholder included) of
+    /// declaration `d` when its type (or return type) was deduced from a
+    /// placeholder and the deduced part contained at least one written
+    /// expression (spec/types.md §8.4, WP-3640).
+    pub fn written_decl_type(&self, d: DeclId) -> Option<QualType> {
+        self.cold.written_decl_type.get(d).copied()
     }
 
     /// What failed to form, silently, in invalid declaration `d` (spec/ast.md

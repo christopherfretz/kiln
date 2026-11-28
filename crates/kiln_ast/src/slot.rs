@@ -206,6 +206,7 @@ const COLD_MAP_NAMES: &[&str] = &[
     "unresolved_found",
     "use_imm",
     "using_shadows",
+    "written_decl_type",
     "written_ns",
 ];
 

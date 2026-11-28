@@ -1147,3 +1147,190 @@ fn a_deduced_return_template_pattern_and_specialization() {
     ast.types.written_exprs(ast.decls.get(h_spec).ty().unwrap(), &mut h_all);
     assert_eq!(h_all.len(), 2, "deduced return (line 2) + param (line 5): {h_all:?}");
 }
+
+/// [dcl.type.auto.deduct]: expressions written in the declarator around
+/// a deduced placeholder (`auto (*p)[f(1)] = &a;`) are kept on
+/// `ColdDeclData::written_decl_type` and reported by
+/// `decl_written_exprs`, while a plain `auto v = w;` still appends
+/// nothing and keeps zero bytes in the map (spec/types.md §8.4, WP-3640).
+#[test]
+fn a_deduced_declarator_bound_is_kept() {
+    let t = parse(
+        "constexpr int f(int x) { return x; }\n\
+         long make(int);\n\
+         int x;\n\
+         decltype(make(x)) a[1] = {};\n\
+         decltype(make(x)) w = 0;\n\
+         auto (*p)[f(1)] = &a;\n\
+         auto v = w;\n",
+    );
+    let ast = t.ast();
+    let p = t.one("p", DeclKind::Var);
+    assert_eq!(ast.decls.var(p).unwrap().spec.placeholder(), VarPlaceholder::Auto);
+    let mut out = Vec::new();
+    ast.decl_written_exprs(p, &mut out);
+    assert_eq!(out.len(), 1, "p's written bound f(1): {out:?}");
+    assert_eq!(t.calls(out, "f"), [6]);
+    // Control: `auto v = w;` still appends nothing, keeps zero bytes in
+    // `written_decl_type`, and does not leak `w`'s `decltype(make(x))`.
+    let v = t.one("v", DeclKind::Var);
+    assert_eq!(ast.decls.written_decl_type(v), None);
+    let mut v_out = Vec::new();
+    ast.decl_written_exprs(v, &mut v_out);
+    assert!(v_out.is_empty(), "v control leaked: {v_out:?}");
+}
+
+/// [dcl.type.auto.deduct], [temp.constr.decl]: a type-constraint's
+/// template arguments on a deduced variable (`C<f(1)> auto v = w;`) are
+/// kept and reported by `decl_written_exprs` in §8.4 pre-order, without
+/// leaking expressions from `w`'s type (spec/types.md §8.4, WP-3640).
+#[test]
+fn a_constrained_placeholder_var_keeps_its_arguments() {
+    let t = parse(
+        "constexpr int f(int x) { return x; }\n\
+         template<class, int> concept C = true;\n\
+         long make(int);\n\
+         int x;\n\
+         decltype(make(x)) w = 0;\n\
+         decltype(make(x)) a[1] = {};\n\
+         C<f(1)> auto v = w;\n\
+         C<f(2)> auto (*p)[f(1)] = &a;\n",
+    );
+    let ast = t.ast();
+    let v = t.one("v", DeclKind::Var);
+    let mut out = Vec::new();
+    ast.decl_written_exprs(v, &mut out);
+    assert_eq!(out.len(), 1, "v's constraint arg f(1): {out:?}");
+    assert_eq!(t.calls(out.clone(), "f"), [7]);
+    assert!(t.calls(out, "make").is_empty());
+
+    let p = t.one("p", DeclKind::Var);
+    let mut p_out = Vec::new();
+    ast.decl_written_exprs(p, &mut p_out);
+    assert_eq!(p_out.len(), 2, "p's bound f(1) then constraint f(2): {p_out:?}");
+    assert_eq!(t.calls(vec![p_out[0]], "f"), [8]);
+    assert_eq!(t.calls(vec![p_out[1]], "f"), [8]);
+    assert!(t.calls(p_out.clone(), "make").is_empty());
+    // Pre-order: the outer array bound `f(1)` precedes the inner element's
+    // type-constraint argument `f(2)`.
+    let col = |e: ExprId| t.sm.line_col(ast.exprs.get(e).loc()).unwrap().col;
+    assert!(col(p_out[0]) > col(p_out[1]), "array bound before element constraint");
+}
+
+/// [dcl.spec.auto], [temp.constr.decl]: a constrained deduced return
+/// (`C<f(1)> auto g() { return 0; }`) keeps its constraint argument,
+/// reported before parameter and `noexcept(e)` expressions and without
+/// leaking the deduced return type (spec/types.md §8.4, WP-3640).
+#[test]
+fn a_constrained_deduced_return_keeps_its_arguments() {
+    let t = parse(
+        "constexpr int f(int x) { return x; }\n\
+         template<class, int> concept C = true;\n\
+         template<int N> struct A {};\n\
+         A<1+1> h();\n\
+         C<f(1)> auto g() { return 0; }\n\
+         C<f(1)> auto g2(int (*p)[f(2)]) noexcept(f(3) > 0) { return h(); }\n",
+    );
+    let ast = t.ast();
+    let g = t.one("g", DeclKind::Function);
+    assert!(ast.decls.function(g).unwrap().spec.return_deduced());
+    let mut out = Vec::new();
+    ast.decl_written_exprs(g, &mut out);
+    assert_eq!(out.len(), 1, "g's return constraint f(1): {out:?}");
+    assert_eq!(t.calls(out, "f"), [5]);
+
+    let g2 = t.one("g2", DeclKind::Function);
+    assert!(ast.decls.function(g2).unwrap().spec.return_deduced());
+    let mut out2 = Vec::new();
+    ast.decl_written_exprs(g2, &mut out2);
+    assert_eq!(out2.len(), 3, "g2's return f(1), param f(2), noexcept f(3)>0: {out2:?}");
+    let col = |e: ExprId| t.sm.line_col(ast.exprs.get(e).loc()).unwrap().col;
+    assert!(col(out2[0]) < col(out2[1]) && col(out2[1]) < col(out2[2]), "pre-order: {out2:?}");
+    assert_eq!(t.calls(out2, "f"), [6]);
+}
+
+/// [temp.inst], [dcl.type.auto.deduct], [dcl.spec.auto]: instantiations
+/// of variable and function templates with expressions around a deduced
+/// placeholder substitute those written types, so the specialization
+/// reports its own non-dependent expressions (spec/types.md §8.4,
+/// WP-3640).
+#[test]
+fn a_deduced_placeholder_in_template_keeps_substituted_exprs() {
+    use kiln_ast::expr::ExprDeps;
+    let t = parse(
+        "constexpr int f(int x) { return x; }\n\
+         template<class, int> concept C = true;\n\
+         template<int N> struct A {};\n\
+         A<1+1> h();\n\
+         template<class T> C<f(sizeof(T))> auto tv = h();\n\
+         template<class T> C<f(sizeof(T) + 2)> auto tf(int (*p)[f(sizeof(T) + 1)]) { return h(); }\n\
+         template<class T> C<f(1)> auto tv2 = h();\n\
+         long make(int);\n\
+         int x;\n\
+         decltype(make(x)) a[1] = {};\n\
+         decltype(make(x)) w = 0;\n\
+         template<class T> void k() { auto (*kp)[f(1)] = &a; auto kq = w; }\n\
+         auto r1 = tv<int>;\n\
+         auto r2 = tf<int>(nullptr);\n\
+         auto r3 = tv2<int>;\n\
+         void call_k() { k<int>(); }\n",
+    );
+    let ast = t.ast();
+
+    let (var_pat, var_spec) = t.pattern_and_instance("tv", DeclKind::Var);
+    let (mut pat_out, mut spec_out) = (Vec::new(), Vec::new());
+    ast.decl_written_exprs(var_pat, &mut pat_out);
+    ast.decl_written_exprs(var_spec, &mut spec_out);
+    assert_eq!(pat_out.len(), 1, "tv pattern: {pat_out:?}");
+    assert_eq!(spec_out.len(), 1, "tv<int>: {spec_out:?}");
+    assert_eq!(t.line(pat_out[0]), 5);
+    assert_eq!(t.line(spec_out[0]), 5);
+    assert_ne!(spec_out[0], pat_out[0]);
+    assert!(ast.exprs.get(pat_out[0]).deps().contains(ExprDeps::INSTANTIATION));
+    assert!(!ast.exprs.get(spec_out[0]).deps().contains(ExprDeps::INSTANTIATION));
+
+    let (fn_pat, fn_spec) = t.pattern_and_instance("tf", DeclKind::Function);
+    let (mut fpat_out, mut fspec_out) = (Vec::new(), Vec::new());
+    ast.decl_written_exprs(fn_pat, &mut fpat_out);
+    ast.decl_written_exprs(fn_spec, &mut fspec_out);
+    assert_eq!(fpat_out.len(), 2, "tf pattern: {fpat_out:?}");
+    assert_eq!(fspec_out.len(), 2, "tf<int>: {fspec_out:?}");
+    for i in 0..2 {
+        assert_eq!(t.line(fpat_out[i]), 6);
+        assert_eq!(t.line(fspec_out[i]), 6);
+        assert_ne!(fspec_out[i], fpat_out[i]);
+        assert!(ast.exprs.get(fpat_out[i]).deps().contains(ExprDeps::INSTANTIATION));
+        assert!(!ast.exprs.get(fspec_out[i]).deps().contains(ExprDeps::INSTANTIATION));
+    }
+
+    // Variable template whose pattern was already deduced (non-dependent
+    // declared type and non-dependent initializer): `tv2<int>` keeps its
+    // placeholder kind and `written_decl_type`, appending only `f(1)` and
+    // never leaking `1+1` from `h()`.
+    let (_, tv2_spec) = t.pattern_and_instance("tv2", DeclKind::Var);
+    assert_eq!(ast.decls.var(tv2_spec).unwrap().spec.placeholder(), VarPlaceholder::Auto);
+    let mut tv2_out = Vec::new();
+    ast.decl_written_exprs(tv2_spec, &mut tv2_out);
+    assert_eq!(tv2_out.len(), 1, "tv2<int>: {tv2_out:?}");
+    assert_eq!(t.calls(tv2_out, "f"), [7]);
+
+    // Function-body locals whose pattern declarations were already deduced
+    // (`copy_deduced_written_type`): `kp` in `k<int>` keeps only `f(1)`
+    // (non-dependent, no `make(x)` leak) and `kq` appends nothing with its
+    // placeholder kind preserved.
+    let (_, local_ptr) = t.pattern_and_instance("kp", DeclKind::Var);
+    assert_eq!(ast.decls.var(local_ptr).unwrap().spec.placeholder(), VarPlaceholder::Auto);
+    let mut ptr_out = Vec::new();
+    ast.decl_written_exprs(local_ptr, &mut ptr_out);
+    assert_eq!(ptr_out.len(), 1, "k<int>'s kp: {ptr_out:?}");
+    assert!(!ast.exprs.get(ptr_out[0]).deps().contains(ExprDeps::INSTANTIATION));
+    assert_eq!(t.calls(ptr_out.clone(), "f"), [12]);
+    assert!(t.calls(ptr_out, "make").is_empty());
+
+    let (_, local_var) = t.pattern_and_instance("kq", DeclKind::Var);
+    assert_eq!(ast.decls.var(local_var).unwrap().spec.placeholder(), VarPlaceholder::Auto);
+    assert_eq!(ast.decls.written_decl_type(local_var), None);
+    let mut var_out = Vec::new();
+    ast.decl_written_exprs(local_var, &mut var_out);
+    assert!(var_out.is_empty(), "k<int>'s kq leaked: {var_out:?}");
+}
