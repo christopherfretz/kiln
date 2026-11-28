@@ -297,19 +297,12 @@ impl Sema<'_, '_> {
         self.adl_lookup_explained(name, args, loc, out, false);
     }
 
-    /// [`Sema::adl_lookup_dn`], returning what it saw when `explain`
-    /// (spec/ast.md §18.7.4; `None` otherwise).
-    pub(crate) fn adl_lookup_explained(
-        &mut self,
-        name: DeclName,
-        args: &[ExprId],
-        loc: Loc,
-        out: &mut Vec<(DeclId, DeclId)>,
-        explain: bool,
-    ) -> Option<AdlFacts> {
-        let mut also = Vec::new();
-        // The candidates ordinary lookup found, before this lookup's.
-        let ordinary = out.len();
+    /// The associated namespaces, classes and enumerations of `args`
+    /// ([basic.lookup.argdep]/3), instantiating any incomplete associated
+    /// class template specializations from `loc` so their bases and hidden
+    /// friends are included (shared by [`Self::adl_lookup_explained`] and
+    /// built-in operator written-reference provenance; spec/ast.md §18.7.4).
+    pub(crate) fn adl_associated_set(&mut self, args: &[ExprId], loc: Loc) -> AssocSet {
         let mut assoc = AssocSet::default();
         for &a in args {
             self.assoc_arg(a, &mut assoc);
@@ -350,6 +343,23 @@ impl Sema<'_, '_> {
                 self.sess_reach_class_decl(c, loc);
             }
         }
+        assoc
+    }
+
+    /// [`Sema::adl_lookup_dn`], returning what it saw when `explain`
+    /// (spec/ast.md §18.7.4; `None` otherwise).
+    pub(crate) fn adl_lookup_explained(
+        &mut self,
+        name: DeclName,
+        args: &[ExprId],
+        loc: Loc,
+        out: &mut Vec<(DeclId, DeclId)>,
+        explain: bool,
+    ) -> Option<AdlFacts> {
+        let mut also = Vec::new();
+        // The candidates ordinary lookup found, before this lookup's.
+        let ordinary = out.len();
+        let assoc = self.adl_associated_set(args, loc);
         for &ns in &assoc.namespaces {
             let r = self.ast.lookup_local(ns, name);
             for (raw, flags) in r.iter_with_flags() {

@@ -29,3 +29,4 @@
 29:31-29:32  expr  'l' -> l@28:8 in=run@26:5
 29:36-29:47  expr  'measure_ptr' -> measure_ptr<Vec>@24:24 found=measure_ptr@24:24 in=run@26:5 how=both adl-ns=:: adl-cls=Vec@8:8
 29:49-29:50  expr  'v' -> v@27:7 in=run@26:5
+29:48-29:49  operator  '&' -> (builtin) in=run@26:5 how=builtin adl-ns=:: adl-cls=Vec@8:8

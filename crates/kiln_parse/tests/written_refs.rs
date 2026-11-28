@@ -988,6 +988,74 @@ fn operator_entries_through_the_api() {
     });
 }
 
+/// spec/ast.md §18.13 (WP-2920, WP-3701) through the API: non-member
+/// operators carry `how=adl` / `how=both` and their associated sets, member
+/// operators carry `how=member` with no associated set, built-in candidates
+/// selected on class/enum operands carry `REF_BUILTIN`, `how=builtin` and
+/// their associated set, and fundamental-only operators carry no entry.
+#[test]
+fn operator_provenance_and_builtin_entries_through_the_api() {
+    use kiln_ast::written_refs::{REF_BUILTIN, REF_REWRITTEN, REF_UNRESOLVED, RefLookup};
+    let src = "namespace n {\n\
+               struct S {};\n\
+               enum E { e0 };\n\
+               bool operator==(S, S);\n\
+               }\n\
+               struct M { bool operator==(const M &) const; };\n\
+               void f(n::S a, n::S b, n::E e, M m) {\n\
+                 bool r1 = a == b;\n\
+                 bool r2 = e == e;\n\
+                 bool r3 = b != a;\n\
+                 using n::operator==;\n\
+                 bool r4 = a == b;\n\
+                 bool r5 = m == m;\n\
+                 int r6 = 1 + 2;\n\
+                 (void)(r1 + r2 + r3 + r4 + r5 + r6);\n\
+               }\n";
+    with_ast(src, |ast, sm| {
+        let t = &ast.written_refs;
+        let eq_adl = entry_at(t, sm, (8, 13));
+        assert_eq!(t.get(eq_adl).how, RefLookup::Adl);
+        assert_eq!(
+            t.adl_set(eq_adl).map(|s| (s.namespaces().len(), s.classes().len())),
+            Some((1, 1))
+        );
+
+        let eq_bi = entry_at(t, sm, (9, 13));
+        assert!(t.get(eq_bi).entity.is_none());
+        assert_eq!(t.get(eq_bi).flags & REF_BUILTIN, REF_BUILTIN);
+        assert_eq!(t.get(eq_bi).flags & REF_UNRESOLVED, 0);
+        assert_eq!(t.get(eq_bi).how, RefLookup::Builtin);
+        assert_eq!(t.adl_set(eq_bi).map(|s| (s.namespaces().len(), s.enums().len())), Some((1, 1)));
+
+        let ne_rew = entry_at(t, sm, (10, 13));
+        assert_eq!(t.get(ne_rew).flags & REF_REWRITTEN, REF_REWRITTEN);
+        assert_eq!(t.get(ne_rew).how, RefLookup::Adl);
+        assert_eq!(
+            t.adl_set(ne_rew).map(|s| (s.namespaces().len(), s.classes().len())),
+            Some((1, 1))
+        );
+
+        let eq_both = entry_at(t, sm, (12, 13));
+        assert_eq!(t.get(eq_both).how, RefLookup::Both);
+        assert!(t.get(eq_both).found.is_some());
+        assert_eq!(
+            t.adl_set(eq_both).map(|s| (s.namespaces().len(), s.classes().len())),
+            Some((1, 1))
+        );
+
+        let eq_mem = entry_at(t, sm, (13, 13));
+        assert_eq!(t.get(eq_mem).how, RefLookup::Member);
+        assert!(t.adl_set(eq_mem).is_none());
+
+        // `1 + 2` has no class or enum operand: no entry at `(14, 12)`.
+        assert!(
+            t.iter().all(|(_, r)| line_col(sm, r.range.lo) != (14, 12)),
+            "fundamental 1 + 2 must not record an operator entry"
+        );
+    });
+}
+
 const DEP_OPS: &str = "struct S { int v; };\n\
                        S operator+(S, S);\n\
                        struct P { S *operator->(); };\n\

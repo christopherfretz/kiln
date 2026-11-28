@@ -33,10 +33,10 @@
 75:12-75:15  type  'Mem' -> Mem@41:8 in=direct@73:6
 75:3-75:11  operator  'co_await' -> Mem::operator co_await@42:9 in=direct@73:6 how=member
 76:12-76:16  type  'Glob' -> Glob@44:8 in=direct@73:6
-76:3-76:11  operator  'co_await' -> operator co_await@45:7 in=direct@73:6
+76:3-76:11  operator  'co_await' -> operator co_await@45:7 in=direct@73:6 how=both adl-ns=:: adl-cls=Glob@44:8
 77:12-77:14  nns  'ns' -> ns@46:11 in=direct@73:6
 77:16-77:20  type  'Free' -> ns::Free@47:8 q=77:12 in=direct@73:6
-77:3-77:11  operator  'co_await' -> ns::operator co_await@48:7 in=direct@73:6 how=adl
+77:3-77:11  operator  'co_await' -> ns::operator co_await@48:7 in=direct@73:6 how=adl adl-ns=ns@46:11 adl-cls=ns::Free@47:8
 80:1-80:6  type  'ttask' -> ttask@61:8 in=transformed@80:7
 81:3-81:11  operator  'co_await' -> Mem::operator co_await@42:9 in=transformed@80:7 how=member
 85:20-85:24  type  'task' -> task@51:8 in=await@85:25
@@ -46,8 +46,8 @@
 85:38-85:46  operator  'co_await' def=operator co_await@45:7
 85:38-85:46  operator  'co_await' -> (builtin) spec=await<Plain>@85:25 how=builtin
 85:38-85:46  operator  'co_await' -> Mem::operator co_await@42:9 spec=await<Mem>@85:25 how=member
-85:38-85:46  operator  'co_await' -> ns::operator co_await@48:7 spec=await<ns::Free>@85:25 how=adl
-85:38-85:46  operator  'co_await' -> operator co_await@45:7 spec=await<Glob>@85:25
+85:38-85:46  operator  'co_await' -> ns::operator co_await@48:7 spec=await<ns::Free>@85:25 how=adl adl-ns=ns@46:11 adl-cls=ns::Free@47:8
+85:38-85:46  operator  'co_await' -> operator co_await@45:7 spec=await<Glob>@85:25 how=both adl-ns=:: adl-cls=Glob@44:8
 86:20-86:24  type  'task' -> task@51:8 in=never@86:25
 86:31-86:32  type  'T' -> T@86:17 in=t@86:33
 86:47-86:48  expr  't' -> t@86:33 in=never@86:25

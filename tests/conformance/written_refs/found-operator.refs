@@ -19,7 +19,7 @@
 14:46-14:47  expr  't' -> t@14:34 in=expr_form@14:22
 14:50-14:51  expr  't' -> t@14:34 in=expr_form@14:22
 14:48-14:49  operator  '+' -> (dependent) in=expr_form@14:22 def=0+adl
-14:48-14:49  operator  '+' -> lib::operator+@10:3 spec=expr_form<lib::X>@14:22 how=adl
+14:48-14:49  operator  '+' -> lib::operator+@10:3 spec=expr_form<lib::X>@14:22 how=adl adl-ns=lib@8:11 adl-cls=lib::X@9:8
 16:3-16:12  expr  'call_form' -> call_form<lib::X>@13:22 found=call_form@13:22 in=run@15:6 adl-ns=lib@8:11 adl-cls=lib::X@9:8
 16:13-16:16  nns  'lib' -> lib@8:11 in=run@15:6
 16:18-16:19  type  'X' -> lib::X@9:8 q=16:13 in=run@15:6

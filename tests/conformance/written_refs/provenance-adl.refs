@@ -65,7 +65,7 @@
 93:16-93:17  expr  's' -> s@61:18 in=calls@61:6
 94:10-94:11  expr  's' -> s@61:18 in=calls@61:6
 94:14-94:15  expr  's' -> s@61:18 in=calls@61:6
-94:12-94:13  operator  '+' -> n1::operator+@11:3 in=calls@61:6 how=adl
+94:12-94:13  operator  '+' -> n1::operator+@11:3 in=calls@61:6 how=adl adl-ns=n1@8:11 adl-cls=n1::S@9:8
 99:29-99:30  type  'T' -> T@99:17 in=(anonymous)@99:30
 103:18-103:21  expr  'unn' -> n9::unn<(unnamed enum at tests/conformance/written_refs/provenance-adl.cpp:98:1)>@99:25 found=n9::unn@99:25 in=unnamed@103:6 how=adl adl-ns=n9@97:11 adl-enum=(anonymous)@98:1
 103:22-103:24  nns  'n9' -> n9@97:11 in=unnamed@103:6

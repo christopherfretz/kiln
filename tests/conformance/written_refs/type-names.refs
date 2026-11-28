@@ -28,6 +28,7 @@
 37:35-37:36  expr  'p' -> app::p@35:8 in=app::x@37:8
 37:57-37:60  type  'Rec' -> lib::Rec@13:8 found=app::Rec@27:12 in=app::x@37:8
 37:64-37:65  expr  'q' -> app::q@36:14 in=app::x@37:8
+37:63-37:64  operator  '&' -> (builtin) in=app::x@37:8 how=builtin adl-ns=lib@12:11 adl-cls=lib::Rec@13:8
 37:68-37:69  member  'n' -> lib::Rec::n@14:7 in=app::x@37:8
 38:3-38:4  expr  'x' -> app::x@37:8 in=app::sum@33:7
 38:15-38:18  type  'Rec' -> lib::Rec@13:8 found=app::Rec@27:12 in=app::sum@33:7

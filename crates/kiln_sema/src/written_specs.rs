@@ -10,8 +10,8 @@ use kiln_ast::decl::{DeclFlags, DeclKind, FriendTarget};
 use kiln_ast::expr::ExprKind;
 use kiln_ast::types::Nns;
 use kiln_ast::written_refs::{
-    PatternNode, QualLink, REF_DEPENDENT, REF_MEMBER, REF_UNRESOLVED, RefLookup, SPEC_BUILTIN,
-    ScopeRef, SpecRef, SpecRefId, SubstRef, WrittenRefId,
+    AdlSet, PatternNode, QualLink, REF_DEPENDENT, REF_MEMBER, REF_UNRESOLVED, RefLookup,
+    SPEC_BUILTIN, ScopeRef, SpecRef, SpecRefId, SubstRef, WrittenRefId,
 };
 use kiln_ast::{DeclId, ExprId, NnsId, QualType};
 use kiln_source::Loc;
@@ -478,18 +478,18 @@ impl Sema<'_, '_> {
         found: Option<DeclId>,
         naming_class: Option<DeclId>,
     ) -> WrittenPush {
-        self.push_written_spec_with(w, keys, entity, found, 0, None, naming_class)
+        self.push_written_spec_with(w, keys, entity, found, 0, None, naming_class, None)
     }
 
     /// [`Self::push_written_spec`] with a dependent operator's facts
     /// (spec/ast.md §18.13.6): `flags` (`REWRITTEN`, `REVERSED`,
     /// `SPEC_BUILTIN`, which makes the row entity-less and `how`
-    /// `Builtin`) and the `how` its call's facts give (`Member` for a
-    /// member function, `Adl` for a candidate argument-dependent lookup
-    /// alone found; `None`: as for a name). The row goes to the
-    /// per-specialization table under `keys.spec` and to the key scope
-    /// `keys.key` (spec/ast.md §18.14.3), where an unresolved name fails
-    /// the substitution instead.
+    /// `Builtin`), `how` (`Member` for a member function, `Adl` or `Both`
+    /// from ADL; `None`: as for a name), `naming_class` for member/qualified
+    /// class lookups, and `adl` (the associated set when ADL ran). The row
+    /// goes to the per-specialization table under `keys.spec` and to the key
+    /// scope `keys.key` (spec/ast.md §18.14.3), where an unresolved name
+    /// fails the substitution instead.
     #[allow(clippy::too_many_arguments, reason = "row fields")]
     pub(crate) fn push_written_spec_with(
         &mut self,
@@ -500,6 +500,7 @@ impl Sema<'_, '_> {
         flags: u8,
         how: Option<RefLookup>,
         naming_class: Option<DeclId>,
+        adl: Option<AdlSet>,
     ) -> WrittenPush {
         let r = *self.ast.written_refs.get(w);
         let builtin = flags & SPEC_BUILTIN != 0;
@@ -507,13 +508,14 @@ impl Sema<'_, '_> {
         let flags = (r.flags & REF_MEMBER)
             | flags
             | if entity.is_none() && !builtin { REF_UNRESOLVED } else { 0 };
+        let adl_id = adl.map(|set| self.ast.written_refs.intern_adl(set));
         let mut row = SpecRef {
             entry: w,
             // A keyed row alone drops the specialization (`SubstRef::of_spec`).
             spec: keys.spec.unwrap_or(self.ast.tu),
             entity,
             found: found.filter(|&f| Some(f) != entity),
-            adl: None,
+            adl: adl_id,
             udir: None,
             naming_class: None,
             flags,
@@ -547,7 +549,7 @@ impl Sema<'_, '_> {
         // The using-directive ordinary lookup at the definition found the
         // selected declaration through (§18.9.1).
         if let Some(e) = entity
-            && matches!(row.how, RefLookup::Unqualified | RefLookup::Qualified)
+            && matches!(row.how, RefLookup::Unqualified | RefLookup::Both | RefLookup::Qualified)
         {
             let key = self.ast.first(self.ast.strip_shadow(row.found.unwrap_or(e)));
             row.udir = self.ast.written_refs.pattern_udir(w, key);

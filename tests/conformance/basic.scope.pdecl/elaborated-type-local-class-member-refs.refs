@@ -6,6 +6,8 @@
 16:3-16:4  expr  'a' -> a@14:5 in=f@10:6
 16:5-16:6  member  'g' -> f()::A::g@11:19 in=f@10:6
 16:8-16:9  expr  'q' -> q@15:5 in=f@10:6
+16:7-16:8  operator  '&' -> (builtin) in=f@10:6 how=builtin adl-ns=:: adl-cls=Q@11:28
 17:3-17:4  expr  'a' -> a@14:5 in=f@10:6
 17:5-17:7  member  'pq' -> A::pq@11:46 in=f@10:6
 17:11-17:12  expr  'q' -> q@15:5 in=f@10:6
+17:10-17:11  operator  '&' -> (builtin) in=f@10:6 how=builtin adl-ns=:: adl-cls=Q@11:28

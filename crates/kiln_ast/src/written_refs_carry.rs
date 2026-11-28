@@ -618,13 +618,21 @@ mod tests {
     /// role is rejected.
     #[test]
     fn operator_closes_round_trip_and_a_close_off_an_operator_is_rejected() {
-        use crate::written_refs::{REF_REVERSED, REF_REWRITTEN};
+        use crate::written_refs::{REF_BUILTIN, REF_REVERSED, REF_REWRITTEN};
         let mut ast = new_ast();
         ast.written_refs.set_on(true);
         let flags = REF_REWRITTEN | REF_REVERSED;
         let op = WrittenRef { role: RefRole::Operator, flags, ..entry(RefQualifier::NONE) };
         let eo = ast.written_refs.push(op).unwrap();
         ast.written_refs.set_close(eo, Loc::from_raw(7));
+        let bi = WrittenRef {
+            role: RefRole::Operator,
+            entity: None,
+            flags: REF_BUILTIN,
+            how: RefLookup::Builtin,
+            ..entry(RefQualifier::NONE)
+        };
+        let eb = ast.written_refs.push(bi).unwrap();
         let ud = WrittenRef { role: RefRole::UdSuffix, ..entry(RefQualifier::NONE) };
         let eu = ast.written_refs.push(ud).unwrap();
         let bytes = put(&ast);
@@ -633,6 +641,8 @@ mod tests {
         back.get_written_refs(&mut rd, (true, false), 0).expect("read");
         assert_eq!(back.written_refs.close(eo), Some(Loc::from_raw(7)));
         assert_eq!(back.written_refs.get(eo).flags, flags);
+        assert_eq!(back.written_refs.get(eb).flags, REF_BUILTIN);
+        assert_eq!(back.written_refs.get(eb).how, RefLookup::Builtin);
         assert_eq!(back.written_refs.get(eu).role, RefRole::UdSuffix);
         let mut bad = new_ast();
         bad.written_refs.set_on(true);

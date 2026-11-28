@@ -273,6 +273,13 @@ pub const REF_REVERSED: u8 = 16;
 /// declaration of the group holds the name
 /// ([`WrittenRefs::group`], [`WrittenRefs::holders`]; spec/ast.md §18.3.1).
 pub const REF_GROUP: u8 = 32;
+/// [`WrittenRef::flags`]: an `operator` entry whose overload resolution ran
+/// (an operand had class or enumeration type, [over.match.oper]/1-2) and
+/// selected a built-in candidate ([over.built]; spec/ast.md §18.13, WP-3701).
+/// `entity` and `found` are `None`, `how` is [`RefLookup::Builtin`]; dumped
+/// `(builtin)`. Distinguishes a selected built-in candidate from
+/// [`REF_UNRESOLVED`].
+pub const REF_BUILTIN: u8 = 64;
 
 /// A declarator group of two or more declarators (spec/ast.md §18.3.1):
 /// a run of [`WrittenRefs`]' group declarations, the first of which an
@@ -2488,6 +2495,7 @@ impl WrittenRefs {
             match r.entity {
                 Some(d) => decl(d, &mut out),
                 None if r.flags & REF_DEPENDENT != 0 => out.push_str("(dependent)"),
+                None if r.flags & REF_BUILTIN != 0 => out.push_str("(builtin)"),
                 None => out.push_str("(unresolved)"),
             }
             if let Some(f) = r.found {
@@ -3225,6 +3233,29 @@ mod tests {
         assert_ne!(t.push_spec(unresolved), a);
         assert_eq!(t.specs_of(arrow).count(), 2);
         assert_eq!(t.specs_of(arrow).filter(|(_, r)| r.flags & SPEC_BUILTIN != 0).count(), 1);
+        // Non-dependent built-in operator entry (WP-3701): distinct flag bit
+        // from `REF_UNRESOLVED` and `REF_GROUP`.
+        assert_eq!(
+            REF_BUILTIN
+                & (REF_DEPENDENT
+                    | REF_UNRESOLVED
+                    | REF_MEMBER
+                    | REF_REWRITTEN
+                    | REF_REVERSED
+                    | REF_GROUP),
+            0
+        );
+        let bi = t
+            .push(WrittenRef {
+                role: RefRole::Operator,
+                flags: REF_BUILTIN,
+                how: RefLookup::Builtin,
+                ..entry(None)
+            })
+            .unwrap();
+        assert_eq!(t.get(bi).flags & REF_BUILTIN, REF_BUILTIN);
+        assert_eq!(t.get(bi).flags & REF_UNRESOLVED, 0);
+        assert_eq!(t.get(bi).how, RefLookup::Builtin);
     }
 
     fn el(decl: u32, found: u32) -> FoundDecl {
