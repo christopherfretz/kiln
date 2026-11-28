@@ -1387,6 +1387,15 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- `Ast::decl_written_exprs` now keeps expressions written around a
+  deduced placeholder (spec/types.md §8.4, WP-3640): array bounds in a
+  declarator (`auto (*p)[f(1)] = &a;`), type-constraint arguments on a
+  deduced variable (`C<f(1)> auto v = w;`) or deduced return type
+  (`C<f(1)> auto g() { return 0; }`), and their template instantiations
+  are preserved in `ColdDeclData::written_decl_type`
+  (`DeclArena::written_decl_type`) when the deduced part contains at
+  least one written expression, and carried by PCH snapshots
+  (`FORMAT_VERSION` 188) and module images (`IMAGE_VERSION` 102).
 - `Ast::decl_written_exprs` no longer descends into a function's deduced
   return type (`FnSpec::return_deduced()`, spec/types.md §8.4, WP-3641):
   a function, member function, lambda call operator or function template

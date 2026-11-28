@@ -8864,6 +8864,9 @@ impl Sema<'_, '_> {
             None => return,
         };
         self.ast.decls.mark_var(v, VarSpec::new().with_placeholder(kind));
+        if self.ast.types.has_written_exprs(declared) {
+            self.builder().set_written_decl_type(v, declared);
+        }
     }
 
     /// `auto x = e;` ([dcl.type.auto.deduct]): deduces through the

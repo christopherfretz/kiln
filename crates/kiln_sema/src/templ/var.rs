@@ -221,6 +221,13 @@ impl Sema<'_, '_> {
             // dependent operand substituted (clang `InstantiateAttrs`).
             if ty.is_ok() {
                 sub.var_align_attrs(spec, pattern);
+                if !sub.sema.contains_placeholder(pty)
+                    && let Some(pw) = sub.sema.ast.decls.written_decl_type(pattern)
+                    && let Ok(sw) = sub.ty(pw, ploc)
+                    && sub.sema.ast.types.has_written_exprs(sw)
+                {
+                    sub.sema.builder().set_written_decl_type(spec, sw);
+                }
             }
             ty
         });

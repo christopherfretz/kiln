@@ -197,6 +197,13 @@ struct DeclNode {        // 28 bytes
   written in or its qualifier names (WP-2725, WP-2626).
   `DeclArena::written_ns(d)` reads it, `set_written_ns` records it.
   Codegen's visibility walk starts there (spec/codegen.md §8).
+- The declared type as written (sugar and placeholder included) of a
+  deduced-placeholder variable or deduced-return function is stored in
+  `ColdDeclData::written_decl_type: ColdMap<DeclId, QualType>` (memory
+  row `written_decl_type`; snapshots and module images carry it;
+  `DeclArena::written_decl_type(d)`, `AstBuilder::set_written_decl_type`;
+  spec/types.md §8.4, WP-3640) only when the deduced part contains at
+  least one written expression.
 - Source range: the begin location (decl-specifiers start) is in the
   payload of kinds that need it for diagnostics; the end is computed.
 - Identifier namespace (IDNS: ordinary / tag / member / namespace / label

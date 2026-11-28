@@ -3892,6 +3892,15 @@ impl<'a> AstBuilder<'a> {
         }
     }
 
+    /// Records the declared type as written `ty` (sugar and placeholder
+    /// included) of declaration `d`, when its deduced part carries at
+    /// least one written expression
+    /// ([`crate::decl::ColdDeclData::written_decl_type`], spec/types.md
+    /// §8.4, WP-3640); a second record for `d` is ignored.
+    pub fn set_written_decl_type(&mut self, d: DeclId, ty: QualType) {
+        let _ = self.ast.decls.cold.written_decl_type.insert(d, ty);
+    }
+
     /// Records the type as written `ty` of named or functional cast `e`
     /// ([`crate::expr::ColdExprData::cast_written`]); a second record for
     /// the same cast is ignored.

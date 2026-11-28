@@ -776,6 +776,7 @@ impl Sema<'_, '_> {
         if placeholder {
             self.declared_returns.entry(first).or_insert(p.ret());
         }
+        let write_ret = placeholder && self.ast.types.has_written_exprs(p.ret());
         let nty = self.ast.types.function(ret, &params, p.info(), exc);
         let nty = self.with_cc_sugar_of(nty, fty);
         let redecls: Vec<DeclId> = self.ast.redecls_of(f).collect();
@@ -787,6 +788,9 @@ impl Sema<'_, '_> {
             // is not part of.
             if placeholder && self.ast.decls.function(d).is_some() {
                 self.ast.decls.mark_function(d, deduced);
+                if write_ret {
+                    self.builder().set_written_decl_type(d, fty);
+                }
             }
         }
         self.finish_source_locs(f);
