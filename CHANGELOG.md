@@ -1387,6 +1387,14 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- A class that inherits constructors from a base whose default constructor is
+  a template with defaulted parameters (such as `std::pair`) no longer
+  requires a nested class's default member initializers inside the enclosing
+  class definition (regression since `1f2951a7b`, WP-3685): evaluating a
+  special member's implicit exception specification (`SynthKind::ExceptionSpec`,
+  clang `ExceptionSpecEvaluation`) no longer breaks out of an enclosing SFINAE
+  context such as `__is_constructible` (implicit definitions and
+  `SynthKind::Declaring` still end SFINAE, matching clang `isSFINAEContext`).
 - `Ast::decl_written_exprs` no longer descends into a function's deduced
   return type (`FnSpec::return_deduced()`, spec/types.md §8.4, WP-3641):
   a function, member function, lambda call operator or function template

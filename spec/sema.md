@@ -5878,7 +5878,9 @@ specializations ([class.mem.general]/7, [except.spec]/13, [temp.inst]/14):
     using-declared `B& operator=(int)`; clang 19 also hides a template
     differing only in its return type, gcc does not). Otherwise the two
     overload and both are candidates. A member template is compared as
-    the `FunctionTemplate`, not its pattern. Either order gives one
+    the `FunctionTemplate`, not its pattern; the hiding comparison
+    (`member_hides_using_target`, `hides_ctor`) is purely declarative (no
+    deduction and no default template argument substitution). Either order gives one
     record (WP-3145): the shadow is made and marked hidden by the member
     (`Decls::hidden_shadow`), by a member declared after the
     using-declarator (`check_using_shadow_conflict`, from ordinary member

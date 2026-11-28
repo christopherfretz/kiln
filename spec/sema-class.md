@@ -1822,7 +1822,16 @@ using-declarators), `class/inhctor.rs` (the inheriting constructor),
   for an earlier one (the shadow is made and marked at once), by
   `hide_inherited_ctors` at `}` for a later one, including the implicit
   ones declared there (`HAS_INHERITED_CTOR` declares the default, copy
-  and move constructors eagerly, so the marks never depend on a use). A
+  and move constructors eagerly, so the marks never depend on a use). The
+  hiding comparison (`hides_ctor`) is purely declarative (no deduction, no
+  default template argument substitution), and evaluating a nested class's
+  implicit exception specification during the eager default constructor's
+  deletion check stays inside an enclosing SFINAE context (WP-3685,
+  spec/sema-templates.md §5.7.3; tests
+  `namespace.udecl/inherited-ctor-template-nested-nsdmi-cxx17-run.cpp`,
+  `namespace.udecl/inherited-ctor-template-nested-nsdmi-cxx20-run.cpp`,
+  `namespace.udecl/inherited-ctor-std-pair-nested-nsdmi-cxx17-run.cpp`,
+  `namespace.udecl/inherited-ctor-std-pair-nested-nsdmi-cxx20-run.cpp`). A
   hidden shadow stays in the record (`Ast::using_shadows`) and is dropped
   from lookup, from the constructors a further derived class inherits
   (`ctor_shadows`) and from the dump (clang `HideUsingShadowDecl`; clang

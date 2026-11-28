@@ -467,6 +467,47 @@ fn this_in_requires_expression_keeps_the_lambda_expr_prim_req_general_5() {
     }
 }
 
+/// WP-3685 ([except.spec]/7, [temp.deduct.general]/8): evaluating a special
+/// member's implicit exception specification (`SynthKind::ExceptionSpec`,
+/// clang `ExceptionSpecEvaluation`) does not break an enclosing SFINAE
+/// context. When a class inheriting a constructor template with defaulted
+/// parameters triggers `__is_constructible(Data)` on a nested class inside
+/// the enclosing class definition, the unavailable default member
+/// initializers are a substitution failure, not a hard error, and the
+/// fields stay valid.
+#[test]
+fn exception_spec_eval_is_transparent_to_sfinae_wp3685() {
+    let ast = clean(
+        "template <bool B, class T = void> struct enable_if {};\n\
+         template <class T> struct enable_if<true, T> { using type = T; };\n\
+         template <class T> struct is_dc { static constexpr bool value = __is_constructible(T); };\n\
+         template <class T1, class T2> struct pair {\n\
+           T1 first; T2 second;\n\
+           template <class U1 = T1, class U2 = T2,\n\
+                     typename enable_if<is_dc<U1>::value && is_dc<U2>::value, bool>::type = true>\n\
+           constexpr pair() : first(), second() {}\n\
+         };\n\
+         template <class K, class V> struct DP : pair<K, V> { using pair<K, V>::pair; };\n\
+         template <class K, class V> struct Map { char s[sizeof(DP<K, V>)]; };\n\
+         struct M {\n\
+           struct Data { bool H = false; unsigned ID = 0; };\n\
+           Map<const int *, Data> Info;\n\
+         };\n\
+         struct N {\n\
+           struct Inner { int x = 1; };\n\
+           static constexpr bool ok = __is_constructible(Inner);\n\
+           static_assert(!ok);\n\
+         };\n\
+         int main() { M m; M::Data d; N::Inner i; return d.H + d.ID + i.x - 1; }\n",
+    );
+    for fname in ["H", "ID", "x"] {
+        let fields = named(&ast, DeclKind::Field, fname);
+        assert_eq!(fields.len(), 1, "field {fname}");
+        assert!(!invalid(&ast, fields[0]), "field {fname} stayed valid");
+        assert_eq!(ast.decls.subst_failed(fields[0]), None);
+    }
+}
+
 /// The kinds' values are fixed (spec/ast.md §4.1) and round-trip.
 #[test]
 fn kind_values_are_fixed() {

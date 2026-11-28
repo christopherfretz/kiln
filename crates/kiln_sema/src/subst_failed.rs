@@ -276,14 +276,16 @@ impl Sema<'_, '_> {
     }
 
     /// Whether an error emitted now is a substitution failure: the
-    /// innermost frame that says is a SFINAE frame, and no implicit
-    /// definition was begun above it (clang `isSFINAEContext`: an
-    /// implicitly defined special member or comparison,
-    /// `DefiningSynthesizedFunction`, is no SFINAE context, also when a
-    /// deduction made it needed).
+    /// innermost frame that says is a SFINAE frame, and no non-SFINAE
+    /// synthesis context was begun above it (clang `isSFINAEContext`: an
+    /// implicitly defined special member, comparison or inheriting
+    /// constructor, `DefiningSynthesizedFunction`, or an implicit
+    /// special-member declaration, `DeclaringSpecialMember`, is no SFINAE
+    /// context, also when a deduction made it needed; `ExceptionSpec`,
+    /// `ExceptionSpecEvaluation`, is transparent to SFINAE).
     pub(crate) fn sfinae_traps(&self) -> bool {
         let Some(i) = self.inst.stack.innermost_sfinae_frame() else { return false };
-        self.synth.last().is_none_or(|c| c.inst_depth <= i)
+        !self.synth.iter().any(|c| c.inst_depth > i && c.kind.ends_sfinae())
     }
 
     /// Opens a SFINAE context (§5.7): its errors are counted, not printed.
