@@ -267,7 +267,22 @@ clang's `CodeGenModule` pipeline:
    emitted waits in `to_emit` (clang `MayBeEmittedEagerly`). An in-class
    `used` definition of a non-template class is emitted after the
    class's static data members (`emit_used_inline_defs`;
-   spec/landed/codegen/WP-1430.md).
+   spec/landed/codegen/WP-1430.md). Member functions of a local class
+   ([class.local], including nested classes) carrying GNU `constructor`,
+   `destructor` or `used` (and `used` constructors/destructors) are
+   likewise emission roots wherever declared — inside non-inline,
+   inline, `constexpr`, `consteval`, member, lambda and instantiated
+   template bodies — without forcing emission of an unused enclosing
+   function and without emitting uninstantiated template patterns
+   (`emit_local_class_forced_defs_for`,
+   `emit_remaining_local_class_forced_defs`, WP-3687; local classes owned
+   by an imported named-module unit are skipped in importers because the
+   module's own object emits them, while headers/PCH and importer-side
+   template instantiations are emitted;
+   `tests/conformance/ext.gnu.constructor/local-class-ctor-dtor-used-run.cpp`,
+   `tests/conformance/module.interface/local-class-ctor-used-run.cpp`,
+   `tests/conformance/cpp.include/pch-local-class-forced-run.cpp`,
+   `tests/codegen/local_class_forced_emit.cpp`).
 4. **`emit_deferred`** (clang `EmitDeferred`): deferred vtables first,
    then `to_emit`, recursing depth-first into the names each definition
    newly references.
