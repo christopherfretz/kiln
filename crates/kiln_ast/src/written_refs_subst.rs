@@ -384,6 +384,7 @@ impl WrittenRefs {
                 }
                 l.push_str(" key=");
                 Self::write_key(k, ast, names, pos, &mut l);
+                Self::dump_naming_class(sr.entity, sr.naming_class, ast, names, pos, &mut l);
                 dump_rewrite_flags(sr.flags, &mut l);
                 if sr.how != sr.default_how(r) {
                     l.push_str(" how=");
@@ -539,6 +540,7 @@ mod tests {
             found: None,
             adl: None,
             udir: None,
+            naming_class: None,
             flags: 0,
             how: RefLookup::Unqualified,
         }
@@ -548,11 +550,12 @@ mod tests {
         ArgListId::new(n)
     }
 
-    /// spec/ast.md §18.14.1: a key and a keyed row are 24 bytes each.
+    /// spec/ast.md §18.14.1, §18.14.2: a key is 24 bytes and a keyed row is
+    /// 28 bytes.
     #[test]
     fn sizes() {
         assert_eq!(size_of::<SubstKey>(), 24);
-        assert_eq!(size_of::<SubstRef>(), 24);
+        assert_eq!(size_of::<SubstRef>(), 28);
         // §18.14.10: a root slot is 12 bytes, a root's span 8.
         assert_eq!(size_of::<RootSlot>(), 12);
     }

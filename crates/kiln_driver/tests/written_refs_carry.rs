@@ -561,3 +561,152 @@ fn a_module_compiled_without_keys_is_a_key_gap() {
         assert!(used.stdout.contains("2:18-2:20  nns  'rm' -> rm@rm.cppm:2:18"), "{}", used.stdout);
     }
 }
+
+/// spec/ast.md §18.9.1, §18.14.2 (WP-3695): `SpecRef::naming_class` and
+/// `SubstRef::naming_class` survive a PCH snapshot round-trip.
+#[test]
+fn naming_class_round_trips_through_pch() {
+    let dir = scratch("naming-class-pch");
+    let hdr = "\
+namespace n {\n\
+template <class T> struct S { static int s(); };\n\
+}\n\
+template <class B> struct Der : B {};\n\
+template <class T> using A = decltype(T::s());\n\
+template <class T> auto call() -> decltype(T::s());\n\
+template <class T, class = void> struct P { static const int v = 0; };\n\
+template <class T> struct P<T, decltype(void(T::s()))> { static const int v = 1; };\n\
+inline A<Der<n::S<int>>> a0 = 0;\n\
+inline int p0 = P<Der<n::S<int>>>::v;\n";
+    let main = "int c1 = call<Der<n::S<int>>>();\n";
+    std::fs::write(dir.join("h.h"), hdr).unwrap();
+    std::fs::write(dir.join("u.cpp"), main).unwrap();
+
+    let pre = kiln(
+        &dir,
+        &["-std=c++20", "-fkiln-written-ref-keys", "-x", "c++-header", "h.h", "-o", "h.pch"],
+    );
+    assert_eq!(pre.code, 0, "{}", pre.stderr);
+    let via_pch = kiln(
+        &dir,
+        &[
+            "-std=c++20",
+            "-fsyntax-only",
+            "-fkiln-written-ref-keys",
+            "-fkiln-dump-written-refs",
+            "-include-pch",
+            "h.pch",
+            "u.cpp",
+        ],
+    );
+    assert_eq!(via_pch.code, 0, "{}", via_pch.stderr);
+    assert!(
+        via_pch.stderr.contains("snapshot-timing: note: matches; restoring it"),
+        "{}",
+        via_pch.stderr
+    );
+    let direct = kiln(
+        &dir,
+        &[
+            "-std=c++20",
+            "-fsyntax-only",
+            "-fkiln-written-ref-keys",
+            "-fkiln-dump-written-refs",
+            "-include",
+            "h.h",
+            "u.cpp",
+        ],
+    );
+    assert_eq!(direct.code, 0, "{}", direct.stderr);
+    assert_eq!(via_pch.stdout, direct.stdout, "PCH dump parity");
+    assert!(
+        via_pch.stdout.contains("spec=A@h.h:5:26 naming=Der<n::S<int>>@h.h:4:27"),
+        "{}",
+        via_pch.stdout
+    );
+    assert!(
+        via_pch.stdout.contains(
+            "key=partial:P@h.h:8:27<Der<n::S<int>>, void> naming=Der<n::S<int>>@h.h:4:27"
+        ),
+        "{}",
+        via_pch.stdout
+    );
+}
+
+/// spec/ast.md §18.9.1, §18.14.2 (WP-3695): `SpecRef::naming_class` and
+/// `SubstRef::naming_class` survive a module declaration image
+/// (`-fkiln-bmi-image`) round-trip.
+#[test]
+fn naming_class_round_trips_through_module_image() {
+    let dir = scratch("naming-class-bmi");
+    let mod_src = "\
+export module nm;\n\
+export namespace n {\n\
+template <class T> struct S { static int s(); int f() const; using type = void; };\n\
+template <class B> struct Der : B {};\n\
+template <class T> using Ty = typename T::type;\n\
+template <class T> int call(const T &t) { return t.f() + T::s(); }\n\
+template <class T, class = void> struct P { static const int v = 0; };\n\
+template <class T> struct P<T, typename T::type> { static const int v = 1; };\n\
+inline Ty<Der<S<int>>> *t0 = nullptr;\n\
+inline int c0 = call(Der<S<int>>{});\n\
+inline int p0 = P<Der<S<int>>>::v;\n\
+}\n";
+    let imp_src = "import nm;\nstruct ImpDer : n::S<int> {};\nint c1 = n::call(ImpDer{});\n";
+    std::fs::write(dir.join("nm.cppm"), mod_src).unwrap();
+    std::fs::write(dir.join("imp.cpp"), imp_src).unwrap();
+    let made = kiln(
+        &dir,
+        &[
+            "-std=c++20",
+            "-fkiln-bmi-image",
+            "--precompile",
+            "-fkiln-written-ref-keys",
+            "-x",
+            "c++-module",
+            "nm.cppm",
+            "-o",
+            "nm.pcm",
+        ],
+    );
+    assert_eq!(made.code, 0, "{}", made.stderr);
+    let used = kiln(
+        &dir,
+        &[
+            "-std=c++20",
+            "-fsyntax-only",
+            "-v",
+            "-fkiln-bmi-image",
+            "-fkiln-dump-written-refs",
+            "-fkiln-written-ref-keys",
+            "-fmodule-file=nm=nm.pcm",
+            "imp.cpp",
+        ],
+    );
+    assert_eq!(used.code, 0, "{}", used.stderr);
+    assert!(used.stderr.contains("imported 'nm' from its declaration image"), "{}", used.stderr);
+    assert!(
+        used.stdout.contains("spec=n::Ty@nm.cppm:5:26 naming=n::Der<n::S<int>>@nm.cppm:4:27"),
+        "{}",
+        used.stdout
+    );
+    assert!(
+        used.stdout.contains(
+            "spec=n::call<n::Der<n::S<int>>>@nm.cppm:6:24 naming=n::Der<n::S<int>>@nm.cppm:4:27"
+        ),
+        "{}",
+        used.stdout
+    );
+    assert!(
+        used.stdout.contains(
+            "key=partial:n::P@nm.cppm:8:27<n::Der<n::S<int>>, void> naming=n::Der<n::S<int>>@nm.cppm:4:27"
+        ),
+        "{}",
+        used.stdout
+    );
+    assert!(
+        used.stdout.contains("spec=n::call<ImpDer>@nm.cppm:6:24 naming=ImpDer@2:8"),
+        "{}",
+        used.stdout
+    );
+}

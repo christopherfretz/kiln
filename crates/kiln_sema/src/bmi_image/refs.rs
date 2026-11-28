@@ -48,7 +48,7 @@ const Q_SPEC: u32 = NONE - 2;
 
 /// The fixed size of an entry, a row and a node (for `count`).
 const ENTRY_BYTES: usize = 8 * 4 + 3;
-const SPEC_BYTES: usize = 6 * 4 + 2;
+const SPEC_BYTES: usize = 7 * 4 + 2;
 const UDIR_BYTES: usize = 3 * 4;
 const NODE_BYTES: usize = 1 + 2 * 4;
 const LEAD_BYTES: usize = 7 * 4;
@@ -59,7 +59,7 @@ const GROUP_BYTES: usize = 1 + 2 * 4;
 /// The smallest key (no arguments, no deduced list, no root slot) and a
 /// keyed row.
 const KEY_BYTES: usize = 2 + 4 + 4 + 4 + 1 + 4 + 4;
-const KEY_ROW_BYTES: usize = 5 * 4 + 2;
+const KEY_ROW_BYTES: usize = 6 * 4 + 2;
 
 /// One entry: `lo, hi, entity, found, enclosing, qualifier, udir, adl`
 /// (declaration words, the qualifier an earlier entry's index,
@@ -74,11 +74,11 @@ pub(super) struct EntryRec {
     how: u8,
 }
 
-/// One per-specialization row: `entry, spec, entity, found, adl, udir`,
-/// flags, `how`.
+/// One per-specialization row: `entry, spec, entity, found, adl, udir,
+/// naming_class`, flags, `how`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) struct SpecRec {
-    words: [u32; 6],
+    words: [u32; 7],
     flags: u8,
     how: u8,
 }
@@ -169,10 +169,11 @@ pub(super) enum SlotRec {
     Args(Vec<ArgRec>),
 }
 
-/// One keyed row: `entry, entity, found, adl, udir`, flags, `how`.
+/// One keyed row: `entry, entity, found, adl, udir, naming_class`, flags,
+/// `how`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) struct KeyRowRec {
-    words: [u32; 5],
+    words: [u32; 6],
     flags: u8,
     how: u8,
 }
@@ -312,6 +313,7 @@ impl Writer<'_, '_, '_> {
                     self.ref_opt(s.found)?,
                     adl?,
                     self.ref_opt(s.udir)?,
+                    self.ref_opt(s.naming_class)?,
                 ])
             })();
             // A specialization the image does not carry: the importer
@@ -366,6 +368,7 @@ impl Writer<'_, '_, '_> {
                         self.ref_opt(r.found)?,
                         adl,
                         self.ref_opt(r.udir)?,
+                        self.ref_opt(r.naming_class)?,
                     ];
                     recs.push(KeyRowRec { words, flags: r.flags, how: r.how as u8 });
                 }
@@ -708,7 +711,7 @@ pub(super) fn decode_refs(r: &mut Rd, want: bool) -> Res<Refs> {
         t.entries.push(EntryRec { words, role: r.u8()?, flags: r.u8()?, how: r.u8()? });
     }
     for _ in 0..r.count(SPEC_BYTES)? {
-        let mut words = [0; 6];
+        let mut words = [0; 7];
         for x in &mut words {
             *x = r.u32()?;
         }
@@ -789,7 +792,7 @@ fn decode_keys(r: &mut Rd<'_>, t: &mut RefsRec) -> Res<()> {
         t.keys.push(KeyRec { kind, outcome, template, args, extra, deduced, rows, root });
     }
     for _ in 0..r.count(KEY_ROW_BYTES)? {
-        let mut words = [0; 5];
+        let mut words = [0; 6];
         for x in &mut words {
             *x = r.u32()?;
         }
@@ -828,12 +831,13 @@ pub(super) fn validate_refs(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Res<
     });
     let ne = t.entries.len() as u32;
     let ok_specs = t.specs.iter().all(|s| {
-        let [entry, spec, entity, found, adl, udir] = s.words;
+        let [entry, spec, entity, found, adl, udir, naming] = s.words;
         entry < ne
             && word_ok(spec)
             && d_ok(entity)
             && d_ok(found)
             && d_ok(udir)
+            && d_ok(naming)
             && (adl == NONE || adl < ns)
             && RefLookup::from_u8(s.how).is_some()
     });
@@ -958,12 +962,13 @@ fn keys_ok(
             }
     }) && t.keys.iter().map(|k| u64::from(k.rows)).sum::<u64>() == t.key_rows.len() as u64
         && t.key_rows.iter().all(|r| {
-            let [entry, entity, found, adl, udir] = r.words;
+            let [entry, entity, found, adl, udir, naming] = r.words;
             entry < ne
                 && t.entries[entry as usize].flags & REF_DEPENDENT != 0
                 && d_ok(entity)
                 && d_ok(found)
                 && d_ok(udir)
+                && d_ok(naming)
                 && (adl == NONE || adl < ns)
                 && RefLookup::from_u8(r.how).is_some()
         })
@@ -1098,7 +1103,7 @@ impl Sema<'_, '_> {
     /// The unit's per-specialization rows (spec/ast.md §18.9).
     fn image_specs(&mut self, t: &RefsRec, pushed: &[WrittenRefId], (dec, set): RefMaps<'_>) {
         for s in &t.specs {
-            let [entry, spec, entity, found, adl, udir] = s.words;
+            let [entry, spec, entity, found, adl, udir, naming] = s.words;
             let Some(spec) = dec(spec) else { continue };
             let adl = if adl == NONE { None } else { set(adl) };
             let adl = adl.map(|a| self.ast.written_refs.intern_adl(a));
@@ -1109,6 +1114,7 @@ impl Sema<'_, '_> {
                 found: dec(found),
                 adl,
                 udir: dec(udir),
+                naming_class: dec(naming),
                 flags: s.flags,
                 how: RefLookup::from_u8(s.how).unwrap_or_default(),
             });
@@ -1161,7 +1167,7 @@ impl Sema<'_, '_> {
                     root.push(self.image_root_slot(img, tys, cx.ids, x)?);
                 }
                 for r in recs {
-                    let [entry, entity, found, adl, udir] = r.words;
+                    let [entry, entity, found, adl, udir, naming] = r.words;
                     let adl = if adl == NONE { None } else { Some(set(adl)?) };
                     rows.push(SubstRef {
                         entry: pushed[entry as usize],
@@ -1169,6 +1175,7 @@ impl Sema<'_, '_> {
                         found: dec(found),
                         adl: adl.map(|a| self.ast.written_refs.intern_adl(a)),
                         udir: dec(udir),
+                        naming_class: dec(naming),
                         flags: r.flags,
                         how: RefLookup::from_u8(r.how).unwrap_or_default(),
                     });
@@ -1370,7 +1377,7 @@ mod tests {
                     how: 1,
                 },
             ],
-            specs: vec![SpecRec { words: [1, 7, 1, NONE, NONE, NONE], flags: 0, how: 1 }],
+            specs: vec![SpecRec { words: [1, 7, 1, NONE, NONE, NONE, 7], flags: 0, how: 1 }],
             nodes: vec![
                 NodeRec::Expr { entry: 1, expr: 0 },
                 NodeRec::Type { entry: 0, ty: int, loc: 5 },
@@ -1417,8 +1424,8 @@ mod tests {
                 },
             ],
             key_rows: vec![
-                KeyRowRec { words: [1, 1, NONE, 0, NONE], flags: 0, how: 1 },
-                KeyRowRec { words: [1, NONE, NONE, NONE, NONE], flags: 1, how: 0 },
+                KeyRowRec { words: [1, 1, NONE, 0, NONE, 7], flags: 0, how: 1 },
+                KeyRowRec { words: [1, NONE, NONE, NONE, NONE, NONE], flags: 1, how: 0 },
             ],
             keys_left_out: [1, 3],
         }));
@@ -1454,7 +1461,7 @@ mod tests {
     #[test]
     fn written_refs_section_is_validated() {
         type Corrupt = (&'static str, fn(&mut RefsRec));
-        let corrupt: [Corrupt; 48] = [
+        let corrupt: [Corrupt; 50] = [
             ("qualifier after its entry", |t| t.entries[0].words[5] = 0),
             ("unknown role", |t| t.entries[0].role = 99),
             ("unknown lookup", |t| t.entries[1].how = 99),
@@ -1466,6 +1473,7 @@ mod tests {
             ("row of no specialization", |t| t.specs[0].words[1] = NONE),
             ("node past the expressions", |t| t.nodes[0] = NodeRec::Expr { entry: 1, expr: 9999 }),
             ("row directive past the records", |t| t.specs[0].words[5] = 1000),
+            ("row naming class past the records", |t| t.specs[0].words[6] = 1000),
             ("directive of no entry", |t| t.udirs[0][0] = 4),
             ("operator node past the expressions", |t| {
                 t.nodes[3] = NodeRec::Oper { entry: 1, expr: 9999, slot: 0 }
@@ -1505,6 +1513,7 @@ mod tests {
             ("keyed row of no entry", |t| t.key_rows[0].words[0] = 4),
             ("keyed row of an entry that is not dependent", |t| t.key_rows[0].words[0] = 0),
             ("keyed row set past the sets", |t| t.key_rows[0].words[3] = 1),
+            ("keyed row naming class past the records", |t| t.key_rows[0].words[5] = 1000),
             ("keyed row of an unknown lookup", |t| t.key_rows[1].how = 99),
             ("keys from a unit that did not record them", |t| t.keys_on = false),
             // Roots (spec/ast.md §18.14.10, WP-3541).

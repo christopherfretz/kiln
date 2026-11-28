@@ -783,7 +783,7 @@ impl Substituter<'_, '_, '_> {
                     let s = self.sema.ast.using_shadows(i).next();
                     let e = s.map(|s| self.sema.ast.strip_shadow(s));
                     let at = self.written(WrittenKey::Type(q), loc);
-                    self.note_spec_type(q, at, e, s, None);
+                    self.note_spec_type(q, at, e, s, None, None);
                 }
                 Ok(self.decl_type(i))
             }
@@ -838,7 +838,7 @@ impl Substituter<'_, '_, '_> {
                     return Err(SubstFail);
                 }
                 let Some(&d) = found.decls.first() else {
-                    self.note_spec_type(q, loc, None, None, Some(n));
+                    self.note_spec_type(q, loc, None, None, Some(n), None);
                     let d = match self.enable_if_failure(nns, n, name, ctx) {
                         Some(d) => d,
                         None => self
@@ -870,7 +870,14 @@ impl Substituter<'_, '_, '_> {
                     }
                     self.sema.mark_type_referenced(d);
                     self.sema.check_found_access(&found, loc);
-                    self.note_spec_type(q, loc, Some(d), found.found.first().copied(), Some(n));
+                    self.note_spec_type(
+                        q,
+                        loc,
+                        Some(d),
+                        found.found.first().copied(),
+                        Some(n),
+                        found.naming,
+                    );
                     return Ok(self.sema.ctad_placeholder(d, Some(n), (loc, loc)));
                 }
                 if !matches!(
@@ -900,7 +907,14 @@ impl Substituter<'_, '_, '_> {
                 }
                 // What the name resolved to in this specialization
                 // (spec/ast.md §18.9).
-                self.note_spec_type(q, loc, Some(d), found.found.first().copied(), Some(n));
+                self.note_spec_type(
+                    q,
+                    loc,
+                    Some(d),
+                    found.found.first().copied(),
+                    Some(n),
+                    found.naming,
+                );
                 let t = self.decl_type(d);
                 // The keyword is kept as written (clang: `typename S::type`).
                 Ok(self.sema.ast.types.elaborated(keyword, Some(n), t))
@@ -1110,7 +1124,7 @@ impl Substituter<'_, '_, '_> {
                 // `T::template X<args>` ([temp.names]/5): the member
                 // template of the substituted class, diagnosed at `X`.
                 // A non-class qualifier is diagnosed at the `T` (§5.8).
-                self.nns_context(n, self.written(WrittenKey::Nns(nns), loc))?;
+                let ctx = self.nns_context(n, self.written(WrittenKey::Nns(nns), loc))?;
                 let loc = self.written(WrittenKey::Type(q), loc);
                 self.dtor_template_name = no_kw;
                 let d = self.member_template_named(n, name, loc)?;
@@ -1119,7 +1133,7 @@ impl Substituter<'_, '_, '_> {
                 }
                 // `T::template X<U>` names the member template `d` in this
                 // specialization (spec/ast.md §18.9).
-                self.note_spec_type(q, loc, Some(d), None, Some(n));
+                self.note_spec_type(q, loc, Some(d), None, Some(n), Some(ctx));
                 let underlying = self.sema.template_name_for(d);
                 let tn = self.sema.ast.types.template_name(TemplateName::Qualified {
                     nns: n,

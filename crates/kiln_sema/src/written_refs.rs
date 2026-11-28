@@ -827,14 +827,20 @@ impl Sema<'_, '_> {
     /// Overload resolution chose `d` (found as `found`) for the overload
     /// set `x`: patches the entry naming `x` (spec/ast.md §18.4).
     #[inline]
-    pub(crate) fn resolve_written_ref(&mut self, x: ExprId, d: DeclId, found: Option<DeclId>) {
+    pub(crate) fn resolve_written_ref(
+        &mut self,
+        x: ExprId,
+        d: DeclId,
+        found: Option<DeclId>,
+        naming: Option<DeclId>,
+    ) {
         if self.ast.written_refs.has_pending()
             && self.inst.stack.is_empty()
             && let Some(id) = self.ast.written_refs.resolve(x, d, found)
         {
             self.fill_written_provenance(id);
         } else if self.ast.written_refs.has_spec_pending() {
-            self.resolve_written_spec(x, Some(d), found);
+            self.resolve_written_spec(x, Some(d), found, naming);
         }
     }
 

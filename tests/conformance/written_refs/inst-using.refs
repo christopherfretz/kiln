@@ -40,7 +40,7 @@
 35:11-35:12  type  'T' -> T@34:17 in=E::size@35:15
 35:9-35:10  nns  'D' -> D@25:27 in=E::size@35:15
 35:15-35:19  using-decl  'size' -> (dependent) q=35:9 in=E::size@35:15
-35:15-35:19  using-decl  'size' -> V::size@14:7 spec=E<V>@34:27
+35:15-35:19  using-decl  'size' -> V::size@14:7 spec=E<V>@34:27 naming=D<V>@25:27
 36:29-36:33  expr  'size' -> (dependent) in=E::more@36:7 def=1+base+using
 36:29-36:33  expr  'size' def=E::size@35:15
 36:29-36:33  expr  'size' -> V::size@14:7 found=E<V>::size@35:15 spec=E<V>::more@36:7

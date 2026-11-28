@@ -1240,7 +1240,7 @@ impl Sema<'_, '_> {
                 self.emit(self.diag(DiagId::sema_nonconst_member_fn_ptr, b));
                 return Some(self.recover_err(&[m.base], loc));
             }
-            self.resolve_written_ref(x, d, Some(f));
+            self.resolve_written_ref(x, d, Some(f), Some(m.naming));
             let r = self.finish_member_winner(&m, d, f, loc);
             self.keep_template_id_end(x, r);
             return Some(self.rebuild_parens(e, r));

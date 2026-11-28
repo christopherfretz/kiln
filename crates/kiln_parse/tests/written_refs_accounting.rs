@@ -1303,6 +1303,7 @@ fn definition_sets(name: &str, src: &str) -> Option<SetReport> {
             found: r.found,
             adl: r.adl,
             udir: r.udir,
+            naming_class: r.naming_class,
             flags: r.flags,
             how: r.how,
         })

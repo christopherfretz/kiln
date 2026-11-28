@@ -1,0 +1,110 @@
+10:33-10:34  base  'B' -> B@10:17 in=Der@10:27
+11:15-11:16  nns  'n' -> n@7:11 in=Der2@11:8
+11:18-11:19  base  'S' -> n::S@8:27 q=11:15 in=Der2@11:8
+13:39-13:40  nns  'T' -> T@13:17 in=A@13:26
+13:42-13:43  expr  's' -> (dependent) q=13:39 in=A@13:26
+13:42-13:43  expr  's' -> n::S<int>::s@8:42 spec=A@13:26
+13:42-13:43  expr  's' -> n::S<int>::s@8:42 spec=A@13:26 naming=Der2@11:8
+13:42-13:43  expr  's' -> n::S<int>::s@8:42 spec=A@13:26 naming=Der<n::S<int>>@10:27
+14:44-14:45  nns  'T' -> T@14:17 in=call@14:25
+14:47-14:48  expr  's' -> (dependent) q=14:44 in=call@14:25
+14:47-14:48  expr  's' -> n::S<int>::s@8:42 spec=call<Der<n::S<int>>>@14:25 naming=Der<n::S<int>>@10:27
+14:47-14:48  expr  's' -> n::S<int>::s@8:42 spec=call<n::S<int>>@14:25
+20:18-20:26  base  'LeafBase' -> LeafBase@16:8 in=LeafDer@20:8
+27:3-27:10  type  'LeafDer' -> LeafDer@20:8 in=MidBase::a@27:11
+28:3-28:10  type  'LeafDer' -> LeafDer@20:8 in=MidBase::b@28:11
+30:17-30:24  base  'MidBase' -> MidBase@22:8 in=MidDer@30:8
+32:41-32:42  type  'T' -> T@32:17 in=t@32:44
+33:10-33:11  expr  't' -> t@32:44 in=member_use@32:24
+33:12-33:13  member  'f' -> (dependent) in=member_use@32:24
+33:12-33:13  member  'f' -> MidBase::f@23:7 spec=member_use<MidBase>@32:24
+33:12-33:13  member  'f' -> MidBase::f@23:7 spec=member_use<MidDer>@32:24 naming=MidDer@30:8
+33:18-33:19  expr  't' -> t@32:44 in=member_use@32:24
+33:20-33:21  member  'f' -> (dependent) in=member_use@32:24
+33:20-33:21  member  'f' -> MidBase::f@24:7 spec=member_use<MidBase>@32:24
+33:20-33:21  member  'f' -> MidBase::f@24:7 spec=member_use<MidDer>@32:24 naming=MidDer@30:8
+33:16-33:17  operator  '+' -> (dependent) in=member_use@32:24 def=0+adl
+33:16-33:17  operator  '+' -> (builtin) spec=member_use<MidBase>@32:24 how=builtin
+33:16-33:17  operator  '+' -> (builtin) spec=member_use<MidDer>@32:24 how=builtin
+33:27-33:28  expr  't' -> t@32:44 in=member_use@32:24
+33:29-33:30  member  'x' -> (dependent) in=member_use@32:24
+33:29-33:30  member  'x' -> MidBase::x@25:7 spec=member_use<MidBase>@32:24
+33:29-33:30  member  'x' -> MidBase::x@25:7 spec=member_use<MidDer>@32:24 naming=MidDer@30:8
+33:25-33:26  operator  '+' -> (dependent) in=member_use@32:24 def=0+adl
+33:25-33:26  operator  '+' -> (builtin) spec=member_use<MidBase>@32:24 how=builtin
+33:25-33:26  operator  '+' -> (builtin) spec=member_use<MidDer>@32:24 how=builtin
+33:34-33:35  expr  't' -> t@32:44 in=member_use@32:24
+33:36-33:37  operator  '+' -> (dependent) in=member_use@32:24 def=0+adl
+33:36-33:37  operator  '+' -> MidBase::operator+@26:7 spec=member_use<MidBase>@32:24 how=member
+33:36-33:37  operator  '+' -> MidBase::operator+@26:7 spec=member_use<MidDer>@32:24 naming=MidDer@30:8 how=member
+33:31-33:32  operator  '+' -> (dependent) in=member_use@32:24 def=0+adl
+33:31-33:32  operator  '+' -> (builtin) spec=member_use<MidBase>@32:24 how=builtin
+33:31-33:32  operator  '+' -> (builtin) spec=member_use<MidDer>@32:24 how=builtin
+33:43-33:44  expr  't' -> t@32:44 in=member_use@32:24
+33:45-33:46  member  'a' -> (dependent) in=member_use@32:24
+33:45-33:46  member  'a' -> MidBase::a@27:11 spec=member_use<MidBase>@32:24
+33:45-33:46  member  'a' -> MidBase::a@27:11 spec=member_use<MidDer>@32:24 naming=MidDer@30:8
+33:47-33:48  member  'g' -> (dependent) in=member_use@32:24
+33:47-33:48  member  'g' -> LeafBase::g@17:7 spec=member_use<MidBase>@32:24 naming=LeafDer@20:8
+33:47-33:48  member  'g' -> LeafBase::g@17:7 spec=member_use<MidDer>@32:24 naming=LeafDer@20:8
+33:41-33:42  operator  '+' -> (dependent) in=member_use@32:24 def=0+adl
+33:41-33:42  operator  '+' -> (builtin) spec=member_use<MidBase>@32:24 how=builtin
+33:41-33:42  operator  '+' -> (builtin) spec=member_use<MidDer>@32:24 how=builtin
+33:53-33:54  expr  't' -> t@32:44 in=member_use@32:24
+33:55-33:56  member  'a' -> (dependent) in=member_use@32:24
+33:55-33:56  member  'a' -> MidBase::a@27:11 spec=member_use<MidBase>@32:24
+33:55-33:56  member  'a' -> MidBase::a@27:11 spec=member_use<MidDer>@32:24 naming=MidDer@30:8
+33:57-33:58  member  'v' -> (dependent) in=member_use@32:24
+33:57-33:58  member  'v' -> LeafBase::v@18:7 spec=member_use<MidBase>@32:24 naming=LeafDer@20:8
+33:57-33:58  member  'v' -> LeafBase::v@18:7 spec=member_use<MidDer>@32:24 naming=LeafDer@20:8
+33:51-33:52  operator  '+' -> (dependent) in=member_use@32:24 def=0+adl
+33:51-33:52  operator  '+' -> (builtin) spec=member_use<MidBase>@32:24 how=builtin
+33:51-33:52  operator  '+' -> (builtin) spec=member_use<MidDer>@32:24 how=builtin
+36:34-36:35  base  'T' -> T@36:17 in=Host@36:27
+37:34-37:35  member  'f' -> (dependent) in=Host::run@37:7
+37:34-37:35  member  'f' -> MidBase::f@23:7 spec=Host<MidDer>::run@37:7 naming=Host<MidDer>@36:27
+37:46-37:47  member  'x' -> (dependent) in=Host::run@37:7
+37:46-37:47  member  'x' -> MidBase::x@25:7 spec=Host<MidDer>::run@37:7 naming=Host<MidDer>@36:27
+37:38-37:39  operator  '+' -> (dependent) in=Host::run@37:7 def=0+adl
+37:38-37:39  operator  '+' -> (builtin) spec=Host<MidDer>::run@37:7 how=builtin
+37:56-37:57  member  'b' -> (dependent) in=Host::run@37:7
+37:56-37:57  member  'b' -> MidBase::b@28:11 spec=Host<MidDer>::run@37:7 naming=Host<MidDer>@36:27
+37:58-37:59  member  'g' -> (dependent) in=Host::run@37:7
+37:58-37:59  member  'g' -> LeafBase::g@17:7 spec=Host<MidDer>::run@37:7 naming=LeafDer@20:8
+37:48-37:49  operator  '+' -> (dependent) in=Host::run@37:7 def=0+adl
+37:48-37:49  operator  '+' -> (builtin) spec=Host<MidDer>::run@37:7 how=builtin
+40:50-40:51  type  'T' -> T@40:17 in=HasS@40:28
+40:58-40:59  nns  'T' -> T@40:17 in=HasS@40:28
+40:61-40:62  expr  's' -> (dependent) q=40:58 in=HasS@40:28
+40:61-40:62  expr  's' -> n::S<int>::s@8:42 spec=HasS@40:28 naming=Both@41:8
+40:66-40:67  expr  't' -> t@40:53 in=HasS@40:28
+40:68-40:69  member  'f' -> (dependent) in=HasS@40:28
+40:68-40:69  member  'f' -> MidBase::f@23:7 spec=HasS@40:28 naming=Both@41:8
+41:15-41:16  nns  'n' -> n@7:11 in=Both@41:8
+41:18-41:19  base  'S' -> n::S@8:27 q=41:15 in=Both@41:8
+41:26-41:33  base  'MidBase' -> MidBase@22:8 in=Both@41:8
+42:20-42:24  type  'Both' -> Both@41:8 in=static_assert@42:1
+42:15-42:19  concept  'HasS' -> HasS@40:28 in=static_assert@42:1
+44:7-44:8  nns  'n' -> n@7:11 in=a1@44:19
+44:10-44:11  template  'S' -> n::S@8:27 q=44:7 in=a1@44:19
+44:3-44:6  template  'Der' -> Der@10:27 in=a1@44:19
+44:1-44:2  template  'A' -> A@13:26 in=a1@44:19
+45:3-45:7  type  'Der2' -> Der2@11:8 in=a2@45:9
+45:1-45:2  template  'A' -> A@13:26 in=a2@45:9
+46:3-46:4  nns  'n' -> n@7:11 in=a3@46:14
+46:6-46:7  template  'S' -> n::S@8:27 q=46:3 in=a3@46:14
+46:1-46:2  template  'A' -> A@13:26 in=a3@46:14
+47:19-47:20  nns  'n' -> n@7:11 in=c1@47:5
+47:22-47:23  template  'S' -> n::S@8:27 q=47:19 in=c1@47:5
+47:15-47:18  template  'Der' -> Der@10:27 in=c1@47:5
+47:10-47:14  expr  'call' -> call<Der<n::S<int>>>@14:25 found=call@14:25 in=c1@47:5 adl-ns=
+48:15-48:16  nns  'n' -> n@7:11 in=c2@48:5
+48:18-48:19  template  'S' -> n::S@8:27 q=48:15 in=c2@48:5
+48:10-48:14  expr  'call' -> call<n::S<int>>@14:25 found=call@14:25 in=c2@48:5 adl-ns=
+49:10-49:20  expr  'member_use' -> member_use<MidDer>@32:24 found=member_use@32:24 in=m1@49:5 how=both adl-ns=:: adl-cls=MidDer@30:8,MidBase@22:8
+49:21-49:27  type  'MidDer' -> MidDer@30:8 in=m1@49:5
+50:10-50:20  expr  'member_use' -> member_use<MidBase>@32:24 found=member_use@32:24 in=m2@50:5 how=both adl-ns=:: adl-cls=MidBase@22:8
+50:21-50:28  type  'MidBase' -> MidBase@22:8 in=m2@50:5
+51:15-51:21  type  'MidDer' -> MidDer@30:8 in=h1@51:5
+51:10-51:14  template  'Host' -> Host@36:27 in=h1@51:5
+51:25-51:28  member  'run' -> Host<MidDer>::run@37:7 in=h1@51:5
