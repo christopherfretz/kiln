@@ -1387,6 +1387,16 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- Member functions of local classes carrying `__attribute__((constructor))`,
+  `__attribute__((destructor))`, or `__attribute__((used))` (including
+  `[[gnu::used]]` and `__attribute__((used, retain))`, and `used`
+  constructors/destructors) are now emitted with clang's linkage and
+  `@llvm.global_ctors` / `@llvm.global_dtors` / `@llvm.used` /
+  `@llvm.compiler.used` entries wherever declared — including inside
+  unused `inline`, `constexpr`, `consteval`, member-function, lambda,
+  and instantiated template bodies — without emitting unused enclosing
+  functions or uninstantiated template patterns (spec/codegen.md §2a,
+  WP-3687).
 - A class that inherits constructors from a base whose default constructor is
   a template with defaulted parameters (such as `std::pair`) no longer
   requires a nested class's default member initializers inside the enclosing
