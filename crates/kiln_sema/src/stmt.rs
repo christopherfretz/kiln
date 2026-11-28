@@ -1776,6 +1776,11 @@ impl Sema<'_, '_> {
             self.emit(msg);
         } else if let Some(l) = self.func.as_mut().and_then(|f| f.labels.get_mut(d)) {
             l.defined = Some(loc);
+            // A non-`__label__` label created on a forward `goto`/`&&`/`asm goto`
+            // moves its declaration location to the label definition (as clang).
+            if l.local.is_none() {
+                self.ast.decls.set_label_loc(d, loc);
+            }
         }
         d
     }

@@ -123,11 +123,14 @@ pub enum RefRole {
     /// The ud-suffix of a user-defined literal, naming its literal
     /// operator: `12[_k]`, `"ab"[_s]` (§18.13, stage 6).
     UdSuffix,
+    /// A written use of a label: `goto [l]`, `&&[l]`, an `asm goto` label
+    /// operand (§18.4, WP-3688).
+    Label,
 }
 
 impl RefRole {
     /// Every role, in declaration order (`r as u8` is its index).
-    pub const ALL: [RefRole; 17] = [
+    pub const ALL: [RefRole; 18] = [
         RefRole::Expr,
         RefRole::Member,
         RefRole::Type,
@@ -145,6 +148,7 @@ impl RefRole {
         RefRole::Redecl,
         RefRole::Operator,
         RefRole::UdSuffix,
+        RefRole::Label,
     ];
 
     /// The role whose `as u8` is `b` (a module image's byte).
@@ -172,6 +176,7 @@ impl RefRole {
             RefRole::Redecl => "redecl",
             RefRole::Operator => "operator",
             RefRole::UdSuffix => "ud-suffix",
+            RefRole::Label => "label",
         }
     }
 }
@@ -2903,6 +2908,7 @@ mod tests {
         }
         assert_eq!(RefRole::Operator.spelling(), "operator");
         assert_eq!(RefRole::UdSuffix.spelling(), "ud-suffix");
+        assert_eq!(RefRole::Label.spelling(), "label");
         assert_eq!(RefRole::from_u8(RefRole::ALL.len() as u8), None);
         let mut t = WrittenRefs::default();
         t.set_on(true);

@@ -476,8 +476,11 @@ impl Parser<'_, '_> {
             self.emit(d);
             return None;
         };
-        let nl = self.bump().span.lo;
-        self.s.act_on_addr_label(name, nl, amp)
+        let span = self.bump().span;
+        let e = self.s.act_on_addr_label(name, span.lo, amp);
+        let label = e.map(|x| self.s.ast.exprs.addr_label(x));
+        self.s.note_written_label(span, label);
+        e
     }
 
     /// cast-expression ([expr.cast]) and unary-expression ([expr.unary]).

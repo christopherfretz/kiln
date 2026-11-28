@@ -10,6 +10,16 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- Written label uses (`goto l`, `&&l`, and `asm goto` label operands) are
+  now recorded in the written-reference table with role `RefRole::Label`
+  (`label`), pointing to their `LabelDecl` (updated to the `l:` definition
+  location after a forward jump; pattern-local in templates with no
+  per-specialization rows, matching local variables and parameters), and
+  `AstNames::decl_key` gives every label (including multiple `__label__`
+  declarations of one name in a function) a unique stable key
+  (spec/ast.md §18.4, §18.8, WP-3688). Carried by PCH snapshots
+  (`FORMAT_VERSION` 191) and module declaration images (`IMAGE_VERSION`
+  104).
 - `FrontEndOptions::decl_extents` (default `false`) enables the
   declaration-extent table (`fe.ast.decl_extents`, spec/ast.md §19) from
   the front-end library entry without passing `-fkiln-decl-extents` on

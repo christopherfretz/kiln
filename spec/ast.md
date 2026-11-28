@@ -2509,7 +2509,9 @@ constraint_loc, expr }`, outputs then inputs), clobbers and labels
 (`VOLATILE`, `GOTO`, `INLINE`, `BASIC`). Built with
 `AstBuilder::gcc_asm_stmt(data, ops, bits, loc)`. A namespace-scope
 asm-declaration is `DeclKind::FileScopeAsm` (`AstBuilder::file_scope_asm`,
-`Ast::file_scope_asm_string`). `labels` is always empty (no `asm goto`).
+`Ast::file_scope_asm_string`). For `asm goto` (`asm_bits::GOTO`), `labels`
+holds the `LabelDecl`s named in the label operand list (each recorded as a
+`RefRole::Label` written reference, §18.4).
 
 **Landed (WP-140): `PredefinedExpr`.** `__func__`, `__FUNCTION__`,
 `__PRETTY_FUNCTION__` ([dcl.fct.def.general]/8; clang `PredefinedExpr`):
@@ -2825,7 +2827,8 @@ id-expression; stage 2 (WP-1931) fills `Type`, `Template`, `Base` and
 `NamespaceAlias`, `Elaborated`, `SpecTarget`, `Designator` and
 `Redecl` (added by stage 3), `Concept` for a type-constraint, and
 `Template` for a deduction guide's name; stage 6 (WP-2820) adds and
-fills `Operator` and `UdSuffix` (§18.13).
+fills `Operator` and `UdSuffix` (§18.13); WP-3688 adds and fills `Label`
+for written label uses.
 
 | role | dump | example (bracketed) | stage |
 |---|---|---|---|
@@ -2846,15 +2849,34 @@ fills `Operator` and `UdSuffix` (§18.13).
 | `Redecl` | `redecl` | `void A::[f]() {}` `int C::[x] = 0;` `struct C::[In] {};` `A::[A]() {}` `A::~[A]() {}` | 3 |
 | `Operator` | `operator` | `s [+] s` `a [!=] b` (rewritten) `m[[]1]` `f[(]x)` `p[->]m` `m[,] 4` `[++]m`; `[new] T` `[delete] p` `[delete[]] p` `::[new] T` `[co_await] e` (stage 6c) | 6 |
 | `UdSuffix` | `ud-suffix` | `12[_k]` `1.5[_f]` `'x'[_c]` `"ab"[_s]` `R"(r)"[_s]` | 6 |
+| `Label` | `label` | `goto [l];` `&&[l]` `asm goto ("" : : : : [out]);` | WP-3688 |
 
 Not in the table: a declaration's own name at its declaration (an
-unqualified first declaration, including a first `friend class Y;`),
-keywords, labels, attribute names, module names, built-in operators,
-and implicit references with no written token (implicit conversions
-and constructor calls, range-for iterator operations, coroutine and
-structured-binding helpers, the bodies of defaulted comparisons;
-§18.13.1). An operator token that selects a function is an `operator`
-entry (§18.13).
+unqualified first declaration, including a first `friend class Y;`, and
+label declarations `l:` and `__label__ a, b;`, which are §19
+declaration-extent rows), keywords, attribute names, module names,
+built-in operators, and implicit references with no written token
+(implicit conversions and constructor calls, range-for iterator
+operations, coroutine and structured-binding helpers, the bodies of
+defaulted comparisons; §18.13.1). An operator token that selects a
+function is an `operator` entry (§18.13).
+
+Label uses (`RefRole::Label`, WP-3688): `goto l`, `&&l`, and each label
+operand of `asm goto` record a `Label` entry at the label identifier's
+token with `entity` set to the function's (or enclosing block's
+`__label__`) `LabelDecl` and `how` `Unqualified` (`None` / `UNRESOLVED`
+when `&&l` is rejected outside a function). A non-`__label__` label
+first mentioned by a forward jump updates its `LabelDecl` location to
+its `l:` definition when defined (as clang). Computed `goto *p` records
+no `Label` entry for `*p` (only the expression's own entries and any
+`&&l` that feeds it). Inside a template pattern, labels are
+function-local and resolve at definition to the pattern's `LabelDecl`,
+with no per-specialization (`SpecRef`) or keyed (`SubstRef`) rows (the
+same rule as local variables and parameters). `AstNames::decl_key` gives
+every label a unique stable key (`f()::l`, with `#2`, `#3`, ... for
+multiple `__label__` declarations of one name in a function). Carried in
+PCH snapshots (`FORMAT_VERSION` 191) and module declaration images
+(`IMAGE_VERSION` 104).
 
 Stage-1 recording sites (all in `kiln_parse` unless noted):
 
@@ -3311,7 +3333,11 @@ sets the class or a non-dependent base declares),
 `template-id-concepts`, and the carriage goldens `template-id-pch`,
 `template-id-pch-include`, `template-id-module-image` and
 `template-id-module-replay`; `crates/kiln_parse/tests/written_refs.rs`
-`rename_claims_dependent_template_ids`; stage 6: the `operators-*` tests and `udl`, §18.13.9).
+`rename_claims_dependent_template_ids` and `label_uses_and_decl_keys`;
+stage 6: the `operators-*` tests and `udl`, §18.13.9; WP-3688: `labels`,
+`labels-module-image`, `labels-module-replay`, and
+`crates/kiln_parse/tests/decl_extents.rs`
+`label_decl_extents_forward_local_and_attributed`).
 
 ### 18.7 Lookup provenance (WP-2130)
 
@@ -3611,11 +3637,12 @@ one of:
   (`__attribute__((x(mu)))`), which clang takes as an identifier
   argument (`ParseAttributeArgsCommon`), looking nothing up (a later
   argument of an unknown GNU attribute is an expression and counts),
-  a label (a `LabelStmt` definition `l:` located from the AST rather than
-  any identifier followed by `:` — WP-3699 — `goto l`, `&&l`, the names of
-  a `__label__` declaration, an `asm goto` label),
-  an `asm` symbolic operand name, or a module name (after `module` /
-  `import` up to `;`).
+  a label declaration (a `LabelStmt` definition `l:`, located from the
+  AST rather than any identifier followed by `:`, WP-3699; the names of a
+  `__label__` declaration; label uses `goto l`, `&&l`, and `asm goto`
+  label operands are §18 `label` entries, WP-3688),
+  an `asm` symbolic operand name (`[name]`), or a module name (after
+  `module` / `import` up to `;`).
 
 Macro names, directive text, `#pragma` text and the text of skipped
 conditional blocks never reach the parser and are not counted. A file
