@@ -2336,35 +2336,48 @@ impl Sema<'_, '_> {
         self.ast.definition(self.pattern_of(self.inst_template(tmpl)).unwrap_or(spec))
     }
 
-    /// The class template specialization member `f` was instantiated
-    /// with.
-    /// The declaration of `f` instantiated from a pattern: `f` itself,
-    /// or the first declaration when `f` is a redeclaration that is not
-    /// (a friend `friend R B<T>::f(W<T>&);` in an instantiated `W<A>`
-    /// redeclaring the member of `B<A>`, [class.friend]/10; WP-1071).
+    /// The declaration of `f` instantiated from a pattern:
+    /// - for a member of a class template specialization (`CXXMethod`,
+    ///   `CXXConstructor`, `CXXDestructor`, `CXXConversion`), `f` itself or
+    ///   its first declaration (a friend `friend R B<T>::f(W<T>&);` in an
+    ///   instantiated `W<A>` redeclaring the member of `B<A>`,
+    ///   [class.friend]/10; WP-1071);
+    /// - for a namespace-scope function (`DeclKind::Function`, including
+    ///   friend functions of class template specializations, [temp.inst]/4),
+    ///   a redeclaration in `f`'s chain whose pattern has a body, if any
+    ///   (WP-3686: `f` or `first` may itself be an instantiated bodyless
+    ///   friend declaration), falling back to `f` or `first` when
+    ///   instantiated (e.g., a function template specialization whose
+    ///   pattern's definition is out-of-line or later).
     pub(crate) fn member_redecl_instance(&self, f: DeclId) -> DeclId {
+        if self.kind_of(f) != DeclKind::Function {
+            if self.ast.instantiated_from(f).is_some() {
+                return f;
+            }
+            let first = self.ast.first(f);
+            return if first != f && self.ast.instantiated_from(first).is_some() {
+                first
+            } else {
+                f
+            };
+        }
+        let has_inst_body = |d: DeclId| {
+            self.ast
+                .instantiated_from(d)
+                .and_then(|p| self.ast.decls.function(p))
+                .is_some_and(|x| x.body.is_some())
+        };
+        if has_inst_body(f) {
+            return f;
+        }
+        if let Some(y) = self.ast.redecls_of(f).find(|&y| y != f && has_inst_body(y)) {
+            return y;
+        }
         if self.ast.instantiated_from(f).is_some() {
             return f;
         }
         let first = self.ast.first(f);
-        if first != f && self.ast.instantiated_from(first).is_some() {
-            return first;
-        }
-        // A namespace-scope function a friend definition of a class
-        // template specialization redeclares ([temp.inst]/4): the friend.
-        if self.kind_of(f) == DeclKind::Function
-            && let Some(y) = self.ast.redecls_of(f).find(|&y| {
-                y != f
-                    && self
-                        .ast
-                        .instantiated_from(y)
-                        .and_then(|p| self.ast.decls.function(p))
-                        .is_some_and(|x| x.body.is_some())
-            })
-        {
-            return y;
-        }
-        f
+        if first != f && self.ast.instantiated_from(first).is_some() { first } else { f }
     }
 
     pub(crate) fn inst_owner(&self, f: DeclId) -> Option<DeclId> {

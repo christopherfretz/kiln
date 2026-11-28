@@ -1387,6 +1387,10 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- A friend function defined in a class template specialization is now
+  instantiated on odr-use even when the call binds a later bodyless friend
+  redeclaration (from another specialization, from the same class template,
+  or at namespace scope after an earlier bodyless friend) (WP-3686).
 - `Ast::decl_written_exprs` now keeps expressions written around a
   deduced placeholder (spec/types.md §8.4, WP-3640): array bounds in a
   declarator (`auto (*p)[f(1)] = &a;`), type-constraint arguments on a
