@@ -303,9 +303,7 @@ impl Compiler<'_> {
                     CastKind::NoOp if !n.value_category().is_glvalue() => {
                         self.init_inner(op, p, ty);
                     }
-                    CastKind::IntegralCast | CastKind::BooleanToSignedIntegral
-                        if self.o.types.wide(ot).is_some() =>
-                    {
+                    CastKind::IntegralCast if self.o.types.wide(ot).is_some() => {
                         let a = self.wide_place(op);
                         self.wide(wide::CAST | init, 0, [p, a, 0], ty, ot.0, e);
                     }
@@ -313,6 +311,14 @@ impl Compiler<'_> {
                         let r = self.rv(op);
                         let x = self.narrow_code(ot);
                         self.wide(wide::FROM | init, 0, [p, r, 0], ty, x, e);
+                    }
+                    CastKind::BooleanToSignedIntegral => {
+                        // A `bool` splatted into a wide `_BitInt` ext_vector lane:
+                        // `true` -> -1 (all ones in `ty`'s width), `false` -> 0.
+                        let r = self.rv(op);
+                        let neg = self.reg();
+                        self.emit_at(Op::INeg, int_aux(64, false), &[neg, r], e);
+                        self.wide(wide::FROM | init, 0, [p, neg, 0], ty, 64 | 1 << 8, e);
                     }
                     CastKind::FloatingToIntegral => {
                         // clang reports an out-of-range value at the

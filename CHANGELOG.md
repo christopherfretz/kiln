@@ -1432,6 +1432,13 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   specialization's kind-4 `ClassPartialAmbiguity` mark is cleared when a
   later explicit or partial specialization resolves it. PCH `FORMAT_VERSION`
   190.
+- Constant evaluation (and static-initialization/codegen constant
+  folding) no longer ICEs on `CastKind::BooleanToSignedIntegral` when
+  splatting a `bool` into an `ext_vector_type` vector (e.g. `(V4)bb`,
+  `constexpr V4 v = (V4)true`, including signed/unsigned integers,
+  floating vectors, 128-bit integers, and wide `_BitInt` lanes): `true`
+  now evaluates to `-1` / all-ones (`-1.0` for floating lanes) and
+  `false` to `0` (spec/oven.md "Vectors", WP-3698).
 - Calls to C++23 explicit-object member functions written with member
   syntax (`s.f(2)`, `(*p).f(2)`, `p->f(2)`, `this->f(2)`, and
   instantiated `t.f(2)`) now begin their written extent
