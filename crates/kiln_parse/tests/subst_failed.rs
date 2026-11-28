@@ -508,6 +508,44 @@ fn exception_spec_eval_is_transparent_to_sfinae_wp3685() {
     }
 }
 
+/// WP-3697: a class template specialization marked with kind 4
+/// (`ClassPartialAmbiguity`) during a SFINAE probe has its `INVALID` flag
+/// and kind-4 mark cleared when a later explicit specialization defines
+/// it, and the retired failed function specialization is no longer
+/// reachable from `find_spec` / `specs_of` once re-deduction succeeds.
+#[test]
+fn kind4_mark_cleared_by_later_explicit_specialization_wp3697() {
+    let ast = clean(
+        "template <class T, class U> struct X {};\n\
+         template <class T> struct X<T, int> { using t = int; };\n\
+         template <class U> struct X<int, U> { using t = int; };\n\
+         template <class T> auto f(T) -> typename X<T, int>::t;\n\
+         long f(...);\n\
+         long p = sizeof(f(1));\n\
+         template <> struct X<int, int> { using t = int; };\n\
+         static_assert(sizeof(f(1)) == sizeof(int));\n",
+    );
+    let xs = specs(&ast, DeclKind::CXXRecord, "X");
+    assert_eq!(xs.len(), 1);
+    let x = xs[0];
+    assert!(!invalid(&ast, x), "explicit specialization X<int, int> must be valid");
+    assert_eq!(ast.decls.subst_failed(x), None, "stale kind-4 mark must be cleared");
+    assert!(ast.definition(x).is_some(), "X<int, int> must be defined");
+    // Only the live valid specialization of `f` is reachable from `specs_of` / `find_spec`.
+    let ft = named(&ast, DeclKind::FunctionTemplate, "f")[0];
+    let live = ast.templates.specs_of(ft);
+    assert_eq!(live.len(), 1, "retired failed f<int> must not remain in specs_of");
+    let live_spec = live[0];
+    assert!(!invalid(&ast, live_spec), "re-deduced f<int> must be valid");
+    assert_eq!(ast.decls.subst_failed(live_spec), None);
+    let canonical = ast.types.canonical_args(ast.spec_info(live_spec).unwrap().1.args);
+    assert_eq!(ast.templates.find_spec(ft, canonical), Some(live_spec));
+    // The retired failed `f<int>` stays in the arena with `FunctionSignature` (verified by `clean`).
+    let all_f = specs(&ast, DeclKind::Function, "f");
+    assert_eq!(all_f.len(), 2);
+    assert_eq!(marks(&ast), [(DeclKind::Function, SubstFailedKind::FunctionSignature)]);
+}
+
 /// The kinds' values are fixed (spec/ast.md §4.1) and round-trip.
 #[test]
 fn kind_values_are_fixed() {

@@ -1439,7 +1439,7 @@ impl Sema<'_, '_> {
         let conv = ConvertedArgs { sugared, canonical };
         // Whether this deduction forms the specialization (its own
         // held-back warnings then stored with it, `get_function_spec_signature`).
-        let fresh = held.is_empty() || self.ast.templates.find_spec(ft, canonical).is_none();
+        let fresh = held.is_empty() || !self.has_live_function_spec(ft, canonical);
         let r = self.in_sfinae(FrameKind::DeducedArgSubstitution, ft, Some(sugared), loc, |s| {
             s.get_function_spec_signature(ft, conv, loc)
         });
@@ -1478,9 +1478,16 @@ impl Sema<'_, '_> {
                         None => return Err(DeductionFailure::new(Tdk::InstantiationDepth, d)),
                         Some((Ok(()), Ok(()))) => {}
                         Some((_, failed)) => {
+                            let diag = failed.err().flatten();
+                            if let Some(x) = &diag {
+                                self.templ
+                                    .fn_spec_failures
+                                    .entry(spec)
+                                    .or_insert_with(|| x.clone());
+                            }
                             let mut f = DeductionFailure::new(Tdk::SubstitutionFailure, d);
                             f.args = Some(sugared);
-                            f.diag = failed.err().flatten();
+                            f.diag = diag;
                             return Err(f);
                         }
                     }
@@ -1563,11 +1570,19 @@ impl Sema<'_, '_> {
                 // A call, or a match the type comparison passes, forms it
                 // (not kiln's own resolution of an explicit
                 // specialization, `DeduceTarget::None` without a call).
-                if let Some(s) = spec
-                    && (call.is_some()
-                        || matches!(target, DeduceTarget::FuncAddr(_) | DeduceTarget::Decl(_)))
-                {
-                    self.templ.fn_spec_unformed.remove(&s);
+                if let Some(s) = spec {
+                    if call.is_some()
+                        || matches!(target, DeduceTarget::FuncAddr(_) | DeduceTarget::Decl(_))
+                    {
+                        self.templ.fn_spec_unformed.remove(&s);
+                        // A Swift parameter-ABI failure after formation keeps
+                        // the formed declaration permanently invalid as in clang.
+                        if abi {
+                            self.templ.fn_spec_failed_gen.remove(&s);
+                        }
+                    } else if abi {
+                        self.templ.fn_spec_unformed.insert(s);
+                    }
                 }
                 let mut f = DeductionFailure::new(Tdk::SubstitutionFailure, d);
                 f.args = Some(sugared);

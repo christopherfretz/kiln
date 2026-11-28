@@ -1412,6 +1412,16 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- Function template specializations whose signature or explicit-specifier
+  substitution failed are no longer permanently memoized across later
+  declarations (spec/sema-templates.md §11.5, WP-3697): `DeclArena::decl_gen`
+  advances on declarations, definitions, completions, default arguments, and
+  formed specializations; a failed specialization is retired from
+  `TemplateTables` and re-substituted once `decl_gen` changes (reporting its
+  own first error if it fails again outside a trap), and a class template
+  specialization's kind-4 `ClassPartialAmbiguity` mark is cleared when a
+  later explicit or partial specialization resolves it. PCH `FORMAT_VERSION`
+  190.
 - Calls to C++23 explicit-object member functions written with member
   syntax (`s.f(2)`, `(*p).f(2)`, `p->f(2)`, `this->f(2)`, and
   instantiated `t.f(2)`) now begin their written extent

@@ -716,6 +716,20 @@ impl TemplateTables {
         self.specializations.get(&(template, canonical)).copied()
     }
 
+    /// Retires a failed specialization `spec` of `template` for
+    /// `canonical` so it is no longer reachable from [`Self::find_spec`]
+    /// or [`Self::specs_of`] (WP-3697).
+    pub fn retire_spec(&mut self, template: DeclId, canonical: ArgListId, spec: DeclId) {
+        if self.specializations.get(&(template, canonical)) == Some(&spec) {
+            let _ = self.specializations.remove(&(template, canonical));
+        }
+        if let Some(order) = self.spec_order.get_mut(&template)
+            && let Some(pos) = order.iter().rposition(|&d| d == spec)
+        {
+            order.remove(pos);
+        }
+    }
+
     /// The specializations of `template` (its first decl) in creation
     /// order.
     pub fn specs_of(&self, template: DeclId) -> &[DeclId] {
@@ -1666,7 +1680,11 @@ impl AstBuilder<'_> {
         d: DeclId,
         a: TemplateArg,
     ) -> Result<(), crate::slot::AlreadySet> {
-        self.ast.templates.defaults.insert(d, a)
+        let r = self.ast.templates.defaults.insert(d, a);
+        if r.is_ok() {
+            self.ast.decls.bump_decl_gen();
+        }
+        r
     }
 
     /// Records that parameter `d` inherits the default argument of
@@ -1681,7 +1699,11 @@ impl AstBuilder<'_> {
         d: DeclId,
         from: DeclId,
     ) -> Result<(), crate::slot::AlreadySet> {
-        self.ast.templates.inherited_defaults.insert(d, from)
+        let r = self.ast.templates.inherited_defaults.insert(d, from);
+        if r.is_ok() {
+            self.ast.decls.bump_decl_gen();
+        }
+        r
     }
 
     /// Adds a template pattern: pushed like [`AstBuilder::add`] but neither
@@ -2189,6 +2211,7 @@ impl AstBuilder<'_> {
         if self.ast.decls.member_list(lexical).is_some() {
             self.ast.decls.append_member(lexical, spec);
         }
+        self.ast.decls.bump_decl_gen();
     }
 
     /// Locates specialization `spec` at `loc`, the template-name of the
@@ -2235,6 +2258,7 @@ impl AstBuilder<'_> {
         if self.ast.decls.member_list(lexical).is_some() {
             self.ast.decls.append_member(lexical, spec);
         }
+        self.ast.decls.bump_decl_gen();
     }
 
     /// Links `member`, a member of a class template specialization, to the
