@@ -6,7 +6,7 @@
 
 use super::args::ArgView;
 use super::context::{ExprOperand, TypeContext, TypeOfOperand, TypeView};
-use super::func::ExcSpec;
+use super::func::{ExcSpec, FuncProto};
 use super::nns::Nns;
 use crate::ids::{ArgListId, DeclId, ExprId, NnsId, QualType};
 
@@ -85,12 +85,7 @@ impl TypeContext {
             }
             TypeView::Function(p) => {
                 self.written_exprs_in(p.ret(), out, d);
-                for &t in self.params(&p) {
-                    self.written_exprs_in(t, out, d);
-                }
-                if let ExcSpec::NoexceptExpr { expr, .. } = self.exc_spec(&p) {
-                    out.push(expr);
-                }
+                self.written_fn_params_exc(&p, out, d);
             }
             TypeView::Elaborated { nns, named, .. } => {
                 if let Some(n) = nns {
@@ -164,17 +159,49 @@ impl TypeContext {
             _ => {}
         }
     }
+
+    fn written_fn_params_exc(&self, p: &FuncProto, out: &mut Vec<ExprId>, depth: u32) {
+        for &t in self.params(p) {
+            self.written_exprs_in(t, out, depth);
+        }
+        if let ExcSpec::NoexceptExpr { expr, .. } = self.exc_spec(p) {
+            out.push(expr);
+        }
+    }
+
+    /// Like [`Self::written_exprs`] for a function whose return type was
+    /// deduced (spec/types.md §8.4, WP-3641): skips transparent top-level
+    /// sugar (such as a calling-convention attribute) to the function type
+    /// and appends only its parameter and `noexcept(e)` expressions, never
+    /// its return type.
+    fn written_exprs_without_return(&self, mut q: QualType, out: &mut Vec<ExprId>) {
+        for depth in 0..=MAX_DEPTH {
+            match self.view(q.ty()) {
+                TypeView::Attributed { modified: x, .. }
+                | TypeView::Paren(x)
+                | TypeView::ExtQual { base: x, .. } => q = x,
+                TypeView::Function(p) => {
+                    self.written_fn_params_exc(&p, out, depth + 1);
+                    return;
+                }
+                _ => return,
+            }
+        }
+    }
 }
 
 impl crate::Ast {
     /// Appends to `out` the expressions written in declaration `d`'s type
-    /// (spec/types.md §8.4, WP-3583): [`TypeContext::written_exprs`] of
-    /// its type, except that a deduced type is no written one, so nothing
+    /// (spec/types.md §8.4, WP-3583, WP-3641): [`TypeContext::written_exprs`]
+    /// of its type, except that a deduced type is no written one, so nothing
     /// is appended for a variable whose type its initializer deduced from
     /// a placeholder ([`crate::decl::VarSpec::placeholder`] is not
     /// `None`: `auto v = w;`, `decltype(auto)`, `auto &`, `const auto *`,
     /// a structured binding declaration, an init-capture) nor for a
-    /// structured binding (`Binding`, whose type is its element's).
+    /// structured binding (`Binding`, whose type is its element's), and a
+    /// function whose return type was deduced
+    /// ([`crate::decl::FnSpec::return_deduced`]) appends only its parameter
+    /// types' and `noexcept(e)` expressions, never its return type.
     pub fn decl_written_exprs(&self, d: DeclId, out: &mut Vec<ExprId>) {
         use crate::decl::{DeclKind, VarPlaceholder};
         let n = self.decls.get(d);
@@ -183,7 +210,14 @@ impl crate::Ast {
         {
             return;
         }
-        if let Some(t) = n.ty() {
+        let Some(t) = n.ty() else { return };
+        if self.decls.function(d).is_some()
+            && self
+                .redecls_of(d)
+                .any(|r| self.decls.function(r).is_some_and(|f| f.spec.return_deduced()))
+        {
+            self.types.written_exprs_without_return(t, out);
+        } else {
             self.types.written_exprs(t, out);
         }
     }
