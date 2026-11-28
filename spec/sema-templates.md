@@ -11389,6 +11389,7 @@ what a later use needs to re-diagnose it (`fn_spec_failures`, the
 | An alias template specialization's type | `InstState.alias_cache` | (alias template, converted argument list: sugared at clang compat 22, canonical at 19; §4.10) |
 | Partial ordering of two partial specializations | `TemplState.partial_order` | (row index, row index) |
 | A function specialization's first signature-substitution error | `TemplState.fn_spec_failures` | the (invalid) specialization `DeclId` |
+| Generation of each failed function specialization and kind-4 ambiguous class specialization | `DeclArena.decl_gen`, `TemplState.fn_spec_failed_gen`, `TemplState.class_partial_ambig_gen` | the (invalid) specialization `DeclId` (WP-3697) |
 | Constraint satisfaction of an entity | `ConceptState.sat_cache` | (entity, canonical argument list) |
 | An atomic constraint's value and its notes | `ConceptState.atom_cache` | (atom, canonical arguments of each level it names) |
 | Subsumption | `ConceptState.subsume_cache` | (normal form, normal form) |
@@ -11402,6 +11403,37 @@ would need the SFINAE note replayed per use), default template
 arguments (substituted per `check_template_args`, as clang), and
 default function arguments (substituted at each use, [temp.inst]/12;
 `lazy_defaults` only records which are pending).
+
+**Declaration-generation invalidation of failed specializations (WP-3697).**
+Valid specializations remain permanently memoized in `TemplateTables`.
+Substitution failures do not outlive later declarations: `DeclArena::decl_gen`
+is bumped by every declaration, definition, class/enum completion, variable
+initializer, function body, default function or template argument, explicit
+specialization declaration, and formed specialization (excluding parameter
+decls and unformed placeholder specializations so failing SFINAE probes do
+not thrash one another at the same point in the unit). Each failed function
+template specialization (`get_function_spec_signature` /
+`finish_function_spec_explicit`) records `decl_gen` in
+`TemplState.fn_spec_failed_gen`; a later lookup reuses the failure only while
+`decl_gen` is unchanged. Once `decl_gen` advances, `TemplateTables::retire_spec`
+removes the stale invalid declaration from `specializations` and `spec_order`
+(so it is neither reachable from `find_spec` nor emitted, while staying in the
+arena with its `SubstFailedKind` mark) and substitution runs afresh, reporting
+its own first error if it fails again outside a trap. A class template
+specialization marked silently with `SubstFailedKind::ClassPartialAmbiguity`
+clears `INVALID` and its kind-4 mark when a later explicit specialization
+declares it (`act_on_explicit_class_spec`) or when a later `decl_gen` retry of
+`select_partial_spec` succeeds (`instantiate_class_as`). Carried in PCH
+snapshots (`FORMAT_VERSION` 190).
+Tests: `temp.deduct.general/sfinae-retry-class-completed.cpp`,
+`temp.deduct.general/sfinae-retry-explicit-spec.cpp`,
+`temp.deduct.general/sfinae-retry-adl-func.cpp`,
+`temp.deduct.general/sfinae-retry-constexpr-func.cpp`,
+`temp.deduct.general/sfinae-retry-default-template-arg.cpp`,
+`temp.deduct.general/sfinae-retry-var-and-static-member.cpp`,
+`temp.deduct.general/sfinae-retry-deduction-guide.cpp`,
+`temp.deduct.general/sfinae-retry-new-error.cpp`,
+`kiln_parse/tests/subst_failed.rs` `kind4_mark_cleared_by_later_explicit_specialization_wp3697`.
 
 WP-313 found the `experimental/simd` slowness was not a missing memo but
 two quadratic costs on every lookup and every frame: the intern hash

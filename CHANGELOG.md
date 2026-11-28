@@ -1412,6 +1412,16 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- Function template specializations whose signature or explicit-specifier
+  substitution failed are no longer permanently memoized across later
+  declarations (spec/sema-templates.md §11.5, WP-3697): `DeclArena::decl_gen`
+  advances on declarations, definitions, completions, default arguments, and
+  formed specializations; a failed specialization is retired from
+  `TemplateTables` and re-substituted once `decl_gen` changes (reporting its
+  own first error if it fails again outside a trap), and a class template
+  specialization's kind-4 `ClassPartialAmbiguity` mark is cleared when a
+  later explicit or partial specialization resolves it. PCH `FORMAT_VERSION`
+  190.
 - Constant evaluation (and static-initialization/codegen constant
   folding) no longer ICEs on `CastKind::BooleanToSignedIntegral` when
   splatting a `bool` into an `ext_vector_type` vector (e.g. `(V4)bb`,
