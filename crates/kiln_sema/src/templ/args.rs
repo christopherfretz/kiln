@@ -475,11 +475,16 @@ impl Sema<'_, '_> {
     }
 
     /// [`Self::check_dependent_template_args`], with the converted
-    /// argument list when every parameter was matched without a pack
-    /// (one argument per parameter, the defaults filled in): a
-    /// non-dependent non-type argument for a parameter of a known type
-    /// converted to its value ([temp.arg.nontype]/1), every other
-    /// argument as written. `Ok(None)` when a pack is involved.
+    /// argument list: every non-dependent non-type argument for a
+    /// parameter of a known type before the first pack expansion, and
+    /// every non-expansion argument matched to a trailing parameter pack
+    /// of known element type, is converted to its value
+    /// ([temp.arg.nontype]/1); defaults before a pack are filled in; a
+    /// pack expansion that hits a non-pack parameter and every argument
+    /// after it stay as written (matching clang's
+    /// `CheckTemplateArgumentList`; WP-3321, WP-3689). `Ok(None)` when
+    /// an expanded or non-trailing parameter pack prevents forming a
+    /// flat converted list.
     pub(crate) fn check_dependent_template_args_converted(
         &mut self,
         tmpl: DeclId,
@@ -528,28 +533,46 @@ impl Sema<'_, '_> {
             _ => loc,
         };
         // A pack expansion may cover any number of parameters: the
-        // arguments before it are checked, the arity is not.
+        // arguments before it are checked, the arity is not. Once a
+        // trailing parameter pack is reached, every remaining argument
+        // belongs to that pack and non-expansion elements are checked
+        // and converted individually (clang `CheckTemplateArgumentList`,
+        // WP-3689).
         let expansion = args.iter().position(|&a| self.is_pack_expansion_arg(a));
         let checked = expansion.unwrap_or(args.len());
         let depth = self.template_param_depth(head);
         let tmpl = self.ast.first(tmpl);
         let arg_loc = |i: usize| locs.get(i).copied().unwrap_or(loc);
-        let mut prior: Vec<TemplateArg> = Vec::with_capacity(params.len());
+        let mut prior: Vec<TemplateArg> = Vec::with_capacity(params.len().max(args.len()));
         let mut failed = false;
         let mut wi = 0usize;
         let mut open = false;
+        let mut non_trailing_pack = false;
         // A pack expansion is checked against the parameters only as
         // written: substitution forms the template-id of an element that
         // is itself an expansion (`remove_const_t<Ts...>` for `_Types` :=
         // `{Ts...}` in a fold) on the way to re-forming the expansion.
         let written = self.inst.stack.is_empty();
-        for &p in &params {
+        for (pi, &p) in params.iter().enumerate() {
             if self.ast.template_parm(p).is_some_and(|x| x.pack) {
-                while wi < checked {
-                    let (f, _) =
-                        self.check_dependent_arg(tmpl, depth, p, args[wi], arg_loc(wi), &prior)?;
-                    failed |= f;
-                    wi += 1;
+                if pi + 1 == params.len() {
+                    failed |= self.check_dependent_trailing_pack(
+                        tmpl, depth, p, args, locs, loc, &mut wi, &mut prior,
+                    )?;
+                } else {
+                    while wi < checked {
+                        let (f, _) = self.check_dependent_arg(
+                            tmpl,
+                            depth,
+                            p,
+                            args[wi],
+                            arg_loc(wi),
+                            &prior,
+                        )?;
+                        failed |= f;
+                        wi += 1;
+                    }
+                    non_trailing_pack = true;
                 }
                 open = true;
                 break;
@@ -575,6 +598,8 @@ impl Sema<'_, '_> {
                         self.emit(d);
                         return Err(());
                     }
+                    prior.extend_from_slice(&args[wi..]);
+                    wi = args.len();
                     open = true;
                     break;
                 }
@@ -603,7 +628,45 @@ impl Sema<'_, '_> {
         if failed {
             return Err(());
         }
-        Ok((!open && expansion.is_none() && wi == args.len()).then_some(prior))
+        if !non_trailing_pack && wi < args.len() {
+            prior.extend_from_slice(&args[wi..]);
+        }
+        Ok((!non_trailing_pack).then_some(prior))
+    }
+
+    /// Checks and converts the arguments matched to trailing parameter
+    /// pack `p` in [`Self::check_dependent_template_args_in`]: pack
+    /// expansions stay as written, every non-expansion argument is checked
+    /// and converted against `p` using only the fixed parameters in
+    /// `prior` (WP-3689). Returns whether a recoverable error occurred.
+    #[allow(clippy::too_many_arguments)]
+    fn check_dependent_trailing_pack(
+        &mut self,
+        tmpl: DeclId,
+        depth: u16,
+        p: DeclId,
+        args: &[TemplateArg],
+        locs: &[Loc],
+        loc: Loc,
+        wi: &mut usize,
+        prior: &mut Vec<TemplateArg>,
+    ) -> Result<bool, ()> {
+        let fixed_len = prior.len();
+        let mut failed = false;
+        while *wi < args.len() {
+            let arg = args[*wi];
+            if self.is_pack_expansion_arg(arg) {
+                prior.push(arg);
+            } else {
+                let at = locs.get(*wi).copied().unwrap_or(loc);
+                let (f, a) =
+                    self.check_dependent_arg(tmpl, depth, p, arg, at, &prior[..fixed_len])?;
+                failed |= f;
+                prior.push(a);
+            }
+            *wi += 1;
+        }
+        Ok(failed)
     }
 
     /// One argument of [`Self::check_dependent_template_args`], with the
@@ -649,15 +712,16 @@ impl Sema<'_, '_> {
     }
 
     /// Whether the type of non-type parameter `p` is dependent and cannot
-    /// be substituted with `prior` yet: they are dependent, or `p` is a
-    /// parameter pack (not an expanded one, §3.2).
+    /// be substituted with `prior` yet: they are dependent, or `p`'s
+    /// declared type is itself a pack expansion (`template<Ts... a>`,
+    /// not an expanded one, §3.2).
     fn nttp_type_pending(&self, p: DeclId, prior: &[TemplateArg]) -> bool {
         if self.templ.nttp_elem.is_some() {
             return false;
         }
         let declared = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
         self.ast.types.is_dependent(declared)
-            && (self.ast.template_parm(p).is_some_and(|x| x.pack)
+            && (self.ast.types.qflags(declared).contains(TypeFlags::UNEXPANDED_PACK)
                 || prior.iter().any(|&a| {
                     self.ast
                         .types

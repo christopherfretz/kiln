@@ -2083,11 +2083,33 @@ takes the converted list that check gives ([temp.type]/1; clang's
   name the same type;
 - so does a non-dependent argument for a parameter whose type depends on
   a dependent argument before it (`W<T, 1>` and `W<T, 1u>` for
-  `template<class U, U v>` are two types until `T` is substituted, as in
-  clang);
-- with a pack expansion argument or a parameter pack, nothing is
-  converted: the value arguments are profiled as written and the
-  defaults completed (`Sema::dependent_spec_canon`).
+  `template<class U, U v>`, and `WD<T, 1>` and `WD<T, 1u>` for
+  `template<class U, U... vs>`, are two types until `T` is substituted, as
+  in clang; once `U` is concrete, `WD<int, N, 1>` and `WD<int, N, 1u>`
+  convert to one type);
+- with a pack expansion argument or a parameter pack (WP-3689, matching
+  clang's `CheckTemplateArgumentList`):
+  - non-expansion arguments for non-pack parameters before the first pack
+    expansion convert as above (`V<n::k, Ns...>` and `V<3, Ns...>`,
+    `V2<n::k, Ns..., 4>` and `V2<3, Ns..., 4>`), and defaulted parameters
+    before a pack are completed (`D2<T>` and `D2<T, 1>` for
+    `template<class, int = 1, int...>`);
+  - once a trailing parameter pack of known element type (including
+    `auto...` and structural class NTTP packs) is reached, every
+    non-expansion argument matched to that pack — both before and after a
+    pack expansion inside the pack — converts individually (`W<T, n::k>`
+    and `W<T, 3>`, `W<T, Ns..., n::k>` and `W<T, Ns..., 3>`, `WU<T, 2>`
+    and `WU<T, 2u>`, `WA<T, n::k>` and `WA<T, 3>`, while `WA<T, 1>` and
+    `WA<T, 1u>` stay distinct by their deduced types), and pack expansions
+    stay profiled expressions;
+  - a pack expansion that hits a non-pack parameter and every argument
+    after it stay profiled expressions as written (`P2<Ns..., n::k>` vs
+    `P2<Ns..., 3>`, `V2<3, Ns..., 1 + 1>` vs `V2<3, Ns..., 2>`), and
+    mangling does not wrap the trailing arguments in `J...E` when an
+    expansion precedes the parameter pack (`grouped_args` in
+    `crates/kiln_abi/src/mangle/dep.rs`);
+  - only an expanded or non-trailing parameter pack skips conversion and
+    falls back to `Sema::dependent_spec_canon`.
 The written arguments stay as the sugar (printing, `args_as_written`,
 written references); such a specialization is not sugar for its
 canonical form (`TypeContext::desugar_once`, clang's
@@ -2102,7 +2124,10 @@ spelling one template-id differently redeclare one function template,
 and an out-of-line member written `It<T, 1 == 1>::f` is the partial
 specialization `It<T, true>`'s
 (`tests/conformance/temp.type/converted-value-args-dependent-specialization-run.cpp`,
+`tests/conformance/temp.type/converted-value-args-dependent-pack-run.cpp`,
+`tests/conformance/temp.type/converted-value-args-dependent-pack-redef.cpp`,
 `tests/conformance/temp.over.link/non-type-literal-arg-in-dependent-specialization.cpp`,
+`tests/conformance/written_refs/dependent-pack-converted-args.cpp`,
 `crates/kiln_parse/tests/dependent_spec_converted_args.rs`).
 Every spelling of a dependent template-id is formed this one way
 (`Sema::dependent_class_spec_type`): a simple-type-specifier
