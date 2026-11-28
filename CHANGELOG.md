@@ -1387,6 +1387,16 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- Member functions of local classes carrying `__attribute__((constructor))`,
+  `__attribute__((destructor))`, or `__attribute__((used))` (including
+  `[[gnu::used]]` and `__attribute__((used, retain))`, and `used`
+  constructors/destructors) are now emitted with clang's linkage and
+  `@llvm.global_ctors` / `@llvm.global_dtors` / `@llvm.used` /
+  `@llvm.compiler.used` entries wherever declared — including inside
+  unused `inline`, `constexpr`, `consteval`, member-function, lambda,
+  and instantiated template bodies — without emitting unused enclosing
+  functions or uninstantiated template patterns (spec/codegen.md §2a,
+  WP-3687).
 - A friend function defined in a class template specialization is now
   instantiated on odr-use even when the call binds a later bodyless friend
   redeclaration (from another specialization, from the same class template,

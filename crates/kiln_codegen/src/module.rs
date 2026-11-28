@@ -313,6 +313,12 @@ pub(crate) struct Cg<'a> {
     /// declaration whose definition encloses them
     /// ([`Self::emit_local_class_module_defs`]), built on first use.
     pub(crate) local_classes: Option<FxHashMap<DeclId, Vec<DeclId>>>,
+    /// The local classes of this unit by the top-level declaration whose
+    /// definition encloses them, for forced-emission members
+    /// (`constructor`, `destructor`, `used`;
+    /// [`Self::emit_local_class_forced_defs_for`]), built on first use
+    /// when the TU carries any of those attributes.
+    local_forced_classes: Option<FxHashMap<DeclId, Vec<DeclId>>>,
     /// The static data members an explicit instantiation definition
     /// names (`template int C<long>::m;`), keyed in
     /// `TemplateTables::explicit_member_insts` (first declarations).
@@ -486,6 +492,7 @@ impl<'a> Cg<'a> {
             explicit_anchor: None,
             parse_time_handed: FxHashSet::default(),
             local_classes: None,
+            local_forced_classes: None,
             keyed_explicit_vars: ast
                 .templates
                 .explicit_member_insts_all()
@@ -602,6 +609,7 @@ impl<'a> Cg<'a> {
         self.emit_late_explicit_insts()?;
         self.emit_key_function_vtables()?;
         self.emit_end_of_tu_instantiations()?;
+        self.emit_remaining_local_class_forced_defs()?;
         self.emit_deferred()?;
         if !self.imported_explicit_vtables.is_empty() {
             self.emit_imported_explicit_vtables()?;
@@ -1067,6 +1075,7 @@ impl<'a> Cg<'a> {
             if ast.modules.active {
                 self.emit_local_class_module_defs(d)?;
             }
+            self.emit_local_class_forced_defs_for(d)?;
         }
         Ok(())
     }
@@ -1098,6 +1107,103 @@ impl<'a> Cg<'a> {
     pub(crate) fn module_local_classes(&mut self) -> &FxHashMap<DeclId, Vec<DeclId>> {
         let ast = self.ast;
         self.local_classes.get_or_insert_with(|| local_classes_by_owner(ast))
+    }
+
+    /// Emits forced-emission (`constructor`, `destructor`, `used`) member
+    /// functions of local classes ([class.local]) enclosed by top-level
+    /// declaration `d`, removing `d`'s entry so the end-of-TU drain does
+    /// not visit them again.
+    fn emit_local_class_forced_defs_for(&mut self, d: DeclId) -> R<()> {
+        if !has_forced_emit_attrs(self.ast) {
+            return Ok(());
+        }
+        let ast = self.ast;
+        let recs = self
+            .local_forced_classes
+            .get_or_insert_with(|| local_forced_classes_by_owner(ast))
+            .remove(&d);
+        if let Some(recs) = recs {
+            for r in recs {
+                self.emit_local_class_forced_defs(r, 0)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Emits forced-emission (`constructor`, `destructor`, `used`) member
+    /// functions of local classes whose enclosing top-level owner was not
+    /// visited by the top-level walk (for example, an implicitly
+    /// instantiated function template or class template specialization).
+    fn emit_remaining_local_class_forced_defs(&mut self) -> R<()> {
+        if !has_forced_emit_attrs(self.ast) {
+            return Ok(());
+        }
+        let ast = self.ast;
+        let map =
+            self.local_forced_classes.get_or_insert_with(|| local_forced_classes_by_owner(ast));
+        if map.is_empty() {
+            return Ok(());
+        }
+        let mut recs: Vec<DeclId> = map.drain().flat_map(|(_, v)| v).collect();
+        recs.sort_unstable();
+        for r in recs {
+            self.emit_local_class_forced_defs(r, 0)?;
+        }
+        Ok(())
+    }
+
+    /// Emits the in-class `constructor` / `destructor` / `used` member
+    /// function definitions of local class `d` and its nested classes
+    /// (WP-3687). Guarded against re-emitting a definition already emitted
+    /// by another path (for example, [`Self::emit_module_class_defs`]).
+    fn emit_local_class_forced_defs(&mut self, d: DeclId, depth: usize) -> R<()> {
+        let ast = self.ast;
+        let n = ast.decls.get(d);
+        if depth > 256
+            || n.has(DeclFlags::INVALID)
+            || n.has(DeclFlags::DEPENDENT_CTX)
+            || ast.definition(d) != Some(d)
+        {
+            return Ok(());
+        }
+        let members: Vec<DeclId> = ast.decls.members(d).collect();
+        for m in members {
+            let mn = ast.decls.get(m);
+            if mn.has(DeclFlags::INVALID) || mn.has(DeclFlags::DEPENDENT_CTX) {
+                continue;
+            }
+            match mn.kind() {
+                DeclKind::CXXMethod | DeclKind::CXXConversion => {
+                    let has_body = ast.decls.function(m).is_some_and(|f| {
+                        f.body.is_some()
+                            && !matches!(f.templ.get(), Some((TemplLinkKind::Pattern, _)))
+                    });
+                    if has_body
+                        && (self.is_ctor_dtor_fn(m)
+                            || self.has_fn_attr(m, kiln_ast::attr::AttrKind::USED))
+                    {
+                        let first = ast.first(m);
+                        if self.fns.get(&first).is_none_or(|&f| self.m.func(f).is_declaration()) {
+                            self.emit_global_fn(m)?;
+                        }
+                    }
+                }
+                DeclKind::CXXConstructor | DeclKind::CXXDestructor => {
+                    let has_body = ast.decls.function(m).is_some_and(|f| {
+                        f.body.is_some()
+                            && !matches!(f.templ.get(), Some((TemplLinkKind::Pattern, _)))
+                    });
+                    if has_body && self.has_fn_attr(m, kiln_ast::attr::AttrKind::USED) {
+                        self.emit_global_structor(m)?;
+                    }
+                }
+                DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization => {
+                    self.emit_local_class_forced_defs(m, depth + 1)?;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
     }
 
     /// clang `EmitGlobal` for a function.
@@ -4852,6 +4958,178 @@ fn local_classes_by_owner(ast: &Ast) -> FxHashMap<DeclId, Vec<DeclId>> {
             let Some(y) = c else { break };
             if matches!(
                 ast.decls.get(y).kind(),
+                DeclKind::TranslationUnit
+                    | DeclKind::Namespace
+                    | DeclKind::LinkageSpec
+                    | DeclKind::Export
+            ) {
+                ok = true;
+                break;
+            }
+            owner = y;
+            c = ast.decls.lexical_ctx(y);
+        }
+        if ok {
+            out.entry(owner).or_default().push(x);
+        }
+    }
+    out
+}
+
+/// Whether the TU carries any attribute that forces emission of an
+/// otherwise unreferenced local-class member function.
+fn has_forced_emit_attrs(ast: &Ast) -> bool {
+    use kiln_ast::attr::AttrKind;
+    ast.attrs.has_kind(AttrKind::USED)
+        || ast.attrs.has_kind(AttrKind::CONSTRUCTOR)
+        || ast.attrs.has_kind(AttrKind::DESTRUCTOR)
+}
+
+/// Whether `d` or any enclosing semantic context is a template pattern or
+/// partial specialization (same rule as [`Cg::is_templated`]).
+fn is_templated_ast(ast: &Ast, d: DeclId) -> bool {
+    let mut c = Some(d);
+    for _ in 0..256 {
+        let Some(x) = c else { break };
+        let n = ast.decls.get(x);
+        if n.has(DeclFlags::DEPENDENT_CTX) || kiln_ast::templates::is_template_kind(n.kind()) {
+            return true;
+        }
+        if matches!(
+            ast.templ_link(x).get(),
+            Some((TemplLinkKind::Pattern | TemplLinkKind::PartialSpecialization, _))
+        ) {
+            return true;
+        }
+        if n.kind() == DeclKind::TranslationUnit {
+            return false;
+        }
+        c = n.ctx();
+    }
+    false
+}
+
+/// Whether declaration `d` (or any of its redeclarations) carries a
+/// forced-emission attribute: GNU `used`, or (when `ctor_dtor`) a
+/// non-dependent GNU `constructor` / `destructor`.
+fn has_decl_forced_attr(ast: &Ast, d: DeclId, ctor_dtor: bool) -> bool {
+    use kiln_ast::attr::{AttrKind, AttrNode};
+    ast.redecls_of(d).any(|r| {
+        ast.lists.iter::<kiln_ast::AttrId>(ast.attrs.of_decl(r)).any(|id| {
+            let a = ast.attrs.get(id);
+            a.kind == AttrKind::USED
+                || (ctor_dtor
+                    && matches!(a.kind, AttrKind::CONSTRUCTOR | AttrKind::DESTRUCTOR)
+                    && a.flags & AttrNode::PRIORITY_DEPENDENT == 0)
+        })
+    })
+}
+
+/// Whether local class `d` (or any nested class inside it) defines at least
+/// one non-pattern member function carrying `constructor`, `destructor`, or
+/// `used`.
+fn local_class_has_forced_member(ast: &Ast, d: DeclId, depth: usize) -> bool {
+    let n = ast.decls.get(d);
+    if depth > 256
+        || n.has(DeclFlags::INVALID)
+        || n.has(DeclFlags::DEPENDENT_CTX)
+        || ast.definition(d) != Some(d)
+    {
+        return false;
+    }
+    for m in ast.decls.members(d) {
+        let mn = ast.decls.get(m);
+        if mn.has(DeclFlags::INVALID) || mn.has(DeclFlags::DEPENDENT_CTX) {
+            continue;
+        }
+        match mn.kind() {
+            DeclKind::CXXMethod | DeclKind::CXXConversion => {
+                let has_body = ast.decls.function(m).is_some_and(|f| {
+                    f.body.is_some() && !matches!(f.templ.get(), Some((TemplLinkKind::Pattern, _)))
+                });
+                if has_body && has_decl_forced_attr(ast, m, true) {
+                    return true;
+                }
+            }
+            DeclKind::CXXConstructor | DeclKind::CXXDestructor => {
+                let has_body = ast.decls.function(m).is_some_and(|f| {
+                    f.body.is_some() && !matches!(f.templ.get(), Some((TemplLinkKind::Pattern, _)))
+                });
+                if has_body && has_decl_forced_attr(ast, m, false) {
+                    return true;
+                }
+            }
+            DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization => {
+                if local_class_has_forced_member(ast, m, depth + 1) {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// The non-dependent, non-templated local class definitions ([class.local],
+/// excluding closure types and imported named-module declarations) in this
+/// TU that have at least one forced-emission member, grouped by the
+/// enclosing top-level declaration along their lexical-context chain.
+/// Nested member classes of a local class are reached recursively by
+/// [`Cg::emit_local_class_forced_defs`].
+fn local_forced_classes_by_owner(ast: &Ast) -> FxHashMap<DeclId, Vec<DeclId>> {
+    use kiln_ast::decl::PayloadClass;
+    let mut out: FxHashMap<DeclId, Vec<DeclId>> = FxHashMap::default();
+    if !has_forced_emit_attrs(ast) {
+        return out;
+    }
+    for x in ast.decls.ids() {
+        let n = ast.decls.get(x);
+        if n.kind() != DeclKind::CXXRecord
+            || n.has(DeclFlags::INVALID)
+            || n.has(DeclFlags::DEPENDENT_CTX)
+            || !n.ctx().is_some_and(|c| ast.decls.get(c).kind().payload() == PayloadClass::Function)
+            || ast.definition(x) != Some(x)
+            || ast.closure_lambda(x).is_some()
+            // An imported named-module unit's own object already emits its
+            // local classes' forced definitions and `global_ctors` entries;
+            // emitting them again in an importer would duplicate them. A
+            // template instantiated in the importer creates a local class
+            // owned by this unit (`!is_imported_named_unit_decl`), so it
+            // stays eligible.
+            || ast.modules.is_imported_named_unit_decl(x)
+            || is_templated_ast(ast, x)
+            || !local_class_has_forced_member(ast, x, 0)
+        {
+            continue;
+        }
+        if ast.instantiated_from(x).is_some() {
+            // An instantiated local class is created at its enclosing
+            // template's point of instantiation, not where an outer
+            // non-template declaration (such as a generic lambda's variable)
+            // was parsed; drain it at end-of-TU in `DeclId` (instantiation)
+            // order.
+            out.entry(x).or_default().push(x);
+            continue;
+        }
+        let mut owner = x;
+        let mut c = ast.decls.lexical_ctx(x);
+        let mut ok = false;
+        for _ in 0..256 {
+            let Some(y) = c else { break };
+            let yn = ast.decls.get(y);
+            if yn.has(DeclFlags::INVALID)
+                || yn.has(DeclFlags::DEPENDENT_CTX)
+                || kiln_ast::templates::is_template_kind(yn.kind())
+                || matches!(
+                    ast.templ_link(y).get(),
+                    Some((TemplLinkKind::Pattern | TemplLinkKind::PartialSpecialization, _))
+                )
+            {
+                ok = false;
+                break;
+            }
+            if matches!(
+                yn.kind(),
                 DeclKind::TranslationUnit
                     | DeclKind::Namespace
                     | DeclKind::LinkageSpec
