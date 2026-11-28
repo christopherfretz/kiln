@@ -2877,7 +2877,7 @@ impl Parser<'_, '_> {
             self.ext_tag_qual = ext_qual;
             self.tag_link = link;
             self.tag_mark = qmark;
-            self.parse_class_template_id_tag(ds, keyword, t, qualifier, nloc, kw_loc, &attrs, ctx);
+            self.parse_class_template_id_tag(ds, keyword, t, qual, nloc, kw_loc, &attrs, ctx);
             return;
         }
         // [temp.names]/3: an unqualified name ordinary lookup does not
@@ -2970,7 +2970,7 @@ impl Parser<'_, '_> {
         // class template defined out of line) takes no declarator.
         let templated = !nested && keyword != TagKeyword::Enum && self.s.in_template_declaration();
         let wmark = self.s.written_ref_mark().filter(|_| self.s.records_written_refs());
-        let d = self.s.act_on_tag(keyword, name, qualifier, use_, scoped, fixed, kw_loc);
+        let d = self.s.act_on_tag_qual(keyword, name, qual, use_, scoped, fixed, kw_loc);
         // An elaborated-type-specifier that refers to an existing type
         // and declares nothing is a type name (spec/ast.md §18.4).
         if let Some(m) = wmark
@@ -3062,6 +3062,7 @@ impl Parser<'_, '_> {
             ds.tag_defined = true;
         }
         ds.tag = Some(d);
+        ds.tag_qual_nns = qual.map(|q| q.nns);
         ds.tag_declares = use_ != TagUse::Reference;
         ds.tag_extent = ext;
         ds.keyword = keyword;
@@ -3220,12 +3221,13 @@ impl Parser<'_, '_> {
         ds: &mut DeclSpec,
         keyword: TagKeyword,
         tmpl: DeclId,
-        qualifier: Option<DeclId>,
+        qual: Option<kiln_sema::using::Qualifier>,
         name_loc: Loc,
         kw_loc: Loc,
         attrs: &[AttrId],
         ctx: DeclaratorContext,
     ) {
+        let qualifier = qual.map(|q| q.ctx);
         // The template arguments of a partial or explicit specialization's
         // class-head are not access checked ([temp.spec.partial.general]/10,
         // [temp.spec.general]/6); a reference's join the declaration's.
@@ -3262,7 +3264,7 @@ impl Parser<'_, '_> {
             keyword,
             tmpl,
             &args,
-            qualifier,
+            qual,
             use_,
             name_loc,
             (l_angle, r_angle),
@@ -3328,6 +3330,7 @@ impl Parser<'_, '_> {
                 ds.tag = Some(d);
                 ds.tag_declares = true;
             }
+            ds.tag_qual_nns = qual.map(|q| q.nns);
             ty
         } else {
             if use_ == TagUse::Definition {

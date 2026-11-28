@@ -49,6 +49,9 @@ pub(super) struct ExplInst {
     owner: u8,
     /// `template class` (not `extern template class`).
     definition: bool,
+    /// The written nested-name-specifier (`template struct m::X<int>;`),
+    /// empty when unqualified (WP-3690).
+    qualifier: Vec<super::NnsRec>,
 }
 
 /// The section, in declaration order of the specializations.
@@ -141,6 +144,10 @@ impl Writer<'_, '_, '_> {
         let owner = u8::from(o.purview) | (u8::from(o.exported) << 1);
         let loc = self.loc(n.loc())?;
         let definition = si.kind == SpecKind::ExplicitInstantiationDefinition;
+        let qualifier = match ast.decls.decl_qualifier(d) {
+            Some(n) => self.nns_steps(n)?,
+            None => Vec::new(),
+        };
         let k = self.img.explinsts.insts.len() as u32;
         let before = self.img.attrs.insts.len();
         for a in own_attrs {
@@ -149,7 +156,15 @@ impl Writer<'_, '_, '_> {
                 return Err(e);
             }
         }
-        self.img.explinsts.insts.push(ExplInst { template, args, loc, lexical, owner, definition });
+        self.img.explinsts.insts.push(ExplInst {
+            template,
+            args,
+            loc,
+            lexical,
+            owner,
+            definition,
+            qualifier,
+        });
         Ok(())
     }
 }
@@ -163,7 +178,11 @@ pub(super) fn encode_explicit_insts(w: &mut Wr, s: &ExplInsts) {
         w.args(&x.args);
         w.u32(x.loc);
         w.u32(x.lexical);
-        w.u8(x.owner | (u8::from(x.definition) << 2));
+        let has_qual = !x.qualifier.is_empty();
+        w.u8(x.owner | (u8::from(x.definition) << 2) | (u8::from(has_qual) << 3));
+        if has_qual {
+            w.steps(&x.qualifier);
+        }
     }
 }
 
@@ -174,9 +193,10 @@ pub(super) fn decode_explicit_insts(r: &mut Rd) -> Res<ExplInsts> {
         let template = r.u32()?;
         let args = r.args()?;
         let (loc, lexical, bits) = (r.u32()?, r.u32()?, r.u8()?);
-        if bits > 7 {
+        if bits > 15 {
             return bad("bad explicit instantiation");
         }
+        let qualifier = if bits & 8 != 0 { r.steps()? } else { Vec::new() };
         insts.push(ExplInst {
             template,
             args,
@@ -184,6 +204,7 @@ pub(super) fn decode_explicit_insts(r: &mut Rd) -> Res<ExplInsts> {
             lexical,
             owner: bits & 3,
             definition: bits & 4 != 0,
+            qualifier,
         });
     }
     Ok(ExplInsts { insts })
@@ -229,7 +250,16 @@ pub(super) fn validate_explicit_insts(img: &Image, qref_ok: &dyn Fn(QRef) -> boo
                 false
             }
         });
-        if !matches!(tmpl, Some(Payload::Template { kind: 1, .. })) || !lex_ok || !args_ok {
+        let qual_ok = x.qualifier.is_empty()
+            || (super::steps_ok(img, &x.qualifier, img.decls.len())
+                && x.qualifier
+                    .iter()
+                    .all(|st| !matches!(st, super::NnsRec::Ty(q, _) if !qref_ok(*q))));
+        if !matches!(tmpl, Some(Payload::Template { kind: 1, .. }))
+            || !lex_ok
+            || !args_ok
+            || !qual_ok
+        {
             return bad("bad explicit instantiation");
         }
     }
@@ -261,8 +291,15 @@ impl Sema<'_, '_> {
             let owner = Owner { unit, purview: x.owner & 1 != 0, exported: x.owner & 2 != 0 };
             let next = self.ast.decls.next_id();
             self.ast.modules.set_owner_from(next, owner);
+            let qual_nns = if x.qualifier.is_empty() {
+                None
+            } else {
+                let mut qt = |me: &mut Self, q: QRef| me.image_ty(img, tys, ids, q);
+                self.image_nns(img, &x.qualifier, ids, &mut qt)
+            };
             let saved = std::mem::replace(&mut self.ctx, lexical);
-            let spec = self.act_on_explicit_class_inst(tmpl, &args, &locs, !x.definition, loc);
+            let spec =
+                self.act_on_explicit_class_inst(tmpl, &args, &locs, !x.definition, qual_nns, loc);
             self.ctx = saved;
             if let Ok(spec) = spec {
                 self.image_inst_attrs(img, k as u32, spec, main);

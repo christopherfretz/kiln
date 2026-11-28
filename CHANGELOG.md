@@ -10,6 +10,18 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- `Ast::decl_qualifier(d: DeclId) -> Option<NnsId>` records the written
+  nested-name-specifier on qualified declarations with template arguments,
+  alias template specializations, typedefs, and namespace aliases kept as
+  written (spec/ast.md §4.2, WP-3690): covers out-of-line member
+  functions/vars/nested classes/enums, explicit and partial specializations,
+  namespace-qualified definitions, member templates (forwarded from their
+  pattern), `using enum`, `using` (consistent with `Ast::using_qualifier`),
+  qualified friends, and explicit instantiations of members, classes, and
+  templates (recorded on the target specialization/member's first
+  declaration). Stored in `ColdDeclData::decl_qualifier` (0 bytes per
+  unqualified declaration) and carried by PCH snapshots (`FORMAT_VERSION`
+  192) and module declaration images (`IMAGE_VERSION` 105).
 - Written label uses (`goto l`, `&&l`, and `asm goto` label operands) are
   now recorded in the written-reference table with role `RefRole::Label`
   (`label`), pointing to their `LabelDecl` (updated to the `l:` definition

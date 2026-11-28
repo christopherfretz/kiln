@@ -288,6 +288,9 @@ pub struct DeclSpec {
     /// The class or enumeration declared or defined by this
     /// decl-specifier-seq (`struct S { }`, `enum E : int;`).
     pub tag: Option<DeclId>,
+    /// The nested-name-specifier written on that tag's class-head or
+    /// elaborated-type-specifier (`struct m::X<int>`), if any (WP-3690).
+    pub tag_qual_nns: Option<NnsId>,
     /// Whether `tag` is a declaration of its own (`struct S;`,
     /// `struct S { }`) rather than a reference (`struct S *p;`).
     pub tag_declares: bool,

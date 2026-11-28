@@ -525,7 +525,14 @@ impl Sema<'_, '_> {
                 let found: Vec<DeclId> = self.ast.lookup_local(class, name).iter().collect();
                 self.function_templates_in(&found)
             };
-            self.act_on_explicit_special_template_inst(ds, &templates, name, ty, sloc);
+            self.act_on_explicit_special_template_inst(
+                ds,
+                &templates,
+                name,
+                ty,
+                d.qualifier_nns,
+                sloc,
+            );
             return None;
         }
         if matched.is_none()
@@ -629,7 +636,12 @@ impl Sema<'_, '_> {
             self.templ.cur = None;
             self.note_explicit_inst_named(p);
             self.note_written_inst_target(sloc, self.ast.first(p));
-            self.act_on_explicit_member_inst(self.ast.first(p), ext.is_some(), sloc);
+            self.act_on_explicit_member_inst(
+                self.ast.first(p),
+                ext.is_some(),
+                d.qualifier_nns,
+                sloc,
+            );
             return None;
         }
         if let Some(p) = prev_ok

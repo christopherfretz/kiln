@@ -174,7 +174,9 @@ pub(crate) const MAGIC: [u8; 8] = *b"KILNSNAP";
 /// (`TemplState::fn_spec_failed_gen`, `TemplState::class_partial_ambig_gen`).
 /// version 191 (WP-3688) `RefRole::Label` for written label uses in the
 /// written-reference table.
-pub(crate) const FORMAT_VERSION: u32 = 191;
+/// version 192 (WP-3690) `ColdDeclData::decl_qualifier` for written
+/// nested-name-specifiers on declarations.
+pub(crate) const FORMAT_VERSION: u32 = 192;
 /// The length of the magic and the format version.
 pub(crate) const HEADER_LEN: usize = 12;
 

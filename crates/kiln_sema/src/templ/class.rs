@@ -3262,7 +3262,13 @@ impl Substituter<'_, '_, '_> {
                 let e = self.sema.ast.using_target(m).ok_or(SubstFail)?;
                 let e = self.find_instantiated_decl(e, loc)?;
                 let written = self.sema.decl_name(e);
-                self.sema.using_enum_of(e, &written, loc)
+                let ud = self.sema.using_enum_of(e, &written, loc);
+                if let Some(pnns) = self.sema.ast.decls.decl_qualifier(m)
+                    && let Ok(nns) = self.nns(pnns, loc)
+                {
+                    self.sema.builder().set_decl_qualifier(ud, nns);
+                }
+                ud
             }
             DeclKind::AccessSpec => {
                 let a = n.misc().access();

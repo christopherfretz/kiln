@@ -4016,7 +4016,7 @@ impl Sema<'_, '_> {
         } {
             QualifiedDecl::Keep => d,
             QualifiedDecl::Unqualify => {
-                unqualified = Declarator { qualifier: None, ..d.clone() };
+                unqualified = Declarator { qualifier: None, qualifier_nns: None, ..d.clone() };
                 &unqualified
             }
             QualifiedDecl::Drop => {
@@ -4025,10 +4025,27 @@ impl Sema<'_, '_> {
             }
             QualifiedDecl::DropLocal => {
                 dropped_local = true;
-                unqualified = Declarator { qualifier: None, invalid: true, ..d.clone() };
+                unqualified =
+                    Declarator { qualifier: None, qualifier_nns: None, invalid: true, ..d.clone() };
                 &unqualified
             }
         };
+        let decl = self.act_on_declarator_checked(ds, base, d, head, dropped_local);
+        if let (Some(x), Some(nns)) = (decl, d.qualifier_nns) {
+            self.builder().set_decl_qualifier(x, nns);
+        }
+        decl
+    }
+
+    #[allow(clippy::too_many_lines, reason = "one flat dispatch over declarator kinds")]
+    fn act_on_declarator_checked(
+        &mut self,
+        ds: &DeclSpec,
+        base: QualType,
+        d: &Declarator,
+        head: Option<kiln_ast::ids::TemplateParamListId>,
+        dropped_local: bool,
+    ) -> Option<DeclId> {
         if !d.dropped
             && ds.friend.is_none()
             && let Some((SpecialName::DeductionGuide(t), _)) = d.special
@@ -10647,6 +10664,52 @@ impl Sema<'_, '_> {
         fixed: Option<QualType>,
         loc: Loc,
     ) -> DeclId {
+        self.act_on_tag_impl(keyword, name, qualifier, None, use_, scoped, fixed, loc)
+    }
+
+    /// [`Sema::act_on_tag`] with the tag's written nested-name-specifier
+    /// (`qual`, WP-3690), recorded in `ColdDeclData::decl_qualifier` for
+    /// qualified tag declarations, definitions, and member class explicit
+    /// instantiations.
+    #[allow(clippy::too_many_arguments, reason = "mirrors act_on_tag")]
+    pub fn act_on_tag_qual(
+        &mut self,
+        keyword: TagKeyword,
+        name: Option<(Symbol, Loc)>,
+        qual: Option<crate::using::Qualifier>,
+        use_: TagUse,
+        scoped: u32,
+        fixed: Option<QualType>,
+        loc: Loc,
+    ) -> DeclId {
+        self.act_on_tag_impl(
+            keyword,
+            name,
+            qual.map(|q| q.ctx),
+            qual.map(|q| q.nns),
+            use_,
+            scoped,
+            fixed,
+            loc,
+        )
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        clippy::too_many_lines,
+        reason = "one lookup-and-redeclaration sequence shared by every tag use"
+    )]
+    fn act_on_tag_impl(
+        &mut self,
+        keyword: TagKeyword,
+        name: Option<(Symbol, Loc)>,
+        qualifier: Option<DeclId>,
+        qual_nns: Option<kiln_ast::NnsId>,
+        use_: TagUse,
+        scoped: u32,
+        fixed: Option<QualType>,
+        loc: Loc,
+    ) -> DeclId {
         if use_ == TagUse::Declaration
             && let Some((_, nloc)) = name
             && let Some((_, template_loc)) = self.templ.explicit_inst
@@ -10659,7 +10722,7 @@ impl Sema<'_, '_> {
             // a reference).
             let p =
                 self.act_on_tag(keyword, name, qualifier, TagUse::Reference, scoped, fixed, loc);
-            if !self.act_on_explicit_member_class_inst(p, nloc)
+            if !self.act_on_explicit_member_class_inst(p, qual_nns, nloc)
                 && self.templ.explicit_inst.take().is_some()
                 && !self.is_invalid_decl(p)
             {
@@ -10837,8 +10900,8 @@ impl Sema<'_, '_> {
                 {
                     // `[extern] template struct C<args>::I;` explicitly
                     // instantiates a member class ([temp.explicit]/3).
-                    let inst =
-                        qualifier.is_some() && self.act_on_explicit_member_class_inst(p, nloc);
+                    let inst = qualifier.is_some()
+                        && self.act_on_explicit_member_class_inst(p, qual_nns, nloc);
                     if head.is_none() {
                         self.check_member_tag_redeclared(p, nloc);
                     }
@@ -10928,6 +10991,13 @@ impl Sema<'_, '_> {
             self.check_forward_ref_enum(prev, nloc);
         }
         let d = self.new_tag_decl(h, keyword, (scoped, fixed), prev, plain_ref);
+        if let Some(nns) = qual_nns
+            && matches!(use_, TagUse::Definition | TagUse::Declaration)
+            && !conflict
+            && !redefined
+        {
+            self.builder().set_decl_qualifier(d, nns);
+        }
         self.note_born_invalid(d);
         if merged_dup {
             self.note_merged_duplicate(d);

@@ -265,13 +265,54 @@ impl Sema<'_, '_> {
         self.emit(e);
     }
 
+    /// The written nested-name-specifier of a friend type specifier `ty`
+    /// (`friend struct m::S;`, `friend m::S;`, `friend class T::Y;`), if any.
+    fn type_written_qualifier(&self, ty: QualType) -> Option<kiln_ast::NnsId> {
+        let mut cur = ty;
+        for _ in 0..16 {
+            match self.ast.types.view(cur.ty()) {
+                TypeView::PackExpansion { pattern, .. } => cur = pattern,
+                TypeView::Elaborated { nns: Some(n), .. }
+                | TypeView::DependentName { nns: n, .. }
+                | TypeView::DependentTemplateSpecialization { nns: n, .. } => return Some(n),
+                TypeView::Elaborated { nns: None, named, .. } => cur = named,
+                TypeView::TemplateSpecialization { name, .. } => {
+                    return match self.ast.types.template_name_view(name) {
+                        kiln_ast::types::TemplateName::Qualified { nns, .. } => Some(nns),
+                        _ => None,
+                    };
+                }
+                _ => return None,
+            }
+        }
+        None
+    }
+
     /// [`Sema::act_on_friend`]: the befriended function or type, recorded
     /// in the class being defined (`RecordCold.friends` at `}`).
+    pub(crate) fn declare_friend(
+        &mut self,
+        ds: &DeclSpec,
+        base: QualType,
+        d: Option<&Declarator>,
+        friend_loc: Loc,
+    ) -> Option<DeclId> {
+        let qual_nns = match d {
+            Some(d) => d.qualifier_nns,
+            None => ds.tag_qual_nns.or_else(|| self.type_written_qualifier(base)),
+        };
+        let fd = self.declare_friend_impl(ds, base, d, friend_loc)?;
+        if let Some(nns) = qual_nns {
+            self.builder().set_decl_qualifier(fd, nns);
+        }
+        Some(fd)
+    }
+
     #[allow(
         clippy::too_many_lines,
         reason = "one step per friend rule, as clang's ActOnFriendFunctionDecl"
     )]
-    pub(crate) fn declare_friend(
+    fn declare_friend_impl(
         &mut self,
         ds: &DeclSpec,
         base: QualType,
@@ -468,6 +509,9 @@ impl Sema<'_, '_> {
             self.check_friend_template_defaults(head);
         }
         let target = self.finish_template_pattern(f).unwrap_or(f);
+        if let Some(nns) = d.qualifier_nns {
+            self.builder().set_decl_qualifier(f, nns);
+        }
         if d.qualifier.is_some() && !local && self.friend_needs_access_check(target) {
             // clang notes a member template at the friend redeclaring it.
             let note_at = head.is_some().then(|| d.name_loc());

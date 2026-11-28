@@ -3901,6 +3901,13 @@ impl<'a> AstBuilder<'a> {
         let _ = self.ast.decls.cold.written_decl_type.insert(d, ty);
     }
 
+    /// Records the nested-name-specifier `nns` as written on declaration
+    /// `d` ([`crate::decl::ColdDeclData::decl_qualifier`], spec/ast.md
+    /// §4.2, WP-3690); a second record for `d` is ignored.
+    pub fn set_decl_qualifier(&mut self, d: DeclId, nns: crate::ids::NnsId) {
+        let _ = self.ast.decls.cold.decl_qualifier.insert(d, nns);
+    }
+
     /// Records the type as written `ty` of named or functional cast `e`
     /// ([`crate::expr::ColdExprData::cast_written`]); a second record for
     /// the same cast is ignored.

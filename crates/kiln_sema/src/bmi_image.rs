@@ -103,7 +103,7 @@ pub(crate) use locs::Locs;
 use locs::{FileRec, LocTable, SlocRec};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 104;
+pub(crate) const IMAGE_VERSION: u32 = 105;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -811,6 +811,9 @@ struct Image {
     /// whose type (or return type) was deduced from a placeholder
     /// (`ColdDeclData::written_decl_type`), in ascending record order.
     written_decls: Vec<(u32, QRef)>,
+    /// WP-3690: the nested-name-specifier written on a carried declaration
+    /// (`ColdDeclData::decl_qualifier`), in ascending record order.
+    decl_qualifiers: Vec<(u32, Vec<NnsRec>)>,
 }
 
 const K_NAMESPACE: u8 = 1;
@@ -1615,6 +1618,7 @@ fn encode(img: &Image) -> Vec<u8> {
     specbase::encode_member_classes(&mut w, &img.mclasses);
     fpstate::encode_fp_inits(&mut w, &img.fp_inits);
     written::encode_written_decls(&mut w, &img.written_decls);
+    written::encode_decl_qualifiers(&mut w, &img.decl_qualifiers);
     extents::encode_extents(&mut w, &img.extents);
     splits::encode_splits(&mut w, &img.splits);
     refs::encode_refs(&mut w, &img.refs);
@@ -2354,6 +2358,7 @@ fn decode_with(bytes: &[u8], want_refs: bool) -> Res<Image> {
     img.mclasses = specbase::decode_member_classes(&mut r)?;
     img.fp_inits = fpstate::decode_fp_inits(&mut r)?;
     img.written_decls = written::decode_written_decls(&mut r)?;
+    img.decl_qualifiers = written::decode_decl_qualifiers(&mut r)?;
     img.extents = extents::decode_extents(&mut r)?;
     img.splits = splits::decode_splits(&mut r)?;
     img.refs = refs::decode_refs(&mut r, want_refs)?;
@@ -3561,6 +3566,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
     exprs::validate_late_nx(img)?;
     fpstate::validate_fp_inits(img)?;
     written::validate_written_decls(img, &|q| qref_ok(q, nt))?;
+    written::validate_decl_qualifiers(img, &|q| qref_ok(q, nt))?;
     body::validate_bodies(img, &|q| qref_ok(q, nt))
 }
 
@@ -5112,6 +5118,7 @@ impl Writer<'_, '_, '_> {
         self.walk_roots()?;
         self.lambda_contexts()?;
         self.written_decl_types()?;
+        self.decl_qualifiers()?;
         self.written_section();
         self.fp_inits();
         self.extents_section()?;
@@ -6671,6 +6678,7 @@ impl Sema<'_, '_> {
         }
         self.image_fp_inits(img, &ids);
         self.image_written_decls(img, &mut tys, &ids);
+        self.image_decl_qualifiers(img, &mut tys, &ids);
         self.image_spec_defaults(img, &ids, main);
         self.image_defaulted_cmps(img, &ids, main);
         self.image_explicit_insts(img, &mut tys, &ids, main);
@@ -7334,6 +7342,7 @@ mod tests {
             mclasses: specbase::MemberClasses::default(),
             fp_inits: Vec::new(),
             written_decls: Vec::new(),
+            decl_qualifiers: Vec::new(),
             cons: constraints::Constraints::default(),
             reqs: requires::ReqBodies::default(),
             written: Vec::new(),

@@ -1190,6 +1190,7 @@ pub static COLD_MAPS: &[ColdMapRoles] = &[
     cold("ColdDeclData", "friend_form", D, Role::Value("friend_forms row")),
     cold("ColdDeclData", "subst_failed", D, Role::Record("SubstFailedKind")),
     cold("ColdDeclData", "written_decl_type", D, T),
+    cold("ColdDeclData", "decl_qualifier", D, Role::Nns),
 ];
 
 #[cfg(test)]
