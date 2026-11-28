@@ -22,6 +22,14 @@ template <class T, P v> struct G {};
 template <class U, U v> struct W {};
 template <class T, long n = 1> struct L {};
 template <class T, int M, unsigned N> struct Z {};
+constexpr int k = 3;
+template <int, int...> struct V {};
+template <int, int, int...> struct V2 {};
+template <int, int> struct P2 {};
+template <class T, int... Ns> struct Wp {};
+template <class T, auto... Ns> struct WA {};
+template <class U, U... vs> struct WD {};
+template <class T, int = 1, int...> struct D2 {};
 
 template <class T> void i1(It<T, 1 == 1>) {}
 template <class T> void i2(It<T, true>) {}
@@ -44,6 +52,17 @@ template <class T> void l1(L<T, 2>) {}
 template <class T> void l2(L<T, 'a'>) {}
 template <class T> void l3(L<T>) {}
 template <int M, class T> void z1(Z<T, M, 1 + 2>) {}
+template <int... Ns> void pk1(V<k, Ns...>) {}
+template <class T> void pk2(Wp<T, k>) {}
+template <class T, int... Ns> void pk3(Wp<T, Ns..., k>) {}
+template <int... Ns> void pk4(V2<k, Ns..., 4>) {}
+template <int... Ns> void pk5(V2<3, Ns..., 1 + 1>) {}
+template <int... Ns> void pk6(V2<3, 4, Ns...>) {}
+template <int... Ns> void pk7(P2<Ns..., k>) {}
+template <class T> void pk8(D2<T>) {}
+template <class T> void pk9(WA<T, k>) {}
+template <class T> void pk10(WD<T, 1>) {}
+template <class T> void pk11(WD<T, 1u>) {}
 
 void use() {
   i1(It<int, true>{});
@@ -67,5 +86,16 @@ void use() {
   l2(L<int, 'a'>{});
   l3(L<int>{});
   z1<4>(Z<int, 4, 3>{});
+  pk1<1, 2>(V<3, 1, 2>{});
+  pk2(Wp<int, 3>{});
+  pk3<int, 1>(Wp<int, 1, 3>{});
+  pk4<1>(V2<3, 1, 4>{});
+  pk5<1>(V2<3, 1, 2>{});
+  pk6<1>(V2<3, 4, 1>{});
+  pk7<1>(P2<1, 3>{});
+  pk8(D2<int, 1>{});
+  pk9(WA<int, 3>{});
+  pk10(WD<int, 1>{});
+  pk11(WD<int, 1>{});
 }
 } // namespace cv

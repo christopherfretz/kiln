@@ -795,11 +795,22 @@ impl Sema<'_, '_> {
     /// `X<T, N + 1>` name the same type. A dependent specialization's
     /// arguments that can be converted are values by then
     /// ([`Sema::dependent_class_spec_type`]); the rest (a value-dependent
-    /// one, one for a parameter whose type is still dependent, any when a
-    /// pack is involved) are profiled here.
+    /// one, one for a parameter whose type is still dependent, a pack
+    /// expansion or an argument after one that hit a non-pack parameter)
+    /// are profiled here.
     pub(crate) fn profile_value_args(&mut self, list: ArgListId) -> ArgListId {
         let args = self.ast.types.args(list).to_vec();
-        if !args.iter().any(|a| matches!(a.view(), ArgView::Expr { profile: None, .. })) {
+        let needs = args.iter().any(|a| match a.view() {
+            ArgView::Expr { profile: None, .. } => true,
+            ArgView::Pack(inner) => self
+                .ast
+                .types
+                .args(inner)
+                .iter()
+                .any(|e| matches!(e.view(), ArgView::Expr { profile: None, .. })),
+            _ => false,
+        });
+        if !needs {
             return list;
         }
         let out: Vec<TemplateArg> = args
@@ -808,6 +819,7 @@ impl Sema<'_, '_> {
                 ArgView::Expr { expr, profile: None } => {
                     TemplateArg::expr(expr, Some(self.ast.profile_expr(expr)))
                 }
+                ArgView::Pack(inner) => TemplateArg::pack(self.profile_value_args(inner)),
                 _ => a,
             })
             .collect();
@@ -1382,14 +1394,15 @@ impl Sema<'_, '_> {
     /// `struct It<T, true> *q;`). `converted` is the argument list
     /// [`Sema::check_dependent_template_args_converted`] gave: the
     /// canonical type takes its values, so `It<T, 1 == 1>` and
-    /// `It<T, true>` are one type ([temp.type]/1) while the written
-    /// arguments stay as sugar. Without one (a pack is involved) its
+    /// `It<T, true>` (and `V<n::k, Ns...>` and `V<3, Ns...>`) are one
+    /// type ([temp.type]/1) while the written arguments stay as sugar.
+    /// Without one (an expanded or non-trailing parameter pack) its
     /// non-dependent value arguments are profiled
     /// ([`Sema::profile_value_args`]) and the parameters not written take
     /// their defaults. A partial specialization's own arguments name its
     /// current instantiation, so every spelling of one template-id is one
     /// canonical type ([temp.type]/1, [temp.over.link]/5;
-    /// spec/sema-templates.md §2.2, WP-3270, WP-3321).
+    /// spec/sema-templates.md §2.2, WP-3270, WP-3321, WP-3689).
     pub(crate) fn dependent_class_spec_type(
         &mut self,
         name: TemplateNameId,
