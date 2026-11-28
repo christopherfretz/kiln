@@ -3197,7 +3197,13 @@ reports a dropped statement, part or declaration lookup.
 
 - A friend function **defined** in a class template (a hidden friend) is
   instantiated as a declaration into the innermost enclosing namespace,
-  visible only to ADL. Its body is instantiated on odr-use. It is
+  visible only to ADL. Its body is instantiated on odr-use. The definition
+  instantiated for a use is found from any redeclaration in the chain whose
+  pattern has a body (`Sema::member_redecl_instance`, [temp.inst]/4), even
+  when the bound or first declaration is an instantiated bodyless friend
+  (WP-3686; Tests: `temp.inst/friend-definition-used-before-instantiation.cpp`,
+  `temp.inst/friend-def-later-bodyless-redecl-run.cpp`,
+  `temp.inst/friend-def-later-bodyless-redecl-cxx17-run.cpp`). It is
   instantiated through its `FriendDecl` only (WP-082), not also as an
   entry of the class's member list. A defaulted friend comparison is
   instantiated as defaulted and checked at the specialization's `}`
