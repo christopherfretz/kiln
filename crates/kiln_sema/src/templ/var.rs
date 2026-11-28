@@ -933,6 +933,9 @@ impl Sema<'_, '_> {
                         s.point_of_instantiation = name_loc;
                     }
                 });
+                if let Some(nns) = d.qualifier_nns {
+                    self.builder().set_decl_qualifier(v, nns);
+                }
             }
             // A definition instantiates the initializer before the type
             // is compared, so an array of unknown bound is compared with
@@ -998,6 +1001,9 @@ impl Sema<'_, '_> {
                 x.kind = kind;
                 x.point_of_instantiation = name_loc;
             });
+            if let Some(nns) = d.qualifier_nns {
+                self.builder().set_decl_qualifier(m, nns);
+            }
             if !declaration {
                 self.module_note_explicit_inst_def(m);
             }

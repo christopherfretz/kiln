@@ -1438,7 +1438,11 @@ impl Sema<'_, '_> {
             return None;
         }
         self.mark_type_referenced(td);
-        Some(self.using_enum_of(e, &written, name_loc))
+        let ud = self.using_enum_of(e, &written, name_loc);
+        if let Some(q) = qual {
+            self.builder().set_decl_qualifier(ud, q.nns);
+        }
+        Some(ud)
     }
 
     /// The using-enum-declaration for enumeration `e` (`written` is how

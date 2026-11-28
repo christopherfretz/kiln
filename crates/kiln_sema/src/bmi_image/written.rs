@@ -143,6 +143,62 @@ impl Writer<'_, '_, '_> {
         self.img.written_decls = rows;
         Ok(())
     }
+
+    /// Carries `ColdDeclData::decl_qualifier` for every carried
+    /// declaration that has one (spec/ast.md §4.2, spec/modules.md §11.11,
+    /// WP-3690), in ascending record order.
+    pub(super) fn decl_qualifiers(&mut self) -> W<()> {
+        let mut pairs: Vec<(u32, NnsId)> = self
+            .s
+            .ast
+            .decls
+            .cold
+            .decl_qualifier
+            .iter()
+            .filter_map(|(d, &n)| self.recs.get(&d).map(|&r| (r, n)))
+            .collect();
+        pairs.sort_unstable_by_key(|&(r, _)| r);
+        let mut rows = Vec::with_capacity(pairs.len());
+        for (r, n) in pairs {
+            rows.push((r, self.nns_steps(n)?));
+        }
+        self.img.decl_qualifiers = rows;
+        Ok(())
+    }
+}
+
+pub(super) fn encode_decl_qualifiers(w: &mut Wr, rows: &[(u32, Vec<NnsRec>)]) {
+    w.len(rows.len());
+    for (r, steps) in rows {
+        w.u32(*r);
+        w.steps(steps);
+    }
+}
+
+pub(super) fn decode_decl_qualifiers(r: &mut Rd<'_>) -> Res<Vec<(u32, Vec<NnsRec>)>> {
+    let n = r.count(5)?;
+    let mut v = Vec::with_capacity(n);
+    for _ in 0..n {
+        v.push((r.u32()?, r.steps()?));
+    }
+    Ok(v)
+}
+
+/// Checks each `decl_qualifiers` entry: ascending distinct declaration
+/// records, each qualifier non-empty with valid steps and type refs.
+pub(super) fn validate_decl_qualifiers(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Res<()> {
+    let mut last = None;
+    for (r, s) in &img.decl_qualifiers {
+        let ok = last.is_none_or(|l| l < *r)
+            && (*r as usize) < img.decls.len()
+            && super::steps_ok(img, s, img.decls.len())
+            && s.iter().all(|st| !matches!(st, NnsRec::Ty(q, _) if !qref_ok(*q)));
+        if !ok {
+            return bad("bad declaration qualifier row");
+        }
+        last = Some(*r);
+    }
+    Ok(())
 }
 
 pub(super) fn encode_written_decls(w: &mut Wr, rows: &[(u32, QRef)]) {
@@ -335,6 +391,23 @@ impl Sema<'_, '_> {
             self.builder().set_written_decl_type(d, ty);
         }
     }
+
+    /// Enters `img`'s `decl_qualifiers` rows into
+    /// `ColdDeclData::decl_qualifier` (WP-3690).
+    pub(super) fn image_decl_qualifiers(
+        &mut self,
+        img: &Image,
+        tys: &mut Vec<QualType>,
+        ids: &[DeclId],
+    ) {
+        for (rec, steps) in &img.decl_qualifiers {
+            let Some(&d) = ids.get(*rec as usize) else { continue };
+            let mut qt = |me: &mut Self, q: QRef| me.image_ty(img, tys, ids, q);
+            if let Some(nns) = self.image_nns(img, steps, ids, &mut qt) {
+                self.builder().set_decl_qualifier(d, nns);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -415,6 +488,39 @@ mod tests {
             ("duplicate", |i| i.written_decls.push(i.written_decls[0])),
             ("not var or fn", |i| i.written_decls[0].0 = 0),
             ("type out of range", |i| i.written_decls[0].1.ty = 9999),
+        ];
+        for (what, mutate) in corrupt {
+            let mut bad = img.clone();
+            mutate(&mut bad);
+            assert!(decode(&encode(&bad)).is_err(), "{what}");
+        }
+    }
+
+    /// spec/ast.md §4.2, spec/modules.md §11.11 (WP-3690):
+    /// `decl_qualifiers` round-trips; a duplicate record, out-of-range
+    /// record, empty step list, or out-of-range type step is rejected.
+    #[test]
+    fn decl_qualifiers_round_trip() {
+        type Corrupt = (&'static str, fn(&mut Image));
+        let mut img = template_sample();
+        let t = QRef { ty: BUILTINS + 1 + 3, quals: 0 };
+        let f = img
+            .decls
+            .iter()
+            .position(|d| matches!(d.payload, Payload::Function { .. }))
+            .expect("a function record") as u32;
+        img.decl_qualifiers = vec![(f, vec![NnsRec::Ty(t, false)])];
+        assert_eq!(decode(&encode(&img)), Ok(img.clone()));
+        let corrupt: [Corrupt; 4] = [
+            ("duplicate", |i| {
+                let row = i.decl_qualifiers[0].clone();
+                i.decl_qualifiers.push(row);
+            }),
+            ("record out of range", |i| i.decl_qualifiers[0].0 = 9999),
+            ("empty steps", |i| i.decl_qualifiers[0].1.clear()),
+            ("type step out of range", |i| {
+                i.decl_qualifiers[0].1 = vec![NnsRec::Ty(QRef { ty: 9999, quals: 0 }, false)];
+            }),
         ];
         for (what, mutate) in corrupt {
             let mut bad = img.clone();

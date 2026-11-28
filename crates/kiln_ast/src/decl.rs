@@ -8,7 +8,7 @@
 use kiln_source::Loc;
 
 use crate::ids::{
-    ConstValueId, DeclId, ExprId, LambdaId, ListId, QualType, RawId, RedeclGroupId, StmtId,
+    ConstValueId, DeclId, ExprId, LambdaId, ListId, NnsId, QualType, RawId, RedeclGroupId, StmtId,
     StringLitId,
 };
 use crate::mem::{HeapSize, MemReport, MemRow, VecDims};
@@ -1943,6 +1943,12 @@ pub struct ColdDeclData {
     /// when the deduced part contains at least one written expression
     /// (`DeclArena::written_decl_type`, spec/types.md §8.4; WP-3640).
     pub written_decl_type: ColdMap<DeclId, QualType>,
+    /// The nested-name-specifier written on a declaration's declarator-id,
+    /// tag head, `using enum`, qualified friend, or explicit instantiation
+    /// (`Ast::decl_qualifier`, spec/ast.md §4.2; WP-3690). `Using`,
+    /// `UnresolvedUsingValue`, and `UnresolvedUsingTypename` keep theirs
+    /// inline in `DeclNode.data` (`Ast::using_qualifier`).
+    pub decl_qualifier: ColdMap<DeclId, NnsId>,
 }
 
 impl Default for ColdDeclData {
@@ -1988,12 +1994,13 @@ impl Default for ColdDeclData {
             friend_form: ColdMap::new("friend_form"),
             subst_failed: ColdMap::new("subst_failed"),
             written_decl_type: ColdMap::new("written_decl_type"),
+            decl_qualifier: ColdMap::new("decl_qualifier"),
         }
     }
 }
 
 impl ColdDeclData {
-    fn rows(&self) -> [MemRow; 40] {
+    fn rows(&self) -> [MemRow; 41] {
         [
             self.lexical_ctx.mem_row(),
             self.written_ns.mem_row(),
@@ -2035,6 +2042,7 @@ impl ColdDeclData {
             self.friend_form.mem_row(),
             self.subst_failed.mem_row(),
             self.written_decl_type.mem_row(),
+            self.decl_qualifier.mem_row(),
         ]
     }
 }
@@ -2823,6 +2831,14 @@ impl DeclArena {
     /// expression (spec/types.md §8.4, WP-3640).
     pub fn written_decl_type(&self, d: DeclId) -> Option<QualType> {
         self.cold.written_decl_type.get(d).copied()
+    }
+
+    /// The nested-name-specifier stored in [`ColdDeclData::decl_qualifier`]
+    /// for declaration `d` (spec/ast.md §4.2, WP-3690). Most callers should
+    /// use [`crate::Ast::decl_qualifier`], which also answers for `Using`
+    /// declarations and templates.
+    pub fn decl_qualifier(&self, d: DeclId) -> Option<NnsId> {
+        self.cold.decl_qualifier.get(d).copied()
     }
 
     /// What failed to form, silently, in invalid declaration `d` (spec/ast.md

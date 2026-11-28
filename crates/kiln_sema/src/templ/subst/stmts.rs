@@ -955,7 +955,13 @@ impl Substituter<'_, '_, '_> {
                 let e = self.sema.ast.using_target(d).ok_or(SubstFail)?;
                 let e = self.find_instantiated_decl(e, loc)?;
                 let written = self.sema.decl_name(e);
-                Ok(self.sema.using_enum_of(e, &written, loc))
+                let ud = self.sema.using_enum_of(e, &written, loc);
+                if let Some(pnns) = self.sema.ast.decls.decl_qualifier(d)
+                    && let Ok(nns) = self.nns(pnns, loc)
+                {
+                    self.sema.builder().set_decl_qualifier(ud, nns);
+                }
+                Ok(ud)
             }
             DeclKind::CXXRecord => Ok(self.local_class(d, None)),
             DeclKind::Enum => {

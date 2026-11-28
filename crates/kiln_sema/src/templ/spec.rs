@@ -199,18 +199,20 @@ impl Sema<'_, '_> {
     /// dependent reference) and the elaborated type. `Err` after a
     /// diagnostic (a definition's body is then skipped).
     #[allow(clippy::result_unit_err, reason = "`Err` means already diagnosed")]
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     pub fn act_on_class_template_id_tag(
         &mut self,
         keyword: TagKeyword,
         tmpl: DeclId,
         args: &[TemplateArg],
-        qualifier: Option<DeclId>,
+        qual: Option<crate::using::Qualifier>,
         use_: TagUse,
         name_loc: Loc,
         (l_angle, r_angle): (Loc, Loc),
         kw_loc: Loc,
     ) -> Result<(Option<DeclId>, QualType), ()> {
+        let qualifier = qual.map(|q| q.ctx);
+        let qual_nns = qual.map(|q| q.nns);
         let range = Span::new(name_loc, r_angle.with_offset(1));
         let tmpl = self.ast.first(tmpl);
         let corrected = self.templ.typo_corrected.take() == Some(tmpl);
@@ -268,6 +270,9 @@ impl Sema<'_, '_> {
                 let r = self.act_on_partial_spec(keyword, tmpl, args, &locs, use_, range);
                 self.templ.cur = None;
                 let p = r?;
+                if let Some(nns) = qual_nns {
+                    self.builder().set_decl_qualifier(p, nns);
+                }
                 // Its value arguments profiled as any dependent
                 // template-id's are (WP-3270).
                 let list = self.ast.types.arg_list(args);
@@ -278,6 +283,9 @@ impl Sema<'_, '_> {
             TagForm::ExplicitSpec => {
                 let spec =
                     self.act_on_explicit_class_spec(keyword, tmpl, args, &locs, use_, range)?;
+                if let Some(nns) = qual_nns {
+                    self.builder().set_decl_qualifier(spec, nns);
+                }
                 Ok((Some(spec), self.spec_tag_type(keyword, name, args, spec)))
             }
             TagForm::ExplicitInst { declaration } => {
@@ -291,8 +299,14 @@ impl Sema<'_, '_> {
                     (qualifier.is_some(), corrected),
                     name_loc,
                 );
-                let spec =
-                    self.act_on_explicit_class_inst(tmpl, args, &locs, declaration, name_loc)?;
+                let spec = self.act_on_explicit_class_inst(
+                    tmpl,
+                    args,
+                    &locs,
+                    declaration,
+                    qual_nns,
+                    name_loc,
+                )?;
                 Ok((Some(spec), self.spec_tag_type(keyword, name, args, spec)))
             }
             TagForm::Reference => {
@@ -1058,6 +1072,7 @@ impl Sema<'_, '_> {
         args: &[TemplateArg],
         locs: &[Loc],
         declaration: bool,
+        qual_nns: Option<kiln_ast::NnsId>,
         name_loc: Loc,
     ) -> Result<DeclId, ()> {
         let spec = self.get_class_spec(tmpl, args, locs, name_loc)?;
@@ -1118,6 +1133,9 @@ impl Sema<'_, '_> {
             // instantiation's written arguments.
             let w = self.ast.types.arg_list(args);
             self.ast.templates.set_args_as_written(spec, w, false);
+            if let Some(nns) = qual_nns {
+                self.builder().set_decl_qualifier(spec, nns);
+            }
         }
         if self.ast.definition(spec).is_none() && !self.instantiate_explicit(spec, name_loc) {
             return Err(());
@@ -1274,7 +1292,12 @@ impl Sema<'_, '_> {
     /// declared after an explicit instantiation's `template`: when `p` is
     /// a member class of a class template specialization
     /// ([temp.explicit]/3), it is explicitly instantiated (true).
-    pub(crate) fn act_on_explicit_member_class_inst(&mut self, p: DeclId, name_loc: Loc) -> bool {
+    pub(crate) fn act_on_explicit_member_class_inst(
+        &mut self,
+        p: DeclId,
+        qual_nns: Option<kiln_ast::NnsId>,
+        name_loc: Loc,
+    ) -> bool {
         let m = self.ast.first(p);
         if !self.at_explicit_head() || self.ast.member_spec_info(m).is_none() {
             return false;
@@ -1283,7 +1306,7 @@ impl Sema<'_, '_> {
         let pattern = self.ast.instantiated_from(m).unwrap_or(m);
         let n = self.decl_name(m);
         self.check_explicit_inst_scope(pattern, n, true, name_loc);
-        self.explicit_member_class_inst(m, ext.is_some(), name_loc);
+        self.explicit_member_class_inst(m, ext.is_some(), qual_nns, name_loc);
         true
     }
 
@@ -1292,7 +1315,13 @@ impl Sema<'_, '_> {
     /// definition is instantiated and, for a definition, the definitions
     /// of its members, handed to codegen here (clang
     /// `ActOnExplicitInstantiation` for a member class).
-    fn explicit_member_class_inst(&mut self, m: DeclId, declaration: bool, name_loc: Loc) {
+    fn explicit_member_class_inst(
+        &mut self,
+        m: DeclId,
+        declaration: bool,
+        qual_nns: Option<kiln_ast::NnsId>,
+        name_loc: Loc,
+    ) {
         let Some((i, info)) = self.ast.member_spec_info(m).map(|(i, x)| (i, *x)) else { return };
         match (info.kind, declaration) {
             // [temp.explicit]/8 (clang: no effect); a repeated
@@ -1339,6 +1368,9 @@ impl Sema<'_, '_> {
             x.kind = kind;
             x.point_of_instantiation = name_loc;
         });
+        if let Some(nns) = qual_nns {
+            self.builder().set_decl_qualifier(m, nns);
+        }
         if !declaration {
             self.module_note_explicit_inst_def(m);
             if let Some(after) = self.explicit_inst_anchor() {

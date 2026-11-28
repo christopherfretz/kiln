@@ -726,6 +726,25 @@ impl Ast {
         }
     }
 
+    /// The nested-name-specifier written on declaration `d` (its
+    /// declarator-id, tag head, `using` / `using enum` declarator, qualified
+    /// friend, or explicit instantiation), with template arguments, alias
+    /// template specializations, typedefs, and namespace aliases kept as
+    /// written; `None` when unqualified (spec/ast.md §4.2, WP-3690).
+    ///
+    /// Answers identically to [`Ast::using_qualifier`] for `Using`,
+    /// `UnresolvedUsingValue`, and `UnresolvedUsingTypename` (stored inline
+    /// in `DeclNode.data`), and reads [`crate::decl::ColdDeclData::decl_qualifier`]
+    /// for all other kinds. For a template declaration (`ClassTemplate`,
+    /// `FunctionTemplate`, `VarTemplate`, `TypeAliasTemplate`), forwards to
+    /// its pattern declaration.
+    pub fn decl_qualifier(&self, d: DeclId) -> Option<crate::ids::NnsId> {
+        self.using_qualifier(d).or_else(|| self.decls.decl_qualifier(d)).or_else(|| {
+            let pat = self.template_info(d)?.pattern?;
+            self.decls.decl_qualifier(pat)
+        })
+    }
+
     /// The written name of the member access `e` (spec/ast.md §5.10,
     /// WP-2020): its nested-name-specifier, its explicit template
     /// arguments and, for an overloaded access (a `MemberExpr` of

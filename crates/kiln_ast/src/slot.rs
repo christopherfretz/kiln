@@ -150,6 +150,7 @@ const COLD_MAP_NAMES: &[&str] = &[
     "ctor_inits",
     "ctor_shadow_nominated",
     "decl_attrs",
+    "decl_qualifier",
     "declarator_end",
     "decomp_bindings",
     "default_arg_rewritten",

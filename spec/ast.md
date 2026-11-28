@@ -711,6 +711,77 @@ fields used by fewer than ~5% of decls of a kind go there.
   `TypeAlias` decl with its typedef type that is entered in no lookup
   table and no context's member list: Sema's dependent-scope marker for
   a dependent `decltype(e)::` qualifier (sema.md §4.3.1).
+- **Written nested-name-specifier on declarations** (`Ast::decl_qualifier`,
+  WP-3690). `Ast::decl_qualifier(d: DeclId) -> Option<NnsId>` returns the
+  nested-name-specifier written on `d` with its template arguments, alias
+  template specializations, typedef names and namespace aliases kept as
+  written (sugared `TemplateSpecialization` with `ArgView::Expr` written
+  arguments, `Typedef`, `NamespaceAlias`), never only the canonical or
+  converted form; `None` when `d` was written unqualified.
+  - *Storage and `using_qualifier` consistency:* `Using`,
+    `UnresolvedUsingValue`, and `UnresolvedUsingTypename` keep their
+    qualifier inline in their free `DeclNode.data` word
+    (`Ast::using_qualifier`). Every other kind either has a dense
+    fixed-size payload arena or already uses `DeclNode.data` (e.g.,
+    `UsingEnum` stores the enum's definition, `Friend` stores its target
+    or owned tag, templates store their `TemplateInfo` index), so their
+    written qualifier lives in the write-once sparse map
+    `ColdDeclData::decl_qualifier: ColdMap<DeclId, NnsId>` (0 bytes per
+    unqualified declaration). `Ast::decl_qualifier(d)` checks
+    `using_qualifier(d)` first, then `DeclArena::decl_qualifier(d)`, and
+    for a template declaration (`ClassTemplate`, `FunctionTemplate`,
+    `VarTemplate`, `TypeAliasTemplate`) forwards to its pattern's entry
+    (each template redeclaration has its own pattern).
+  - *Declaration kinds carrying it:* qualified functions, member
+    functions, constructors, destructors, and conversion functions
+    (`Function`, `CXXMethod`, `CXXConstructor`, `CXXDestructor`,
+    `CXXConversion`, including explicit specializations and out-of-line
+    member definitions); qualified variables and static data members
+    (`Var`, `VarTemplateSpecialization`, `VarTemplatePartialSpecialization`);
+    qualified nested classes, enumerations, and class template partial or
+    explicit specializations (`CXXRecord`, `Enum`,
+    `ClassTemplateSpecialization`, `ClassTemplatePartialSpecialization`);
+    member templates (via their pattern); `Using`, `UnresolvedUsingValue`,
+    `UnresolvedUsingTypename`, and `UsingEnum` (substituted when a
+    template containing `using enum` is instantiated); qualified `Friend`
+    declarations (both friend types and friend functions/members/templates,
+    and also on a newly created befriended function redeclaration); and
+    explicit instantiations (below). Two redeclarations of one entity
+    (e.g., `template <> int Q<1>::s;` and
+    `template <> int Q<sizeof(one(0))>::s = 5;`) are distinct `DeclId`s
+    and each keeps its own written `NnsId` (`same_nns` holds).
+  - *Explicit instantiations:* kiln does not allocate a separate `DeclId`
+    for an explicit instantiation; it updates `SpecInfo` / `MemberSpecInfo`
+    on the first declaration `d` of the explicitly instantiated
+    specialization or member (`ClassTemplateSpecialization` for
+    `template struct m::X<int>;`, member `Var`/`CXXMethod`/`CXXConstructor`/
+    `CXXDestructor`/`CXXConversion`/`CXXRecord` for `template int Q<2>::s;`
+    etc., `Function` / `VarTemplateSpecialization` for
+    `template void n::f<int>();` / `template int n::v<int>;`) — the same
+    `DeclId` keyed by `explicit_member_insts`, `late_explicit_insts`, and
+    `DeclExtents::rows_of(d)`. When a valid explicit instantiation takes
+    effect (not an ignored one after an explicit specialization or a
+    diagnosed duplicate), its written qualifier is recorded on that `d`
+    (write-once, keeping the first explicit instantiation's qualifier as
+    `args_as_written` does), so a consumer reaches it directly via
+    `Ast::decl_qualifier(d)`.
+  - *Serialization and dumps:* PCH snapshots carry `ColdDeclData::decl_qualifier`
+    (`FORMAT_VERSION` 192). Module declaration images (`IMAGE_VERSION` 105)
+    carry `decl_qualifiers` for carried declarations and
+    `ExplInst::qualifier` for explicit class template instantiations.
+    Keyed written refs (`-fkiln-written-ref-keys`) keep their canonical
+    keys unchanged, and `-fdump-ast` stays aligned with the clang JSON
+    oracle (`xtask clang-ast`), which prints qualifiers inline only on
+    `UsingDecl`.
+  - Tests: `crates/kiln_parse/tests/decl_qualifier.rs`
+    (`written_qualifiers_for_declarators_using_enum_friends_and_insts`,
+    `two_specializations_same_entity_keep_distinct_written_qualifiers`,
+    `alias_template_typedef_and_written_expr_args_keep_sugar`),
+    `crates/kiln_driver/tests/decl_qualifier_carry.rs`
+    (`decl_qualifiers_survive_a_snapshot`,
+    `decl_qualifiers_survive_a_declaration_image`),
+    `crates/kiln_sema/src/bmi_image/written.rs`
+    (`decl_qualifiers_round_trip`).
 
 ### 4.3 DeclContext lookup tables
 - **One global table** `FxHashMap<(DeclId /*semantic ctx*/, DeclName),

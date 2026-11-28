@@ -654,7 +654,7 @@ impl Sema<'_, '_> {
                     self.explicit_inst_annotations(m, ds, d, name_loc);
                     self.note_explicit_inst_named(m);
                     self.note_written_inst_target(name_loc, m);
-                    self.act_on_explicit_member_inst(m, ext.is_some(), name_loc);
+                    self.act_on_explicit_member_inst(m, ext.is_some(), d.qualifier_nns, name_loc);
                     None
                 }
                 None => self.act_on_explicit_member_spec(ds, ty, d, m, name_loc),
@@ -676,7 +676,7 @@ impl Sema<'_, '_> {
             self.check_explicit_inst_scope(m.template, n, d.qualifier.is_some(), name_loc);
             self.note_explicit_inst_named(m.spec);
             self.note_written_inst_target(name_loc, m.template);
-            self.act_on_explicit_function_inst(m, ext.is_some(), name_loc);
+            self.act_on_explicit_function_inst(m, ext.is_some(), d.qualifier_nns, name_loc);
             return Ok(None);
         }
         Ok(self.act_on_explicit_function_spec(ds, ty, d, m, name_loc))
@@ -698,6 +698,7 @@ impl Sema<'_, '_> {
         templates: &[DeclId],
         name: DeclName,
         ty: QualType,
+        qual_nns: Option<kiln_ast::NnsId>,
         loc: Loc,
     ) {
         let Some((ext, _)) = self.templ.explicit_inst.take() else { return };
@@ -715,7 +716,7 @@ impl Sema<'_, '_> {
         self.check_explicit_inst_scope(m.template, n, true, loc);
         self.note_explicit_inst_named(m.spec);
         self.note_written_inst_target(loc, m.template);
-        self.act_on_explicit_function_inst(m, ext.is_some(), loc);
+        self.act_on_explicit_function_inst(m, ext.is_some(), qual_nns, loc);
     }
 
     /// `template<> C::C(params) ...` / `template<> C::operator T()`: the
@@ -1189,7 +1190,13 @@ impl Sema<'_, '_> {
     /// instantiates the definition (now or at the end of the translation
     /// unit) and lists the specialization in the current context so that
     /// it is emitted; a declaration only records the kind.
-    fn act_on_explicit_function_inst(&mut self, m: SpecMatch, declaration: bool, name_loc: Loc) {
+    fn act_on_explicit_function_inst(
+        &mut self,
+        m: SpecMatch,
+        declaration: bool,
+        qual_nns: Option<kiln_ast::NnsId>,
+        name_loc: Loc,
+    ) {
         let s = m.spec;
         let Some((i, info)) = self.ast.spec_info(s).map(|(i, x)| (i, *x)) else { return };
         let name = self.fn_spec_decl_name(info.template, info.print_args);
@@ -1249,6 +1256,9 @@ impl Sema<'_, '_> {
                 x.point_of_instantiation = name_loc;
             }
         });
+        if let Some(nns) = qual_nns {
+            self.builder().set_decl_qualifier(s, nns);
+        }
         if declaration {
             return;
         }
@@ -1768,6 +1778,7 @@ impl Sema<'_, '_> {
         &mut self,
         m: DeclId,
         declaration: bool,
+        qual_nns: Option<kiln_ast::NnsId>,
         name_loc: Loc,
     ) {
         let Some((i, info)) = self.ast.member_spec_info(m).map(|(i, x)| (i, *x)) else { return };
@@ -1825,6 +1836,9 @@ impl Sema<'_, '_> {
             x.kind = kind;
             x.point_of_instantiation = name_loc;
         });
+        if let Some(nns) = qual_nns {
+            self.builder().set_decl_qualifier(m, nns);
+        }
         if !declaration {
             self.module_note_explicit_inst_def(m);
             // [temp.explicit]/10: clang hands the definition to codegen
