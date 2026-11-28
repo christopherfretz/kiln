@@ -1725,3 +1725,52 @@ fn spec_and_subst_rows_carry_naming_class() {
         assert_eq!(p_naming, vec![Some("Der<n::S<int>>".into()), Some("n::S<int>".into())]);
     });
 }
+
+/// WP-3688: label uses (`goto`, `&&`, `asm goto`) record `RefRole::Label`
+/// entries pointing to their `LabelDecl`, with no per-specialization/keyed
+/// rows in templates, and `AstNames::decl_key` gives every label (including
+/// multiple `__label__` declarations of the same name in one function) a
+/// distinct, stable key.
+#[test]
+fn label_uses_and_decl_keys() {
+    let src = "\
+void g() { f: ; goto f; void *p = &&f; (void)p; }
+void h(int x) { asm goto (\"\" : : \"r\"(x) : : out); out: ; }
+void k() {
+  { __label__ m; goto m; m: ; }
+  { __label__ m; goto m; m: ; }
+}
+template <class T> void ft(T x) { l: ; void *p = &&l; (void)p; (void)x; }
+void use_ft() { ft(1); ft(2.0); }
+";
+    with_keys(src, |ast, sm| {
+        let t = &ast.written_refs;
+        let names = kiln_ast::dump::AstNames::with_sources(ast, sm);
+        let label_at =
+            |at: (u32, u32)| -> (kiln_ast::written_refs::WrittenRefId, kiln_ast::DeclId) {
+                let id = entry_at(t, sm, at);
+                let r = t.get(id);
+                assert_eq!(r.role, RefRole::Label, "at {at:?}");
+                assert_eq!(r.how, kiln_ast::written_refs::RefLookup::Unqualified, "at {at:?}");
+                (id, r.entity.expect("label entity"))
+            };
+        let (_, f1) = label_at((1, 22));
+        let (_, f2) = label_at((1, 37));
+        assert_eq!(f1, f2);
+        assert_eq!(names.decl_key(f1), "g()::f");
+
+        let (_, out) = label_at((2, 45));
+        assert_eq!(names.decl_key(out), "h(int)::out");
+
+        let (_, m1) = label_at((4, 23));
+        let (_, m2) = label_at((5, 23));
+        assert_ne!(m1, m2, "distinct __label__ decls");
+        assert_eq!(names.decl_key(m1), "k()::m");
+        assert_eq!(names.decl_key(m2), "k()::m#2");
+
+        let (l_id, l_decl) = label_at((7, 52));
+        assert_eq!(names.decl_key(l_decl), "ft(type-parameter-0-0)::l");
+        assert_eq!(t.specs_of(l_id).count(), 0, "no SpecRef rows for pattern-local label");
+        assert_eq!(t.subst_rows_of(l_id).count(), 0, "no SubstRef rows for pattern-local label");
+    });
+}

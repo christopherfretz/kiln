@@ -638,8 +638,10 @@ impl Parser<'_, '_> {
             self.skip_to_semi();
             return None;
         };
-        let nl = self.bump().span.lo;
-        let s = self.s.act_on_goto(name, nl, loc);
+        let span = self.bump().span;
+        let s = self.s.act_on_goto(name, span.lo, loc);
+        let label = self.s.ast.stmts.label_decl(s);
+        self.s.note_written_label(span, Some(label));
         self.expect_semi_after_stmt("goto");
         Some(s)
     }

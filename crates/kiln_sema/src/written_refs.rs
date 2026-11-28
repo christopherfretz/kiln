@@ -808,6 +808,18 @@ impl Sema<'_, '_> {
         self.token_end(at)
     }
 
+    /// Records a written label use (`goto l`, `&&l`, an `asm goto` label
+    /// operand; spec/ast.md §18.4, WP-3688) at `range`, naming `label`
+    /// (`None` when rejected outside a function, `UNRESOLVED`).
+    pub fn note_written_label(&mut self, range: Span, label: Option<DeclId>) {
+        if !self.records_written_refs() || !self.inst.stack.is_empty() {
+            return;
+        }
+        let flags = if label.is_some() { 0 } else { REF_UNRESOLVED };
+        let _ =
+            self.push_written_ref(range, label, None, RefRole::Label, RefQualifier::NONE, flags);
+    }
+
     /// Records a lambda capture's name `[x]` at `loc` naming `var`.
     pub(crate) fn note_written_capture(&mut self, loc: kiln_source::Loc, var: DeclId) {
         if !self.records_written_refs() || !self.inst.stack.is_empty() {

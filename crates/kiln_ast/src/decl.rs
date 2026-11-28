@@ -2957,6 +2957,14 @@ impl DeclArena {
         self.nodes[d.index() as usize].loc = loc;
     }
 
+    /// Re-points the location of a `Label` declaration `d` to its
+    /// definition (`l:` after a forward `goto`/`&&`/`asm goto`; WP-3688).
+    pub fn set_label_loc(&mut self, d: DeclId, loc: Loc) {
+        let n = &mut self.nodes[d.index() as usize];
+        debug_assert_eq!(n.kind, DeclKind::Label, "set_label_loc on a {:?}", n.kind);
+        n.loc = loc;
+    }
+
     /// Sets `HAS_ATTRS` (by `AttrArena::attach`).
     pub(crate) fn set_has_attrs(&mut self, d: DeclId) {
         let n = &mut self.nodes[d.index() as usize];
