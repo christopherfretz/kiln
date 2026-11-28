@@ -1086,13 +1086,22 @@ variable whose initializer is dependent has the kind too, its type the
 dependent `auto` ([temp.dep.expr]/3); its instance deduces again. The
 kind is set when the initializer is attached, so a placeholder-typed
 variable read before that has `None`. Expressions written in the
-declarator around the placeholder (`auto (*p)[f(1)] = &a;`, a
-type-constraint's arguments `C<f(1)> auto v = w;`) are not kept once
-deduced. PCH `FORMAT_VERSION` 187, `IMAGE_VERSION` 101 (the image
-carries the bits with the variable's specifiers). A function whose
-return type was deduced from a placeholder (`FnSpec::return_deduced()`,
-WP-3641) writes only its parameter types and `noexcept(e)` operand,
-never its return type. Tests:
+declarator around a deduced placeholder (`auto (*p)[f(1)] = &a;`, a
+type-constraint's arguments `C<f(1)> auto v = w;`, or a constrained
+deduced return `C<f(1)> auto g() { return 0; }`) are kept on
+`ColdDeclData::written_decl_type` (`DeclArena::written_decl_type(d) ->
+Option<QualType>`, WP-3640), which records the declared type as written
+(sugar and placeholder included) ONLY when the deduced part contains at
+least one written expression (so plain `auto v = w;` and `auto f()` cost
+zero bytes). `decl_written_exprs` walks `written_decl_type` for a
+deduced variable when present, and for a function whose return type was
+deduced from a placeholder (`FnSpec::return_deduced()`, WP-3641) walks
+its written return type first when present, then its parameter types and
+`noexcept(e)` operand, never its deduced return type. Template
+instantiations substitute `written_decl_type` along with the declared
+type. PCH `FORMAT_VERSION` 188, `IMAGE_VERSION` 102 (the image carries
+`written_decl_type` in its `written_decls` section; 187/101 carried
+`VarSpec::placeholder`). Tests:
 `crates/kiln_parse/tests/written_bounds.rs`
 `a_deduced_variable_writes_no_expression`,
 `a_structured_binding_writes_no_expression`,
@@ -1101,7 +1110,14 @@ never its return type. Tests:
 `a_deduced_return_keeps_parameter_and_noexcept_exprs`,
 `a_written_trailing_return_keeps_its_expression`,
 `a_lambda_deduced_return_keeps_parameter_exprs`,
-`a_deduced_return_template_pattern_and_specialization`.
+`a_deduced_return_template_pattern_and_specialization`,
+`a_deduced_declarator_bound_is_kept`,
+`a_constrained_placeholder_var_keeps_its_arguments`,
+`a_constrained_deduced_return_keeps_its_arguments`,
+`a_deduced_placeholder_in_template_keeps_substituted_exprs`;
+`crates/kiln_parse/tests/written_args_image.rs`
+`written_arguments_and_bounds_survive_the_module_image`,
+`written_arguments_and_bounds_survive_the_pch_snapshot`.
 
 ## 9. Memory accounting
 `TypeContext::memory() -> MemReport` with one row per arena: element
