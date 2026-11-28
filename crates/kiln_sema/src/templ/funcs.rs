@@ -43,6 +43,65 @@ impl Sema<'_, '_> {
         Ok(spec)
     }
 
+    /// The current declaration generation counter (`DeclArena::decl_gen`;
+    /// WP-3697).
+    pub(crate) fn decl_gen(&self) -> u64 {
+        self.ast.decls.decl_gen()
+    }
+
+    /// Whether `tmpl` has a live specialization for `canonical` — valid,
+    /// permanently invalid (e.g. invalidated by its body or parameter ABI),
+    /// or a signature/explicit-specifier failure recorded at the current
+    /// declaration generation (WP-3697).
+    pub(crate) fn has_live_function_spec(&self, tmpl: DeclId, canonical: ArgListId) -> bool {
+        let tmpl = self.ast.first(tmpl);
+        let Some(s) = self.ast.templates.find_spec(tmpl, canonical) else {
+            return false;
+        };
+        if !self.ast.decls.get(s).has(DeclFlags::INVALID) {
+            return true;
+        }
+        self.templ.fn_spec_failed_gen.get(&s).is_none_or(|&g| g == self.decl_gen())
+    }
+
+    /// Retires a stale failed function template specialization so a fresh
+    /// substitution can run at the current declaration generation (WP-3697).
+    fn retire_failed_function_spec(&mut self, tmpl: DeclId, canonical: ArgListId, s: DeclId) {
+        self.ast.templates.retire_spec(tmpl, canonical, s);
+        let _ = self.templ.fn_spec_failed_gen.remove(&s);
+        let _ = self.templ.fn_spec_failures.remove(&s);
+        let _ = self.templ.fn_spec_unformed.remove(&s);
+        let _ = self.templ.explicit_pending.remove(&s);
+    }
+
+    /// Probes the specialization memo for `(tmpl, canonical)`: returns
+    /// `Some(Ok(s))` on a valid hit, `Some(Err(()))` on a live invalid hit
+    /// (emitting a trapped silent failure once on a hard use, WP-3283), or
+    /// `None` when no live specialization exists (retiring any stale failed
+    /// entry whose `decl_gen` is older than the current generation, WP-3697).
+    fn probe_function_spec_memo(
+        &mut self,
+        tmpl: DeclId,
+        canonical: ArgListId,
+    ) -> Option<Result<DeclId, ()>> {
+        let s = self.ast.templates.find_spec(tmpl, canonical)?;
+        if !self.ast.decls.get(s).has(DeclFlags::INVALID) {
+            return Some(Ok(s));
+        }
+        if self.templ.fn_spec_failed_gen.get(&s).is_some_and(|&g| g != self.decl_gen()) {
+            self.retire_failed_function_spec(tmpl, canonical, s);
+            return None;
+        }
+        if self.take_silent_failure(
+            s,
+            &[SubstFailedKind::FunctionSignature, SubstFailedKind::ExplicitSpecifier],
+        ) && let Some(d) = self.templ.fn_spec_failures.get(&s).cloned()
+        {
+            self.emit(d);
+        }
+        Some(Err(()))
+    }
+
     /// [`Self::get_function_spec`] with the explicit-specifier left
     /// pending: deduction checks the associated constraints first and
     /// substitutes it after ([temp.deduct.general]/5, clang
@@ -61,21 +120,8 @@ impl Sema<'_, '_> {
         let _t = crate::templ::deduce_stats::timer("get_function_spec_signature");
         let tmpl = self.ast.first(tmpl);
         let poi = self.templ.deduce_poi.take().unwrap_or(loc);
-        if let Some(s) = self.ast.templates.find_spec(tmpl, args.canonical) {
-            if self.ast.decls.get(s).has(DeclFlags::INVALID) {
-                // A specialization whose substitution failed inside a trap,
-                // now used outside one: the first substitution error,
-                // which nothing printed, is reported here (WP-3283).
-                if self.take_silent_failure(
-                    s,
-                    &[SubstFailedKind::FunctionSignature, SubstFailedKind::ExplicitSpecifier],
-                ) && let Some(d) = self.templ.fn_spec_failures.get(&s).cloned()
-                {
-                    self.emit(d);
-                }
-                return Err(());
-            }
-            return Ok(s);
+        if let Some(hit) = self.probe_function_spec_memo(tmpl, args.canonical) {
+            return hit;
         }
         let Some(pattern) = self.pattern_of(self.inst_template(tmpl)) else { return Err(()) };
         let kind = self.kind_of(pattern);
@@ -168,6 +214,7 @@ impl Sema<'_, '_> {
             self.invalidate_as(spec, SubstFailedKind::FunctionSignature);
             self.claim_failed_locals(after as usize);
             self.note_failed_formation(spec, after as usize);
+            let _ = self.templ.fn_spec_failed_gen.insert(spec, self.decl_gen());
             return Err(());
         }
         if self.fn_spec(pattern).is_explicit()
@@ -175,6 +222,7 @@ impl Sema<'_, '_> {
         {
             let _ = self.templ.explicit_pending.insert(spec);
         }
+        self.ast.decls.bump_decl_gen();
         Ok(spec)
     }
 
@@ -271,6 +319,8 @@ impl Sema<'_, '_> {
         if r.is_err() || captured {
             self.invalidate_as(spec, SubstFailedKind::ExplicitSpecifier);
             self.claim_failed_locals(first);
+            self.note_failed_formation(spec, first);
+            let _ = self.templ.fn_spec_failed_gen.insert(spec, self.decl_gen());
             return Err(());
         }
         Ok(())

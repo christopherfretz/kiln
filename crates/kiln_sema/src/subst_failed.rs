@@ -353,7 +353,7 @@ impl Sema<'_, '_> {
     /// about it, with one of `kinds`: its entry still waits in an open
     /// SFINAE context, a capture or a discard scope, or was confirmed, or
     /// the Ast marks it (a snapshot's).
-    fn silent_kind(&self, d: DeclId, kinds: &[SubstFailedKind]) -> bool {
+    pub(crate) fn silent_kind(&self, d: DeclId, kinds: &[SubstFailedKind]) -> bool {
         let mine = |p: &Pending| p.decl == d && p.kind.is_some_and(|k| kinds.contains(&k));
         if self.ast.decls.subst_failed(d).is_some_and(|k| kinds.contains(&k)) {
             return true;
@@ -363,6 +363,27 @@ impl Sema<'_, '_> {
             || l.captured.iter().any(|(_, p)| mine(p))
             || l.discards.iter().any(|(_, ps)| ps.iter().any(mine))
             || self.inst.sfinae.borrow().iter().any(|s| s.pending.iter().any(mine))
+    }
+
+    /// Clears `DeclFlags::INVALID` and removes any silent-failure record
+    /// of `kind` for `d` from both the AST and the trap ledger (WP-3697:
+    /// a `ClassPartialAmbiguity` specialization resolved by a later
+    /// explicit or partial specialization).
+    pub(crate) fn clear_silent_failure(&mut self, d: DeclId, kind: SubstFailedKind) {
+        self.ast.decls.clear_invalid_subst_failed(d);
+        let drop_entry = |p: &Pending| p.decl == d && p.kind == Some(kind);
+        {
+            let mut l = self.subst_ledger.borrow_mut();
+            l.confirmed.retain(|p| !drop_entry(p));
+            l.captured.retain(|(_, p)| !drop_entry(p));
+            for (_, ps) in &mut l.discards {
+                ps.retain(|p| !drop_entry(p));
+            }
+            let _ = l.reported.remove(&d);
+        }
+        for s in self.inst.sfinae.borrow_mut().iter_mut() {
+            s.pending.retain(|p| !drop_entry(p));
+        }
     }
 
     /// A use of `d`, invalid, that is no substitution (no trap is in

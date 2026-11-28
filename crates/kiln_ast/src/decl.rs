@@ -2088,6 +2088,12 @@ pub struct DeclArena {
     /// Every declaration [`DeclArena::set_ty`] retypes (WP-658; see
     /// [`crate::journal::Journal`]).
     pub ty_journal: crate::journal::Journal<DeclId>,
+    /// Monotonic declaration generation counter (WP-3697): bumped on every
+    /// declaration, definition, completion, default argument, or
+    /// specialization formation so memoized substitution failures are
+    /// invalidated after new declarations. Carried in PCH snapshots so a
+    /// consumer's declarations advance past the prefix's generation.
+    decl_gen: u64,
 }
 
 /// [`DeclArena::min_args`]'s "not recorded" byte: more than 254 counted
@@ -2187,6 +2193,7 @@ impl Default for DeclArena {
             friend_form_decls: Vec::new(),
             cold: ColdDeclData::default(),
             ty_journal: crate::journal::Journal::default(),
+            decl_gen: 0,
         }
     }
 }
@@ -2337,6 +2344,34 @@ impl DeclArena {
             "decl kind {:?} requires a payload",
             h.kind
         );
+        let bumps_gen = !h.flags.contains(DeclFlags::INVALID)
+            && !matches!(
+                h.kind,
+                DeclKind::ParmVar
+                    | DeclKind::TemplateTypeParm
+                    | DeclKind::NonTypeTemplateParm
+                    | DeclKind::TemplateTemplateParm
+                    | DeclKind::RequiresExprBody
+            )
+            && !match &payload {
+                // Fresh placeholder specialization decls (`function_spec`,
+                // `class_spec`, `var_spec`) bump when formed/completed so a
+                // failing SFINAE probe does not thrash unrelated cached
+                // failures at the same point in the TU.
+                Payload::Function(x) => {
+                    matches!(x.templ.get(), Some((TemplLinkKind::Specialization, _)))
+                        && x.redecl.prev.is_none()
+                }
+                Payload::Record(x) => {
+                    matches!(x.templ.get(), Some((TemplLinkKind::Specialization, _)))
+                        && x.redecl.prev.is_none()
+                }
+                Payload::Var(x) => {
+                    matches!(x.templ.get(), Some((TemplLinkKind::Specialization, _)))
+                        && x.redecl.prev.is_none()
+                }
+                _ => false,
+            };
         let data = match payload {
             Payload::None(x) => x,
             Payload::Function(x) => {
@@ -2390,7 +2425,20 @@ impl DeclArena {
             ty: h.ty,
             data,
         });
+        if bumps_gen {
+            self.bump_decl_gen();
+        }
         id
+    }
+
+    /// The current declaration generation counter (WP-3697).
+    pub fn decl_gen(&self) -> u64 {
+        self.decl_gen
+    }
+
+    /// Advances the declaration generation counter (WP-3697).
+    pub fn bump_decl_gen(&mut self) {
+        self.decl_gen = self.decl_gen.wrapping_add(1);
     }
 
     /// The id the next [`DeclArena::push`] returns.
@@ -2479,6 +2527,7 @@ impl DeclArena {
     pub(crate) fn mark_definition(&mut self, d: DeclId) {
         let n = &mut self.nodes[d.index() as usize];
         n.misc = n.misc.with_field(15, 1, 1);
+        self.bump_decl_gen();
     }
 
     /// Clears `d`'s definition mark ([`crate::Ast::replace_definition`]).
@@ -2795,6 +2844,16 @@ impl DeclArena {
         let _ = self.cold.subst_failed.insert(d, kind);
     }
 
+    /// Clears `DeclFlags::INVALID` and any `subst_failed` mark on `d`
+    /// (WP-3697: a class template specialization previously marked with
+    /// `ClassPartialAmbiguity` resolved by a later explicit or partial
+    /// specialization).
+    pub fn clear_invalid_subst_failed(&mut self, d: DeclId) {
+        let n = &mut self.nodes[d.index() as usize];
+        n.flags = n.flags.without(DeclFlags::INVALID);
+        let _ = self.cold.subst_failed.remove(d);
+    }
+
     /// The marked declarations, in id order.
     pub fn subst_failed_decls(&self) -> Vec<(DeclId, SubstFailedKind)> {
         let mut v: Vec<(DeclId, SubstFailedKind)> =
@@ -2981,7 +3040,11 @@ impl DeclArena {
 
     /// Sets a function's body (write-once, §2.4).
     pub fn set_body(&mut self, f: DeclId, body: StmtId) -> Result<(), AlreadySet> {
-        set_once(&mut self.function_mut(f).body, body, "FunctionData.body", RawId::raw)
+        let r = set_once(&mut self.function_mut(f).body, body, "FunctionData.body", RawId::raw);
+        if r.is_ok() {
+            self.bump_decl_gen();
+        }
+        r
     }
 
     /// Sets late specifier bits ([`FnSpec::LATE`]: trivial, contracts,
@@ -3105,7 +3168,11 @@ impl DeclArena {
 
     /// Sets a variable's initializer (write-once, §2.4).
     pub fn set_init(&mut self, v: DeclId, init: ExprId) -> Result<(), AlreadySet> {
-        set_once(&mut self.var_mut(v).init, init, "VarData.init", RawId::raw)
+        let r = set_once(&mut self.var_mut(v).init, init, "VarData.init", RawId::raw);
+        if r.is_ok() {
+            self.bump_decl_gen();
+        }
+        r
     }
 
     /// Sets late variable bits ([`VarSpec::LATE`]: NRVO).
@@ -3432,7 +3499,12 @@ impl DeclArena {
         if !self.param_has_default(p) {
             self.param_gains_default(p);
         }
-        set_once(&mut self.param_mut(p).default_arg, arg, "ParamData.default_arg", RawId::raw)
+        let r =
+            set_once(&mut self.param_mut(p).default_arg, arg, "ParamData.default_arg", RawId::raw);
+        if r.is_ok() {
+            self.bump_decl_gen();
+        }
+        r
     }
 
     /// Takes back the default argument of a parameter of a class template
@@ -7491,6 +7563,7 @@ impl DeclArena {
             friend_form_decls: _,
             cold: _,
             ty_journal: _,
+            decl_gen: _,
         } = self;
         let len = |c: PayloadClass| match c {
             PayloadClass::None => usize::MAX,

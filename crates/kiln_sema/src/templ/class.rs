@@ -1307,6 +1307,81 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Clears a stale `ClassPartialAmbiguity` failure (and its `INVALID`
+    /// flag) on class template specialization `spec` once an explicit or
+    /// later partial specialization resolves it (WP-3697).
+    pub(crate) fn clear_class_partial_ambiguity(&mut self, spec: DeclId) {
+        let _ = self.templ.class_partial_ambig_gen.remove(&spec);
+        self.clear_silent_failure(spec, SubstFailedKind::ClassPartialAmbiguity);
+    }
+
+    /// Selects the partial specialization (or `None` for the primary
+    /// template) of class template specialization `spec` for
+    /// [`Self::instantiate_class_as`]. Handles `INVALID` specializations
+    /// (retrying a silent `ClassPartialAmbiguity` once `decl_gen` advances,
+    /// WP-3697, or reporting it once on a hard use, WP-3283) and undeclared
+    /// explicit specializations.
+    #[allow(clippy::result_unit_err, reason = "`Err` means cannot instantiate")]
+    fn select_class_spec_partial(
+        &mut self,
+        tmpl: DeclId,
+        spec: DeclId,
+        kind: Option<SpecKind>,
+        poi: Loc,
+    ) -> Result<Option<super::order::PartialMatch>, ()> {
+        if self.ast.decls.get(spec).has(DeclFlags::INVALID) {
+            if self.silent_kind(spec, &[SubstFailedKind::ClassPartialAmbiguity])
+                && self
+                    .templ
+                    .class_partial_ambig_gen
+                    .get(&spec)
+                    .is_none_or(|&g| g != self.decl_gen())
+            {
+                if self.trap_now().is_some() {
+                    if let Ok(m) = self.select_partial_spec(tmpl, spec, poi) {
+                        self.clear_class_partial_ambiguity(spec);
+                        return Ok(m);
+                    }
+                } else {
+                    let (res, stash) = self.capturing(|s| s.select_partial_spec(tmpl, spec, poi));
+                    if let Ok(m) = res {
+                        self.clear_class_partial_ambiguity(spec);
+                        return Ok(m);
+                    }
+                    if self.take_silent_failure(spec, &[SubstFailedKind::ClassPartialAmbiguity]) {
+                        self.release(stash, Vec::new());
+                    }
+                }
+                let _ = self.templ.class_partial_ambig_gen.insert(spec, self.decl_gen());
+            } else if self.take_silent_failure(spec, &[SubstFailedKind::ClassPartialAmbiguity]) {
+                let _ = self.select_partial_spec(tmpl, spec, poi);
+            }
+            self.inst.undefined_diagnosed.set(Some(spec));
+            return Err(());
+        }
+        if kind == Some(SpecKind::ExplicitSpecialization) {
+            // Declared, never defined ([temp.expl.spec]/1): the caller
+            // reports the incomplete type.
+            self.inst.undefined_diagnosed.set(None);
+            return Err(());
+        }
+        // [temp.spec.partial.match]: the most specialized matching
+        // partial specialization, else the primary template.
+        let Ok(matched) = self.select_partial_spec(tmpl, spec, poi) else {
+            // Ambiguous: never instantiated, it stays a nameable incomplete
+            // type (spec/ast.md §4.1 kind 4 when the error was trapped).
+            if self.inst.fatal {
+                self.invalidate(spec);
+            } else {
+                self.invalidate_as(spec, SubstFailedKind::ClassPartialAmbiguity);
+                let _ = self.templ.class_partial_ambig_gen.insert(spec, self.decl_gen());
+            }
+            self.inst.undefined_diagnosed.set(Some(spec));
+            return Err(());
+        };
+        Ok(matched)
+    }
+
     /// [`Sema::instantiate_class`]; `implicit` relocates an implicit
     /// instantiation at its pattern's definition (false for an explicit
     /// instantiation, already located at its template-name).
@@ -1333,34 +1408,7 @@ impl Sema<'_, '_> {
         }
         let Some((tmpl, mut args)) = self.spec_args(spec) else { return false };
         let kind = self.ast.spec_info(spec).map(|(_, s)| s.kind);
-        if self.ast.decls.get(spec).has(DeclFlags::INVALID) {
-            // An ambiguity only a trap saw (a SFINAE context, a dropped
-            // capture): this use is the first that must report it, as it
-            // would had it come first ([temp.spec.partial.match]/1;
-            // WP-3283). The choice is made again, printing the error.
-            if self.take_silent_failure(spec, &[SubstFailedKind::ClassPartialAmbiguity]) {
-                let _ = self.select_partial_spec(tmpl, spec, poi);
-            }
-            self.inst.undefined_diagnosed.set(Some(spec));
-            return false;
-        }
-        if kind == Some(SpecKind::ExplicitSpecialization) {
-            // Declared, never defined ([temp.expl.spec]/1): the caller
-            // reports the incomplete type.
-            self.inst.undefined_diagnosed.set(None);
-            return false;
-        }
-        // [temp.spec.partial.match]: the most specialized matching
-        // partial specialization, else the primary template.
-        let Ok(matched) = self.select_partial_spec(tmpl, spec, poi) else {
-            // Ambiguous: never instantiated, it stays a nameable incomplete
-            // type (spec/ast.md §4.1 kind 4 when the error was trapped).
-            if self.inst.fatal {
-                self.invalidate(spec);
-            } else {
-                self.invalidate_as(spec, SubstFailedKind::ClassPartialAmbiguity);
-            }
-            self.inst.undefined_diagnosed.set(Some(spec));
+        let Ok(matched) = self.select_class_spec_partial(tmpl, spec, kind, poi) else {
             return false;
         };
         let pattern = match matched {

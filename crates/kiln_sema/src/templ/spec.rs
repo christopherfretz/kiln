@@ -9,7 +9,7 @@
 //! specialization (a template head is open) and a plain elaborated
 //! reference (`struct X<int>`).
 
-use kiln_ast::decl::{DeclFlags, DeclKind, TagKind};
+use kiln_ast::decl::{DeclFlags, DeclKind, SubstFailedKind, TagKind};
 use kiln_ast::expr::ExprKind;
 use kiln_ast::ids::ArgListId;
 use kiln_ast::templates::SpecKind;
@@ -1007,6 +1007,15 @@ impl Sema<'_, '_> {
             s.kind = SpecKind::ExplicitSpecialization;
             s.from = spec;
         });
+        // WP-3697: a class template specialization previously marked with
+        // kind-4 `ClassPartialAmbiguity` is resolved once an explicit
+        // specialization declares/defines it.
+        if self.ast.decls.get(spec).has(DeclFlags::INVALID)
+            && (self.templ.class_partial_ambig_gen.contains_key(&spec)
+                || self.silent_kind(spec, &[SubstFailedKind::ClassPartialAmbiguity]))
+        {
+            self.clear_class_partial_ambiguity(spec);
+        }
         // clang `setTemplateArgsAsWritten`: the type printer prints these
         // (`std::coroutine_handle<void>`, not `<>`).
         let w = self.ast.types.arg_list(args);

@@ -94,6 +94,11 @@ impl<K: Copy + Eq + Hash, V> ColdMap<K, V> {
         }
     }
 
+    /// Removes `k` and returns its value, if present.
+    pub fn remove(&mut self, k: K) -> Option<V> {
+        self.map.remove(&k)
+    }
+
     /// The number of entries.
     pub fn len(&self) -> usize {
         self.map.len()

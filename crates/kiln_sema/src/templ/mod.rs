@@ -342,6 +342,13 @@ pub struct TemplState {
     /// substitution-failure note of a later deduction that finds it
     /// memoized (§6.1 step 4).
     pub(crate) fn_spec_failures: kiln_source::fx::FxHashMap<DeclId, kiln_diag::Diag>,
+    /// The declaration generation at which each failed function template
+    /// specialization failed (`get_function_spec_signature` /
+    /// `finish_function_spec_explicit`; WP-3697). Carried in PCH snapshots.
+    pub(crate) fn_spec_failed_gen: kiln_source::fx::FxHashMap<DeclId, u64>,
+    /// The declaration generation at which each class template
+    /// specialization failed with `ClassPartialAmbiguity` (WP-3697).
+    pub(crate) class_partial_ambig_gen: kiln_source::fx::FxHashMap<DeclId, u64>,
     /// The (invalid) specializations of [`Self::fn_spec_failures`] failing
     /// on their Swift parameter ABIs that clang 22 never forms: matched
     /// only against declarations and addresses whose types differ, so

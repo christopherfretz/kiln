@@ -169,7 +169,10 @@ pub(crate) const MAGIC: [u8; 8] = *b"KILNSNAP";
 /// version 189 (WP-3695) the lookup-context (naming) class on per-
 /// specialization and keyed written-reference rows (`SpecRef::naming_class`,
 /// `SubstRef::naming_class`).
-pub(crate) const FORMAT_VERSION: u32 = 189;
+/// version 190 (WP-3697) the declaration generation counter
+/// (`DeclArena::decl_gen`) and per-specialization failure generations
+/// (`TemplState::fn_spec_failed_gen`, `TemplState::class_partial_ambig_gen`).
+pub(crate) const FORMAT_VERSION: u32 = 190;
 /// The length of the magic and the format version.
 pub(crate) const HEADER_LEN: usize = 12;
 
