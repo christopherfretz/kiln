@@ -1397,6 +1397,10 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   and instantiated template bodies — without emitting unused enclosing
   functions or uninstantiated template patterns (spec/codegen.md §2a,
   WP-3687).
+- A friend function defined in a class template specialization is now
+  instantiated on odr-use even when the call binds a later bodyless friend
+  redeclaration (from another specialization, from the same class template,
+  or at namespace scope after an earlier bodyless friend) (WP-3686).
 - A class that inherits constructors from a base whose default constructor is
   a template with defaulted parameters (such as `std::pair`) no longer
   requires a nested class's default member initializers inside the enclosing
