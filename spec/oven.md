@@ -4475,6 +4475,18 @@ exception (see "Bool vectors" below). The operations are in
   - `__builtin_bit_cast` to and from vectors;
   - multi-element compound literals and list-initialization, including
     brace-elided members.
+- **`BooleanToSignedIntegral` (`ext_vector_type` bool splats)** (WP-3698):
+  splatting a scalar `bool` into an `ext_vector_type` of integer or
+  floating lanes emits a `CastKind::BooleanToSignedIntegral` cast
+  (`vector_ops.rs` `prepare_vector_splat`; into `int` before
+  `IntegralToFloating` for floating lanes). `compile.rs` `cast` (widths
+  `<= 128`) and `compile/wide.rs` `wide_init` (wide `_BitInt` lanes)
+  evaluate `false` to `0` and `true` to all-ones (`-1` for signed lanes,
+  `~0` for unsigned lanes, `-1.0` after `IntegralToFloating` for floating
+  lanes). For unsigned lanes wider than 64 bits (`unsigned __int128`,
+  `unsigned _BitInt(N)`), kiln yields full-width all-ones (matching
+  run-time `sext i1`), whereas clang 19 and 22 truncate the constant fold
+  to 64 bits (`0xffff_ffff_ffff_ffff`).
 - **Diagnosed per lane:** signed overflow, division by zero and shift
   counts carry the usual notes, with the vector type in the operand text
   (`notes.rs` `vector_suffix`). An uninitialized vector read is
@@ -4619,7 +4631,10 @@ Tests: `tests/conformance/ext.vector/bool-constexpr-*.cpp` (shuffles:
 `tests/codegen/bool_vector_shuffle_const.cpp`; unions:
 `bool-constexpr-union-run.cpp`, `tests/codegen/bool_vector_union_const.cpp`),
 `ext.vector/bool-from-int-vector-diagnostics-clang22.cpp`,
-`ext.vector/bool-from-int-vector-constexpr-clang22.cpp`;
+`ext.vector/bool-from-int-vector-constexpr-clang22.cpp`,
+`ext.vector/bool-splat-run.cpp`, `ext.vector/bool-splat-wide.cpp`,
+`tests/codegen/ext_vector_bool_splat.cpp`,
+`crates/kiln_driver/tests/static_init_facts.rs` (`ext_vector_bool_splat`);
 budget (packed bits, no per-lane allocation): `tests/stress/bool-vector-sieve.cpp`.
 
 ### `_BitInt` — Landed (WP-404, wide WP-445)

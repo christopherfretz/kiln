@@ -5597,8 +5597,22 @@ impl Compiler<'_> {
             // gives the generic note); a fixed-length vector's splat is a
             // vector operation (`vec_op`), not a scalar's.
             CastKind::VectorSplat => self.throw_invalid(e),
+            // A `bool` splatted into an `ext_vector_type` integer lane (or
+            // `int` on the way to a floating lane, `vector_ops.rs`
+            // `prepare_vector_splat`): `true` -> -1 (all ones in the target
+            // width), `false` -> 0.
+            CastKind::BooleanToSignedIntegral => {
+                let r = self.rv(op);
+                let (w, s) = int_of(self.kind(ty)).unwrap_or((32, true));
+                if s {
+                    let neg = self.reg();
+                    self.emit_at(Op::INeg, int_aux(w as u8, false), &[neg, r], e);
+                    self.emit(Op::ICast, w | w << 9 | 1 << 17, &[dst, neg]);
+                } else {
+                    self.emit_at(Op::INeg, int_aux(w as u8, false), &[dst, r], e);
+                }
+            }
             CastKind::Dependent
-            | CastKind::BooleanToSignedIntegral
             | CastKind::ToUnion
             | CastKind::IntegralRealToComplex
             | CastKind::FloatingRealToComplex
@@ -5606,7 +5620,7 @@ impl Compiler<'_> {
             | CastKind::FloatingComplexCast
             | CastKind::IntegralComplexToFloatingComplex
             | CastKind::FloatingComplexToIntegralComplex => unreachable!(
-                "`cast` evaluates a scalar result: a dependent cast is value-dependent, never evaluated (`value::eval_at`); a union cast's result is a class and a complex or vector mask conversion's a complex value or a vector, initialized in memory (`init_inner`, `cx_op`, `vec_op`): {ck:?}"
+                "`cast` evaluates a scalar result: a dependent cast is value-dependent, never evaluated (`value::eval_at`); a union cast is never built (and would have class type) and a complex conversion's result is a complex value, initialized in memory (`init_inner`, `cx_op`): {ck:?}"
             ),
         }
     }
