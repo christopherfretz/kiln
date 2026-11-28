@@ -332,3 +332,44 @@ fn off_records_nothing_and_dump_shows_on() {
         "{on}"
     );
 }
+
+/// WP-3698: an `ext_vector_type` bool splat (`BooleanToSignedIntegral`)
+/// in static-storage initializers: dynamic for a non-constant `bool`,
+/// constant for `true`/`false` (both `-fkiln-static-init-facts` and IR),
+/// plus full-width all-ones for `unsigned __int128` and wide `_BitInt(256)`.
+#[test]
+fn ext_vector_bool_splat() {
+    let src = "typedef int V4 __attribute__((ext_vector_type(4)));\n\
+               typedef unsigned char V4uc __attribute__((ext_vector_type(4)));\n\
+               bool bb;\n\
+               V4 dyn_v = (V4)bb;\n\
+               V4 st_t = (V4)true;\n\
+               V4 st_f = (V4)false;\n\
+               constexpr V4uc ct_uc = (V4uc)true;\n\
+               const void *keep[] = {&dyn_v, &st_t, &st_f, &ct_uc};\n";
+    check(
+        src,
+        &[],
+        &[
+            ("dyn_v", fact(Dynamic, Trivial)),
+            ("st_t", fact(Constant, Trivial)),
+            ("st_f", fact(Constant, Trivial)),
+            ("ct_uc", fact(Constant, Trivial)),
+        ],
+    );
+    // Unsigned 128-bit and wide `_BitInt(256)` lanes: `true` splats to
+    // all-ones (matching run-time `sext i1`).
+    let wide = "typedef unsigned __int128 V2u128 __attribute__((ext_vector_type(2)));\n\
+                typedef _BitInt(256) V2bi __attribute__((ext_vector_type(2)));\n\
+                typedef unsigned _BitInt(256) V2bu __attribute__((ext_vector_type(2)));\n\
+                constexpr V2u128 cu128t = (V2u128)true, cu128f = (V2u128)false;\n\
+                static_assert(cu128t[0] == ~((unsigned __int128)0) && cu128f[1] == 0);\n\
+                constexpr V2bi cbit = (V2bi)true, cbif = (V2bi)false;\n\
+                static_assert(cbit[0] == -1 && cbit[1] == -1 && cbif[0] == 0);\n\
+                constexpr V2bu cbut = (V2bu)true, cbuf = (V2bu)false;\n\
+                static_assert(cbut[0] == ~((unsigned _BitInt(256))0) && cbuf[1] == 0);\n";
+    let got = facts(wide, &["--target=x86_64-unknown-linux-gnu"]);
+    assert_eq!(got.get("cu128t"), Some(&fact(Constant, Trivial)));
+    assert_eq!(got.get("cbit"), Some(&fact(Constant, Trivial)));
+    assert_eq!(got.get("cbut"), Some(&fact(Constant, Trivial)));
+}
