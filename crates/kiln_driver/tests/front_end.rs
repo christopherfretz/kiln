@@ -6,6 +6,7 @@
 
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use kiln_ast::Ast;
@@ -19,7 +20,7 @@ use kiln_driver::front_end::{
 };
 use kiln_pp::{DirGroup, DropReason, DroppedDir, Found, LookupForm, LookupLog};
 use kiln_sema::Oven;
-use kiln_source::FileOrigin;
+use kiln_source::{FileOrigin, Overlay};
 
 // What a caller may move to another thread or share: the AST is both;
 // the constant evaluator's state is `Send` but not `Sync` (its caches
@@ -183,15 +184,289 @@ fn has_include_and_embed_are_consulted() {
             Consulted {
                 kind: ConsultedKind::Probe,
                 path: probe,
-                content: Some(Content::of(b"int never;\n"))
+                content: Some(Content::of(b"int never;\n")),
+                bytes: None,
             },
             Consulted {
                 kind: ConsultedKind::Embed,
                 path: data,
-                content: Some(Content { size: 3, digest: content_digest(b"\x01\x02\x03") })
+                content: Some(Content { size: 3, digest: content_digest(b"\x01\x02\x03") }),
+                bytes: None,
             },
         ]
     );
+}
+
+/// WP-3692 (a): `#include` and `#embed` of the same file (in either order)
+/// still report one `Embed` entry for the `#embed` read, while a
+/// `__has_include` / `__has_embed` probe of an entered file stays dropped.
+#[test]
+fn consulted_include_and_embed_same_file() {
+    let s = Scratch::new("inc-embed");
+    let hdr_bytes = b"constexpr int from_hdr = 7;\n";
+    let hdr = s.write("d.h", hdr_bytes);
+    let probe_only = s.write("only_entered.h", b"constexpr int entered_v = 1;\n");
+    for (name, src) in [
+        (
+            "inc_then_embed.cpp",
+            format!(
+                "#include \"{hdr}\"\n\
+                 #if __has_include(\"{probe_only}\") && __has_embed(\"{probe_only}\")\n\
+                 #include \"{probe_only}\"\n#endif\n\
+                 constexpr unsigned char e[] = {{\n#embed \"{hdr}\"\n}};\n\
+                 static_assert(from_hdr == 7 && entered_v == 1 && sizeof e == {});\n",
+                hdr_bytes.len()
+            ),
+        ),
+        (
+            "embed_then_inc.cpp",
+            format!(
+                "constexpr unsigned char e[] = {{\n#embed \"{hdr}\"\n}};\n\
+                 #include \"{hdr}\"\n\
+                 #include \"{probe_only}\"\n\
+                 #if __has_include(\"{probe_only}\") && __has_embed(\"{probe_only}\")\n#endif\n\
+                 static_assert(from_hdr == 7 && entered_v == 1 && sizeof e == {});\n",
+                hdr_bytes.len()
+            ),
+        ),
+    ] {
+        let main = s.write(name, src.as_bytes());
+        let r = run_front_end(
+            "kiln++",
+            &argv(&["-fsyntax-only", "-std=c++26", &main]),
+            quiet(),
+            |fe| fe.consulted.to_vec(),
+        )
+        .unwrap();
+        assert_eq!(r.errors, 0, "{name}: {:?}", r.first_error);
+        let got: Vec<_> =
+            r.value.unwrap().into_iter().map(|c| (c.kind, c.path, c.content)).collect();
+        assert_eq!(
+            got,
+            vec![(ConsultedKind::Embed, hdr.clone(), Some(Content::of(hdr_bytes)))],
+            "{name}"
+        );
+    }
+}
+
+/// WP-3692 (b): two `#embed`s of one path with the file rewritten between
+/// them (triggered deterministically by an `Overlay::create_with` lazy
+/// loader on an included header between the two directives) report both
+/// contents in order; likewise a `__has_include` probe followed by a
+/// rewrite and an `#embed`.
+#[test]
+fn consulted_rewritten_file_reports_each_read() {
+    let s = Scratch::new("rewrite");
+    let data_path = s.0.join("data.bin");
+    let data = s.write("data.bin", b"FIRST");
+    let trigger_path = s.0.join("trigger.h");
+    let mut ov = Overlay::new();
+    let rewrite_target = data_path.clone();
+    ov.create_with(
+        &trigger_path,
+        Box::new(move || {
+            std::fs::write(&rewrite_target, b"SECOND")?;
+            Ok(Arc::from(b"".as_slice()))
+        }),
+    )
+    .unwrap();
+    let trigger = trigger_path.to_string_lossy().into_owned();
+    let main = s.write(
+        "main.cpp",
+        format!(
+            "constexpr unsigned char a[] = {{\n#embed \"{data}\"\n}};\n\
+             #include \"{trigger}\"\n\
+             constexpr unsigned char b[] = {{\n#embed \"{data}\"\n}};\n\
+             static_assert(sizeof a == 5 && a[0] == 'F');\n\
+             static_assert(sizeof b == 6 && b[0] == 'S');\n"
+        )
+        .as_bytes(),
+    );
+    let mut opts = quiet();
+    opts.overlay = Some(Arc::new(ov));
+    let r = run_front_end("kiln++", &argv(&["-fsyntax-only", "-std=c++26", &main]), opts, |fe| {
+        fe.consulted.to_vec()
+    })
+    .unwrap();
+    assert_eq!(r.errors, 0, "{:?}", r.first_error);
+    let got: Vec<_> = r.value.unwrap().into_iter().map(|c| (c.kind, c.path, c.content)).collect();
+    assert_eq!(
+        got,
+        vec![
+            (ConsultedKind::Embed, data.clone(), Some(Content::of(b"FIRST"))),
+            (ConsultedKind::Embed, data, Some(Content::of(b"SECOND"))),
+        ]
+    );
+
+    // Probe then rewrite then embed: two distinct contents, both reported in order.
+    let probe_path = s.0.join("probe_rewrite.h");
+    let probe = s.write("probe_rewrite.h", b"int before;\n");
+    let trigger2_path = s.0.join("trigger2.h");
+    let mut ov2 = Overlay::new();
+    let rewrite_probe = probe_path.clone();
+    ov2.create_with(
+        &trigger2_path,
+        Box::new(move || {
+            std::fs::write(&rewrite_probe, b"AFTER")?;
+            Ok(Arc::from(b"".as_slice()))
+        }),
+    )
+    .unwrap();
+    let trigger2 = trigger2_path.to_string_lossy().into_owned();
+    let main2 = s.write(
+        "main2.cpp",
+        format!(
+            "#if __has_include(\"{probe}\")\n#endif\n\
+             #include \"{trigger2}\"\n\
+             constexpr unsigned char e[] = {{\n#embed \"{probe}\"\n}};\n\
+             static_assert(sizeof e == 5 && e[0] == 'A');\n"
+        )
+        .as_bytes(),
+    );
+    let mut opts2 = quiet();
+    opts2.overlay = Some(Arc::new(ov2));
+    let r2 =
+        run_front_end("kiln++", &argv(&["-fsyntax-only", "-std=c++26", &main2]), opts2, |fe| {
+            fe.consulted.to_vec()
+        })
+        .unwrap();
+    assert_eq!(r2.errors, 0, "{:?}", r2.first_error);
+    let got2: Vec<_> = r2.value.unwrap().into_iter().map(|c| (c.kind, c.path, c.content)).collect();
+    assert_eq!(
+        got2,
+        vec![
+            (ConsultedKind::Probe, probe.clone(), Some(Content::of(b"int before;\n"))),
+            (ConsultedKind::Embed, probe, Some(Content::of(b"AFTER"))),
+        ]
+    );
+}
+
+/// WP-3692 (c): reading the same file twice with identical content merges
+/// into one entry in first-met order (upgrading Probe to Embed).
+#[test]
+fn consulted_identical_reads_merge() {
+    let s = Scratch::new("same-reads");
+    let a = s.write("a.bin", b"SAME");
+    let b = s.write("b.h", b"int b;\n");
+    let main = s.write(
+        "main.cpp",
+        format!(
+            "#if __has_include(\"{a}\")\n#endif\n\
+             #if __has_include(\"{b}\")\n#endif\n\
+             constexpr unsigned char x[] = {{\n#embed \"{a}\"\n}};\n\
+             constexpr unsigned char y[] = {{\n#embed \"{a}\"\n}};\n\
+             static_assert(sizeof x == 4 && sizeof y == 4);\n"
+        )
+        .as_bytes(),
+    );
+    let r =
+        run_front_end("kiln++", &argv(&["-fsyntax-only", "-std=c++26", &main]), quiet(), |fe| {
+            fe.consulted.to_vec()
+        })
+        .unwrap();
+    assert_eq!(r.errors, 0, "{:?}", r.first_error);
+    let got: Vec<_> = r.value.unwrap().into_iter().map(|c| (c.kind, c.path, c.content)).collect();
+    assert_eq!(
+        got,
+        vec![
+            (ConsultedKind::Embed, a, Some(Content::of(b"SAME"))),
+            (ConsultedKind::Probe, b, Some(Content::of(b"int b;\n"))),
+        ]
+    );
+}
+
+/// WP-3692 (d): `FrontEndOptions::consulted_bytes` defaults to `false`
+/// (`bytes == None`); when `true`, each entry carries the shared bytes of
+/// that read (`Arc::ptr_eq` with `SourceManager::shared_original_bytes` for
+/// a loaded `__has_include` hit, and with an `Overlay` buffer for an
+/// overlaid `#embed` or `__has_include`).
+#[test]
+fn consulted_bytes_switch_shares_buffers_and_defaults_to_none() {
+    let s = Scratch::new("consulted-bytes");
+    let probe_bytes = b"int probed_only;\n";
+    let probe = s.write("probe.h", probe_bytes);
+    let ov_probe_disk = s.0.join("ov_probe.h");
+    let ov_probe = s.write("ov_probe.h", b"int disk;\n");
+    let embed_bytes = b"\x00\x01\x02\xFFbinary";
+    let embed = s.write("data.bin", embed_bytes);
+    let ov_embed_disk = s.0.join("ov_data.bin");
+    let ov_embed = s.write("ov_data.bin", b"disk");
+    let main = s.write(
+        "main.cpp",
+        format!(
+            "#if __has_include(\"{probe}\") && __has_include(\"{ov_probe}\")\n#endif\n\
+             constexpr unsigned char a[] = {{\n#embed \"{embed}\"\n}};\n\
+             constexpr unsigned char b[] = {{\n#embed \"{ov_embed}\"\n}};\n\
+             static_assert(sizeof a == {} && sizeof b == 7);\n",
+            embed_bytes.len()
+        )
+        .as_bytes(),
+    );
+
+    let ov_probe_arc: Arc<[u8]> = Arc::from(b"int from_overlay;\n".as_slice());
+    let ov_embed_arc: Arc<[u8]> = Arc::from(b"OVERLAY".as_slice());
+    let mut ov = Overlay::new();
+    ov.replace(&ov_probe_disk, Arc::clone(&ov_probe_arc)).unwrap();
+    ov.replace(&ov_embed_disk, Arc::clone(&ov_embed_arc)).unwrap();
+    let ov = Arc::new(ov);
+
+    let cl = argv(&["-fsyntax-only", "-std=c++26", &main]);
+
+    // Default (consulted_bytes: false): bytes are None on every entry.
+    let mut off = quiet();
+    assert!(!off.consulted_bytes);
+    off.overlay = Some(Arc::clone(&ov));
+    let r_off = run_front_end("kiln++", &cl, off, |fe| fe.consulted.to_vec()).unwrap();
+    assert_eq!(r_off.errors, 0, "{:?}", r_off.first_error);
+    let c_off = r_off.value.unwrap();
+    assert_eq!(c_off.len(), 4);
+    assert!(c_off.iter().all(|c| c.bytes.is_none()));
+
+    // Opt-in (consulted_bytes: true): shared bytes on every entry.
+    let mut on = quiet();
+    on.consulted_bytes = true;
+    on.overlay = Some(Arc::clone(&ov));
+    let r_on = run_front_end("kiln++", &cl, on, |fe| {
+        let probe_id = fe.sm.loaded_file(std::path::Path::new(&probe)).unwrap();
+        let ov_probe_id = fe.sm.loaded_file(std::path::Path::new(&ov_probe)).unwrap();
+        let sm_probe = fe.sm.shared_original_bytes(probe_id).unwrap();
+        let sm_ov_probe = fe.sm.shared_original_bytes(ov_probe_id).unwrap();
+        let c = fe.consulted;
+        assert_eq!(c.len(), 4);
+
+        // Disk __has_include hit: matches file bytes and shares SourceManager's Arc.
+        assert_eq!(c[0].kind, ConsultedKind::Probe);
+        assert_eq!(c[0].path, probe);
+        assert_eq!(c[0].content, Some(Content::of(probe_bytes)));
+        let b0 = c[0].bytes.as_ref().unwrap();
+        assert_eq!(&**b0, probe_bytes);
+        assert!(Arc::ptr_eq(b0, &sm_probe));
+
+        // Overlaid __has_include hit: shares both SourceManager's Arc and Overlay's Arc.
+        assert_eq!(c[1].kind, ConsultedKind::Probe);
+        assert_eq!(c[1].path, ov_probe);
+        assert_eq!(c[1].content, Some(Content::of(&ov_probe_arc)));
+        let b1 = c[1].bytes.as_ref().unwrap();
+        assert_eq!(&**b1, &*ov_probe_arc);
+        assert!(Arc::ptr_eq(b1, &sm_ov_probe));
+        assert!(Arc::ptr_eq(b1, &ov_probe_arc));
+
+        // Disk #embed: matches file bytes (arbitrary binary bytes).
+        assert_eq!(c[2].kind, ConsultedKind::Embed);
+        assert_eq!(c[2].path, embed);
+        assert_eq!(c[2].content, Some(Content::of(embed_bytes)));
+        assert_eq!(c[2].bytes.as_deref(), Some(&embed_bytes[..]));
+
+        // Overlaid #embed: shares the Overlay's Arc without copying.
+        assert_eq!(c[3].kind, ConsultedKind::Embed);
+        assert_eq!(c[3].path, ov_embed);
+        assert_eq!(c[3].content, Some(Content::of(&ov_embed_arc)));
+        let b3 = c[3].bytes.as_ref().unwrap();
+        assert_eq!(&**b3, &*ov_embed_arc);
+        assert!(Arc::ptr_eq(b3, &ov_embed_arc));
+    })
+    .unwrap();
+    assert_eq!(r_on.errors, 0, "{:?}", r_on.first_error);
 }
 
 /// Test 3: one error. The closure runs, and the first error is what the

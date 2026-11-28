@@ -474,8 +474,9 @@ pub trait HeaderFs {
     /// or `None` if there is no such file.
     fn open(&mut self, sm: &SourceManager, path: &str) -> Option<FileId>;
 
-    /// The bytes of the regular file at `path` (`#embed`).
-    fn read(&mut self, path: &str) -> Option<Vec<u8>>;
+    /// The bytes of the regular file at `path` (`#embed`), in a shared
+    /// buffer so callers can keep them without copying.
+    fn read(&mut self, path: &str) -> Option<Arc<[u8]>>;
 }
 
 /// The entry names of the directory `path`, or `None`.
@@ -574,17 +575,17 @@ impl HeaderFs for RealFs {
         sm.load_regular_file(Path::new(path)).ok()
     }
 
-    fn read(&mut self, path: &str) -> Option<Vec<u8>> {
-        read_file(&self.disk(path))
+    fn read(&mut self, path: &str) -> Option<Arc<[u8]>> {
+        read_file_shared(&self.disk(path))
     }
 }
 
-/// The bytes of the regular file at `path`: one `open`, one `fstat`, its
-/// reads.
-fn read_file(path: &Path) -> Option<Vec<u8>> {
+/// The bytes of the regular file at `path` in a shared [`Arc<[u8]>`]: one
+/// `open`, one `fstat`, one allocation and its reads (no copy).
+fn read_file_shared(path: &Path) -> Option<Arc<[u8]>> {
     let mut f = std::fs::File::open(path).ok()?;
     let m = f.metadata().ok().filter(std::fs::Metadata::is_file)?;
-    kiln_source::read_open_file(&mut f, &m).ok()
+    kiln_source::read_open_file_shared(&mut f, &m).ok()
 }
 
 /// The disk as an [`Overlay`] changes it (spec/source.md "Overlay"):
@@ -709,29 +710,25 @@ impl HeaderFs for OverlayFs {
         self.real.open(sm, path)
     }
 
-    fn read(&mut self, path: &str) -> Option<Vec<u8>> {
+    fn read(&mut self, path: &str) -> Option<Arc<[u8]>> {
         let disk = self.real.disk(path);
         match std::fs::File::open(&disk) {
             Ok(mut f) => {
                 let m = f.metadata().ok().filter(std::fs::Metadata::is_file)?;
                 match self.overlay.on_disk(&disk, m.clone()) {
-                    Resolved::Disk { replaced: Some(c), .. } => {
-                        c.bytes_noting(&self.failures).map(|b| b.to_vec())
-                    }
+                    Resolved::Disk { replaced: Some(c), .. } => c.bytes_noting(&self.failures),
                     Resolved::Disk { replaced: None, .. } => {
-                        kiln_source::read_open_file(&mut f, &m).ok()
+                        kiln_source::read_open_file_shared(&mut f, &m).ok()
                     }
                     _ => None,
                 }
             }
             Err(_) => match self.overlay.absent_path(&disk, &mut self.cache) {
-                Resolved::Created { content, .. } => {
-                    content.bytes_noting(&self.failures).map(|b| b.to_vec())
-                }
+                Resolved::Created { content, .. } => content.bytes_noting(&self.failures),
                 Resolved::Disk { meta, replaced, redirected: Some(at) } if meta.is_file() => {
                     match replaced {
-                        Some(c) => c.bytes_noting(&self.failures).map(|b| b.to_vec()),
-                        None => read_file(&at),
+                        Some(c) => c.bytes_noting(&self.failures),
+                        None => read_file_shared(&at),
                     }
                 }
                 _ => None,
@@ -760,7 +757,7 @@ fn dir_key(path: &Path, _m: &std::fs::Metadata) -> Option<String> {
 /// implicit working directory. Every ancestor of a file is a directory.
 #[derive(Clone, Debug, Default)]
 pub struct MemoryFs {
-    files: HashMap<String, Vec<u8>>,
+    files: HashMap<String, Arc<[u8]>>,
     dirs: HashSet<String>,
     loaded: HashMap<String, FileId>,
     /// Calls of [`HeaderFs::open`], [`HeaderFs::is_dir`] /
@@ -811,7 +808,7 @@ impl MemoryFs {
         let n = normalize(path);
         let parent = parent_dir(&n).to_owned();
         *self = std::mem::take(self).with_dir(&parent);
-        self.files.insert(n, bytes.to_vec());
+        self.files.insert(n, Arc::from(bytes));
     }
 }
 
@@ -877,7 +874,7 @@ impl HeaderFs for MemoryFs {
         Some(names.collect())
     }
 
-    fn read(&mut self, path: &str) -> Option<Vec<u8>> {
+    fn read(&mut self, path: &str) -> Option<Arc<[u8]>> {
         self.files.get(&normalize(path)).cloned()
     }
 

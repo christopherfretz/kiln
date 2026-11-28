@@ -1772,14 +1772,30 @@ sequence; the evaluation session (spec/eval-session.md §2) uses it too.
   report's totals are the engines' own, every diagnostic of every engine
   counted (the in-process module build's included), `driver_errors` the
   part reported before the job.
-- `consulted`: `__has_include` / `__has_embed` hits and `#embed`
-  resources (header search's events), in the order first met, each
-  once, without the files the preprocessor entered (their bytes are the
-  source manager's). `content` is the bytes' size and FNV-1a 128 digest
-  (`Content`, `content_digest`): a `__has_include` hit's file as the
-  source manager holds it, a `#embed` / `__has_embed` resource's whole
-  file (not its `limit` / `offset` window); `None` for a `__has_include`
-  hit whose buffer was not loaded.
+- `consulted`: every `#embed` read (even when the preprocessor also
+  entered the file, WP-3692) and every `__has_include` / `__has_embed`
+  hit of a file the preprocessor did not enter (header search's events),
+  in the order met. Reads of the same path with identical content merge
+  into one entry (keeping first-met order and upgrading a probe to an
+  embed); a read whose content differs from an earlier entry for the
+  path gets its own entry in order. A `__has_include` / `__has_embed`
+  probe of a file the preprocessor entered stays dropped, since the
+  entered file covers it. `content` is the bytes' size and FNV-1a 128
+  digest (`Content`, `content_digest`): a `__has_include` hit's file as
+  the source manager holds it, a `#embed` / `__has_embed` resource's
+  whole file (not its `limit` / `offset` window); `None` for a
+  `__has_include` hit whose buffer was not loaded. When
+  `FrontEndOptions::consulted_bytes` is set (default off), each entry's
+  `bytes` holds `Option<Arc<[u8]>>` sharing the buffer the front end
+  read (no second read; for `#embed`, the resolver's shared `all`
+  buffer; for a loaded `__has_include` hit, `SourceManager::shared_original_bytes`,
+  which shares the overlay's `Arc<[u8]>` directly for overlaid files);
+  when off, `bytes` is `None` with no extra allocation or copy. Tests:
+  `front_end.rs` `has_include_and_embed_are_consulted`,
+  `consulted_include_and_embed_same_file`,
+  `consulted_rewritten_file_reports_each_read`,
+  `consulted_identical_reads_merge`,
+  `consulted_bytes_switch_shares_buffers_and_defaults_to_none`.
 - A panic of the front end or of `f` is `FrontEndError::Panicked` (the
   payload's text) with `own_thread` (a scoped thread of
   `-fkiln-stack-size=`, stack guard installed) or without (caught on
@@ -1834,7 +1850,10 @@ spec/parse.md §2.6; `front_end.rs` test `token_table_of_two_files`).
 `-fkiln-static-init-facts`) records each static or thread variable's
 static-initialization fact at the end of the unit, read as
 `fe.ast.static_init_fact(d)` (spec/ast.md §25;
-`static_init_facts.rs` tests).
+`static_init_facts.rs` tests). `consulted_bytes` (default off; WP-3692;
+no command-line flag) attaches the shared `Arc<[u8]>` read buffer to
+each `Consulted::bytes` (`None` when off, with no extra allocation or
+copy).
 Under a fixed environment the driver reads
 every variable it consults from it and never from the process:
 `KILN_RESOURCE_DIR`, `KILN_LLVM_DIR` and the LLVM search's variables,

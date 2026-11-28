@@ -47,7 +47,7 @@ pub use loc::{FileId, Loc, Span};
 pub use manager::{
     ExpansionEntries, ExpansionEntry, ExpansionInfo, ExpansionKind, FileKind, FileOrigin, LazyCopy,
     LazyFile, LazyOutcome, LineCol, LoadError, LoadReport, LocSpaceExhausted, PresumedLoc,
-    Replacement, SourceManager, SourcePathStyle, read_open_file,
+    Replacement, SourceManager, SourcePathStyle, read_open_file, read_open_file_shared,
 };
 pub use overlay::{
     Content, CreatedDir, CreatedKey, DirCache, EntryState, LoadFailures, Loader, Overlay, Resolved,

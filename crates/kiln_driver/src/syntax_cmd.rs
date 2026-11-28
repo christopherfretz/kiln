@@ -613,6 +613,7 @@ impl SyntaxJob<'_> {
         let hooks = crate::front_end::PpHooks {
             record_lookups: false,
             pp_record: false,
+            consulted_bytes: false,
             events: crate::front_end::SearchEvents::default(),
             overlay: None,
             overlay_failures: Vec::new(),
@@ -637,7 +638,7 @@ impl SyntaxJob<'_> {
             limits,
             Some(host),
         );
-        let consulted = crate::front_end::consulted(sm, &pp, &hooks.events.borrow());
+        let consulted = crate::front_end::consulted(sm, &pp, &hooks.events.borrow(), false);
         Some((sema, main, consulted))
     }
 

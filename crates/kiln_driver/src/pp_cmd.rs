@@ -740,19 +740,19 @@ impl Job<'_> {
         let cache_key = staged.then(|| (predefines.clone(), list.verbose_text()));
         sm.set_work_dir(a.work_dir.clone());
         let deps = DepList::for_args(a).map(|l| Rc::new(RefCell::new(l)));
-        let events = hooks.map(|h| Rc::clone(&h.events));
+        let events = hooks.map(|h| (Rc::clone(&h.events), h.consulted_bytes));
         let observer: Option<SearchObserver> = match (&deps, events) {
             (Some(d), None) => {
                 let d2 = Rc::clone(d);
                 Some(Box::new(move |_, e| on_search_event(&d2, e)))
             }
-            (d, Some(events)) => {
+            (d, Some((events, keep_bytes))) => {
                 let d2 = d.as_ref().map(Rc::clone);
                 Some(Box::new(move |_, e| {
                     if let Some(d2) = &d2 {
                         on_search_event(d2, e);
                     }
-                    crate::front_end::on_search_event(&events, e);
+                    crate::front_end::on_search_event(&events, keep_bytes, e);
                 }))
             }
             (None, None) => None,

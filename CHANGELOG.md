@@ -10,6 +10,13 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- Opt-in shared bytes on `FrontEnd::consulted` (`FrontEndOptions::consulted_bytes`,
+  `Consulted::bytes: Option<Arc<[u8]>>`, `SourceManager::shared_original_bytes`,
+  spec/driver.md "Front-end library entry", WP-3692): when enabled, each
+  consulted entry carries the shared bytes read for that event (the
+  resolver's shared `#embed` buffer or the source manager's shared buffer
+  for a loaded `__has_include` hit) with no second read; off by default
+  with `bytes == None` and no extra allocation or copy.
 - Entity keys in evaluation session results (WP-3481,
   spec/eval-session.md §4.1 "Entity keys"): every `Entity` of a run's
   value tree and of `RunError::Uncaught` carries `key`, the key
@@ -1387,6 +1394,14 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- `FrontEnd::consulted` now reports every distinct read of a consulted path
+  with that read's content (spec/driver.md "Front-end library entry",
+  WP-3692): an `#embed` of a file the preprocessor also entered is no
+  longer dropped (in either include/embed order), and a path read twice
+  with differing contents produces one entry per read in order instead of
+  keeping only the first content. Reads of the same path with identical
+  content still merge into one entry in first-met order (upgrading a probe
+  to an embed), and probes of entered files stay dropped.
 - A friend function defined in a class template specialization is now
   instantiated on odr-use even when the call binds a later bodyless friend
   redeclaration (from another specialization, from the same class template,
