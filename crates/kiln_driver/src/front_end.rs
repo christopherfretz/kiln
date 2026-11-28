@@ -34,8 +34,8 @@ use crate::{Engines, EntryRules, SharedWriter};
 
 /// How one run behaves. `Default` is: diagnostics discarded, no lookup
 /// log, a thread of its own, the PCH probe on, the process environment,
-/// no preprocessing record, no written-reference table, no static-initialization
-/// facts, no builtin-macro
+/// no preprocessing record, no written-reference table, no declaration-extent
+/// table, no static-initialization facts, no builtin-macro
 /// literal table, no token table, the process's working directory (read
 /// once), no overlay.
 #[non_exhaustive]
@@ -85,6 +85,11 @@ pub struct FrontEndOptions {
     /// `-fkiln-written-ref-keys` on the command line does; implies
     /// `written_refs`. Off by default (WP-3540).
     pub written_ref_keys: bool,
+    /// Record the declaration-extent table (`ParseOptions::decl_extents`,
+    /// spec/ast.md §19), as `-fkiln-decl-extents` on the command line does,
+    /// and print nothing: the closure reads it as `fe.ast.decl_extents`.
+    /// Off by default (WP-3694).
+    pub decl_extents: bool,
     /// Record each static variable's static-initialization fact
     /// (`ParseOptions::static_init_facts`, spec/ast.md §25), as
     /// `-fkiln-static-init-facts` on the command line does: the closure
@@ -148,6 +153,7 @@ impl Default for FrontEndOptions {
             pp_record: false,
             written_refs: false,
             written_ref_keys: false,
+            decl_extents: false,
             static_init_facts: false,
             fn_names: false,
             builtin_literals: false,
@@ -171,6 +177,7 @@ impl std::fmt::Debug for FrontEndOptions {
             .field("pp_record", &self.pp_record)
             .field("written_refs", &self.written_refs)
             .field("written_ref_keys", &self.written_ref_keys)
+            .field("decl_extents", &self.decl_extents)
             .field("static_init_facts", &self.static_init_facts)
             .field("fn_names", &self.fn_names)
             .field("builtin_literals", &self.builtin_literals)
@@ -360,6 +367,14 @@ pub enum FrontEndError {
     /// itself (`FrontEndOptions::response_files`; the driver prints this
     /// text and exits with 1, as clang's).
     ResponseFile(crate::rsp::RspError),
+    /// [`FrontEndOptions::working_directory`] could not be resolved or is
+    /// not an existing directory (WP-3693).
+    WorkingDirectory {
+        /// The directory configured in [`FrontEndOptions::working_directory`].
+        path: PathBuf,
+        /// The underlying I/O error.
+        source: std::io::Error,
+    },
 }
 
 impl std::fmt::Display for FrontEndError {
@@ -370,11 +385,22 @@ impl std::fmt::Display for FrontEndError {
             FrontEndError::NotOneInput => f.write_str("the command line has not one source input"),
             FrontEndError::NotSyntaxOnly => f.write_str("the command line is not -fsyntax-only"),
             FrontEndError::ResponseFile(e) => write!(f, "{e}"),
+            FrontEndError::WorkingDirectory { path, source } => {
+                write!(f, "cannot use working directory '{}': {source}", path.display())
+            }
         }
     }
 }
 
-impl std::error::Error for FrontEndError {}
+impl std::error::Error for FrontEndError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            FrontEndError::Thread(e) => Some(e),
+            FrontEndError::WorkingDirectory { source, .. } => Some(source),
+            _ => None,
+        }
+    }
+}
 
 /// Parses the one input of `command_line` (the arguments after the
 /// program name, `@file`s expanded unless `options.response_files` is
@@ -386,6 +412,8 @@ impl std::error::Error for FrontEndError {}
 ///
 /// [`FrontEndError::NotSyntaxOnly`] / [`FrontEndError::NotOneInput`] for
 /// a command line that is not one `-fsyntax-only` job;
+/// [`FrontEndError::WorkingDirectory`] when `options.working_directory`
+/// is set and cannot be resolved or is not an existing directory;
 /// [`FrontEndError::ResponseFile`] for an `@file` that cannot be read;
 /// [`FrontEndError::Panicked`] when the front end or `f` panicked;
 /// [`FrontEndError::Thread`] when `own_thread` could not start one. A
@@ -400,7 +428,7 @@ pub fn run_front_end<R: Send>(
     options: FrontEndOptions,
     f: impl FnOnce(&FrontEnd<'_, '_>) -> R + Send,
 ) -> Result<FrontEndReport<R>, FrontEndError> {
-    let base = options.base_work_dir();
+    let base = options.base_work_dir()?;
     let command_line = if options.response_files {
         crate::rsp::expand_checked(command_line, &base).map_err(FrontEndError::ResponseFile)?.words
     } else {
@@ -713,13 +741,24 @@ fn structural_checks(args: &Args) -> Result<(), FrontEndError> {
 
 impl FrontEndOptions {
     /// The run's working directory before the command line's
-    /// `-working-directory`: [`FrontEndOptions::working_directory`], else
-    /// the process's current directory, read now. Read once per run.
-    fn base_work_dir(&self) -> WorkDir {
-        match &self.working_directory {
-            Some(d) => WorkDir::at(d).unwrap_or_else(|_| WorkDir::of_process()),
-            None => WorkDir::of_process(),
+    /// `-working-directory`: [`FrontEndOptions::working_directory`]
+    /// resolved and checked to be an existing directory, else the
+    /// process's current directory, read now. Read once per run.
+    fn base_work_dir(&self) -> Result<WorkDir, FrontEndError> {
+        let Some(d) = &self.working_directory else {
+            return Ok(WorkDir::of_process());
+        };
+        let err = |source| FrontEndError::WorkingDirectory { path: d.clone(), source };
+        let wd = WorkDir::at(d).map_err(err)?;
+        let resolved = wd.dir().unwrap_or(d);
+        let meta = std::fs::metadata(resolved).map_err(err)?;
+        if !meta.is_dir() {
+            return Err(FrontEndError::WorkingDirectory {
+                path: d.clone(),
+                source: std::io::Error::new(std::io::ErrorKind::NotADirectory, "not a directory"),
+            });
         }
+        Ok(wd)
     }
 }
 
@@ -754,6 +793,7 @@ fn run_here<R>(
     // carries the table its producer recorded, spec/ast.md §18.10.2).
     args.written_refs |= options.written_refs || options.written_ref_keys;
     args.written_ref_keys |= options.written_ref_keys;
+    args.decl_extents |= options.decl_extents;
     args.static_init_facts |= options.static_init_facts;
     args.fn_names |= options.fn_names;
     args.builtin_literals |= options.builtin_literals;
@@ -941,7 +981,8 @@ pub struct JobConfig {
 /// `options.record_lookups` do not apply.
 pub fn std_config(std: &str, options: &FrontEndOptions) -> FrontEndReport<JobConfig> {
     let cl = ["-fsyntax-only".to_owned(), format!("-std={std}"), "std-config.cpp".to_owned()];
-    let args = entry_args("kiln++", &cl, &options.environment, &options.base_work_dir());
+    let base = options.base_work_dir().unwrap_or_else(|_| WorkDir::of_process());
+    let args = entry_args("kiln++", &cl, &options.environment, &base);
     let host = Host::new(options.stderr.clone());
     let diag_opts = crate::diag_options(&args);
     let dsm = SourceManager::new();

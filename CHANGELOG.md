@@ -10,6 +10,11 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- `FrontEndOptions::decl_extents` (default `false`) enables the
+  declaration-extent table (`fe.ast.decl_extents`, spec/ast.md §19) from
+  the front-end library entry without passing `-fkiln-decl-extents` on
+  argv; either the option or the flag enables it (spec/driver.md
+  "Front-end library entry", WP-3694).
 - Lookup-context (naming) class on per-specialization and keyed
   written-reference rows (WP-3695, spec/ast.md §18.9.1, §18.14.2):
   `SpecRef::naming_class` and `SubstRef::naming_class` record the
@@ -1407,6 +1412,17 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- Calls to C++23 explicit-object member functions written with member
+  syntax (`s.f(2)`, `(*p).f(2)`, `p->f(2)`, `this->f(2)`, and
+  instantiated `t.f(2)`) now begin their written extent
+  (`WrittenExtents::get` and `Ast::begin_loc`) at the object argument
+  rather than the callee name, via `ExprFlags::MEMBER_SYNTAX` on
+  `CallExpr` (spec/ast.md §21.1, WP-3691).
+- `run_front_end` now returns `FrontEndError::WorkingDirectory { path, source }`
+  when `FrontEndOptions::working_directory` is set to a path that cannot
+  be resolved or is not an existing directory, instead of silently
+  falling back to the process's current directory (spec/driver.md
+  "Front-end library entry", WP-3693).
 - `FrontEnd::consulted` now reports every distinct read of a consulted path
   with that read's content (spec/driver.md "Front-end library entry",
   WP-3692): an `#embed` of a file the preprocessor also entered is no
