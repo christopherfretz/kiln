@@ -172,7 +172,9 @@ pub(crate) const MAGIC: [u8; 8] = *b"KILNSNAP";
 /// version 190 (WP-3697) the declaration generation counter
 /// (`DeclArena::decl_gen`) and per-specialization failure generations
 /// (`TemplState::fn_spec_failed_gen`, `TemplState::class_partial_ambig_gen`).
-pub(crate) const FORMAT_VERSION: u32 = 190;
+/// version 191 (WP-3688) `RefRole::Label` for written label uses in the
+/// written-reference table.
+pub(crate) const FORMAT_VERSION: u32 = 191;
 /// The length of the magic and the format version.
 pub(crate) const HEADER_LEN: usize = 12;
 

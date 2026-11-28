@@ -234,8 +234,8 @@ impl<'a> AstNames<'a> {
             return;
         }
         self.write_name(d, out);
-        if tag || self.is_static_local(d) {
-            let n = self.local_ordinal(d, tag);
+        if tag || self.is_static_local(d) || kind == DeclKind::Label {
+            let n = self.local_ordinal(d, tag, kind == DeclKind::Label);
             if n > 0 {
                 let _ = write!(out, "#{}", n + 1);
             }
@@ -258,12 +258,13 @@ impl<'a> AstNames<'a> {
         })
     }
 
-    /// How many classes and enumerations (`tag`) or static locals of
-    /// the name of local `d` its function declares before it (0 for
-    /// other declarations): the discriminator the mangling gives
-    /// (`_ZZ1fvE1L_0`, `_ZZ1fvE1x_0`), counted over the declarations
-    /// made between the function and `d`.
-    fn local_ordinal(&self, d: DeclId, tag: bool) -> u32 {
+    /// How many classes and enumerations (`tag`), labels (`label`) or
+    /// static locals of the name of local `d` its function declares before
+    /// it (0 for other declarations): the discriminator the mangling gives
+    /// (`_ZZ1fvE1L_0`, `_ZZ1fvE1x_0`) and the disambiguator for multiple
+    /// GNU `__label__` declarations of one name in a function, counted over
+    /// the declarations made between the function and `d`.
+    fn local_ordinal(&self, d: DeclId, tag: bool, label: bool) -> u32 {
         let first = self.ast.first(d);
         let n = self.ast.decls.get(first);
         let Some(f) = n.ctx().filter(|&c| self.ast.decls.get(c).kind().is_function()) else {
@@ -276,6 +277,8 @@ impl<'a> AstNames<'a> {
             let xn = self.ast.decls.get(x);
             let kind = if tag {
                 matches!(xn.kind(), DeclKind::CXXRecord | DeclKind::Enum)
+            } else if label {
+                xn.kind() == DeclKind::Label
             } else {
                 self.is_static_local(x)
             };

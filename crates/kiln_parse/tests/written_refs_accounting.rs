@@ -62,8 +62,9 @@ enum Place {
         owner_at: Option<At>,
         cxx11: bool,
     },
-    /// Inside the parentheses of an `asm` statement or declaration.
-    Asm,
+    /// Inside the parentheses of an `asm` statement or declaration, at
+    /// parenthesis nesting `depth` (1 at the `asm(...)` top level).
+    Asm(u32),
     /// After `module` / `import` in a module directive.
     Module,
     /// In a `__label__` declaration (GNU local labels), up to its `;`.
@@ -348,8 +349,8 @@ impl Scan {
                 }
             }
             Place::Attr { depth, owner: self.owner, owner_at: self.owner_at, cxx11: b == 0 }
-        } else if self.asm.is_some() {
-            Place::Asm
+        } else if let Some(d) = self.asm {
+            Place::Asm(d)
         } else if self.module {
             Place::Module
         } else if self.local_labels {
@@ -528,7 +529,6 @@ fn account_tu(name: &str, src: &str, host: Option<&Host>) -> Report {
         "clang_builtin_alias",
         "builtin_alias",
     ];
-    let goto_sym = interner.intern("goto");
     let mut left = Vec::new();
     let mut seen_offs = HashSet::new();
     for i in &ids {
@@ -562,13 +562,17 @@ fn account_tu(name: &str, src: &str, host: Option<&Host>) -> Report {
         if unknown_attribute_argument(i, &unknown, lone) {
             continue;
         }
-        // A label: `l:` (not `::`), `goto l`, `&&l`, `__label__ a, b`; an
-        // `asm` statement's symbolic operand names and `asm goto` labels.
-        let label = i.next == Some(TokKind::Punct(Punct::Colon))
-            || i.prev == Some(TokKind::Identifier(goto_sym))
-            || i.place == Place::LocalLabels
-            || i.prev == Some(TokKind::Punct(Punct::AmpAmp));
-        if label || matches!(i.place, Place::Module | Place::Asm) {
+        // Label declarations (`l:` — not `::` — and `__label__ a, b;`),
+        // `asm` symbolic operand names (`[name]` at top level of `asm(...)`),
+        // and module names. Label uses (`goto l`, `&&l`, `asm goto` label
+        // operands) are recorded in `written_refs` (WP-3688) and must be
+        // covered above.
+        let label_decl =
+            i.next == Some(TokKind::Punct(Punct::Colon)) || i.place == Place::LocalLabels;
+        let asm_sym = i.place == Place::Asm(1)
+            && i.prev == Some(TokKind::Punct(Punct::LSquare))
+            && i.next == Some(TokKind::Punct(Punct::RSquare));
+        if label_decl || asm_sym || i.place == Place::Module {
             continue;
         }
         let spelling = interner.as_str(i.sym).to_owned();

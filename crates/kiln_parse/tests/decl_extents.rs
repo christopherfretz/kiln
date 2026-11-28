@@ -390,3 +390,56 @@ fn references_declare_nothing_and_statement_declarations_have_rows() {
         assert_eq!(one(name, kind), [[(full, name)]], "{kind} '{name}'");
     }
 }
+
+/// WP-3688: declaration-extent rows for label definitions and GNU `__label__`
+/// declarations: a label defined after a forward `goto`, a `__label__`
+/// declaration plus its later definition (one `LabelDecl`, two rows), a
+/// label with a trailing GNU attribute, and a label with a leading C++11
+/// attribute.
+#[test]
+fn label_decl_extents_forward_local_and_attributed() {
+    let src = "\
+void f() {
+  goto after;
+  after: ;
+  {
+    __label__ a, b;
+    goto a;
+    a: ;
+    b: ;
+  }
+  gnu_attr: __attribute__((unused));
+  [[maybe_unused]] cxx_attr: ;
+}
+";
+    let (sm, _, tu) = parse_src(src, true);
+    let ast = &tu.ast;
+    let t = &ast.decl_extents;
+    let rows = |d: DeclId| -> Vec<(&str, &str, &str)> {
+        t.rows_of(d).map(|e| (text(&sm, e.full), text(&sm, e.own), text(&sm, e.name))).collect()
+    };
+    let one = |name: &str| -> Vec<Vec<(&str, &str, &str)>> {
+        find_all(ast, name, "Label").into_iter().map(rows).filter(|r| !r.is_empty()).collect()
+    };
+    assert_eq!(one("after"), [[("after:", "after:", "after")]]);
+    assert_eq!(
+        one("a"),
+        [[("__label__ a, b;", "a", "a"), ("a:", "a:", "a")]],
+        "__label__ a plus its later definition"
+    );
+    assert_eq!(
+        one("b"),
+        [[("__label__ a, b;", "b", "b"), ("b:", "b:", "b")]],
+        "__label__ b plus its later definition"
+    );
+    assert_eq!(
+        one("gnu_attr"),
+        [[("gnu_attr: __attribute__((unused))", "gnu_attr: __attribute__((unused))", "gnu_attr")]],
+        "label with trailing GNU attribute"
+    );
+    assert_eq!(
+        one("cxx_attr"),
+        [[("[[maybe_unused]] cxx_attr:", "[[maybe_unused]] cxx_attr:", "cxx_attr")]],
+        "label with leading C++11 attribute"
+    );
+}
