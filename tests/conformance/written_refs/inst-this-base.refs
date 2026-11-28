@@ -7,9 +7,9 @@
 14:37-14:41  base  'Base' -> Base@8:27 in=Derived@14:27
 15:3-15:4  type  'T' -> T@14:17 in=Derived::twice@15:5
 15:34-15:40  member  'stored' -> (dependent) in=Derived::twice@15:5
-15:34-15:40  member  'stored' -> Base<int>::stored@9:5 spec=Derived<int>::twice@15:5
+15:34-15:40  member  'stored' -> Base<int>::stored@9:5 spec=Derived<int>::twice@15:5 naming=Derived<int>@14:27
 15:49-15:54  member  'fetch' -> (dependent) in=Derived::twice@15:5
-15:49-15:54  member  'fetch' -> Base<int>::fetch@10:5 spec=Derived<int>::twice@15:5
+15:49-15:54  member  'fetch' -> Base<int>::fetch@10:5 spec=Derived<int>::twice@15:5 naming=Derived<int>@14:27
 15:41-15:42  operator  '+' -> (dependent) in=Derived::twice@15:5 def=0+adl
 15:41-15:42  operator  '+' -> (builtin) spec=Derived<int>::twice@15:5 how=builtin
 15:64-15:65  type  'T' -> T@14:17 in=Derived::twice@15:5

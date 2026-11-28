@@ -399,6 +399,7 @@ impl Sema<'_, '_> {
                     spec,
                     func: d,
                     found: f,
+                    naming,
                     facts: None,
                 });
             }
@@ -888,7 +889,7 @@ impl Sema<'_, '_> {
         ule: ExprId,
         single: bool,
     ) -> ExprId {
-        self.resolve_written_ref(ule, d, Some(found));
+        self.resolve_written_ref(ule, d, Some(found), naming);
         let instance = self.is_class_member_ref(d);
         if let Some(naming) = naming {
             // [class.access.base]/5: the object is `*this` for an

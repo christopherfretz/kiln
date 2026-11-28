@@ -166,7 +166,10 @@ pub(crate) const MAGIC: [u8; 8] = *b"KILNSNAP";
 /// (`ColdExprData::compound_literal_written`).
 /// version 188 (WP-3640) the declared type as written of a deduced
 /// placeholder declaration (`ColdDeclData::written_decl_type`).
-pub(crate) const FORMAT_VERSION: u32 = 188;
+/// version 189 (WP-3695) the lookup-context (naming) class on per-
+/// specialization and keyed written-reference rows (`SpecRef::naming_class`,
+/// `SubstRef::naming_class`).
+pub(crate) const FORMAT_VERSION: u32 = 189;
 /// The length of the magic and the format version.
 pub(crate) const HEADER_LEN: usize = 12;
 

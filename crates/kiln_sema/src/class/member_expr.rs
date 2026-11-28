@@ -670,7 +670,11 @@ impl Sema<'_, '_> {
             let at = (b, obj_ty, def, arrow, nns);
             return self.member_var_template_set(name, m, via, naming, at, loc);
         }
-        self.member_of_object(b, obj_ty, def, arrow, m, found.shadow(0), nns, loc)
+        let r = self.member_of_object(b, obj_ty, def, arrow, m, found.shadow(0), nns, loc);
+        if found.naming.is_some() || self.kind_of(look) != DeclKind::Enum {
+            self.note_last_naming(r, naming);
+        }
+        r
     }
 
     /// `x.v<args>` naming a static data member template ([temp.names]/3,
@@ -735,6 +739,7 @@ impl Sema<'_, '_> {
         if self.ast.exprs.get(r).kind() == ExprKind::MemberExpr {
             let _ = self.ast.exprs.set_member_template_args(r, targs);
         }
+        self.note_last_naming(r, m.naming);
         r
     }
 

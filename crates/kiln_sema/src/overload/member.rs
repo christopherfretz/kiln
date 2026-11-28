@@ -509,7 +509,7 @@ impl Sema<'_, '_> {
             self.fail_written_spec(x);
             return None;
         };
-        self.resolve_written_ref(x, d, Some(f));
+        self.resolve_written_ref(x, d, Some(f), Some(m.naming));
         let e = self.finish_member_winner(&m, d, f, loc);
         self.keep_template_id_end(x, e);
         self.ovl.resolved_member = Some(e);

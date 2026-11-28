@@ -441,6 +441,7 @@ impl Sema<'_, '_> {
                 found: None,
                 adl: None,
                 udir: None,
+                naming_class: None,
                 flags: SUBST_DEPENDENT,
                 how: kiln_ast::written_refs::RefLookup::None,
             };
@@ -502,6 +503,7 @@ mod tests {
             found: None,
             adl: None,
             udir: None,
+            naming_class: None,
             flags: 0,
             how: RefLookup::Unqualified,
         }

@@ -3729,7 +3729,7 @@ a separate table: the main table keeps one entry per written name.
 
 #### 18.9.1 Contract
 
-- **The table.** `WrittenRefs::specs()` yields the rows (`SpecRef`, 28
+- **The table.** `WrittenRefs::specs()` yields the rows (`SpecRef`, 32
   bytes, a `size_of` unit test), keyed by (pattern entry,
   specialization):
 
@@ -3741,6 +3741,7 @@ a separate table: the main table keeps one entry per written name.
   | `found` | `Option<DeclId>` (4) | what lookup found, when it differs from `entity` (the template of a specialization) |
   | `adl` | `Option<AdlSetId>` (4) | a dependent unqualified call's associated set in this specialization (§18.7.4), interned with the main table's sets |
   | `udir` | `Option<DeclId>` (4) | the using-directive ordinary lookup found `entity` (or `found`) through, as §18.7.3's: `None` when lookup found it directly, by argument-dependent lookup only (`how` `Adl`), or by qualified or member lookup |
+  | `naming_class` | `Option<DeclId>` (4) | the lookup-context (naming) class ([class.access.base]/5, canonical first declaration via `Ast::first`) for a resolved `Member` or `Qualified` lookup in a class, including dependent member/class-scope operators (§18.13.6); `None` for unresolved, built-in, unqualified, ADL, namespace-qualified and enum-qualified rows (WP-3695) |
   | `flags` | `u8` | `MEMBER` (the entry's), `UNRESOLVED` without an entity; `REWRITTEN` and `REVERSED` for a dependent operator's resolution there, and `SPEC_BUILTIN` for one that selected a built-in candidate or applied no operator (no entity, `how` `builtin`, dumped `(builtin)`; §18.13.6) |
   | `how` | `RefLookup` | §18.7.2's `how` of the instantiation's lookup: `Member`, `Qualified`, `Unqualified`, `Adl`, `Both`, `Builtin`, or `None` without an entity |
 
@@ -3773,10 +3774,13 @@ a separate table: the main table keeps one entry per written name.
   `Both` keeps the directive of its ordinary half.
 - **Kept once.** A row with the same content as a live row is not added
   again (a name rebuilt by two paths for one specialization, an alias
-  template substituted twice with the same result). One entry can have
-  several rows for one key where the key is a template (§18.9.2: an
-  alias template, a default template argument), one per distinct
-  resolution.
+  template substituted twice with the same result). `naming_class` is
+  part of a row's content (its `Eq`/`Hash` key), so two lookups resolving
+  to the same inherited member through distinct lookup-context classes
+  (for example `A<Der1>` and `A<Der2>` on an alias template) stay
+  distinct rows. One entry can have several rows for one key where the
+  key is a template (§18.9.2: an alias template, a default template
+  argument, a concept), one per distinct resolution.
 - **Order independence.** The set of rows does not depend on the order
   in which the specializations are instantiated; only the order of
   `specs()` (recording order) does. Clients and tests compare the rows
@@ -4117,7 +4121,7 @@ After each entry's line (§18.6), its rows, sorted and without
 duplicates (so the order of instantiation does not show):
 
 ```
-<line>:<col>-<line>:<col>  <role>  '<spelling>' -> <entity>|(unresolved) [found=<decl>] spec=<specialization> [how=<how>] [udir=<ns>@<line>:<col>] [adl-ns=...] [adl-cls=...] [adl-enum=...]
+<line>:<col>-<line>:<col>  <role>  '<spelling>' -> <entity>|(unresolved) [found=<decl>] spec=<specialization> [naming=<class>] [how=<how>] [udir=<ns>@<line>:<col>] [adl-ns=...] [adl-cls=...] [adl-enum=...]
 ```
 
 The positions, role and spelling are the entry's. `<entity>`, `found=`
@@ -4126,9 +4130,15 @@ and the `adl-` lists print as in §18.6 and §18.7.5, `udir=` as
 specialization's qualified name with its template arguments (a class or
 variable template specialization's too: `Table<Cfg>`,
 `scale_of<Feet>`) and `@<line>:<col>` of its location (the pattern's
-declaration). On these lines every specialization, in `<entity>`,
-`found=` and `spec=` and in their scopes, prints its canonical template
-arguments, each type scoped as a canonical type prints
+declaration). `naming=` prints the row's `naming_class` in the same form
+as `spec=`, **only when it differs from the semantic parent of `entity`**
+(`Ast::first` of `entity`'s semantic `DeclContext`); a missing `naming=`
+in the dump therefore means "the entity's own semantic parent class or
+none", whereas the API (`SpecRef::naming_class`, `SubstRef::naming_class`)
+always carries the value for every resolved `Member`/`Qualified` class
+lookup (WP-3695). On these lines every specialization, in `<entity>`,
+`found=`, `spec=` and `naming=` and in their scopes, prints its canonical
+template arguments, each type scoped as a canonical type prints
 (`measure<lib::Item>`, not `measure<Alias>` or `measure<Item>` as some
 use first wrote it; `DiagNames::canonical_args`): a specialization's
 own arguments as first written are the first use's, which the order of
@@ -4176,7 +4186,7 @@ The 29 `bench/oven` entries' `-fconstexpr-report` counters (all but
 
 #### 18.9.7 Tests
 
-`crates/kiln_ast/src/written_refs.rs` (the row is 28 bytes, off records
+`crates/kiln_ast/src/written_refs.rs` (the row is 32 bytes, off records
 no pattern node, a forgotten pattern node is only its own entry's, a
 row is kept once and an update that duplicates
 another merges into it, a SFINAE drop removes one specialization's rows
@@ -5487,7 +5497,7 @@ through `Ast::partial_spec_info(key.template)`; the key's root through
 
 #### 18.14.2 The row
 
-`subst_rows(key)` yields the key's rows (`SubstRef`, 24 bytes, a
+`subst_rows(key)` yields the key's rows (`SubstRef`, 28 bytes, a
 `size_of` unit test): a `SpecRef` (§18.9.1) without `spec`, with the
 same fields and meanings.
 
@@ -5497,7 +5507,9 @@ the pattern's entry (`entry`); the entity the name denotes under the key
 unqualified call the lookup facts of the key's substitution, `how` and
 the associated set (`adl`), the definition-time found set being the
 entry's (`found_at_definition(entry)`, §18.12) and the row one selection
-from it (§18.12.4); `udir`; and, for an entry that was substituted and
+from it (§18.12.4); `udir`; `naming_class` (the lookup-context class of a
+resolved `Member` or `Qualified` class lookup, canonical first
+declaration, §18.9.1); and, for an entry that was substituted and
 is still dependent, `SUBST_DEPENDENT` with no entity.
 
 `flags` holds `SpecRef::flags`' bits and two of its own, in bits
@@ -5722,7 +5734,7 @@ and two `u32` counts. The sub-switch is outside a precompiled header's
 identity, like `-fkiln-written-refs`, and part of an implicit module's
 cache key (`written-ref-keys`).
 
-On, a key is 24 bytes plus its identity-index slot, a row 24 bytes. The
+On, a key is 24 bytes plus its identity-index slot, a row 28 bytes. The
 memory report's `written_refs.subst` row (count: keyed rows; bytes: keys,
 rows, the identity index, the expanded nodes and the pending overload
 sets) is shown only with keys on, and its bytes are not in the

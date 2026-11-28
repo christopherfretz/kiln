@@ -612,6 +612,15 @@ pub struct WrittenRefs {
     /// function template specialization's signature is substituted
     /// (§18.9.2): its declaration exists before its frame's entity says.
     spec_key: Option<(u32, DeclId)>,
+    /// The naming class ([class.access.base]/5) of the most recent
+    /// non-overloaded member or qualified-member expression built while
+    /// pattern nodes are recorded, keyed by the built expression
+    /// (transient, never carried). Overwriting an unconsumed entry is
+    /// expected because non-dependent and sema-synthesized member accesses
+    /// have no `PatternNode::Expr`; [`take_last_naming`](Self::take_last_naming)
+    /// matches `ExprId` and clears the slot so a stale value never attaches
+    /// to another expression.
+    last_naming: Option<(ExprId, DeclId)>,
     /// Stage 5 (§18.10): the sources whose names this table has no
     /// entries for although it is on.
     unrecorded: Vec<Unrecorded>,
@@ -801,7 +810,7 @@ pub const SPEC_DEAD: u8 = 0x80;
 pub const SPEC_BUILTIN: u8 = 32;
 
 /// What one dependent name of a template pattern resolved to in one
-/// specialization (spec/ast.md §18.9; 28 bytes).
+/// specialization (spec/ast.md §18.9; 32 bytes).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, kiln_snap::Snap)]
 pub struct SpecRef {
     /// The pattern's entry (in the main table, `DEPENDENT`).
@@ -817,6 +826,10 @@ pub struct SpecRef {
     /// The using-directive ordinary lookup found the selected declaration
     /// through at the pattern's definition (§18.7.3, §18.9.1).
     pub udir: Option<DeclId>,
+    /// The lookup-context (naming) class ([class.access.base]/5, canonical
+    /// first declaration) for a resolved `Member` or `Qualified` lookup in
+    /// a class, else `None` (§18.9.1).
+    pub naming_class: Option<DeclId>,
     /// [`REF_UNRESOLVED`], [`REF_MEMBER`] (the entry's),
     /// [`REF_REWRITTEN`], [`REF_REVERSED`], [`SPEC_BUILTIN`] (this
     /// specialization's resolution of an operator, §18.13.6).
@@ -975,7 +988,7 @@ impl SubstIdentity {
 }
 
 /// What one dependent entry of a key's pattern bound to under the key
-/// (spec/ast.md §18.14.2): a [`SpecRef`] without `spec` (24 bytes).
+/// (spec/ast.md §18.14.2): a [`SpecRef`] without `spec` (28 bytes).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, kiln_snap::Snap)]
 pub struct SubstRef {
     /// The pattern's entry (in the main table, `DEPENDENT`).
@@ -989,6 +1002,10 @@ pub struct SubstRef {
     /// The using-directive ordinary lookup found the selected declaration
     /// through at the pattern's definition (§18.7.3).
     pub udir: Option<DeclId>,
+    /// The lookup-context (naming) class ([class.access.base]/5, canonical
+    /// first declaration) for a resolved `Member` or `Qualified` lookup in
+    /// a class, else `None` (§18.9.1, §18.14.2).
+    pub naming_class: Option<DeclId>,
     /// [`SpecRef::flags`]'s bits, with [`SUBST_DEPENDENT`] and
     /// [`SUBST_EXPANDED`].
     pub flags: u8,
@@ -1005,6 +1022,7 @@ impl SubstRef {
             found: r.found,
             adl: r.adl,
             udir: r.udir,
+            naming_class: r.naming_class,
             flags: r.flags,
             how: r.how,
         }
@@ -1902,6 +1920,23 @@ impl WrittenRefs {
         self.spec_key
     }
 
+    /// Remembers the lookup-context (naming) class `naming` of the
+    /// non-overloaded member or qualified-member expression `e` just built.
+    /// Overwriting an unconsumed entry is expected because non-dependent and
+    /// sema-synthesized accesses have no `PatternNode::Expr`.
+    #[inline]
+    pub fn set_last_naming(&mut self, e: ExprId, naming: DeclId) {
+        self.last_naming = Some((e, naming));
+    }
+
+    /// Consumes the remembered naming class if it belongs to `e` or
+    /// `peeled`, clearing the slot unconditionally so a stale value never
+    /// attaches to a later expression.
+    #[inline]
+    pub fn take_last_naming(&mut self, e: ExprId, peeled: ExprId) -> Option<DeclId> {
+        self.last_naming.take().and_then(|(id, naming)| (id == e || id == peeled).then_some(naming))
+    }
+
     /// The specializations of the live entries recorded since `mark`.
     pub fn spec_keys_since(&self, mark: u32) -> Vec<DeclId> {
         let mut v: Vec<DeclId> = self.specs[(mark as usize).min(self.specs.len())..]
@@ -2543,6 +2578,50 @@ impl WrittenRefs {
         }
     }
 
+    /// A declaration formatted with its template arguments (for a
+    /// non-function specialization such as `Table<Cfg>` or
+    /// `Der<n::S<int>>`) and its source position, used for `spec=` and
+    /// `naming=`.
+    pub(super) fn write_spec_decl(
+        d: DeclId,
+        ast: &crate::Ast,
+        names: &crate::diag_names::DiagNames<'_>,
+        pos: &dyn Fn(Loc) -> String,
+        out: &mut String,
+    ) {
+        let mut s = String::new();
+        names.write_decl_name(d, true, &mut s);
+        if !ast.decls.get(d).kind().is_function()
+            && let Some((_, info)) = ast.spec_info(d)
+        {
+            names.write_spec_args(names, d, info.print_args, &mut s);
+        }
+        if s.is_empty() {
+            s.push_str("(anonymous)");
+        }
+        out.push_str(&s);
+        out.push('@');
+        out.push_str(&pos(ast.decls.get(d).loc()));
+    }
+
+    /// Prints ` naming=<class>` when `naming_class` is present and differs
+    /// from the semantic parent of `entity` (spec/ast.md §18.9.5).
+    pub(super) fn dump_naming_class(
+        entity: Option<DeclId>,
+        naming_class: Option<DeclId>,
+        ast: &crate::Ast,
+        names: &crate::diag_names::DiagNames<'_>,
+        pos: &dyn Fn(Loc) -> String,
+        out: &mut String,
+    ) {
+        if let Some(nc) = naming_class
+            && entity.and_then(|e| ast.decls.get(e).ctx()).map(|c| ast.first(c)) != Some(nc)
+        {
+            out.push_str(" naming=");
+            Self::write_spec_decl(nc, ast, names, pos, out);
+        }
+    }
+
     /// The per-specialization lines of entry `r` (`rows`), each starting
     /// with `head` (the entry's positions, role and spelling), sorted and
     /// without duplicates (§18.9.5).
@@ -2558,23 +2637,6 @@ impl WrittenRefs {
         decl: &dyn Fn(DeclId, &mut String),
         out: &mut String,
     ) {
-        // A specialization prints with its arguments, a class's and a
-        // variable's too (`Table<Cfg>`, `scale_of<Feet>`).
-        let spec_decl = |d: DeclId, out: &mut String| {
-            let mut s = String::new();
-            names.write_decl_name(d, true, &mut s);
-            if !ast.decls.get(d).kind().is_function()
-                && let Some((_, info)) = ast.spec_info(d)
-            {
-                names.write_spec_args(names, d, info.print_args, &mut s);
-            }
-            if s.is_empty() {
-                s.push_str("(anonymous)");
-            }
-            out.push_str(&s);
-            out.push('@');
-            out.push_str(&pos(ast.decls.get(d).loc()));
-        };
         let mut lines: Vec<String> = rows
             .iter()
             .map(|sr| {
@@ -2589,7 +2651,8 @@ impl WrittenRefs {
                     decl(f, &mut l);
                 }
                 l.push_str(" spec=");
-                spec_decl(sr.spec, &mut l);
+                Self::write_spec_decl(sr.spec, ast, names, pos, &mut l);
+                Self::dump_naming_class(sr.entity, sr.naming_class, ast, names, pos, &mut l);
                 dump_rewrite_flags(sr.flags, &mut l);
                 if sr.how != sr.default_how(r) {
                     l.push_str(" how=");
@@ -3057,14 +3120,15 @@ mod tests {
             found: None,
             adl: None,
             udir: None,
+            naming_class: None,
             flags: 0,
             how: RefLookup::Member,
         }
     }
 
     #[test]
-    fn spec_row_is_28_bytes() {
-        assert_eq!(size_of::<SpecRef>(), 28);
+    fn spec_row_is_32_bytes() {
+        assert_eq!(size_of::<SpecRef>(), 32);
         assert_eq!(size_of::<Option<SpecRefId>>(), 4);
     }
 
@@ -3111,6 +3175,18 @@ mod tests {
         assert_eq!(t.specs().count(), 1);
         assert_eq!(t.specs_naming(DeclId::new(20)).count(), 1);
         assert_eq!(t.specs_of(w).count(), 1);
+        // Distinct naming classes stay distinct rows (spec/ast.md §18.9.1).
+        let n1 =
+            t.push_spec(SpecRef { naming_class: Some(DeclId::new(30)), ..spec_row(w, 10, 20) });
+        let n2 =
+            t.push_spec(SpecRef { naming_class: Some(DeclId::new(31)), ..spec_row(w, 10, 20) });
+        assert_ne!(a, n1);
+        assert_ne!(n1, n2);
+        assert_eq!(
+            t.push_spec(SpecRef { naming_class: Some(DeclId::new(30)), ..spec_row(w, 10, 20) }),
+            n1
+        );
+        assert_eq!(t.spec_len(), 3);
     }
 
     /// spec/ast.md §18.13.6: an operator token is its own pattern node,
