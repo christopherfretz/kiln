@@ -17,6 +17,7 @@
 //!   the `--embed-dir` directories.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use kiln_source::{FileId, SourceManager};
 
@@ -48,8 +49,10 @@ pub enum SearchEvent<'s> {
         /// `__has_embed`: only the resource's existence and emptiness
         /// were asked ([`EmbedRequest::query_only`]).
         query_only: bool,
-        /// The whole resource as read (before `offset` / `limit`).
-        bytes: &'s [u8],
+        /// The whole resource as read (before `offset` / `limit`), in a
+        /// shared buffer so observers that want the bytes can `Arc::clone`
+        /// without copying.
+        bytes: &'s Arc<[u8]>,
     },
 }
 
@@ -358,7 +361,7 @@ impl<F: HeaderFs> HeaderSearch<F> {
         &mut self,
         sm: &SourceManager,
         req: &EmbedRequest,
-    ) -> Option<(String, Vec<u8>, Option<u32>)> {
+    ) -> Option<(String, Arc<[u8]>, Option<u32>)> {
         let name = req.name.as_str();
         if name.starts_with('/') {
             return self.fs.read(name).map(|b| (name.to_owned(), b, None));

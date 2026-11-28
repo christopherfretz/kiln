@@ -107,6 +107,12 @@ pub struct FrontEndOptions {
     /// here" per file. The closure reads it as `fe.token_table`. No
     /// command-line flag sets it. Off by default (WP-2825).
     pub token_table: bool,
+    /// Keep the shared bytes each [`Consulted`] entry read
+    /// (`Consulted::bytes`, spec/driver.md "Front-end library entry",
+    /// WP-3692), without copying or re-reading the file. Off by default:
+    /// when off, every `Consulted::bytes` is `None` and no extra
+    /// allocation or copy is made.
+    pub consulted_bytes: bool,
     /// The directory every relative path of the run opens against (the
     /// main input, `-I` and the other search directories, `-include`,
     /// `#embed`, module files, `@file`s), as clang's `-working-directory`
@@ -146,6 +152,7 @@ impl Default for FrontEndOptions {
             fn_names: false,
             builtin_literals: false,
             token_table: false,
+            consulted_bytes: false,
             working_directory: None,
             overlay: None,
         }
@@ -168,6 +175,7 @@ impl std::fmt::Debug for FrontEndOptions {
             .field("fn_names", &self.fn_names)
             .field("builtin_literals", &self.builtin_literals)
             .field("token_table", &self.token_table)
+            .field("consulted_bytes", &self.consulted_bytes)
             .field("working_directory", &self.working_directory)
             .field("overlay", &self.overlay)
             .finish()
@@ -208,8 +216,12 @@ pub struct FrontEnd<'r, 'sm> {
     /// ([`ParsedTu::token_table`], spec/parse.md §2.6): the tokens of
     /// this unit, not those of a PCH prefix or an imported module file.
     pub token_table: Option<&'r TokenTable>,
-    /// Paths the result depends on that are not files the preprocessor
-    /// entered, in the order first met, each once.
+    /// Paths the result depends on: every `#embed` read (even when the
+    /// preprocessor also entered the file) and every `__has_include` /
+    /// `__has_embed` hit of a file the preprocessor did not enter, in the
+    /// order met (reads of the same path with identical content merge into
+    /// one, upgrading a probe to an embed; a differing content gets its
+    /// own entry).
     pub consulted: &'r [Consulted],
     /// The lookup log, when `record_lookups` was set.
     pub lookups: Option<&'r LookupLog>,
@@ -228,7 +240,8 @@ impl std::fmt::Debug for FrontEnd<'_, '_> {
     }
 }
 
-/// A path the unit depends on without having entered it.
+/// A path the unit consulted: an `#embed` read, or a `__has_include` /
+/// `__has_embed` hit of a file the preprocessor did not enter.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Consulted {
     /// How it was consulted.
@@ -238,6 +251,10 @@ pub struct Consulted {
     /// What the front end read there; `None` when it read nothing (a
     /// `__has_include` hit whose buffer is not loaded).
     pub content: Option<Content>,
+    /// The shared bytes of this read when
+    /// [`FrontEndOptions::consulted_bytes`] was set (`None` when off, or
+    /// when `content` is `None`).
+    pub bytes: Option<Arc<[u8]>>,
 }
 
 /// The bytes of a [`Consulted`] path as the front end read them, by size
@@ -426,6 +443,8 @@ pub(crate) struct PpHooks {
     pub(crate) record_lookups: bool,
     /// `FrontEndOptions::pp_record`.
     pub(crate) pp_record: bool,
+    /// `FrontEndOptions::consulted_bytes`.
+    pub(crate) consulted_bytes: bool,
     pub(crate) events: SearchEvents,
     /// `FrontEndOptions::overlay`, never an empty one.
     pub(crate) overlay: Option<Arc<Overlay>>,
@@ -435,22 +454,37 @@ pub(crate) struct PpHooks {
 }
 
 /// One of header search's events as the entry keeps it: the kind, the
-/// path, the file `__has_include` found, and the bytes an `#embed` or
-/// `__has_embed` read.
-pub(crate) type SearchEvents =
-    Rc<RefCell<Vec<(ConsultedKind, String, Option<FileId>, Option<Content>)>>>;
+/// path, the file `__has_include` found, the content an `#embed` or
+/// `__has_embed` read, and (when `consulted_bytes` is on) its shared bytes.
+pub(crate) struct RecordedSearchEvent {
+    kind: ConsultedKind,
+    path: String,
+    file: Option<FileId>,
+    content: Option<Content>,
+    bytes: Option<Arc<[u8]>>,
+}
+
+/// Header search's recorded events for one run.
+pub(crate) type SearchEvents = Rc<RefCell<Vec<RecordedSearchEvent>>>;
 
 /// Keeps one search event (the observer of
 /// [`crate::pp_cmd::Job::configure_preprocessor_with`]).
-pub(crate) fn on_search_event(events: &SearchEvents, e: SearchEvent<'_>) {
+pub(crate) fn on_search_event(events: &SearchEvents, keep_bytes: bool, e: SearchEvent<'_>) {
     let ev = match e {
-        SearchEvent::HasInclude { file, path, .. } => {
-            (ConsultedKind::Probe, path.to_owned(), Some(file), None)
-        }
-        SearchEvent::Embed { path, query_only, bytes } => {
-            let kind = if query_only { ConsultedKind::Probe } else { ConsultedKind::Embed };
-            (kind, path.to_owned(), None, Some(Content::of(bytes)))
-        }
+        SearchEvent::HasInclude { file, path, .. } => RecordedSearchEvent {
+            kind: ConsultedKind::Probe,
+            path: path.to_owned(),
+            file: Some(file),
+            content: None,
+            bytes: None,
+        },
+        SearchEvent::Embed { path, query_only, bytes } => RecordedSearchEvent {
+            kind: if query_only { ConsultedKind::Probe } else { ConsultedKind::Embed },
+            path: path.to_owned(),
+            file: None,
+            content: Some(Content::of(bytes)),
+            bytes: keep_bytes.then(|| Arc::clone(bytes)),
+        },
     };
     events.borrow_mut().push(ev);
 }
@@ -481,7 +515,7 @@ impl Hooks<'_> {
     /// `pp` when one was asked for.
     pub(crate) fn see<'sm>(&mut self, unit: &Unit<'_, 'sm>, pp: &mut Preprocessor<'sm, '_>) {
         let lookups = if self.pp.record_lookups { pp.take_lookup_log() } else { None };
-        let consulted = consulted(unit.sm, pp, &self.pp.events.borrow());
+        let consulted = consulted(unit.sm, pp, &self.pp.events.borrow(), self.pp.consulted_bytes);
         let fe = FrontEnd {
             sm: unit.sm,
             interner: unit.interner,
@@ -502,36 +536,68 @@ impl Hooks<'_> {
     }
 }
 
-/// The consulted paths of `events`: in the order first met, each once
-/// (an `#embed` makes an earlier probe of the same path an embed),
-/// without the files the preprocessor entered. A `__has_include` hit's
-/// content is its buffer's bytes when the source manager has them.
+/// The consulted paths of `events` (WP-3692): every `#embed` read (even if
+/// the preprocessor also entered the file) and every `__has_include` /
+/// `__has_embed` hit of a file the preprocessor did not enter, in the order
+/// met. Reads of the same path with identical content merge into one
+/// (keeping first-met order and upgrading a probe to an embed); a read with
+/// differing content gets its own entry. When `keep_bytes` is `true`, each
+/// entry also carries the shared bytes of that read (`None` when `false`,
+/// without allocating or copying).
 pub(crate) fn consulted(
     sm: &SourceManager,
     pp: &Preprocessor<'_, '_>,
-    events: &[(ConsultedKind, String, Option<FileId>, Option<Content>)],
+    events: &[RecordedSearchEvent],
+    keep_bytes: bool,
 ) -> Vec<Consulted> {
     let mut out: Vec<Consulted> = Vec::new();
-    for (kind, path, file, content) in events {
-        let entered =
-            file.or_else(|| sm.loaded_file(Path::new(path))).is_some_and(|f| pp.was_entered(f));
-        if entered {
-            continue;
+    for ev in events {
+        if ev.kind == ConsultedKind::Probe {
+            let entered = ev
+                .file
+                .or_else(|| sm.loaded_file(Path::new(&ev.path)))
+                .is_some_and(|f| pp.was_entered(f));
+            if entered {
+                continue;
+            }
         }
-        let content =
-            content.or_else(|| file.and_then(|f| sm.original_bytes(f)).map(|b| Content::of(&b)));
-        match out.iter_mut().find(|c| &c.path == path) {
+        let (content, bytes) = match ev.content {
+            Some(c) => (Some(c), if keep_bytes { ev.bytes.clone() } else { None }),
+            None => {
+                if keep_bytes {
+                    let b = ev.file.and_then(|f| sm.shared_original_bytes(f));
+                    let c = b.as_deref().map(Content::of);
+                    (c, b)
+                } else {
+                    let c = ev.file.and_then(|f| sm.original_bytes(f)).map(|b| Content::of(&b));
+                    (c, None)
+                }
+            }
+        };
+        let existing = out.iter_mut().find(|c| {
+            c.path == ev.path && (c.content == content || c.content.is_none() || content.is_none())
+        });
+        match existing {
             Some(c) => {
-                if *kind == ConsultedKind::Embed {
+                if ev.kind == ConsultedKind::Embed {
                     c.kind = ConsultedKind::Embed;
                 }
-                c.content = c.content.or(content);
+                if c.content.is_none() {
+                    c.content = content;
+                }
+                if c.bytes.is_none() {
+                    c.bytes = bytes;
+                }
             }
-            None => out.push(Consulted { kind: *kind, path: path.clone(), content }),
+            None => out.push(Consulted { kind: ev.kind, path: ev.path.clone(), content, bytes }),
         }
     }
-    // A path entered after it was first probed is not consulted either.
-    out.retain(|c| !sm.loaded_file(Path::new(&c.path)).is_some_and(|f| pp.was_entered(f)));
+    // A probe of a path entered after it was probed stays dropped; an
+    // `#embed` is a separate read and stays reported.
+    out.retain(|c| {
+        c.kind == ConsultedKind::Embed
+            || !sm.loaded_file(Path::new(&c.path)).is_some_and(|f| pp.was_entered(f))
+    });
     out
 }
 
@@ -712,6 +778,7 @@ fn run_here<R>(
         let pp = PpHooks {
             record_lookups: options.record_lookups,
             pp_record: options.pp_record,
+            consulted_bytes: options.consulted_bytes,
             events,
             overlay: overlay.cloned(),
             overlay_failures: Vec::new(),

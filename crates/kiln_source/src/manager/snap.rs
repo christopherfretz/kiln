@@ -115,7 +115,12 @@ impl Snap for FileEntry {
             if t.len() != len as usize {
                 return Err(r.invalid::<Self>("buffer text of the wrong length"));
             }
-            Ok(Body { text: t.into(), report: super::LoadReport::default(), outcome })
+            Ok(Body {
+                text: t.into(),
+                original: OnceLock::new(),
+                report: super::LoadReport::default(),
+                outcome,
+            })
         };
         let (origin, body) = match r.u8()? {
             VIRTUAL => (Origin::Virtual, Some(text(r, LazyOutcome::Disk)?)),

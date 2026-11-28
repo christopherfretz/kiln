@@ -381,6 +381,11 @@ impl fmt::Debug for Origin {
 #[derive(Debug)]
 struct Body {
     text: Box<str>,
+    /// Shared original bytes of this buffer: moved in directly for overlaid
+    /// buffers (no copy) or populated lazily on the first
+    /// [`SourceManager::shared_original_bytes`] call (never allocated on
+    /// the default path).
+    original: OnceLock<Arc<[u8]>>,
     report: LoadReport,
     outcome: LazyOutcome,
 }
@@ -421,6 +426,7 @@ impl FileEntry {
             // Eager buffers set their body at creation.
             Origin::Disk | Origin::Virtual | Origin::Overlay => Body {
                 text: String::new().into_boxed_str(),
+                original: OnceLock::new(),
                 report: LoadReport::default(),
                 outcome: LazyOutcome::Unavailable,
             },
@@ -478,11 +484,17 @@ fn resolve_lazy(path: &Path, len: u32, hash: u64, copy: Option<&LazyCopy>) -> Bo
         .map(decode_utf8)
         .filter(|(t, _)| matches(t));
     if let Some((text, report)) = disk {
-        return Body { text: text.into_boxed_str(), report, outcome: LazyOutcome::Disk };
+        return Body {
+            text: text.into_boxed_str(),
+            original: OnceLock::new(),
+            report,
+            outcome: LazyOutcome::Disk,
+        };
     }
     if let Some(t) = copy.and_then(|c| c()).filter(|t| matches(t)) {
         return Body {
             text: t.into_boxed_str(),
+            original: OnceLock::new(),
             report: LoadReport::default(),
             outcome: LazyOutcome::Copy,
         };
@@ -496,6 +508,7 @@ fn resolve_lazy(path: &Path, len: u32, hash: u64, copy: Option<&LazyCopy>) -> Bo
 fn unavailable(len: u32) -> Body {
     Body {
         text: " ".repeat(len as usize).into_boxed_str(),
+        original: OnceLock::new(),
         report: LoadReport::default(),
         outcome: LazyOutcome::Unavailable,
     }
@@ -664,6 +677,33 @@ pub fn read_open_file(file: &mut fs::File, meta: &fs::Metadata) -> io::Result<Ve
     }
     bytes.truncate(n);
     Ok(bytes)
+}
+
+/// [`read_open_file`] into a shared [`Arc<[u8]>`] in one allocation for a
+/// regular file whose size does not shrink during the read (no copy of the
+/// bytes into a second buffer).
+///
+/// # Errors
+/// The read failed.
+pub fn read_open_file_shared(file: &mut fs::File, meta: &fs::Metadata) -> io::Result<Arc<[u8]>> {
+    if !meta.is_file() {
+        return read_open_file(file, meta).map(Arc::from);
+    }
+    let len = usize::try_from(meta.len()).map_err(|_| io::ErrorKind::OutOfMemory)?;
+    let mut arc: Arc<[u8]> = std::iter::repeat_n(0u8, len).collect();
+    let Some(buf) = Arc::get_mut(&mut arc) else {
+        return read_open_file(file, meta).map(Arc::from);
+    };
+    let mut n = 0;
+    while n < len {
+        match io::Read::read(file, &mut buf[n..]) {
+            Ok(0) => break,
+            Ok(k) => n += k,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
+    }
+    if n == len { Ok(arc) } else { Ok(Arc::from(&arc[..n])) }
 }
 
 /// The identity of a file on disk (clang `llvm::sys::fs::UniqueID`).
@@ -1051,23 +1091,30 @@ impl SourceManager {
         {
             return Ok(id);
         }
-        let (bytes, origin) = if let Some(c) = replaced {
+        let (text, report, original, origin) = if let Some(c) = replaced {
             let Some(b) = c.bytes_noting(&self.overlay_failures) else {
                 return Err(load_failed().into());
             };
-            (b.to_vec(), Origin::Overlay)
+            drop(file);
+            if b.len() as u64 >= FILE_SPACE_END {
+                return Err(LoadError::LocSpaceExhausted);
+            }
+            let (text, report) = decode_utf8_slice(&b);
+            (text, report, Some(b), Origin::Overlay)
         } else {
             if meta.len() >= FILE_SPACE_END {
                 return Err(LoadError::LocSpaceExhausted);
             }
-            (read_open_file(&mut file, &meta)?, Origin::Disk)
+            let bytes = read_open_file(&mut file, &meta)?;
+            drop(file);
+            if bytes.len() as u64 >= FILE_SPACE_END {
+                return Err(LoadError::LocSpaceExhausted);
+            }
+            let (text, report) = decode_utf8(bytes);
+            (text.into_boxed_str(), report, None, Origin::Disk)
         };
-        drop(file);
-        if bytes.len() as u64 >= FILE_SPACE_END {
-            return Err(LoadError::LocSpaceExhausted);
-        }
-        let (text, report) = decode_utf8(bytes);
-        let id = self.push_file(path.to_string_lossy().into(), text, report, origin)?;
+        let id =
+            self.push_file_boxed(path.to_string_lossy().into(), text, original, report, origin)?;
         by_path.insert(key, id);
         Ok(id)
     }
@@ -1101,12 +1148,17 @@ impl SourceManager {
         let Some(bytes) = content.bytes_noting(&self.overlay_failures) else {
             return Err(load_failed().into());
         };
-        let bytes = bytes.to_vec();
         if bytes.len() as u64 >= FILE_SPACE_END {
             return Err(LoadError::LocSpaceExhausted);
         }
-        let (text, report) = decode_utf8(bytes);
-        let id = self.push_file(path.to_string_lossy().into(), text, report, Origin::Overlay)?;
+        let (text, report) = decode_utf8_slice(&bytes);
+        let id = self.push_file_boxed(
+            path.to_string_lossy().into(),
+            text,
+            Some(bytes),
+            report,
+            Origin::Overlay,
+        )?;
         by_path.insert(key, id);
         Ok(id)
     }
@@ -1270,11 +1322,26 @@ impl SourceManager {
         report: LoadReport,
         origin: Origin,
     ) -> Result<FileId, LocSpaceExhausted> {
+        self.push_file_boxed(name, text.into_boxed_str(), None, report, origin)
+    }
+
+    fn push_file_boxed(
+        &self,
+        name: Box<str>,
+        text: Box<str>,
+        original: Option<Arc<[u8]>>,
+        report: LoadReport,
+        origin: Origin,
+    ) -> Result<FileId, LocSpaceExhausted> {
         if text.len() as u64 >= FILE_SPACE_END {
             return Err(LocSpaceExhausted);
         }
         let len = text.len() as u32;
-        let body = Body { text: text.into_boxed_str(), report, outcome: LazyOutcome::Disk };
+        let orig = OnceLock::new();
+        if let Some(b) = original {
+            let _ = orig.set(b);
+        }
+        let body = Body { text, original: orig, report, outcome: LazyOutcome::Disk };
         self.push_entry(name, len, Some(body), origin)
     }
 
@@ -1506,6 +1573,9 @@ impl SourceManager {
             Origin::Lazy { .. } => f.body.get().filter(|b| b.outcome == LazyOutcome::Disk)?,
             Origin::Disk | Origin::Virtual | Origin::Overlay => f.body(),
         };
+        if let Some(orig) = body.original.get() {
+            return Some(std::borrow::Cow::Borrowed(orig));
+        }
         let text = body.text.as_bytes();
         if body.report.is_clean() {
             return Some(std::borrow::Cow::Borrowed(text));
@@ -1520,6 +1590,37 @@ impl SourceManager {
         }
         out.extend_from_slice(&text[at..]);
         Some(std::borrow::Cow::Owned(out))
+    }
+
+    /// Shared buffer of the bytes [`original_bytes`](Self::original_bytes)
+    /// returns (WP-3692): for an overlaid file, the overlay's own buffer (no
+    /// copy); otherwise built once on first call without re-reading the file
+    /// and shared across callers (`Arc::ptr_eq`). `None` whenever
+    /// [`original_bytes`](Self::original_bytes) is `None`. Does not read a
+    /// lazy buffer.
+    pub fn shared_original_bytes(&self, file: FileId) -> Option<Arc<[u8]>> {
+        let f = self.file(file);
+        let body = match f.origin {
+            Origin::Lazy { .. } => f.body.get().filter(|b| b.outcome == LazyOutcome::Disk)?,
+            Origin::Disk | Origin::Virtual | Origin::Overlay => f.body(),
+        };
+        Some(Arc::clone(body.original.get_or_init(|| {
+            let text = body.text.as_bytes();
+            if body.report.is_clean() {
+                Arc::from(text)
+            } else {
+                let mut out = Vec::with_capacity(text.len());
+                let mut at = 0;
+                for r in &body.report.replacements {
+                    let off = r.offset as usize;
+                    out.extend_from_slice(&text[at..off]);
+                    out.extend_from_slice(&r.bytes);
+                    at = off + char::REPLACEMENT_CHARACTER.len_utf8();
+                }
+                out.extend_from_slice(&text[at..]);
+                Arc::from(out)
+            }
+        })))
     }
 
     /// The location of byte `offset` of `file`. `offset == text.len()` is
@@ -2023,6 +2124,21 @@ fn decode_utf8(bytes: Vec<u8>) -> (String, LoadReport) {
         Ok(s) => return (s, LoadReport::default()),
         Err(e) => e.into_bytes(),
     };
+    let (text, report) = decode_utf8_invalid(&bytes);
+    (text, report)
+}
+
+/// [`decode_utf8`] from a borrowed slice (avoids copying into a `Vec` first).
+fn decode_utf8_slice(bytes: &[u8]) -> (Box<str>, LoadReport) {
+    if let Ok(s) = std::str::from_utf8(bytes) {
+        (s.into(), LoadReport::default())
+    } else {
+        let (text, report) = decode_utf8_invalid(bytes);
+        (text.into_boxed_str(), report)
+    }
+}
+
+fn decode_utf8_invalid(bytes: &[u8]) -> (String, LoadReport) {
     let mut text = String::with_capacity(bytes.len() + 16);
     let mut replacements = Vec::new();
     for chunk in bytes.utf8_chunks() {
@@ -2044,3 +2160,50 @@ const _: fn() = || {
 // Expansion entries dominate the manager's memory in deep expansions
 // (one per macro-argument run per substitution): keep them at 24 bytes.
 const _: () = assert!(size_of::<Entry>() == 24);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shared_original_bytes_is_lazy_on_disk_and_shared_on_overlay() {
+        let dir = std::env::temp_dir().join(format!("kiln-sm-shared-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let disk_path = dir.join("disk.h");
+        let ov_path = dir.join("ov.h");
+        fs::write(&disk_path, b"int disk_x;\n").unwrap();
+        fs::write(&ov_path, b"int old_ov;\n").unwrap();
+
+        let ov_arc: Arc<[u8]> = Arc::from(b"int new_ov;\n".as_slice());
+        let mut ov = Overlay::new();
+        ov.replace(&ov_path, Arc::clone(&ov_arc)).unwrap();
+
+        let sm = SourceManager::new();
+        sm.set_overlay(Arc::new(ov));
+
+        let df = sm.load_regular_file(&disk_path).unwrap();
+        // Default path: no shared buffer allocated on load or original_bytes().
+        assert!(sm.file(df).body().original.get().is_none());
+        assert_eq!(sm.original_bytes(df).as_deref(), Some(&b"int disk_x;\n"[..]));
+        assert!(sm.file(df).body().original.get().is_none());
+        // Opt-in path: allocated once and shared across callers.
+        let b1 = sm.shared_original_bytes(df).unwrap();
+        let b2 = sm.shared_original_bytes(df).unwrap();
+        assert_eq!(&*b1, b"int disk_x;\n");
+        assert!(Arc::ptr_eq(&b1, &b2));
+
+        // Overlaid file: keeps the overlay's own Arc without copying.
+        let of = sm.load_regular_file(&ov_path).unwrap();
+        let ob = sm.shared_original_bytes(of).unwrap();
+        assert!(Arc::ptr_eq(&ob, &ov_arc));
+
+        // read_open_file_shared: single unique Arc<[u8]> directly from the file.
+        let mut f = fs::File::open(&disk_path).unwrap();
+        let meta = f.metadata().unwrap();
+        let shared = read_open_file_shared(&mut f, &meta).unwrap();
+        assert_eq!(&*shared, b"int disk_x;\n");
+        assert_eq!(Arc::strong_count(&shared), 1);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+}
