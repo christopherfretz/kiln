@@ -5331,11 +5331,19 @@ Decisions (reviewed by tooling clients):
 - A variable template specialization whose template or matching partial
   specialization is only declared takes the declaration as its pattern
   and is valid ([temp.inst]/7).
-- An implicit definition (special member, comparison, inheriting
-  constructor) is not a SFINAE context (clang `isSFINAEContext`): a
-  synthesis context opened above the innermost SFINAE frame stops the
-  trap (`Sema::sfinae_traps`), so its errors print and its declarations
-  are not filed.
+- An implicit definition or implicit special-member declaration (special
+  member, comparison, inheriting constructor: `SynthKind::Special`,
+  `Comparison`, `Inheriting`, clang `DefiningSynthesizedFunction`;
+  `SynthKind::Declaring`, clang `DeclaringSpecialMember`) is not a SFINAE
+  context (clang `isSFINAEContext`): one opened above the innermost SFINAE
+  frame stops the trap (`Sema::sfinae_traps` via `SynthKind::ends_sfinae`),
+  so its errors print and its declarations are not filed.
+  `SynthKind::ExceptionSpec` (clang `ExceptionSpecEvaluation`) is
+  transparent to an enclosing SFINAE context (WP-3685; tests
+  `namespace.udecl/inherited-ctor-template-nested-nsdmi-cxx17-run.cpp`,
+  `namespace.udecl/inherited-ctor-template-nested-nsdmi-cxx20-run.cpp`,
+  `namespace.udecl/inherited-ctor-std-pair-nested-nsdmi-cxx17-run.cpp`,
+  `namespace.udecl/inherited-ctor-std-pair-nested-nsdmi-cxx20-run.cpp`).
 - `this` named in a requires-expression inside a lambda that captures
   nothing fails the requirement ([expr.prim.req.general]/5), not the
   lambda: under a trap the call operator is not invalidated (as for a
