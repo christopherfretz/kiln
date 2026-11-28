@@ -6571,6 +6571,52 @@ This section is the promise kiln makes, and where it makes none.
   (the value of a non-type template argument in an instantiated
   member's initializer) is the one token of the parameter's name it
   replaces.
+- **Instantiated expressions** (WP-3704): on a specialization's body,
+  `WrittenExtents::get` and `ExprExtents::written_extent` map every node
+  back to the template pattern's written tokens by the following rule:
+  - *Shared non-dependent nodes*: when substitution does not need to
+    rebuild an expression (apart from the three rebuilt/copied
+    exceptions: a non-dependent overloaded member access whose overload
+    set resolution consumes, a node dealiased in an expansion, and a
+    lifetime-extended temporary copied by `unshare_temporaries` together
+    with its `end_loc` and `templates.expr_begin`), the specialization
+    holds the pattern's own `ExprId`, so its extent is the pattern's.
+  - *Rebuilt nodes*: a node rebuilt from a pattern expression takes the
+    pattern node's `loc` and `end_loc` and inherits its recorded
+    side-table `end_loc` (a template-id's `>`, an operator- or
+    conversion-function-id's last token, a pseudo-destructor's destroyed
+    type, a concept-id's `>`) and `templates.expr_begin` (a qualifier's
+    begin, or a parenthesized aggregate initialization's begin), so its
+    written extent equals the pattern node's written extent whatever its
+    instantiated kind (a dependent call or operator becoming
+    `CXXOperatorCallExpr` or `CXXRewrittenBinaryOperator`, a
+    `CXXDependentScopeMemberExpr` becoming `MemberExpr`, a
+    `DependentScopeDeclRefExpr` or `UnresolvedLookupExpr` becoming
+    `DeclRefExpr`, or a `CXXPseudoDestructorExpr` becoming a destructor
+    `MemberExpr`). An explicit-object member call (`t.template f<int>()`)
+    keeps the full call extent on the `CallExpr` (`ExprFlags::MEMBER_SYNTAX`),
+    while its callee `DeclRefExpr` spans the member name (`f`, as clang).
+    Statements keep the pattern statement's location.
+  - *Pack expansions*: expanding a `PackExpansionExpr` in a list
+    (`h(xs...)`, `h(int(xs)...)`) substitutes the expansion's pattern
+    operand (without the `...`) once per element, so each expanded
+    element has that pattern operand's written extent (`xs`, `int(xs)`);
+    the enclosing call keeps its own extent (`h(xs...)`).
+  - *Fold expressions*: an expanded non-empty `CXXFoldExpr` is wrapped
+    in a `ParenExpr` carrying the fold's `(` and `)`, so the outer
+    `ParenExpr` has the fold's full written extent (`(xs + ... + t)`,
+    `(bool(xs) && ...)`). Each inner combination (`BinaryOperator` or
+    `CXXOperatorCallExpr`) spans from its first operand's first token to
+    its last operand's last token: the pattern's extent for a unary fold
+    (`bool(xs)`), or the fold's body for a binary fold (`xs + ... + t`,
+    `t + ... + xs`). An empty unary fold over `&&`, `||` or `,`
+    synthesizes `true`, `false` or `void()` at the `...` token, whose
+    extent is `...` (as clang).
+  - *Nothing-written and implicit nodes*: implicit conversions,
+    temporaries, default arguments (`CXXDefaultArgExpr`), implicit
+    lambda capture initializers, compiler-synthesized operator and
+    conversion callees, rewritten comparison internals, and
+    `SubstNonTypeTemplateParmExpr` follow the bullets above.
 - **Rewritten operators** (`a != b` as `!(a == b)`, a comparison
   through `<=>`): the `CXXRewrittenBinaryOperator` has the written
   extent, from its first written operand to its last; the nodes built
@@ -6677,7 +6723,8 @@ fails on one.
 ### 21.5 Tests
 
 `crates/kiln_parse/tests/expr_extents.rs` (every kind of 21.2,
-`explicit_object_member_calls_begin_at_the_object`, and the
+`explicit_object_member_calls_begin_at_the_object`,
+`instantiated_expressions_keep_pattern_written_extents`, and the
 macro cases: an argument, a whole invocation, a part of a body, a
 pasted token) and `cargo xtask extents` (stage 1 in `ci`); the xtask
 test `the_none_table_is_the_baselines_kinds` holds the table of 21.3 to

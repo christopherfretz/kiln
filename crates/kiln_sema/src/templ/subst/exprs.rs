@@ -85,6 +85,9 @@ impl Substituter<'_, '_, '_> {
         // §18.9): one test of the switch while nothing is recorded.
         let written = self.sema.written_spec_errors();
         let r = self.expr_node(e);
+        if let Ok(r) = r {
+            self.inherit_written_extent(e, r);
+        }
         if scoped {
             self.sema.ast.exprs.round_scope = round;
         }
@@ -404,12 +407,17 @@ impl Substituter<'_, '_, '_> {
         loc: Loc,
         end: Loc,
     ) -> SubstResult<ExprId> {
+        let begin = self.sema.ast.templates.expr_begin.get(p).copied();
         let args = self.paren_list_args(p)?;
-        Ok(match args.as_slice() {
+        let r = match args.as_slice() {
             [a] if !self.sema.is_braced_arg(*a) => {
                 self.sema.act_on_cast(CastStyle::Functional, ty, *a, loc, end)
             }
             _ => self.sema.act_on_paren_list_cast(ty, &args, loc, end),
+        };
+        Ok(match begin {
+            Some(b) => self.sema.keep_paren_list_begin(r, b),
+            None => r,
         })
     }
 
@@ -2647,6 +2655,9 @@ impl Substituter<'_, '_, '_> {
         let is_ule = self.sema.ast.exprs.get(c).kind() == ExprKind::UnresolvedLookupExpr;
         let written = if is_ule { self.sema.written_spec_errors() } else { None };
         let r = self.callee_node(c);
+        if let Ok(r) = r {
+            self.inherit_written_extent(c, r);
+        }
         if let Some(errors) = written {
             match r {
                 Ok(r) => {
@@ -2657,6 +2668,49 @@ impl Substituter<'_, '_, '_> {
             }
         }
         r
+    }
+
+    /// Copies the pattern node's side-table extent records (`end_loc` for a
+    /// multi-token name, template-id, pseudo-destructor or concept-id, and
+    /// `templates.expr_begin` for a qualifier or parenthesized aggregate
+    /// initializer begin) onto the rebuilt node `to` when `to` did not already
+    /// record one (spec/ast.md §21, WP-3704).
+    fn inherit_written_extent(&mut self, from: ExprId, to: ExprId) {
+        if from == to {
+            return;
+        }
+        let is_name = |k| {
+            matches!(
+                k,
+                ExprKind::DeclRefExpr
+                    | ExprKind::UnresolvedLookupExpr
+                    | ExprKind::DependentScopeDeclRefExpr
+                    | ExprKind::MemberExpr
+                    | ExprKind::CXXDependentScopeMemberExpr
+                    | ExprKind::CXXPseudoDestructorExpr
+                    | ExprKind::ConceptSpecializationExpr
+            )
+        };
+        let fk = self.sema.ast.exprs.get(from).kind();
+        let tk = self.sema.ast.exprs.get(to).kind();
+        if is_name(fk) && is_name(tk) {
+            if let Some(end) = self.sema.ast.exprs.end_loc(from) {
+                self.sema.set_template_id_end(to, end);
+            }
+            if let Some(&b) = self.sema.ast.templates.expr_begin.get(from)
+                && b.is_valid()
+                && self.sema.ast.templates.expr_begin.get(to).is_none()
+            {
+                let _ = self.sema.ast.templates.expr_begin.insert(to, b);
+            }
+            return;
+        }
+        if fk == ExprKind::CXXParenListInitExpr
+            && let Some(&b) = self.sema.ast.templates.expr_begin.get(from)
+            && b.is_valid()
+        {
+            let _ = self.sema.keep_paren_list_begin(to, b);
+        }
     }
 
     /// [`Self::callee`]'s rebuild.

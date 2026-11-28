@@ -1443,6 +1443,20 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- Written extents (`WrittenExtents::get`, `ExprExtents::written_extent`) of
+  instantiated expressions in template specializations now inherit the pattern
+  node's side-table `end_loc` and `templates.expr_begin` across substitution
+  (spec/ast.md §21.2, WP-3704): rebuilt function/variable/member template-ids
+  (`g<T>`, `n::gt<T>`, `n::nv<T>`, `T::template tv<int>`, `t.template f<int>`),
+  qualified implicit-`this` member accesses (`Base::bm`, `Base::bm_fn`,
+  `Base::ov`), qualified concept-ids (`n::Small<T>`), operator/conversion names
+  (`t.operator int`), pseudo-destructors (`tmp.~T`), parenthesized aggregate
+  initializers (`Pair(1, N)`), and `unshare_temporaries` clones no longer drop
+  their closing token or qualifier/paren begin. The written-extent rule for
+  instantiated expressions (shared non-dependent nodes, rebuilt nodes, pack
+  expansions, fold expressions, and nothing-written nodes) is now documented in
+  spec/ast.md §21.2 and tested across three-way function-template and
+  class-template-member specializations.
 - Dependent class template-ids containing a parameter pack or pack expansion
   argument now convert non-expansion non-type arguments whose parameter type
   is known in their canonical type, matching clang's

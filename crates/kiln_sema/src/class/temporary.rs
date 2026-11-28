@@ -750,9 +750,19 @@ impl Sema<'_, '_> {
         if self.ast.exprs.get(e).kind() == ExprKind::ExprWithCleanups {
             let o = self.ast.exprs.operand(e);
             let r = self.unshare_walk(o, collect)?;
-            return self.ast.exprs.clone_with_children(e, &mut self.ast.lists, &[r]);
+            return self.clone_expr_with_children(e, &[r]);
         }
         self.unshare_walk(e, collect)
+    }
+
+    /// Clones `e` with `kids` and carries over `templates.expr_begin` (in
+    /// addition to `exprs.cold.*`, which `clone_with_children` copies; WP-3704).
+    fn clone_expr_with_children(&mut self, e: ExprId, kids: &[ExprId]) -> Option<ExprId> {
+        let id = self.ast.exprs.clone_with_children(e, &mut self.ast.lists, kids)?;
+        if let Some(&b) = self.ast.templates.expr_begin.get(e) {
+            let _ = self.ast.templates.expr_begin.insert(id, b);
+        }
+        Some(id)
     }
 
     /// The walk of [`Sema::unshare_temporaries`], in postorder (operands
@@ -797,7 +807,7 @@ impl Sema<'_, '_> {
                             if !collect && ex.default_arg_rewritten(x).is_none() {
                                 None
                             } else {
-                                self.ast.exprs.clone_with_children(x, &mut self.ast.lists, &[])
+                                self.clone_expr_with_children(x, &[])
                             }
                         }
                         ExprKind::BinaryConditionalOperator => {
@@ -832,7 +842,7 @@ impl Sema<'_, '_> {
                     } else {
                         let new: Vec<ExprId> =
                             rs.iter().zip(&kids).map(|(r, &k)| r.unwrap_or(k)).collect();
-                        self.ast.exprs.clone_with_children(x, &mut self.ast.lists, &new)
+                        self.clone_expr_with_children(x, &new)
                     }
                 }
             };
@@ -856,7 +866,7 @@ impl Sema<'_, '_> {
         let o = ex.operand(e);
         if !extended && !collect {
             let r = inner?;
-            return self.ast.exprs.clone_with_children(e, &mut self.ast.lists, &[r]);
+            return self.clone_expr_with_children(e, &[r]);
         }
         let m = self.ast.exprs.clone_unextended(e, inner.unwrap_or(o));
         if let Some(c) = self.extend_collector.as_mut().filter(|_| collect) {
@@ -886,7 +896,7 @@ impl Sema<'_, '_> {
             None => return None,
         };
         let kids = [c2.unwrap_or(common), cond, t, f2.unwrap_or(f)];
-        self.ast.exprs.clone_with_children(e, &mut self.ast.lists, &kids)
+        self.clone_expr_with_children(e, &kids)
     }
 
     /// The returned-reference-to-temporary diagnostic: P2748R5 made it

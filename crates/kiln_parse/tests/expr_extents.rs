@@ -841,3 +841,625 @@ int h(S s) { return tmpl(s); }
     // `f(2)`, `this->f(2)`, `s.f(2)`, `(*p).f(2)`, `p->f(2)`, and instantiated `t.f(2)`.
     assert_eq!(member_syntax, 6);
 }
+
+/// WP-3704 (spec/ast.md §21): written extents of instantiated expressions
+/// across a function template and a class template member, each instantiated
+/// three ways (sharing non-dependent nodes, rebuilding with the same kind,
+/// and rebuilding with a different kind).
+const INSTANTIATED: &str = r"
+namespace n {
+  int f(int x) { return x + 1; }
+  int v = 10;
+  template <class U> int gt(U u) { return int(u); }
+  template <class U> constexpr int nv = int(sizeof(U));
+  template <class U> concept Small = sizeof(U) <= 16;
+}
+
+template <class U> int g(U u) { return int(u); }
+
+int h() { return 0; }
+int h(int a) { return a; }
+int h(int a, int b) { return a + b; }
+int def(int a, int b = 3) { return a + b; }
+
+struct RefWrap { const int &r; };
+struct Pair { int a, b; };
+
+struct M {
+  int ov(int x) const { return x; }
+  int ov(double x) const { return int(x); }
+};
+
+struct Ops {
+  int v;
+  static constexpr int x = 11;
+  template <class U> static constexpr int tv = int(sizeof(U));
+  Ops() : v(0) {}
+  Ops(int a) : v(a) {}
+  operator int() const { return v; }
+  Ops operator+(const Ops &o) const { return Ops(v + o.v); }
+  bool operator==(const Ops &o) const { return v == o.v; }
+  template <class U> int f() const { return v + int(sizeof(U)); }
+};
+
+struct Alt {
+  int v;
+  enum { x = 22 };
+  template <class U> static constexpr int tv = int(sizeof(U)) + 1;
+  Alt() : v(1) {}
+  Alt(int a) : v(a) {}
+  operator int() const { return v; }
+  template <class U> int f(this Alt self) { return self.v + int(sizeof(U)); }
+};
+Alt operator+(Alt a, Alt b) { return Alt(a.v + b.v); }
+bool operator==(Alt a, Alt b) { return a.v == b.v; }
+
+struct StaticMem {
+  int v;
+  static constexpr int x = 33;
+  template <class U> static constexpr int tv = int(sizeof(U)) + 2;
+  StaticMem() : v(2) {}
+  StaticMem(int a) : v(a) {}
+  operator int() const { return v; }
+  template <class U> static int f() { return int(sizeof(U)) + 3; }
+};
+
+int fn_ptr_target(int x) { return x + 2; }
+int alt_fn_target(Alt a) { return a.v + 3; }
+
+struct Functor {
+  int operator()(Ops o) const { return o.v + 4; }
+};
+
+int h(Ops a, Ops b) { return a.v + b.v; }
+
+template <class T, class Call, int N, class... Ts>
+int fn_tmpl(T t, Call c, Ts... xs) {
+  M m;
+  const int &r_nd = 1 + 2;
+  const RefWrap &rw = RefWrap(1);
+  const T &r_dep = T{};
+  Pair pr = Pair(1, N);
+  T tmp = T{};
+  tmp.~T();
+  bool small = n::Small<T>;
+  int shared = n::f(1) + n::v;
+  int ov = m.ov(t);
+  int arith = int(t + t) + int(t != t);
+  int called = c(t);
+  int tid = g<T>(t) + n::gt<T>(t) + n::nv<T>;
+  int packed = h(xs...) + h(int(xs)...);
+  int folded = int((xs + ... + t));
+  bool empty_or_all = (bool(xs) && ...);
+  int d = def(int(t));
+  auto lam = [&](int a) { return a + N + n::f(1) + int(t); };
+  return shared + ov + arith + called + tid + packed + folded
+         + int(empty_or_all) + int(small) + d + lam(N) + r_nd + rw.r + pr.b + int(r_dep);
+}
+
+struct Base {
+  int bm = 5;
+  int bm_fn() const { return bm; }
+  int ov(int x) const { return x; }
+  int ov(double x) const { return int(x); }
+};
+
+template <class T, int N>
+struct Box : Base {
+  int member(T t, int k) {
+    M m;
+    const int &r_nd = 1 + 2;
+    const T &r_dep = T{};
+    int shared = n::f(1) + Base::bm + Base::bm_fn();
+    int qual = T::x + T::template tv<int>;
+    int mem_tid = t.template f<int>() + t.operator int();
+    int tid = g<T>(t) + n::gt<T>(t);
+    int ov = m.ov(t) + Base::ov(t);
+    auto lam = [&](int a) { return a + N + k + n::f(1); };
+    return shared + qual + mem_tid + tid + ov + lam(N) + r_nd + int(r_dep);
+  }
+};
+
+int use_all() {
+  int a = fn_tmpl<int, int(*)(int), 3>(1, &fn_ptr_target, 10, 20);
+  int b = fn_tmpl<Ops, Functor, 5>(Ops(2), Functor{}, Ops(3), Ops(4));
+  int c = fn_tmpl<Alt, int(*)(Alt), 7>(Alt(5), &alt_fn_target);
+  Box<Ops, 1> b1;
+  Box<Alt, 2> b2;
+  Box<StaticMem, 3> b3;
+  return a + b + c + b1.member(Ops(1), 1) + b2.member(Alt(2), 2) + b3.member(StaticMem(3), 3);
+}
+";
+
+/// Every expression node reachable from `body` (statements, local variable
+/// initializers, expression children, lambda capture initializers and bodies).
+fn body_exprs(ast: &kiln_ast::Ast, body: kiln_ast::StmtId) -> Vec<kiln_ast::ExprId> {
+    use kiln_ast::decl::DeclKind;
+    use kiln_ast::expr::ExprKind;
+    use kiln_ast::stmt::StmtKind;
+    use kiln_source::fx::FxHashSet;
+
+    enum Item {
+        Stmt(kiln_ast::StmtId),
+        Expr(kiln_ast::ExprId),
+        Decl(kiln_ast::DeclId),
+    }
+
+    let mut out = Vec::new();
+    let mut seen = FxHashSet::default();
+    let mut stack = vec![Item::Stmt(body)];
+    let mut kids = Vec::new();
+    while let Some(item) = stack.pop() {
+        match item {
+            Item::Stmt(s) => match ast.stmts.get(s).kind() {
+                StmtKind::CompoundStmt => {
+                    let stmts: Vec<_> =
+                        ast.lists.iter::<kiln_ast::StmtId>(ast.stmts.compound_body(s)).collect();
+                    stack.extend(stmts.into_iter().rev().map(Item::Stmt));
+                }
+                StmtKind::DeclStmt => {
+                    let decls: Vec<_> =
+                        ast.lists.iter::<kiln_ast::DeclId>(ast.stmts.decl_stmt_decls(s)).collect();
+                    stack.extend(decls.into_iter().rev().map(Item::Decl));
+                }
+                StmtKind::ExprStmt => stack.push(Item::Expr(ast.stmts.expr_stmt_expr(s))),
+                StmtKind::ReturnStmt => {
+                    if let Some(e) = ast.stmts.return_value(s) {
+                        stack.push(Item::Expr(e));
+                    }
+                }
+                StmtKind::IfStmt => {
+                    let i = *ast.stmts.if_data(s);
+                    stack.extend(i.els.into_iter().map(Item::Stmt));
+                    stack.extend(i.then.into_iter().map(Item::Stmt));
+                    stack.extend(i.cond.into_iter().map(Item::Expr));
+                    stack.extend(i.cond_var.into_iter().map(Item::Decl));
+                    stack.extend(i.init.into_iter().map(Item::Stmt));
+                }
+                other => panic!("unexpected statement kind in test body: {other:?}"),
+            },
+            Item::Decl(d) => {
+                if ast.decls.get(d).kind() == DeclKind::Var
+                    && let Some(init) = ast.decls.var(d).and_then(|v| v.init)
+                {
+                    stack.push(Item::Expr(init));
+                }
+            }
+            Item::Expr(e) => {
+                if !seen.insert(e) {
+                    continue;
+                }
+                out.push(e);
+                let n = ast.exprs.get(e);
+                match n.kind() {
+                    ExprKind::LambdaExpr => {
+                        let data = ast.exprs.lambdas.get(ast.exprs.lambda_id(e));
+                        stack.extend(data.body.into_iter().map(Item::Stmt));
+                        if let Some(inits) = data.inits {
+                            let list: Vec<_> = ast.lists.iter::<kiln_ast::ExprId>(inits).collect();
+                            stack.extend(list.into_iter().rev().map(Item::Expr));
+                        }
+                    }
+                    // Do not descend into a callee parameter's default expression
+                    // (which lives on the callee declaration, outside this body).
+                    ExprKind::CXXDefaultArgExpr | ExprKind::CXXDefaultInitExpr => {}
+                    ExprKind::SubstNonTypeTemplateParmExpr => {
+                        stack.extend(kiln_ast::ExprId::try_new(n.b()).map(Item::Expr));
+                    }
+                    ExprKind::CXXRewrittenBinaryOperator => {
+                        stack.extend(kiln_ast::ExprId::try_new(n.a()).map(Item::Expr));
+                    }
+                    _ => {
+                        kids.clear();
+                        ast.exprs.children_into(e, &ast.lists, &mut kids);
+                        stack.extend(kids.iter().rev().copied().map(Item::Expr));
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Whether `e` is one of spec/ast.md §21.2's nothing-written or implicit kinds
+/// (whose `WrittenExtents::get` is legitimately `None`).
+fn is_legitimately_unwritten(
+    ast: &kiln_ast::Ast,
+    e: kiln_ast::ExprId,
+    implicit_captures: &kiln_source::fx::FxHashSet<kiln_ast::ExprId>,
+) -> bool {
+    use kiln_ast::expr::ExprKind;
+    if implicit_captures.contains(&e) {
+        return true;
+    }
+    let n = ast.exprs.get(e);
+    match n.kind() {
+        ExprKind::CXXDefaultArgExpr
+        | ExprKind::CXXDefaultInitExpr
+        | ExprKind::ImplicitValueInitExpr
+        | ExprKind::NoInitExpr
+        | ExprKind::ArrayInitIndexExpr
+        | ExprKind::ArrayInitLoopExpr
+        | ExprKind::OpaqueValueExpr => true,
+        ExprKind::CXXThisExpr => ast.exprs.this_is_implicit(e),
+        ExprKind::CXXConstructExpr => {
+            ast.exprs.end_loc(e).is_none() && ast.exprs.children(e, &ast.lists).len() != 1
+        }
+        // Compiler-synthesized callee of an overloaded operator or implicit
+        // conversion function call (when no written name end was recorded).
+        ExprKind::DeclRefExpr | ExprKind::MemberExpr => {
+            ast.exprs.end_loc(e).is_none()
+                && matches!(
+                    ast.decls.get(ast.exprs.decl(e)).name().kind(),
+                    kiln_ast::names::DeclNameKind::Operator
+                        | kiln_ast::names::DeclNameKind::Conversion
+                )
+        }
+        ExprKind::ImplicitCastExpr
+        | ExprKind::MaterializeTemporaryExpr
+        | ExprKind::CXXBindTemporaryExpr
+        | ExprKind::ExprWithCleanups
+        | ExprKind::ConstantExpr
+        | ExprKind::CXXStdInitializerListExpr => ast
+            .exprs
+            .first_child(e, &ast.lists)
+            .is_some_and(|c| is_legitimately_unwritten(ast, c, implicit_captures)),
+        _ => false,
+    }
+}
+
+/// Every expression inside an implicit lambda capture initializer in `ast`.
+fn implicit_capture_inits(ast: &kiln_ast::Ast) -> kiln_source::fx::FxHashSet<kiln_ast::ExprId> {
+    use kiln_ast::ids::LambdaId;
+    use kiln_ast::lambda::CaptureKind;
+    let mut out = kiln_source::fx::FxHashSet::default();
+    let mut stack = Vec::new();
+    for i in 1..=ast.exprs.lambdas.len() {
+        let l = ast.exprs.lambdas.get(LambdaId::new(u32::try_from(i).unwrap()));
+        let Some(inits) = l.inits else { continue };
+        let inits = ast.lists.get(inits);
+        if inits.len() != l.captures.len() {
+            continue;
+        }
+        for (c, &init) in l.captures.iter().zip(inits) {
+            if c.implicit || c.kind == CaptureKind::VlaBound {
+                stack.push(kiln_ast::ExprId::new(init));
+            }
+        }
+    }
+    let mut kids = Vec::new();
+    while let Some(e) = stack.pop() {
+        if out.insert(e) {
+            kids.clear();
+            ast.exprs.children_into(e, &ast.lists, &mut kids);
+            stack.extend_from_slice(&kids);
+        }
+    }
+    out
+}
+
+type SpecNodeList = Vec<(kiln_ast::ExprId, kiln_ast::expr::ExprKind, Option<String>)>;
+
+fn assert_has_node(nodes: &SpecNodeList, kind: kiln_ast::expr::ExprKind, text: &str) {
+    assert!(
+        nodes.iter().any(|(_, k, t)| *k == kind && t.as_deref() == Some(text)),
+        "missing {kind:?} `{text}` in {:?}",
+        nodes.iter().filter(|(_, k, _)| *k == kind).map(|(_, _, t)| t).collect::<Vec<_>>()
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn check_group_all_nodes(
+    p: &Parsed,
+    tree: &WrittenExtents<'_>,
+    client: &ExprExtents<'_>,
+    implicit_captures: &kiln_source::fx::FxHashSet<kiln_ast::ExprId>,
+    label: &str,
+    pat_fn: kiln_ast::DeclId,
+    specs: &[kiln_ast::DeclId],
+    extra_synthesized: &[(&str, &str)],
+) {
+    use kiln_ast::expr::ExprKind;
+    use kiln_source::fx::{FxHashMap, FxHashSet};
+
+    let ast = &p.tu.ast;
+    let text_of = |e: kiln_ast::ExprId| -> Option<String> {
+        let (f, b, end) = client.written_range(e)?;
+        Some(p.sm.text(f)[b as usize..end as usize].to_owned())
+    };
+    let pat_body = ast.decls.function(pat_fn).and_then(|f| f.body).expect("pattern body");
+    let pat_nodes = body_exprs(ast, pat_body);
+    let pat_ids: FxHashSet<_> = pat_nodes.iter().copied().collect();
+    let mut pat_extents: FxHashMap<(kiln_source::Loc, kiln_source::Loc), Vec<ExprKind>> =
+        FxHashMap::default();
+    for &pe in &pat_nodes {
+        if let Some(ext) = tree.get(pe) {
+            pat_extents.entry(ext).or_default().push(ast.exprs.get(pe).kind());
+        }
+    }
+    let mut problems = Vec::new();
+    let (mut any_shared, mut any_rebuilt_same, mut any_rebuilt_diff) = (false, false, false);
+    for (idx, &sp) in specs.iter().enumerate() {
+        let body = ast.decls.function(sp).and_then(|f| f.body).expect("specialization body");
+        for e in body_exprs(ast, body) {
+            let kind = ast.exprs.get(e).kind();
+            let ext = tree.get(e);
+            let txt = text_of(e);
+            assert_eq!(ext, client.written_extent(e), "{label}[{idx}] {kind:?}");
+            if pat_ids.contains(&e) {
+                any_shared = true;
+                continue;
+            }
+            match ext {
+                Some(ext) => {
+                    if let Some(pat_kinds) = pat_extents.get(&ext) {
+                        if pat_kinds.contains(&kind) {
+                            any_rebuilt_same = true;
+                        } else {
+                            any_rebuilt_diff = true;
+                        }
+                    } else {
+                        let kstr = format!("{kind:?}");
+                        let allowed = txt.as_deref().is_some_and(|t| {
+                            extra_synthesized.iter().any(|&(ek, et)| ek == kstr && et == t)
+                        });
+                        if !allowed {
+                            problems.push(format!(
+                                "{label}[{idx}] {kind:?} rebuilt extent {txt:?} not in pattern"
+                            ));
+                        }
+                    }
+                }
+                None if !is_legitimately_unwritten(ast, e, implicit_captures) => {
+                    let lc = p.sm.line_col(ast.exprs.get(e).loc());
+                    problems.push(format!(
+                        "{label}[{idx}] {kind:?} at {lc:?} has None extent (not legitimately unwritten)"
+                    ));
+                }
+                None => {}
+            }
+        }
+    }
+    assert!(any_shared, "{label}: expected shared nodes");
+    assert!(any_rebuilt_same, "{label}: expected rebuilt same-kind nodes");
+    assert!(any_rebuilt_diff, "{label}: expected rebuilt different-kind nodes");
+    assert!(problems.is_empty(), "{label} extent discrepancies:\n{}", problems.join("\n"));
+}
+
+fn check_fn_tmpl_constructs(
+    p: &Parsed,
+    client: &ExprExtents<'_>,
+    fn_pat: kiln_ast::DeclId,
+    fn_specs: &[kiln_ast::DeclId],
+) {
+    use kiln_ast::expr::ExprKind;
+    use kiln_source::fx::FxHashSet;
+
+    let ast = &p.tu.ast;
+    let text_of = |e: kiln_ast::ExprId| -> Option<String> {
+        let (f, b, end) = client.written_range(e)?;
+        Some(p.sm.text(f)[b as usize..end as usize].to_owned())
+    };
+    let spec_nodes = |fn_decl: kiln_ast::DeclId| -> SpecNodeList {
+        let body = ast.decls.function(fn_decl).and_then(|f| f.body).expect("body");
+        body_exprs(ast, body)
+            .into_iter()
+            .map(|e| (e, ast.exprs.get(e).kind(), text_of(e)))
+            .collect()
+    };
+    let fn_pat_ids: FxHashSet<_> =
+        body_exprs(ast, ast.decls.function(fn_pat).unwrap().body.unwrap()).into_iter().collect();
+    let [fn0, fn1, fn2] =
+        [spec_nodes(fn_specs[0]), spec_nodes(fn_specs[1]), spec_nodes(fn_specs[2])];
+
+    for nodes in [&fn0, &fn1, &fn2] {
+        let nf_calls: Vec<_> = nodes
+            .iter()
+            .filter(|(_, k, t)| *k == ExprKind::CallExpr && t.as_deref() == Some("n::f(1)"))
+            .collect();
+        assert!(nf_calls.len() >= 2, "expected n::f(1) in body and lambda");
+        assert!(
+            nf_calls.iter().all(|(e, _, _)| fn_pat_ids.contains(e)),
+            "n::f(1) should be shared"
+        );
+        let mov: Vec<_> = nodes
+            .iter()
+            .filter(|(_, k, t)| *k == ExprKind::MemberExpr && t.as_deref() == Some("m.ov"))
+            .collect();
+        assert_eq!(mov.len(), 1);
+        assert!(!fn_pat_ids.contains(&mov[0].0), "m.ov must be rebuilt, not shared");
+        let mat_nd: Vec<_> = nodes
+            .iter()
+            .filter(|(_, k, t)| {
+                *k == ExprKind::MaterializeTemporaryExpr && t.as_deref() == Some("1 + 2")
+            })
+            .collect();
+        assert_eq!(mat_nd.len(), 1);
+        assert!(!fn_pat_ids.contains(&mat_nd[0].0), "extended temporary must be unshared");
+        for (k, text) in [
+            (ExprKind::CXXParenListInitExpr, "RefWrap(1)"),
+            (ExprKind::CXXParenListInitExpr, "(1, N)"),
+            (ExprKind::CXXFunctionalCastExpr, "Pair(1, N)"),
+            (ExprKind::MaterializeTemporaryExpr, "T{}"),
+            (ExprKind::DeclRefExpr, "g<T>"),
+            (ExprKind::CallExpr, "g<T>(t)"),
+            (ExprKind::DeclRefExpr, "n::gt<T>"),
+            (ExprKind::CallExpr, "n::gt<T>(t)"),
+            (ExprKind::DeclRefExpr, "n::nv<T>"),
+            (ExprKind::ConceptSpecializationExpr, "n::Small<T>"),
+            (ExprKind::SubstNonTypeTemplateParmExpr, "N"),
+            (ExprKind::LambdaExpr, "[&](int a) { return a + N + n::f(1) + int(t); }"),
+            (ExprKind::CallExpr, "h(xs...)"),
+            (ExprKind::CallExpr, "h(int(xs)...)"),
+            (ExprKind::ParenExpr, "(xs + ... + t)"),
+        ] {
+            assert_has_node(nodes, k, text);
+        }
+        assert!(nodes.iter().any(|(_, k, t)| *k == ExprKind::CXXDefaultArgExpr && t.is_none()));
+    }
+
+    for (nodes, kind, text) in [
+        (&fn0, ExprKind::BinaryOperator, "t + t"),
+        (&fn0, ExprKind::BinaryOperator, "t != t"),
+        (&fn0, ExprKind::CallExpr, "c(t)"),
+        (&fn0, ExprKind::CXXPseudoDestructorExpr, "tmp.~T"),
+        (&fn0, ExprKind::ParenExpr, "(bool(xs) && ...)"),
+        (&fn0, ExprKind::BinaryOperator, "bool(xs)"),
+        (&fn1, ExprKind::CXXOperatorCallExpr, "t + t"),
+        (&fn1, ExprKind::CXXRewrittenBinaryOperator, "t != t"),
+        (&fn1, ExprKind::CXXOperatorCallExpr, "c(t)"),
+        (&fn1, ExprKind::MemberExpr, "tmp.~T"),
+        (&fn1, ExprKind::ParenExpr, "(bool(xs) && ...)"),
+        (&fn1, ExprKind::BinaryOperator, "bool(xs)"),
+        (&fn2, ExprKind::CXXOperatorCallExpr, "t + t"),
+        (&fn2, ExprKind::CXXRewrittenBinaryOperator, "t != t"),
+        (&fn2, ExprKind::CallExpr, "c(t)"),
+        (&fn2, ExprKind::MemberExpr, "tmp.~T"),
+        (&fn2, ExprKind::CXXBoolLiteralExpr, "..."),
+    ] {
+        assert_has_node(nodes, kind, text);
+    }
+
+    for (nodes, expected_args) in [(&fn0, 2usize), (&fn1, 2usize), (&fn2, 0usize)] {
+        for (call_text, elem_text) in [("h(xs...)", "xs"), ("h(int(xs)...)", "int(xs)")] {
+            let call = nodes
+                .iter()
+                .find(|(_, k, t)| *k == ExprKind::CallExpr && t.as_deref() == Some(call_text))
+                .unwrap()
+                .0;
+            let args: Vec<_> =
+                ast.lists.iter::<kiln_ast::ExprId>(ast.exprs.call_args(call)).collect();
+            assert_eq!(args.len(), expected_args);
+            for a in args {
+                assert_eq!(text_of(a).as_deref(), Some(elem_text));
+            }
+        }
+    }
+}
+
+fn check_box_member_constructs(
+    p: &Parsed,
+    client: &ExprExtents<'_>,
+    box_specs: &[kiln_ast::DeclId],
+) {
+    use kiln_ast::expr::ExprKind;
+    let ast = &p.tu.ast;
+    let spec_nodes = |fn_decl: kiln_ast::DeclId| -> SpecNodeList {
+        let body = ast.decls.function(fn_decl).and_then(|f| f.body).expect("body");
+        body_exprs(ast, body)
+            .into_iter()
+            .map(|e| {
+                let txt = client
+                    .written_range(e)
+                    .map(|(f, b, end)| p.sm.text(f)[b as usize..end as usize].to_owned());
+                (e, ast.exprs.get(e).kind(), txt)
+            })
+            .collect()
+    };
+    let [box0, box1, box2] =
+        [spec_nodes(box_specs[0]), spec_nodes(box_specs[1]), spec_nodes(box_specs[2])];
+    for nodes in [&box0, &box1, &box2] {
+        for (k, text) in [
+            (ExprKind::DeclRefExpr, "T::x"),
+            (ExprKind::DeclRefExpr, "T::template tv<int>"),
+            (ExprKind::MemberExpr, "Base::bm"),
+            (ExprKind::MemberExpr, "Base::bm_fn"),
+            (ExprKind::CXXMemberCallExpr, "Base::bm_fn()"),
+            (ExprKind::MemberExpr, "Base::ov"),
+            (ExprKind::CXXMemberCallExpr, "Base::ov(t)"),
+            (ExprKind::MemberExpr, "t.operator int"),
+            (ExprKind::CXXMemberCallExpr, "t.operator int()"),
+            (ExprKind::DeclRefExpr, "g<T>"),
+            (ExprKind::DeclRefExpr, "n::gt<T>"),
+            (ExprKind::SubstNonTypeTemplateParmExpr, "N"),
+        ] {
+            assert_has_node(nodes, k, text);
+        }
+    }
+    assert_has_node(&box0, ExprKind::CXXMemberCallExpr, "t.template f<int>()");
+    assert_has_node(&box0, ExprKind::MemberExpr, "t.template f<int>");
+    assert_has_node(&box1, ExprKind::CallExpr, "t.template f<int>()");
+    assert_has_node(&box2, ExprKind::CallExpr, "t.template f<int>()");
+    assert_has_node(&box2, ExprKind::MemberExpr, "t.template f<int>");
+}
+
+#[test]
+fn instantiated_expressions_keep_pattern_written_extents() {
+    use kiln_ast::decl::DeclKind;
+
+    let p = parse_src(INSTANTIATED);
+    let ast = &p.tu.ast;
+    let tree = WrittenExtents::new(ast);
+    let client =
+        ExprExtents::new(ast, &p.sm, &p.interner, LexOptions::new(ParseOptions::default().std));
+    let implicit_captures = implicit_capture_inits(ast);
+    let find_decl = |kind: DeclKind, name: &str| -> kiln_ast::DeclId {
+        (1..=ast.decls.len())
+            .map(|i| kiln_ast::DeclId::new(u32::try_from(i).unwrap()))
+            .find(|&d| {
+                ast.decls.get(d).kind() == kind
+                    && ast
+                        .decls
+                        .get(d)
+                        .name()
+                        .as_ident()
+                        .is_some_and(|id| p.interner.as_str(id) == name)
+            })
+            .unwrap_or_else(|| panic!("missing {kind:?} `{name}`"))
+    };
+
+    let fn_tmpl = find_decl(DeclKind::FunctionTemplate, "fn_tmpl");
+    let fn_pat = ast.template_info(fn_tmpl).unwrap().pattern.unwrap();
+    let fn_specs: Vec<_> = ast.templates.specs_of(fn_tmpl).to_vec();
+    assert_eq!(fn_specs.len(), 3, "expected 3 specializations of fn_tmpl");
+
+    let box_tmpl = find_decl(DeclKind::ClassTemplate, "Box");
+    let box_pat = ast.template_info(box_tmpl).unwrap().pattern.unwrap();
+    let member_of = |rec: kiln_ast::DeclId| -> kiln_ast::DeclId {
+        ast.members(rec)
+            .find(|&m| {
+                ast.decls.get(m).kind() == DeclKind::CXXMethod
+                    && ast
+                        .decls
+                        .get(m)
+                        .name()
+                        .as_ident()
+                        .is_some_and(|id| p.interner.as_str(id) == "member")
+            })
+            .expect("Box::member")
+    };
+    let box_pat_member = member_of(box_pat);
+    let box_specs: Vec<_> =
+        ast.templates.specs_of(box_tmpl).iter().map(|&c| member_of(c)).collect();
+    assert_eq!(box_specs.len(), 3, "expected 3 specializations of Box::member");
+
+    check_group_all_nodes(
+        &p,
+        &tree,
+        &client,
+        &implicit_captures,
+        "fn_tmpl",
+        fn_pat,
+        &fn_specs,
+        &[
+            ("BinaryOperator", "xs + ... + t"),
+            ("CXXOperatorCallExpr", "xs + ... + t"),
+            ("MaterializeTemporaryExpr", "xs + ... + t"),
+            ("ImplicitCastExpr", "xs + ... + t"),
+            ("UnaryOperator", "!= t"),
+            ("CXXBoolLiteralExpr", "..."),
+        ],
+    );
+    check_group_all_nodes(
+        &p,
+        &tree,
+        &client,
+        &implicit_captures,
+        "Box::member",
+        box_pat_member,
+        &box_specs,
+        &[("DeclRefExpr", "f")],
+    );
+    check_fn_tmpl_constructs(&p, &client, fn_pat, &fn_specs);
+    check_box_member_constructs(&p, &client, &box_specs);
+}
