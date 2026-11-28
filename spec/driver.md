@@ -1790,7 +1790,12 @@ sequence; the evaluation session (spec/eval-session.md §2) uses it too.
   read (no second read; for `#embed`, the resolver's shared `all`
   buffer; for a loaded `__has_include` hit, `SourceManager::shared_original_bytes`,
   which shares the overlay's `Arc<[u8]>` directly for overlaid files);
-  when off, `bytes` is `None` with no extra allocation or copy. Tests:
+  the bytes are byte-identical to the bytes read (no BOM stripping, no
+  newline normalisation, invalid UTF-8 replacements restored from the
+  load report), and `bytes` is `None` when kiln holds no read bytes
+  (such as a `__has_include` hit whose buffer was not loaded). When
+  `consulted_bytes` is off, `bytes` is `None` with no extra allocation
+  or copy. Tests:
   `front_end.rs` `has_include_and_embed_are_consulted`,
   `consulted_include_and_embed_same_file`,
   `consulted_rewritten_file_reports_each_read`,
@@ -1852,8 +1857,14 @@ static-initialization fact at the end of the unit, read as
 `fe.ast.static_init_fact(d)` (spec/ast.md §25;
 `static_init_facts.rs` tests). `consulted_bytes` (default off; WP-3692;
 no command-line flag) attaches the shared `Arc<[u8]>` read buffer to
-each `Consulted::bytes` (`None` when off, with no extra allocation or
-copy).
+each `Consulted::bytes` — byte-identical to the bytes read (no BOM
+stripping, no newline normalisation, replacements restored from the load
+report), and `None` when kiln holds no read bytes (or when off, with no
+extra allocation or copy). `decl_extents` (default off; WP-3694; on,
+the command line's `-fkiln-decl-extents`, either enabling it) records
+the declaration-extent table and prints nothing, read as
+`fe.ast.decl_extents` (spec/ast.md §19; `front_end.rs` test
+`decl_extents_option_matches_the_flag`).
 Under a fixed environment the driver reads
 every variable it consults from it and never from the process:
 `KILN_RESOURCE_DIR`, `KILN_LLVM_DIR` and the LLVM search's variables,
@@ -1884,14 +1895,19 @@ driver's environment (`Args::env`: the process's for the executable,
 | `KILN_SNAP_REPORT`, `KILN_SNAP_OUT`, `KILN_SNAP_DECODE`, `KILN_GCC16_ROOT`, `KILN_UCD_NORMALIZATION_TEST` | unit tests (`snap_tests.rs`, `kiln_oven` `meta`, `kiln_lex` `unicode.rs`) | test-only |
 | `OUT_DIR`, `CARGO_MANIFEST_DIR`, `KILN_GIT_SHA` | build scripts (`kiln_diag`, `kiln_driver` `build.rs`) | build time |
 
-`working_directory` (WP-2121, an
+`working_directory` (WP-2121, WP-3693, an
 `Option<PathBuf>`, default `None`) is the run's working directory
 ("Working directory" below): `None` is the process's current directory,
 read once when the run starts; a relative one is relative to the
-process's. The entry never calls `set_current_dir`, so two runs in two
-directories run at the same time, and a `-working-directory` of the
-command line wins (a relative one relative to `working_directory`).
-`@file`s are read from `working_directory`.
+process's. When set to a directory that cannot be resolved or is not an
+existing directory, `run_front_end` returns
+`FrontEndError::WorkingDirectory { path, source }` rather than falling
+back to the process's current directory (`front_end.rs` test
+`nonexistent_working_directory_is_an_error`). The entry never calls
+`set_current_dir`, so two runs in two directories run at the same time,
+and a `-working-directory` of the command line wins (a relative one
+relative to `working_directory`). `@file`s are read from
+`working_directory`.
 
 `overlay` (WP-2390, WP-2391, an `Option<Arc<kiln_source::Overlay>>`,
 default `None`, shown by `Debug`) gives the run the files that differ

@@ -75,3 +75,40 @@ quirk tests/conformance/namespace.udecl/hide-member-template-chain.cpp:1074 clan
 quirk tests/conformance/namespace.udecl/hide-member-template-chain.cpp:1335 clang's dependent `Base::operator=` ends at `operator`
 quirk tests/conformance/namespace.udecl/hide-member-template-chain.cpp:1432 clang's dependent `Base::operator=` ends at `operator`
 quirk tests/conformance/namespace.udecl/hide-member-template-instantiated.cpp:829 clang's dependent `Base::operator=` ends at `operator`
+# C++23 explicit-object member calls (WP-3691): clang 19's CallExpr::getBeginLoc
+# predates usesMemberSyntax(), so clang 19 starts the call (and any outer
+# expression starting with it) at the callee name instead of the object
+# argument. All 29 `.` calls match clang 22; the two `p->` calls in
+# explicit-object-call.cpp also begin at `p` in kiln where clang 22's
+# implicit `*` carries an invalid source location.
+quirk tests/conformance/basic.scope.scope/explicit-object-overloads.cpp:496 clang 19 omits the object of explicit-object call `s.f5()`
+quirk tests/conformance/cpp.include/pch-decl-forms-run.cpp:860 clang 19 omits the object of explicit-object call `x.ref()`
+quirk tests/conformance/cpp.include/pch-decl-forms-run.cpp:1116 clang 19 omits the object of explicit-object call `x.get()`
+quirk tests/conformance/dcl.fct/explicit-object-call.cpp:760 clang 19 omits the object of explicit-object call `s.get()`
+quirk tests/conformance/dcl.fct/explicit-object-call.cpp:1083 clang 19 omits the object of explicit-object call `s.get()`
+quirk tests/conformance/dcl.fct/explicit-object-call.cpp:1093 clang 19 omits the object of explicit-object call `cs.get()`
+quirk tests/conformance/dcl.fct/explicit-object-call.cpp:1104 clang omits the object of explicit-object call `p->add(2)`
+quirk tests/conformance/dcl.fct/explicit-object-call.cpp:1116 clang 19 omits the object of explicit-object call `s.fwd()`
+quirk tests/conformance/dcl.fct/explicit-object-call.cpp:1126 clang 19 omits the object of explicit-object call `S{}.fwd()`
+quirk tests/conformance/dcl.fct/explicit-object-call.cpp:1138 clang 19 omits the object of explicit-object call `s.base()`
+quirk tests/conformance/dcl.fct/explicit-object-call.cpp:1149 clang omits the object of explicit-object call `p->tw()`
+quirk tests/conformance/dcl.fct/explicit-object-call.cpp:1200 clang 19 omits the object of explicit-object call `V<int>{3}.visit(Id{})`
+quirk tests/conformance/dcl.fct/explicit-object-call.cpp:1329 clang 19 omits the object of explicit-object call `v.visit(Id{})`
+quirk tests/conformance/expr.call/infinite-recursion-negative.cpp:1243 clang 19 omits the object of explicit-object call `d.g()`
+quirk tests/conformance/expr.call/infinite-recursion.cpp:2967 clang 19 omits the object of explicit-object call `self.x()`
+quirk tests/conformance/over.load/ref-qualifier-ok.cpp:985 clang 19 omits the object of explicit-object call `s.e()`
+quirk tests/conformance/temp.func.order/p3-explicit-object-parameter.cpp:898 clang 19 omits the object of explicit-object call `D{}.g<int>()`
+quirk tests/conformance/temp.func.order/p3-explicit-object-parameter.cpp:978 clang 19 omits the object of explicit-object call `d.k(p)`
+quirk tests/conformance/temp.func.order/p3-explicit-object-parameter.cpp:1288 clang 19 omits the object of explicit-object call `E{}.operator()<int>()`
+quirk tests/conformance/temp.func.order/p3-explicit-object-parameter.cpp:1534 clang 19 omits the object of explicit-object call `s.operator()<int>()`
+quirk tests/conformance/temp.func.order/p3-explicit-object-parameter.cpp:1650 clang 19 omits the object of explicit-object call `r.operator()<int>()`
+quirk tests/conformance/temp.func.order/p3-implicit-against-explicit-object-run.cpp:3051 clang 19 omits the object of explicit-object call `a.g(0)`
+quirk tests/conformance/temp.func.order/p3-implicit-against-explicit-object-run.cpp:3071 clang 19 omits the object of explicit-object call `b.g(0)`
+quirk tests/conformance/temp.func.order/p3-implicit-against-explicit-object-run.cpp:3091 clang 19 omits the object of explicit-object call `d.g(0)`
+quirk tests/conformance/temp.func.order/p3-implicit-against-explicit-object-run.cpp:3113 clang 19 omits the object of explicit-object call `k.g(0)`
+quirk tests/conformance/temp.func.order/p3-implicit-against-explicit-object-run.cpp:3135 clang 19 omits the object of explicit-object call `K{}.g(0)`
+quirk tests/conformance/temp.func.order/p3-implicit-against-explicit-object-run.cpp:3158 clang 19 omits the object of explicit-object call `ck.g(0)`
+quirk tests/conformance/temp.func.order/p3-implicit-against-explicit-object-run.cpp:3183 clang 19 omits the object of explicit-object call `R{}.g(0)`
+quirk tests/conformance/temp.func.order/p3-implicit-against-explicit-object-run.cpp:3207 clang 19 omits the object of explicit-object call `Q{}.g(0)`
+quirk tests/conformance/temp.func.order/p3-implicit-against-explicit-object-run.cpp:3231 clang 19 omits the object of explicit-object call `P{}.g(0)`
+quirk tests/conformance/temp.names/operator-template-id.cpp:1407 clang 19 omits the object of explicit-object call `fib.operator()<10>()`

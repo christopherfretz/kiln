@@ -860,7 +860,7 @@ fn lookup_log_names_module_probes_miss() {
 fn options_default() {
     let o = FrontEndOptions::default();
     assert!(o.stderr.is_none() && !o.record_lookups && o.own_thread && o.pch_probe);
-    assert!(o.response_files);
+    assert!(o.response_files && !o.decl_extents);
     assert!(o.environment.is_process());
 }
 
@@ -1845,4 +1845,84 @@ fn pattern_mem_inits_through_a_module_image() {
     let r = run_front_end("kiln++", &cl, quiet(), |fe| pattern_inits_of(fe.ast, fe.sm)).unwrap();
     assert_eq!(r.errors, 0, "{:?}", r.first_error);
     assert_eq!(r.value.unwrap(), direct);
+}
+
+/// WP-3694: `FrontEndOptions::decl_extents` enables the declaration-extent
+/// table without `-fkiln-decl-extents` on argv, prints nothing, and matches
+/// `-fkiln-dump-decl-extents`; with neither set, the table stays off and empty.
+#[test]
+fn decl_extents_option_matches_the_flag() {
+    let s = Scratch::new("decl-extents");
+    let main = s.write("main.cpp", b"struct S { int x; };\nint f(S s) { return s.x; }\n");
+    let cl = argv(&["-std=c++26", "-fsyntax-only", &main]);
+    // Neither option nor flag: off and empty.
+    let off = run_front_end("kiln++", &cl, quiet(), |fe| {
+        assert!(!fe.parse_options.decl_extents);
+        (fe.ast.decl_extents.is_on(), fe.ast.decl_extents.len())
+    })
+    .unwrap();
+    assert_eq!((off.errors, off.value), (0, Some((false, 0))));
+    // Option set, flag absent from argv: on, populated, prints nothing.
+    let (mut on, buf) = captured();
+    on.decl_extents = true;
+    let r = run_front_end("kiln++", &cl, on, |fe| {
+        assert!(fe.parse_options.decl_extents);
+        assert!(fe.ast.decl_extents.is_on() && !fe.ast.decl_extents.is_empty());
+        fe.ast.decl_extents.dump(fe.ast, fe.sm, fe.main_file)
+    })
+    .unwrap();
+    assert_eq!(r.errors, 0, "{:?}", r.first_error);
+    assert_eq!(buf.contents(), "", "the switch prints nothing");
+    let table = r.value.unwrap();
+    // Flag on argv alone also enables it with the same dump.
+    let mut flag_cl = cl.clone();
+    flag_cl.insert(2, "-fkiln-decl-extents".to_owned());
+    let via_flag = run_front_end("kiln++", &flag_cl, quiet(), |fe| {
+        assert!(fe.parse_options.decl_extents && fe.ast.decl_extents.is_on());
+        fe.ast.decl_extents.dump(fe.ast, fe.sm, fe.main_file)
+    })
+    .unwrap();
+    assert_eq!(via_flag.errors, 0, "{:?}", via_flag.first_error);
+    assert_eq!(table, via_flag.value.unwrap());
+    // Matches `kiln++ -fkiln-dump-decl-extents`.
+    let kilnpp = std::path::Path::new(env!("CARGO_BIN_EXE_kiln")).with_file_name("kiln++");
+    let mut dump_cl = cl.clone();
+    dump_cl.insert(2, "-fkiln-dump-decl-extents".to_owned());
+    let out = Command::new(&kilnpp).args(&dump_cl).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(table, String::from_utf8(out.stdout).unwrap());
+}
+
+/// WP-3693: a nonexistent or non-directory `FrontEndOptions::working_directory`
+/// returns `FrontEndError::WorkingDirectory` instead of silently falling back
+/// to the process's current directory; an unset `working_directory` still uses
+/// the process cwd.
+#[test]
+fn nonexistent_working_directory_is_an_error() {
+    let s = Scratch::new("cwd-missing");
+    let main = s.write("main.cpp", b"int ok = 1;\n");
+    let missing = s.0.join("does-not-exist");
+    assert!(missing.is_absolute() && !missing.exists());
+    let cl = argv(&["-fsyntax-only", &main]);
+    match run_front_end("kiln++", &cl, in_dir(&missing), |_| ()) {
+        Err(FrontEndError::WorkingDirectory { path, source }) => {
+            assert_eq!(path, missing);
+            assert_eq!(source.kind(), std::io::ErrorKind::NotFound);
+            let msg = FrontEndError::WorkingDirectory { path, source }.to_string();
+            assert!(msg.contains("does-not-exist"), "{msg}");
+        }
+        other => panic!("expected WorkingDirectory(NotFound), got {other:?}"),
+    }
+    // An existing regular file is also rejected.
+    let file_path = PathBuf::from(&main);
+    match run_front_end("kiln++", &cl, in_dir(&file_path), |_| ()) {
+        Err(FrontEndError::WorkingDirectory { path, source }) => {
+            assert_eq!(path, file_path);
+            assert_eq!(source.kind(), std::io::ErrorKind::NotADirectory);
+        }
+        other => panic!("expected WorkingDirectory(NotADirectory), got {other:?}"),
+    }
+    // Unset `working_directory` still reads the process cwd and succeeds.
+    let ok = run_front_end("kiln++", &cl, quiet(), |fe| has_decl(fe.ast, "ok")).unwrap();
+    assert_eq!((ok.errors, ok.value), (0, Some(true)));
 }

@@ -6411,6 +6411,16 @@ This section is the promise kiln makes, and where it makes none.
   the qualifier begin sema already records (`templates.expr_begin`, from
   the parser's `nns_start`); nothing changed. The written-reference
   entry of such a name now reaches the same token (§18.11.2).
+- WP-3691 sets one per-kind flag bit (`ExprFlags::MEMBER_SYNTAX`, bit 4
+  on `CallExpr`, clang's `CallExpr::usesMemberSyntax()`; carried in the
+  node's existing flag byte, no PCH or image layout change) when sema
+  builds a `CallExpr` for a C++23 explicit-object member function written
+  with member syntax (`s.f(2)`, `(*p).f(2)`, `p->f(2)`, `this->f(2)`,
+  implicit-object `f(2)` inside a member, and template instantiations of
+  `t.f(2)`). `WrittenExtents::written_first` and `Ast::begin_loc` begin
+  such calls at argument 0 (the object), while non-member calls such as
+  `(&S::f)(s, 2)` keep their callee begin and explicit-object `operator()`
+  (`CXXOperatorCallExpr`) already begins at its object.
 
 ### 21.2 Decisions
 
@@ -6584,7 +6594,8 @@ fails on one.
 
 ### 21.5 Tests
 
-`crates/kiln_parse/tests/expr_extents.rs` (every kind of 21.2 and the
+`crates/kiln_parse/tests/expr_extents.rs` (every kind of 21.2,
+`explicit_object_member_calls_begin_at_the_object`, and the
 macro cases: an argument, a whole invocation, a part of a body, a
 pasted token) and `cargo xtask extents` (stage 1 in `ci`); the xtask
 test `the_none_table_is_the_baselines_kinds` holds the table of 21.3 to

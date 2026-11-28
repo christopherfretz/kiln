@@ -412,6 +412,15 @@ impl Ast {
         if n.kind() == ExprKind::CallExpr && self.is_udl_call(e) {
             return Err(n.loc());
         }
+        // clang `CallExpr::getBeginLoc` (`usesMemberSyntax`, WP-3691): a call
+        // of an explicit-object member function written with member syntax
+        // begins at its object (argument 0).
+        if n.kind() == ExprKind::CallExpr
+            && n.has(crate::expr::ExprFlags::MEMBER_SYNTAX)
+            && let Some(obj) = self.lists.at::<ExprId>(self.exprs.call_args(e), 0)
+        {
+            return Ok(obj);
+        }
         let first = match n.kind() {
             ExprKind::ImplicitCastExpr
             | ExprKind::ConstantExpr

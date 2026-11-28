@@ -763,3 +763,81 @@ fn a_specifier_begins_the_name_it_qualifies() {
     has("DeclRefExpr", "[:^^S:]::m");
     has("DeclRefExpr", "template [:^^X:]<int>::v");
 }
+
+/// WP-3691 (spec/ast.md §21.1): a call to an explicit-object member function
+/// written with member syntax (`s.f(2)`, `(*p).f(2)`, `p->f(2)`, `this->f(2)`,
+/// instantiated `t.f(2)`) begins at the object argument, while an implicit-
+/// object call (`f(2)`) begins at `f`, a non-member call (`(&S::f)(s, 2)`)
+/// begins at its callee, and an explicit-object `operator()` (`s(2)`) already
+/// begins at `s`.
+#[test]
+fn explicit_object_member_calls_begin_at_the_object() {
+    let src = r"
+struct S {
+  int f(this S, int);
+  int operator()(this S, int);
+  int m() { return f(2) + this->f(2); }
+};
+int g(S s, S *p) {
+  return s.f(2) + (*p).f(2) + p->f(2) + (&S::f)(s, 2) + s(2);
+}
+template <class T> int tmpl(T t) { return t.f(2); }
+int h(S s) { return tmpl(s); }
+";
+    let parsed = parse_src(src);
+    let (some, _) = extents(&parsed);
+    let has = |kind: &str, text: &str| {
+        assert!(
+            some.iter().any(|(k, t)| k == kind && t == text),
+            "no {kind} `{text}` among {:?}",
+            some.iter().filter(|(k, _)| k == kind).collect::<Vec<_>>()
+        );
+    };
+    has("CallExpr", "s.f(2)");
+    has("CallExpr", "(*p).f(2)");
+    has("CallExpr", "p->f(2)");
+    has("CallExpr", "this->f(2)");
+    has("CallExpr", "f(2)");
+    has("CallExpr", "(&S::f)(s, 2)");
+    has("CXXOperatorCallExpr", "s(2)");
+    // Also verify the instantiated `t.f(2)` inside `tmpl<S>` (not walked by
+    // `written_exprs`, which visits patterns only).
+    let expr_extents = ExprExtents::new(
+        &parsed.tu.ast,
+        &parsed.sm,
+        &parsed.interner,
+        LexOptions::new(ParseOptions::default().std),
+    );
+    let inst_calls: Vec<String> = (1..=parsed.tu.ast.exprs.len())
+        .map(|idx| kiln_ast::ExprId::new(u32::try_from(idx).unwrap()))
+        .filter(|&expr| parsed.tu.ast.exprs.get(expr).kind() == kiln_ast::expr::ExprKind::CallExpr)
+        .filter_map(|expr| {
+            let (file, begin, end) = expr_extents.written_range(expr)?;
+            let text = &parsed.sm.text(file)[begin as usize..end as usize];
+            (text == "t.f(2)").then(|| text.to_owned())
+        })
+        .collect();
+    // Pattern `t.f(2)` + instantiated `tmpl<S>` `t.f(2)` = 2 CallExprs.
+    assert_eq!(
+        inst_calls.len(),
+        2,
+        "expected both pattern and instantiated t.f(2): {inst_calls:?}"
+    );
+    // `Ast::begin_loc` agrees with `WrittenExtents::get` on every member-syntax
+    // explicit-object call.
+    let written = WrittenExtents::new(&parsed.tu.ast);
+    let mut member_syntax = 0usize;
+    for idx in 1..=parsed.tu.ast.exprs.len() {
+        let expr = kiln_ast::ExprId::new(u32::try_from(idx).unwrap());
+        let node = parsed.tu.ast.exprs.get(expr);
+        if node.kind() == kiln_ast::expr::ExprKind::CallExpr
+            && node.has(kiln_ast::expr::ExprFlags::MEMBER_SYNTAX)
+        {
+            member_syntax += 1;
+            let (first, _) = written.get(expr).expect("member-syntax call has a written extent");
+            assert_eq!(parsed.tu.ast.begin_loc(expr), first);
+        }
+    }
+    // `f(2)`, `this->f(2)`, `s.f(2)`, `(*p).f(2)`, `p->f(2)`, and instantiated `t.f(2)`.
+    assert_eq!(member_syntax, 6);
+}

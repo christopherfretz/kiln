@@ -2944,7 +2944,8 @@ impl Sema<'_, '_> {
             return self.recover_err(kids, loc);
         }
         let (ty, vk) = self.call_result(proto.ret(), loc);
-        let call = self.builder().call(f, &conv_args, ty, vk, loc, rparen, ExprFlags::NONE);
+        let call =
+            self.builder().call(f, &conv_args, ty, vk, loc, rparen, ExprFlags::MEMBER_SYNTAX);
         let call = self.maybe_bind_temporary(call);
         self.check_immediate_invocation(call, m, Some(r))
     }

@@ -295,6 +295,11 @@ impl ExprFlags {
     /// ([expr.prim.lambda.capture]/11-12; spec/sema-lambda.md §4.4). Read
     /// by the Oven only outside a call of the call operator.
     pub const NAMES_CLOSURE_COPY: ExprFlags = ExprFlags(1 << 4);
+    /// `CallExpr`: a call of an explicit-object member function written with
+    /// member syntax (`s.f(x)`, `p->f(x)`, `this->f(x)`, `f(x)` inside a
+    /// member; clang's `CallExpr::usesMemberSyntax()`, WP-3691). The object
+    /// is argument 0, so the call begins there.
+    pub const MEMBER_SYNTAX: ExprFlags = ExprFlags(1 << 4);
     /// `CallExpr`: the callee was found by ADL.
     pub const ADL: ExprFlags = ExprFlags(1 << 5);
     /// `MemberExpr`: written as a member splice `x.[: r :]`

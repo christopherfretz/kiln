@@ -229,6 +229,16 @@ impl<'a> WrittenExtents<'a> {
                 return self.elided_list_first(e);
             }
             let next = match n.kind() {
+                // A call of an explicit-object member function written with
+                // member syntax (`s.f(2)`, `p->f(2)`, `(*p).f(2)`, clang's
+                // `CallExpr::usesMemberSyntax()`, WP-3691): argument 0 is the
+                // object and comes before the callee.
+                ExprKind::CallExpr if n.has(ExprFlags::MEMBER_SYNTAX) => {
+                    match self.lists.at::<ExprId>(self.exprs.call_args(e), 0) {
+                        Some(obj) if self.written_node(obj).is_some() => obj,
+                        _ => self.exprs.first_child(e, &self.lists)?,
+                    }
+                }
                 // The first operand is written first.
                 ExprKind::BinaryOperator
                 | ExprKind::CompoundAssignOperator

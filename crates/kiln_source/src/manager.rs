@@ -1593,11 +1593,15 @@ impl SourceManager {
     }
 
     /// Shared buffer of the bytes [`original_bytes`](Self::original_bytes)
-    /// returns (WP-3692): for an overlaid file, the overlay's own buffer (no
-    /// copy); otherwise built once on first call without re-reading the file
-    /// and shared across callers (`Arc::ptr_eq`). `None` whenever
-    /// [`original_bytes`](Self::original_bytes) is `None`. Does not read a
-    /// lazy buffer.
+    /// returns (WP-3692). The bytes are byte-identical to the bytes read:
+    /// no BOM stripping, no newline normalisation, and invalid UTF-8
+    /// replacements restored from the [`load_report`](Self::load_report).
+    /// For an overlaid file, shares the overlay's own buffer (no copy);
+    /// otherwise built once on first call without re-reading the file and
+    /// shared across callers (`Arc::ptr_eq`). Returns `None` when kiln
+    /// holds no read bytes (whenever
+    /// [`original_bytes`](Self::original_bytes) is `None`, such as an
+    /// unread or changed lazy buffer). Does not read a lazy buffer.
     pub fn shared_original_bytes(&self, file: FileId) -> Option<Arc<[u8]>> {
         let f = self.file(file);
         let body = match f.origin {
@@ -2203,6 +2207,51 @@ mod tests {
         let shared = read_open_file_shared(&mut f, &meta).unwrap();
         assert_eq!(&*shared, b"int disk_x;\n");
         assert_eq!(Arc::strong_count(&shared), 1);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn disk_original_and_shared_bytes_are_byte_identical() {
+        let dir = std::env::temp_dir().join(format!("kiln-sm-disk-bytes-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let all_binary: Vec<u8> = (0x80u8..=0xFF).collect();
+        let cases: [(&str, &[u8]); 6] = [
+            ("crlf", b"int a = 1;\r\nint b = 2;\r\n"),
+            ("lone_cr", b"int a = 1;\rint b = 2;\n"),
+            ("embedded_nul", b"int a;\0// nul\0end\n"),
+            ("fffd_next_to_invalid", b"a\xEF\xBF\xBD\xFFb\xFF\xEF\xBF\xBDc\n"),
+            ("all_binary", &all_binary),
+            ("bom_crlf", b"\xEF\xBB\xBFint bom = 1;\r\nint next = 2;\r\n"),
+        ];
+
+        let sm = SourceManager::new();
+        for (name, expected) in cases {
+            let path = dir.join(format!("{name}.bin"));
+            fs::write(&path, expected).unwrap();
+            let id = sm.load_file(&path).unwrap();
+            assert_eq!(sm.file_origin(id), FileOrigin::Disk, "{name}");
+            // Before caching: exercises original_bytes' direct / rebuilt path.
+            assert!(sm.file(id).body().original.get().is_none(), "{name}");
+            assert_eq!(
+                sm.original_bytes(id).as_deref(),
+                Some(expected),
+                "{name}: original_bytes before cache"
+            );
+            // Opt-in shared buffer: exercises OnceLock rebuild path.
+            let shared = sm.shared_original_bytes(id).unwrap();
+            assert_eq!(&*shared, expected, "{name}: shared_original_bytes");
+            let shared2 = sm.shared_original_bytes(id).unwrap();
+            assert!(Arc::ptr_eq(&shared, &shared2), "{name}: shared pointer identity");
+            // After caching: original_bytes borrows the same bytes.
+            assert_eq!(
+                sm.original_bytes(id).as_deref(),
+                Some(expected),
+                "{name}: original_bytes after cache"
+            );
+        }
 
         let _ = fs::remove_dir_all(&dir);
     }
