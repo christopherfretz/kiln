@@ -1250,6 +1250,13 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Changed
 
+- `kiln_driver::front_end::std_config` now returns
+  `Result<FrontEndReport<JobConfig>, FrontEndError>` instead of
+  `FrontEndReport<JobConfig>`, returning `Err(FrontEndError::WorkingDirectory { .. })`
+  when `FrontEndOptions::working_directory` cannot be resolved or is not an
+  existing directory rather than silently falling back to the process's
+  current directory (matching `run_front_end`; spec/driver.md
+  "Front-end library entry", WP-3699).
 - `kiln_parse::Entity` (evaluation session results) has a new public
   field `key: Arc<str>` (WP-3481): a client that builds an `Entity` by a
   struct literal (a test's expected tree) adds it; reading code is

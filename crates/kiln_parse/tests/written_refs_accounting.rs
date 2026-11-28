@@ -469,6 +469,20 @@ fn covered(
     cov
 }
 
+/// The spelling locations of `LabelStmt` definitions (`l:`) in the AST.
+fn label_def_locs(sm: &SourceManager, scope: Scope, tu: &kiln_parse::ParsedTu) -> HashSet<At> {
+    let mut out = HashSet::new();
+    for raw in 1..=tu.ast.stmts.len() as u32 {
+        let s = tu.ast.stmts.get(kiln_ast::StmtId::new(raw));
+        if s.kind() == kiln_ast::stmt::StmtKind::LabelStmt
+            && let Some(at) = spelled(sm, scope, s.loc())
+        {
+            out.insert(at);
+        }
+    }
+    out
+}
+
 fn account(name: &str, src: &str) -> Report {
     account_tu(name, src, None)
 }
@@ -501,6 +515,7 @@ fn account_tu(name: &str, src: &str, host: Option<&Host>) -> Report {
     let ids = idents(&sm, &interner, main, scope, host);
     let unknown = unknown_attributes(&sink, &sm, scope);
     let cov = covered(&sm, scope, &tu, &ids);
+    let label_defs = label_def_locs(&sm, scope, &tu);
     let kw = Keywords::with_std(&interner, opts.gnu, true, true, opts.clang_compat);
     // The contextual keywords, and the alternative tokens ([lex.digraph]),
     // which the parser reads as operators.
@@ -562,13 +577,13 @@ fn account_tu(name: &str, src: &str, host: Option<&Host>) -> Report {
         if unknown_attribute_argument(i, &unknown, lone) {
             continue;
         }
-        // Label declarations (`l:` — not `::` — and `__label__ a, b;`),
-        // `asm` symbolic operand names (`[name]` at top level of `asm(...)`),
-        // and module names. Label uses (`goto l`, `&&l`, `asm goto` label
-        // operands) are recorded in `written_refs` (WP-3688) and must be
-        // covered above.
-        let label_decl =
-            i.next == Some(TokKind::Punct(Punct::Colon)) || i.place == Place::LocalLabels;
+        // Label declarations (a `LabelStmt` definition `l:`, located from
+        // the AST rather than any identifier followed by `:`, WP-3699; the
+        // names of `__label__ a, b;`), `asm` symbolic operand names
+        // (`[name]` at top level of `asm(...)`), and module names. Label
+        // uses (`goto l`, `&&l`, `asm goto` label operands) are recorded in
+        // `written_refs` (WP-3688) and must be covered above.
+        let label_decl = label_defs.contains(&i.at) || i.place == Place::LocalLabels;
         let asm_sym = i.place == Place::Asm(1)
             && i.prev == Some(TokKind::Punct(Punct::LSquare))
             && i.next == Some(TokKind::Punct(Punct::RSquare));
@@ -1392,6 +1407,71 @@ fn run_definition_sets(dir: &Path) -> (usize, usize, Vec<(String, String, String
         (sets, rows, bad)
     });
     worker.expect("a thread").join().expect("no panic")
+}
+
+/// WP-3699: `ident :` is excused only for actual `LabelStmt` definitions,
+/// never for non-label positions before a single `:` (`a ? b : c`, `case X:`,
+/// `case A ... B:`, bit-fields, enum underlying types, base-specifiers,
+/// range-for variables, GNU field designators).
+#[test]
+fn ident_before_colon_excuse_only_covers_label_defs() {
+    let src = "\
+using U = unsigned;
+enum E : U;
+enum E : U { A = 1, B = 3, X = 5 };
+struct Base {};
+struct Der : Base {};
+struct Bits { int bf : 4; };
+struct Pt { int fx; };
+int f(int c, int b, int d, int v) {
+  int r = c ? b : d;
+  Pt p = { fx: 1 };
+  int arr[2] = { 1, 2 };
+  for (auto item : arr) { r += item; }
+  switch (v) {
+    case X: r += 1; break;
+    case A ... B: r += 2; break;
+    default: break;
+  }
+  lbl: ;
+  goto fwd;
+  fwd: ;
+  [[maybe_unused]] albl: ;
+  { __label__ ll; goto ll; ll: ; }
+  return r + p.fx;
+}
+template <class T> void tf() {
+  tlbl: ;
+}
+";
+    let report = account("colon.cpp", src);
+    assert!(!report.skipped);
+    assert!(report.left.is_empty(), "uncovered identifiers: {:?}", report.left);
+
+    // Confirm `label_def_locs` matches ONLY the 5 real `LabelStmt` definitions,
+    // never any of the non-label `ident :` tokens above.
+    let sm = SourceManager::new();
+    let main = sm.add_virtual("colon.cpp", src.to_owned()).expect("location space");
+    let interner = Arc::new(Interner::new());
+    let sink = MemorySink::new();
+    let engine = DiagEngine::new(&sm, &DiagOptions::default(), sink);
+    let opts = parse_options(None);
+    let pp = preprocessor(&sm, &engine, &interner, main, None);
+    let (tu, _) = parse_preprocessed(
+        pp,
+        Arc::clone(&interner),
+        &engine,
+        Target::for_arch(Arch::X86_64),
+        &opts,
+        ConstexprLimits::default(),
+    );
+    assert_eq!(engine.error_count(), 0);
+    let ids = idents(&sm, &interner, main, Scope::Main(main), None);
+    let defs = label_def_locs(&sm, Scope::Main(main), &tu);
+    let mut excused: Vec<&str> =
+        ids.iter().filter(|i| defs.contains(&i.at)).map(|i| interner.as_str(i.sym)).collect();
+    excused.sort_unstable();
+    assert_eq!(excused, vec!["albl", "fwd", "lbl", "ll", "tlbl"]);
 }
 
 /// §18.12.4 over the written-reference corpus and the pinned directories.

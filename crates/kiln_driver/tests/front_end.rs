@@ -946,7 +946,7 @@ fn no_time_trace_or_statistics_log() {
 /// other flag is the one a parse with that command line uses.
 #[test]
 fn std_config_is_the_jobs() {
-    let r = std_config("c++26", &quiet());
+    let r = std_config("c++26", &quiet()).unwrap();
     assert_eq!(r.errors, 0, "{:?}", r.first_error);
     let c = r.value.unwrap();
     assert!(c.pp_options.predefines.contains("#define __cplusplus 202400L"));
@@ -965,12 +965,39 @@ fn std_config_is_the_jobs() {
     let (popts, lang) = r.value.unwrap();
     assert_eq!(popts, format!("{:?}", c.parse_options));
     assert_eq!(lang, c.lang);
-    let r = std_config("c++99x", &quiet());
+    let r = std_config("c++99x", &quiet()).unwrap();
     assert_eq!(r.value.map(|_| ()), None);
     assert!(r.first_error.unwrap().message.contains("c++99x"));
     let promoted =
         kiln_driver::args::Args::parse(&argv(&["-fcomplex-arithmetic=promoted", "a.cpp"]));
     assert!(promoted.complex_promoted());
+}
+
+/// WP-3699: `std_config` validates `FrontEndOptions::working_directory` the
+/// same way `run_front_end` does (WP-3693), returning
+/// `FrontEndError::WorkingDirectory` instead of falling back to the process
+/// current directory.
+#[test]
+fn std_config_bad_working_directory_is_an_error() {
+    let s = Scratch::new("std-config-cwd-missing");
+    let file = s.write("a.txt", b"not a directory\n");
+    let missing = s.0.join("does-not-exist");
+    assert!(missing.is_absolute() && !missing.exists());
+    match std_config("c++26", &in_dir(&missing)) {
+        Err(FrontEndError::WorkingDirectory { path, source }) => {
+            assert_eq!(path, missing);
+            assert_eq!(source.kind(), std::io::ErrorKind::NotFound);
+        }
+        other => panic!("expected WorkingDirectory(NotFound), got {other:?}"),
+    }
+    let file_path = PathBuf::from(&file);
+    match std_config("c++26", &in_dir(&file_path)) {
+        Err(FrontEndError::WorkingDirectory { path, source }) => {
+            assert_eq!(path, file_path);
+            assert_eq!(source.kind(), std::io::ErrorKind::NotADirectory);
+        }
+        other => panic!("expected WorkingDirectory(NotADirectory), got {other:?}"),
+    }
 }
 
 /// The file names under `dir` with their modification times, sorted
