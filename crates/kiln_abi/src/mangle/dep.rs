@@ -204,8 +204,22 @@ impl Mangler<'_, '_> {
                 .iter::<DeclId>(params)
                 .position(|p| ast.template_parm(p).is_some_and(|x| x.pack))
         });
+        let is_expansion = |a: kiln_ast::types::TemplateArg| match a.view() {
+            ArgView::TemplateExpansion { .. } => true,
+            ArgView::Type(q) => {
+                ast.types.canonical_kind(q) == kiln_ast::types::TypeKind::PackExpansion
+            }
+            ArgView::Expr { expr, .. } => ast.exprs.get(expr).kind() == ExprKind::PackExpansionExpr,
+            ArgView::Profile(p) => ast
+                .types
+                .profile_expr(p)
+                .is_some_and(|e| ast.exprs.get(e).kind() == ExprKind::PackExpansionExpr),
+            _ => false,
+        };
         let Some(k) = pack_at.filter(|&k| {
-            k <= list.len() && !list.get(k).is_some_and(|a| matches!(a.view(), ArgView::Pack(_)))
+            k <= list.len()
+                && !list.get(k).is_some_and(|a| matches!(a.view(), ArgView::Pack(_)))
+                && !list[..k].iter().any(|&a| is_expansion(a))
         }) else {
             self.template_args(args);
             return;

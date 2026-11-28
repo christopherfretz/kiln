@@ -196,3 +196,105 @@ fn partial_specialization_current_instantiation() {
                It<int, true>::C c1;\n";
     assert_groups(src, 1, &[3], &[3]);
 }
+
+#[test]
+fn pack_expansion_and_non_expansion_before_pack() {
+    // WP-3689: a non-expansion value argument for a non-pack parameter is
+    // converted even when a pack expansion or parameter pack follows.
+    let src = "namespace n { constexpr int k = 3; }\n\
+               template <int, int...> struct V {};\n\
+               template <int, int, int...> struct V2 {};\n\
+               template <int... Ns> struct C {\n\
+                 V<n::k, Ns...> *a; V<3, Ns...> *b; V<1 == 1 ? 3 : 0, Ns...> *c;\n\
+                 V<0, Ns...> *d;\n\
+                 V2<n::k, Ns..., 4> *e; V2<3, Ns..., 4> *f;\n\
+               };\n\
+               C<1, 2> c1;\n";
+    assert_groups(src, 1, &[3, 1, 2], &[3, 1, 2]);
+}
+
+#[test]
+fn parameter_pack_element_conversions() {
+    // WP-3689: non-expansion arguments matched to a parameter pack of known
+    // element type convert (int, unsigned, enum, structural class, and
+    // defaults before a pack).
+    let src = "namespace n { constexpr int k = 3; }\n\
+               enum E { e0 = 0, e2 = 2 };\n\
+               struct S { int x; };\n\
+               constexpr S s{1};\n\
+               template <class T, int... Ns> struct W {};\n\
+               template <class T, unsigned... Ns> struct WU {};\n\
+               template <class T, E... Es> struct WE {};\n\
+               template <class T, S... Ss> struct WS {};\n\
+               template <class T, int = 1, int...> struct D2 {};\n\
+               template <class T> struct C {\n\
+                 W<T, n::k> *a; W<T, 3> *b; W<T, 1 + 2> *c; struct W<T, 3> *d;\n\
+                 WU<T, 2> *e; WU<T, 2u> *f; WU<T, 1 + 1> *g;\n\
+                 W<T, e2> *h; W<T, 2> *i;\n\
+                 WE<T, e2> *j; WE<T, (E)2> *k;\n\
+                 WS<T, S{1}> *l; WS<T, s> *m; WS<T, {1}> *n;\n\
+                 D2<T> *o; D2<T, 1> *p; D2<T, 1u> *q;\n\
+                 W<T> *r;\n\
+               };\n\
+               C<int> c1;\n";
+    assert_groups(src, 1, &[4, 3, 2, 2, 3, 3, 1], &[4, 3, 2, 2, 3, 3, 1]);
+}
+
+#[test]
+fn pack_expansion_inside_pack_vs_non_pack() {
+    // WP-3689: once inside a trailing parameter pack, non-expansion arguments
+    // after a pack expansion are still converted; after a pack expansion that
+    // hits a non-pack parameter, subsequent arguments stay unconverted.
+    let src = "namespace n { constexpr int k = 3; }\n\
+               template <class T, int... Ns> struct W {};\n\
+               template <class T, unsigned... Ns> struct WU {};\n\
+               template <int, int> struct P2 {};\n\
+               template <int, int, int...> struct V2 {};\n\
+               template <class T, int... Ns> struct C {\n\
+                 W<T, Ns..., n::k> *a; W<T, Ns..., 3> *b;\n\
+                 WU<T, Ns..., 2> *c; WU<T, Ns..., 2u> *d;\n\
+                 P2<Ns..., n::k> *e; P2<Ns..., 3> *f;\n\
+                 V2<3, Ns..., 1 + 1> *g; V2<3, Ns..., 2> *h;\n\
+               };\n\
+               C<int, 1> c1;\n";
+    assert_groups(src, 1, &[2, 2, 1, 1, 1, 1], &[2, 2, 2, 2]);
+}
+
+#[test]
+fn auto_and_dependent_pack_elements() {
+    // WP-3689: `auto...` converts each element to its deduced type (`n::k` and
+    // `3` are both `int(3)`, `1` and `1u` differ); `template<class U, U...>`
+    // keeps expressions when `U` is dependent (`WD<T, 1>` vs `WD<T, 1u>`) and
+    // converts when `U` is concrete (`WD<int, N, 1>` vs `WD<int, N, 1u>`).
+    let src = "namespace n { constexpr int k = 3; }\n\
+               template <class T, auto... Ns> struct WA {};\n\
+               template <class U, U... vs> struct WD {};\n\
+               template <class T, int N, int... Ns> struct C {\n\
+                 WA<T, n::k> *a; WA<T, 3> *b;\n\
+                 WA<T, 1> *c; WA<T, 1u> *d;\n\
+                 WA<T, Ns..., n::k> *e; WA<T, Ns..., 3> *f;\n\
+                 WD<T, 1> *g; WD<T, 1u> *h;\n\
+                 WD<int, N, 1> *i; WD<int, N, 1u> *j;\n\
+               };\n\
+               C<int, 5, 7> c1;\n";
+    assert_groups(src, 1, &[2, 1, 1, 2, 1, 1, 2], &[2, 1, 1, 2, 2, 2]);
+}
+
+#[test]
+fn partial_specialization_with_pack_current_instantiation() {
+    // Inside `W<T, 3>`, `W`, `W<T, 3>`, and `W<T, 1 + 2>` name one type, and
+    // out-of-line member definitions agree with in-class return types.
+    let src = "template <class T, int... Ns> struct W {\n\
+                 static W *self();\n\
+               };\n\
+               template <class T, int... Ns> W<T, Ns...> *W<T, Ns...>::self() { return nullptr; }\n\
+               template <class T> struct W<T, 3> {\n\
+                 static W *make();\n\
+                 struct C {\n\
+                   W *a; W<T, 3> *b; W<T, 1 + 2> *c;\n\
+                 };\n\
+               };\n\
+               template <class T> W<T, 3> *W<T, 1 + 2>::make() { return nullptr; }\n\
+               W<int, 3>::C c1;\n";
+    assert_groups(src, 1, &[3], &[3]);
+}

@@ -1412,6 +1412,21 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- Dependent class template-ids containing a parameter pack or pack expansion
+  argument now convert non-expansion non-type arguments whose parameter type
+  is known in their canonical type, matching clang's
+  `CheckTemplateArgumentList` (spec/sema-templates.md §4.2, WP-3689):
+  non-expansion arguments before the first expansion (`V<n::k, Ns...>` vs
+  `V<3, Ns...>`, `V2<n::k, Ns..., 4>` vs `V2<3, Ns..., 4>`), defaults before
+  a pack (`D2<T>` vs `D2<T, 1>`), and non-expansion arguments matched to a
+  trailing parameter pack (including after an in-pack expansion, `auto...`,
+  unsigned/enum conversions, and structural class NTTPs) all convert while
+  written arguments stay as sugar. Arguments after a pack expansion that
+  hits a non-pack parameter (`P2<Ns..., n::k>` vs `P2<Ns..., 3>`,
+  `V2<3, Ns..., 1 + 1>` vs `V2<3, Ns..., 2>`) and arguments for a
+  dependent-typed parameter (`template<class U, U... vs>`) stay unconverted
+  as written, and Itanium mangling no longer wraps trailing arguments in
+  `J...E` when a pack expansion precedes the parameter pack.
 - Function template specializations whose signature or explicit-specifier
   substitution failed are no longer permanently memoized across later
   declarations (spec/sema-templates.md §11.5, WP-3697): `DeclArena::decl_gen`
