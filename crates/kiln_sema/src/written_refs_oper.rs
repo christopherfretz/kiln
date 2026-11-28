@@ -22,8 +22,8 @@ use kiln_ast::expr::{BinaryOp, CastKind, ExprDeps, ExprFlags, ExprKind, UnaryOp}
 use kiln_ast::ids::RawId;
 use kiln_ast::names::{DeclName, OverloadedOperator as OO};
 use kiln_ast::written_refs::{
-    FOUND_ADL, FoundDecl, PatternNode, REF_DEPENDENT, REF_REVERSED, REF_REWRITTEN, REF_UNRESOLVED,
-    RefLookup, RefQualifier, RefRole, SPEC_BUILTIN, WrittenRefId,
+    AdlSet, FOUND_ADL, FoundDecl, PatternNode, REF_BUILTIN, REF_DEPENDENT, REF_REVERSED,
+    REF_REWRITTEN, REF_UNRESOLVED, RefLookup, RefQualifier, RefRole, SPEC_BUILTIN, WrittenRefId,
 };
 use kiln_ast::{DeclId, ExprId};
 use kiln_source::{Loc, Span};
@@ -33,14 +33,17 @@ use crate::written_keys::RowKeys;
 
 /// What one dependent operator token selected in one specialization
 /// (spec/ast.md §18.13.6): the rows it gets.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 enum OperSel {
     /// A function (`found` when it differs), with the row's flags
-    /// (`REWRITTEN`, `REVERSED`), the `how` its call says, and its
-    /// lookup-context (naming) class for `Member`/`Qualified` class lookups.
-    Fn((DeclId, Option<DeclId>), u8, Option<RefLookup>, Option<DeclId>),
-    /// A built-in candidate or no operator function at all.
-    Builtin,
+    /// (`REWRITTEN`, `REVERSED`), the `how` its lookup says, its
+    /// lookup-context (naming) class for `Member`/`Qualified` class lookups,
+    /// and its associated set when ADL ran.
+    Fn((DeclId, Option<DeclId>), u8, Option<RefLookup>, Option<DeclId>, Option<AdlSet>),
+    /// A built-in candidate or no operator function at all, with its
+    /// associated set when operator overload resolution ran ADL on a class
+    /// or enumeration operand (WP-3701).
+    Builtin(Option<AdlSet>),
     /// Overload resolution failed (diagnosed).
     Unresolved,
     /// Still dependent (a generic lambda's body rebuilt by the enclosing
@@ -83,7 +86,7 @@ impl Sema<'_, '_> {
         }
         match n.kind() {
             ExprKind::CXXOperatorCallExpr if n.loc() == at => {
-                self.push_written_oper_call(x, tok, close, 0);
+                self.push_written_oper_call(x, tok, close, 0, operands);
             }
             ExprKind::CXXRewrittenBinaryOperator if n.loc() == at => {
                 self.note_written_rewritten(x, tok);
@@ -97,7 +100,7 @@ impl Sema<'_, '_> {
                 }
             }
             _ if self.is_err_expr(x) => self.note_written_oper_failure(tok, close, operands),
-            _ => {}
+            _ => self.note_written_oper_builtin(x, tok, at, close, operands),
         }
     }
 
@@ -145,7 +148,7 @@ impl Sema<'_, '_> {
         }
         // The outermost call is the last applied.
         for &c in chain.iter().rev() {
-            self.push_written_oper_call(c, tok, Loc::INVALID, 0);
+            self.push_written_oper_call(c, tok, Loc::INVALID, 0, &[]);
         }
     }
 
@@ -298,7 +301,8 @@ impl Sema<'_, '_> {
             }
             ExprKind::CoawaitExpr => {
                 if let Some(c) = self.written_coawait_call(x) {
-                    self.push_written_oper_call(c, tok, Loc::INVALID, 0);
+                    let adl_args = self.written_call_unconverted_args(c);
+                    self.push_written_oper_call(c, tok, Loc::INVALID, 0, &adl_args);
                 }
             }
             _ if self.is_err_expr(x) && !kids.iter().any(|&k| self.contains_errors(k)) => {
@@ -560,9 +564,9 @@ impl Sema<'_, '_> {
         };
         let picks = if arrow {
             let at = self.ast.written_refs.get(w).range.lo;
-            self.written_arrow_sels(rebuilt, at)
+            self.written_arrow_sels(w, rebuilt, at)
         } else {
-            self.written_oper_sels(rebuilt)
+            self.written_oper_sels(w, rebuilt)
         };
         for (slot, w) in (0u8..).zip(ws) {
             if let Some(w) = w {
@@ -584,7 +588,7 @@ impl Sema<'_, '_> {
         let picks = if self.ast.exprs.get(r).kind() == ExprKind::CXXFoldExpr {
             vec![OperSel::Dependent]
         } else {
-            self.written_oper_sels(r)
+            self.written_oper_sels(w0, r)
         };
         for (slot, w) in (0u8..).zip(ws) {
             if let Some(w) = w {
@@ -605,7 +609,14 @@ impl Sema<'_, '_> {
         };
         for (slot, w) in (0u8..).zip(ws) {
             if let Some(w) = w {
-                self.push_written_oper_rows(w, slot, keys, pattern, pattern, &[OperSel::Builtin]);
+                self.push_written_oper_rows(
+                    w,
+                    slot,
+                    keys,
+                    pattern,
+                    pattern,
+                    &[OperSel::Builtin(None)],
+                );
             }
         }
     }
@@ -626,13 +637,31 @@ impl Sema<'_, '_> {
     ) {
         let node = PatternNode::Oper(pattern, slot);
         let keys = if slot == 0 { keys } else { self.rekey(keys, w, node) };
-        for &sel in picks {
+        for sel in picks {
             match sel {
-                OperSel::Fn((d, f), flags, how, naming) => {
-                    self.push_written_spec_with(w, keys, Some(d), f, flags, how, naming);
+                OperSel::Fn((d, f), flags, how, naming, adl) => {
+                    self.push_written_spec_with(
+                        w,
+                        keys,
+                        Some(*d),
+                        *f,
+                        *flags,
+                        *how,
+                        *naming,
+                        adl.clone(),
+                    );
                 }
-                OperSel::Builtin => {
-                    self.push_written_spec_with(w, keys, None, None, SPEC_BUILTIN, None, None);
+                OperSel::Builtin(adl) => {
+                    self.push_written_spec_with(
+                        w,
+                        keys,
+                        None,
+                        None,
+                        SPEC_BUILTIN,
+                        None,
+                        None,
+                        adl.clone(),
+                    );
                 }
                 OperSel::Unresolved if self.inst.stack.is_sfinae() => {
                     if let Some(k) = keys.key {
@@ -640,7 +669,7 @@ impl Sema<'_, '_> {
                     }
                 }
                 OperSel::Unresolved => {
-                    self.push_written_spec_with(w, keys, None, None, 0, None, None);
+                    self.push_written_spec_with(w, keys, None, None, 0, None, None, None);
                 }
                 OperSel::Dependent => {
                     let new = PatternNode::Oper(rebuilt, slot);
@@ -655,11 +684,12 @@ impl Sema<'_, '_> {
     /// (spec/ast.md §18.13.6): the function of its operator call, the
     /// candidates of a rewritten comparison (§18.13.3), a surrogate call's
     /// conversion function; a built-in operator, or a call of a function
-    /// pointer, selects nothing.
-    fn written_oper_sels(&self, r: ExprId) -> Vec<OperSel> {
-        let ex = &self.ast.exprs;
+    /// pointer, selects nothing (carrying the associated ADL set when
+    /// overload resolution ran ADL on a class or enumeration operand,
+    /// WP-3701).
+    fn written_oper_sels(&mut self, w: WrittenRefId, r: ExprId) -> Vec<OperSel> {
         let x = self.written_oper_peel(r);
-        let n = *ex.get(x);
+        let n = *self.ast.exprs.get(x);
         if self.is_err_expr(x) {
             return vec![OperSel::Unresolved];
         }
@@ -667,25 +697,25 @@ impl Sema<'_, '_> {
             return vec![OperSel::Dependent];
         }
         match n.kind() {
-            ExprKind::CXXOperatorCallExpr => vec![self.written_call_sel(x, 0)],
+            ExprKind::CXXOperatorCallExpr => vec![self.written_call_sel(w, x, 0, None)],
             ExprKind::CXXRewrittenBinaryOperator => {
                 match self.written_rewritten_calls(x, n.loc()) {
-                    Some((first, second, reversed)) => {
+                    Some((first, second, reversed, written)) => {
                         let flags = REF_REWRITTEN | if reversed { REF_REVERSED } else { 0 };
-                        let mut v = vec![self.written_call_sel(first, flags)];
+                        let mut v = vec![self.written_call_sel(w, first, flags, Some(&written))];
                         if let Some(c) = second {
-                            v.push(self.written_call_sel(c, REF_REWRITTEN));
+                            v.push(self.written_call_sel(w, c, REF_REWRITTEN, None));
                         }
                         v
                     }
-                    None => vec![OperSel::Builtin],
+                    None => vec![OperSel::Builtin(None)],
                 }
             }
-            ExprKind::CallExpr => match self.written_surrogate(ex.callee(x)) {
+            ExprKind::CallExpr => match self.written_surrogate(self.ast.exprs.callee(x)) {
                 Some((d, f, naming)) => {
-                    vec![OperSel::Fn((d, f), 0, Some(RefLookup::Member), naming)]
+                    vec![OperSel::Fn((d, f), 0, Some(RefLookup::Member), naming, None)]
                 }
-                None => vec![OperSel::Builtin],
+                None => vec![OperSel::Builtin(None)],
             },
             // Stage 6c: the allocation or deallocation function (the
             // global replaceable ones count as functions); a still
@@ -702,46 +732,124 @@ impl Sema<'_, '_> {
                         0,
                         Some(RefLookup::Qualified),
                         naming,
+                        None,
                     )]
                 }
                 _ if self.written_alloc_dependent(x) => vec![OperSel::Dependent],
-                _ => vec![OperSel::Builtin],
+                _ => vec![OperSel::Builtin(None)],
             },
             ExprKind::DependentCoawaitExpr => vec![OperSel::Dependent],
             ExprKind::CoawaitExpr => match self.written_coawait_call(x) {
-                Some(c) => vec![self.written_call_sel(c, 0)],
-                None => vec![OperSel::Builtin],
+                Some(c) => vec![self.written_call_sel(w, c, 0, None)],
+                None => vec![OperSel::Builtin(None)],
             },
-            _ => vec![OperSel::Builtin],
+            _ => vec![OperSel::Builtin(self.written_builtin_spec_adl(x))],
         }
     }
 
-    /// The selection of the resolved operator call `c`, with `flags`.
-    fn written_call_sel(&self, c: ExprId, flags: u8) -> OperSel {
-        let n = *self.ast.exprs.get(c);
-        match self.written_callee(self.ast.exprs.callee(c)) {
-            Some(t) => {
-                let how =
-                    if matches!(self.kind_of(t.0), DeclKind::CXXMethod | DeclKind::CXXConversion) {
-                        Some(RefLookup::Member)
-                    } else if n.has(ExprFlags::ADL) {
-                        Some(RefLookup::Adl)
-                    } else {
-                        None
-                    };
-                let naming = if how == Some(RefLookup::Member) {
-                    self.ast
-                        .lists
-                        .iter::<ExprId>(self.ast.exprs.call_args(c))
-                        .next()
-                        .and_then(|a| self.written_oper_object_class(a))
-                } else {
-                    None
-                };
-                OperSel::Fn(t, flags, how, naming)
-            }
-            None => OperSel::Unresolved,
+    /// The associated set for a dependent operator specialization that
+    /// selected a built-in candidate on a class or enumeration operand
+    /// (`[over.match.oper]/1-2`, WP-3701); `None` when no overloadable
+    /// operand is present or the operator has no non-member lookup.
+    fn written_builtin_spec_adl(&mut self, x: ExprId) -> Option<AdlSet> {
+        if self.is_c() {
+            return None;
         }
+        let n = *self.ast.exprs.get(x);
+        let ops: Vec<ExprId> = match n.kind() {
+            ExprKind::BinaryOperator => {
+                let bop = self.ast.exprs.binary_op(x);
+                if matches!(bop, BinaryOp::PtrMemD | BinaryOp::Assign) {
+                    return None;
+                }
+                let (l, r) = (ExprId::new(n.a()), ExprId::new(n.b()));
+                vec![self.written_oper_unconverted(l), self.written_oper_unconverted(r)]
+            }
+            ExprKind::CompoundAssignOperator => {
+                let (l, r) = (ExprId::new(n.a()), ExprId::new(n.b()));
+                vec![self.written_oper_unconverted(l), self.written_oper_unconverted(r)]
+            }
+            ExprKind::UnaryOperator => {
+                let uop = self.ast.exprs.unary_op(x);
+                if crate::overload::oper::unary_oper(uop).is_none()
+                    || (uop == UnaryOp::AddrOf
+                        && self.ast.types.canonical_kind(self.ety(x))
+                            == kiln_ast::types::TypeKind::MemberPointer)
+                {
+                    return None;
+                }
+                vec![self.written_oper_unconverted(self.ast.exprs.operand(x))]
+            }
+            _ => return None,
+        };
+        if !ops.iter().any(|&o| self.overloadable_operand(o)) {
+            return None;
+        }
+        let a = self.adl_associated_set(&ops, n.loc());
+        Some(AdlSet::new(&a.namespaces, &a.classes, &a.enums))
+    }
+
+    /// The selection of the resolved operator call `c`, with `flags`,
+    /// re-running ADL against entry `w`'s definition-context found set for
+    /// non-member calls (WP-2920).
+    fn written_call_sel(
+        &mut self,
+        w: WrittenRefId,
+        c: ExprId,
+        flags: u8,
+        adl_override: Option<&[ExprId]>,
+    ) -> OperSel {
+        let n = *self.ast.exprs.get(c);
+        let Some(t) = self.written_callee(self.ast.exprs.callee(c)) else {
+            return OperSel::Unresolved;
+        };
+        if matches!(self.kind_of(t.0), DeclKind::CXXMethod | DeclKind::CXXConversion) {
+            let naming = self
+                .ast
+                .lists
+                .iter::<ExprId>(self.ast.exprs.call_args(c))
+                .next()
+                .and_then(|a| self.written_oper_object_class(a));
+            return OperSel::Fn(t, flags, Some(RefLookup::Member), naming, None);
+        }
+        let is_adl = n.has(ExprFlags::ADL);
+        let mut how = is_adl.then_some(RefLookup::Adl);
+        let mut adl_set = None;
+        if !self.is_c() {
+            let op = self.ast.exprs.operator_call_op(c);
+            let dn = DeclName::operator(op);
+            let mut fns: Vec<(DeclId, DeclId)> = if is_adl {
+                Vec::new()
+            } else {
+                self.ast
+                    .written_refs
+                    .found_at_definition(w)
+                    .map(|set| {
+                        set.decls
+                            .iter()
+                            .filter(|e| self.ast.decls.get(e.decl).name() == dn)
+                            .map(|e| (e.decl, e.found))
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            };
+            let owned;
+            let args: &[ExprId] = if let Some(a) = adl_override {
+                a
+            } else {
+                owned = self.written_call_unconverted_args(c);
+                &owned
+            };
+            if let Some(facts) = self.adl_lookup_explained(dn, args, n.loc(), &mut fns, true)
+                && let Some((refined, set)) = self.written_call_lookup(Some(t.0), t.1, &facts)
+            {
+                if !is_adl || refined == Some(RefLookup::Adl) {
+                    how = refined.or(how);
+                }
+                adl_set = Some(set);
+            }
+        }
+        OperSel::Fn(t, flags, how, None, adl_set)
     }
 
     /// The pre-derived-to-base object class of a member operator's object
@@ -789,40 +897,80 @@ impl Sema<'_, '_> {
     /// each `operator->` in application order ([over.ref]/1); a built-in
     /// `->` (a pointer) nothing; a class object with no `operator->`
     /// (diagnosed) a failure.
-    fn written_arrow_sels(&self, r: ExprId, at: Loc) -> Vec<OperSel> {
-        let ex = &self.ast.exprs;
+    fn written_arrow_sels(&mut self, w: WrittenRefId, r: ExprId, at: Loc) -> Vec<OperSel> {
         let x = self.written_oper_peel(r);
         let mut chain = Vec::new();
         let mut cur = self.written_arrow_outermost(x, at);
         while let Some(c) = cur.map(|c| self.written_oper_peel(c))
-            && ex.get(c).kind() == ExprKind::CXXOperatorCallExpr
-            && ex.operator_call_op(c) == OO::Arrow
-            && ex.get(c).loc() == at
+            && self.ast.exprs.get(c).kind() == ExprKind::CXXOperatorCallExpr
+            && self.ast.exprs.operator_call_op(c) == OO::Arrow
+            && self.ast.exprs.get(c).loc() == at
         {
             chain.push(c);
-            cur = self.ast.lists.iter::<ExprId>(ex.call_args(c)).next();
+            cur = self.ast.lists.iter::<ExprId>(self.ast.exprs.call_args(c)).next();
         }
         if !chain.is_empty() {
-            return chain.iter().rev().map(|&c| self.written_call_sel(c, 0)).collect();
+            return chain.iter().rev().map(|&c| self.written_call_sel(w, c, 0, None)).collect();
         }
         if self.is_err_expr(x) {
             // The member access failed: whether its `->` was built in is
             // not known.
             return Vec::new();
         }
-        if ex.get(x).is_type_dependent()
-            && matches!(ex.get(x).kind(), ExprKind::CXXDependentScopeMemberExpr)
+        if self.ast.exprs.get(x).is_type_dependent()
+            && matches!(self.ast.exprs.get(x).kind(), ExprKind::CXXDependentScopeMemberExpr)
         {
             return vec![OperSel::Dependent];
         }
         let mut kids = Vec::new();
-        ex.children_into(x, &self.ast.lists, &mut kids);
+        self.ast.exprs.children_into(x, &self.ast.lists, &mut kids);
         match kids.first() {
             Some(&b) if self.ast.types.as_record(self.ety(b)).is_some() => {
                 vec![OperSel::Unresolved]
             }
-            _ => vec![OperSel::Builtin],
+            _ => vec![OperSel::Builtin(None)],
         }
+    }
+
+    /// Peels implicit conversions (including a user-defined conversion
+    /// call `c.operator T()`) off an operator operand so ADL sees the
+    /// pre-conversion class or enumeration expression.
+    fn written_oper_unconverted(&self, mut e: ExprId) -> ExprId {
+        let ex = &self.ast.exprs;
+        for _ in 0..32 {
+            match ex.get(e).kind() {
+                ExprKind::ImplicitCastExpr
+                    if ex.cast_kind(e) == CastKind::UserDefinedConversion =>
+                {
+                    let call = self.written_oper_peel(ex.operand(e));
+                    if ex.get(call).kind() == ExprKind::CXXMemberCallExpr {
+                        let m = self.written_oper_peel(ex.callee(call));
+                        if ex.get(m).kind() == ExprKind::MemberExpr {
+                            e = ex.operand(m);
+                            continue;
+                        }
+                    }
+                    e = ex.operand(e);
+                }
+                ExprKind::ImplicitCastExpr
+                | ExprKind::MaterializeTemporaryExpr
+                | ExprKind::CXXBindTemporaryExpr
+                | ExprKind::ConstantExpr
+                | ExprKind::ExprWithCleanups => e = ex.operand(e),
+                _ => return e,
+            }
+        }
+        e
+    }
+
+    /// The arguments of `CXXOperatorCallExpr` `c` with implicit conversions
+    /// peeled, for re-running ADL at the recording site.
+    fn written_call_unconverted_args(&self, c: ExprId) -> Vec<ExprId> {
+        self.ast
+            .lists
+            .iter::<ExprId>(self.ast.exprs.call_args(c))
+            .map(|a| self.written_oper_unconverted(a))
+            .collect()
     }
 
     /// `e` without the implicit nodes sema puts around an operator call
@@ -899,8 +1047,17 @@ impl Sema<'_, '_> {
         Some((decl, found, naming))
     }
 
-    /// The entry of the resolved operator call `call` at `tok`.
-    fn push_written_oper_call(&mut self, call: ExprId, tok: Span, close: Loc, flags: u8) {
+    /// The entry of the resolved operator call `call` at `tok`, with
+    /// full lookup provenance (`how=adl` / `how=both` / `unqualified`, and
+    /// the associated ADL set for non-member candidates; WP-2920).
+    fn push_written_oper_call(
+        &mut self,
+        call: ExprId,
+        tok: Span,
+        close: Loc,
+        flags: u8,
+        adl_args: &[ExprId],
+    ) {
         let n = *self.ast.exprs.get(call);
         // A dependent operator (an unresolved callee) is stage 6b's.
         if n.is_type_dependent() {
@@ -908,12 +1065,111 @@ impl Sema<'_, '_> {
         }
         let Some(target) = self.written_callee(self.ast.exprs.callee(call)) else { return };
         let adl = n.has(ExprFlags::ADL);
-        let id = self.push_written_oper(tok, target, close, flags);
-        if adl && let Some(id) = id {
+        let Some(id) = self.push_written_oper(tok, target, close, flags) else { return };
+        if matches!(self.kind_of(target.0), DeclKind::CXXMethod | DeclKind::CXXConversion) {
+            return;
+        }
+        if !self.is_c() {
+            let op = self.ast.exprs.operator_call_op(call);
+            let dn = DeclName::operator(op);
+            let mut fns: Vec<(DeclId, DeclId)> = if adl {
+                Vec::new()
+            } else {
+                let found = self.lookup_operator_name(dn);
+                found.decls.iter().copied().zip(found.found.iter().copied()).collect()
+            };
+            let facts = self.adl_lookup_explained(dn, adl_args, n.loc(), &mut fns, true);
+            self.note_written_call_lookup(id, facts);
+        }
+        if adl && self.ast.written_refs.get(id).how != RefLookup::Adl {
             // Found only by argument-dependent lookup (clang's
             // `IsADLCandidate`): no using-directive applies.
             self.ast.written_refs.set_how(id, RefLookup::Adl);
             self.ast.written_refs.set_using_directive(id, None);
+        }
+    }
+
+    /// An `operator` entry for a built-in candidate selected by operator
+    /// overload resolution on a class or enumeration operand
+    /// ([over.match.oper]/1-2, [over.built]; spec/ast.md §18.13, WP-3701):
+    /// no entity, flag `REF_BUILTIN`, `how=builtin`, and the associated ADL
+    /// set when non-member ADL ran. Operators with no class/enum operand,
+    /// non-overloadable operators (`?:`, `.*`), `&C::m`, and normal function
+    /// calls get no entry.
+    fn note_written_oper_builtin(
+        &mut self,
+        x: ExprId,
+        tok: Span,
+        at: Loc,
+        close: Loc,
+        operands: &[ExprId],
+    ) {
+        if self.is_c()
+            || operands
+                .iter()
+                .any(|&o| self.ast.exprs.get(o).is_type_dependent() || self.contains_errors(o))
+        {
+            return;
+        }
+        let n = *self.ast.exprs.get(x);
+        let member_only = match n.kind() {
+            ExprKind::BinaryOperator if n.loc() == at => {
+                let bop = self.ast.exprs.binary_op(x);
+                if matches!(bop, BinaryOp::PtrMemD | BinaryOp::Assign)
+                    || !operands.iter().any(|&o| self.overloadable_operand(o))
+                {
+                    return;
+                }
+                false
+            }
+            ExprKind::CompoundAssignOperator if n.loc() == at => {
+                if !operands.iter().any(|&o| self.overloadable_operand(o)) {
+                    return;
+                }
+                false
+            }
+            ExprKind::UnaryOperator if n.loc() == at => {
+                let uop = self.ast.exprs.unary_op(x);
+                if crate::overload::oper::unary_oper(uop).is_none()
+                    || (uop == UnaryOp::AddrOf
+                        && self.ast.types.canonical_kind(self.ety(x))
+                            == kiln_ast::types::TypeKind::MemberPointer)
+                    || !operands.iter().any(|&o| self.overloadable_operand(o))
+                {
+                    return;
+                }
+                false
+            }
+            ExprKind::ArraySubscriptExpr => {
+                let has_cls = operands
+                    .first()
+                    .is_some_and(|&a0| self.ast.types.as_record(self.ety(a0)).is_some())
+                    || (operands.len() == 2
+                        && self.ast.types.as_record(self.ety(operands[1])).is_some());
+                if !has_cls {
+                    return;
+                }
+                true
+            }
+            _ => return,
+        };
+        let Some(id) = self.push_written_ref(
+            tok,
+            None,
+            None,
+            RefRole::Operator,
+            RefQualifier::NONE,
+            REF_BUILTIN,
+        ) else {
+            return;
+        };
+        self.ast.written_refs.set_how(id, RefLookup::Builtin);
+        if close.is_valid() {
+            self.ast.written_refs.set_close(id, close);
+        }
+        if !member_only {
+            let a = self.adl_associated_set(operands, at);
+            self.ast.written_refs.set_adl(id, AdlSet::new(&a.namespaces, &a.classes, &a.enums));
         }
     }
 
@@ -991,25 +1247,28 @@ impl Sema<'_, '_> {
     /// result with zero is itself an overloaded operator, that function
     /// (`rewritten`), in application order (spec/ast.md §18.13.3).
     fn note_written_rewritten(&mut self, x: ExprId, tok: Span) {
-        let Some((first, second, reversed)) = self.written_rewritten_calls(x, tok.lo) else {
+        let Some((first, second, reversed, written)) = self.written_rewritten_calls(x, tok.lo)
+        else {
             return;
         };
         let flags = REF_REWRITTEN | if reversed { REF_REVERSED } else { 0 };
-        self.push_written_oper_call(first, tok, Loc::INVALID, flags);
+        self.push_written_oper_call(first, tok, Loc::INVALID, flags, &written);
         if let Some(c) = second {
-            self.push_written_oper_call(c, tok, Loc::INVALID, REF_REWRITTEN);
+            let adl_args = self.written_call_unconverted_args(c);
+            self.push_written_oper_call(c, tok, Loc::INVALID, REF_REWRITTEN, &adl_args);
         }
     }
 
     /// The operator calls of the rewritten comparison `x` whose operator
     /// is at `at`: the selected `operator==` or `operator<=>`, the
-    /// overloaded comparison of a `<=>` result with zero if any, and
-    /// whether the first is the reversed synthesized candidate.
+    /// overloaded comparison of a `<=>` result with zero if any, whether
+    /// the first is the reversed synthesized candidate, and the written
+    /// operands of `x` (unconverted, for ADL).
     fn written_rewritten_calls(
         &self,
         x: ExprId,
         at: Loc,
-    ) -> Option<(ExprId, Option<ExprId>, bool)> {
+    ) -> Option<(ExprId, Option<ExprId>, bool, Vec<ExprId>)> {
         let ex = &self.ast.exprs;
         let (_, list) = ex.rewritten_written(x);
         let written: Vec<ExprId> = self.ast.lists.iter::<ExprId>(list).collect();
@@ -1045,6 +1304,6 @@ impl Sema<'_, '_> {
             }
             _ => false,
         };
-        Some((first, second, reversed))
+        Some((first, second, reversed, written))
     }
 }

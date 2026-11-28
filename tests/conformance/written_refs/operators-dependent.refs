@@ -26,13 +26,13 @@
 46:49-46:50  expr  'b' -> b@46:33 in=add@46:22
 46:47-46:48  operator  '+' -> (dependent) in=add@46:22 def=0+adl
 46:47-46:48  operator  '+' -> (builtin) spec=add<int>@46:22 how=builtin
-46:47-46:48  operator  '+' -> lib::operator+@25:3 spec=add<lib::S>@46:22 how=adl
+46:47-46:48  operator  '+' -> lib::operator+@25:3 spec=add<lib::S>@46:22 how=adl adl-ns=lib@18:11 adl-cls=lib::S@19:8
 47:20-47:21  type  'T' -> T@47:17 in=neg@47:22
 47:26-47:27  type  'T' -> T@47:17 in=a@47:28
 47:41-47:42  expr  'a' -> a@47:28 in=neg@47:22
 47:40-47:41  operator  '-' -> (dependent) in=neg@47:22 def=0+adl
 47:40-47:41  operator  '-' -> (builtin) spec=neg<double>@47:22 how=builtin
-47:40-47:41  operator  '-' -> lib::operator-@26:3 spec=neg<lib::S>@47:22 how=adl
+47:40-47:41  operator  '-' -> lib::operator-@26:3 spec=neg<lib::S>@47:22 how=adl adl-ns=lib@18:11 adl-cls=lib::S@19:8
 48:30-48:31  type  'T' -> T@48:17 in=a@48:33
 49:3-49:4  expr  'a' -> a@48:33 in=bump@48:25
 49:5-49:7  operator  '+=' -> (dependent) in=bump@48:25 def=0+adl
@@ -57,18 +57,18 @@
 54:52-54:53  expr  'b' -> b@54:35 in=ne@54:25
 54:49-54:51  operator  '!=' -> (dependent) in=ne@54:25 def=0+adl
 54:49-54:51  operator  '!=' -> (builtin) spec=ne<int>@54:25 how=builtin
-54:49-54:51  operator  '!=' -> lib::operator==@27:6 spec=ne<lib::S>@54:25 rewritten how=adl
+54:49-54:51  operator  '!=' -> lib::operator==@27:6 spec=ne<lib::S>@54:25 rewritten how=adl adl-ns=lib@18:11 adl-cls=lib::S@19:8
 55:28-55:29  type  'T' -> T@55:17 in=a@55:30
 55:33-55:34  type  'T' -> T@55:17 in=b@55:35
 55:47-55:48  expr  'a' -> a@55:30 in=lt@55:25
 55:51-55:52  expr  'b' -> b@55:35 in=lt@55:25
 55:49-55:50  operator  '<' -> (dependent) in=lt@55:25 def=0+adl
 55:49-55:50  operator  '<' -> lib::A::operator<=>@33:5 spec=lt<lib::A>@55:25 rewritten how=member
-55:49-55:50  operator  '<' -> lib::operator<@30:15 spec=lt<lib::A>@55:25 rewritten how=adl
+55:49-55:50  operator  '<' -> lib::operator<@30:15 spec=lt<lib::A>@55:25 rewritten how=adl adl-ns=lib@18:11 adl-cls=lib::R@29:8
 56:29-56:30  type  'T' -> T@56:17 in=a@56:31
 56:48-56:49  expr  'a' -> a@56:31 in=rev@56:25
 56:45-56:47  operator  '==' -> (dependent) in=rev@56:25 def=0+adl
-56:45-56:47  operator  '==' -> lib::operator==@38:6 spec=rev<lib::B>@56:25 rewritten reversed how=adl
+56:45-56:47  operator  '==' -> lib::operator==@38:6 spec=rev<lib::B>@56:25 rewritten reversed how=adl adl-ns=lib@18:11 adl-cls=lib::B@35:8
 57:20-57:21  type  'T' -> T@57:17 in=mul@57:22
 57:26-57:27  type  'T' -> T@57:17 in=a@57:28
 57:40-57:41  expr  'a' -> a@57:28 in=mul@57:22
@@ -76,7 +76,7 @@
 57:42-57:43  operator  '*' -> (dependent) in=mul@57:22 def=1+adl
 57:42-57:43  operator  '*' def=ops::operator*@42:8 udir=ops@44:1
 57:42-57:43  operator  '*' -> (builtin) spec=mul<int>@57:22 how=builtin
-57:42-57:43  operator  '*' -> ops::operator*@42:8 spec=mul<lib::B>@57:22 udir=ops@44:1
+57:42-57:43  operator  '*' -> ops::operator*@42:8 spec=mul<lib::B>@57:22 udir=ops@44:1 adl-ns=lib@18:11 adl-cls=lib::B@35:8
 58:20-58:21  type  'T' -> T@58:17 in=never@58:22
 58:28-58:29  type  'T' -> T@58:17 in=a@58:30
 58:42-58:43  expr  'a' -> a@58:30 in=never@58:22
@@ -93,7 +93,7 @@
 66:35-66:36  expr  'u' -> u@66:19 in=gen(type-parameter-0-0)::(lambda)::operator()@66:10
 66:33-66:34  operator  '+' -> (dependent) in=gen(type-parameter-0-0)::(lambda)::operator()@66:10 def=0+adl
 66:33-66:34  operator  '+' -> (builtin) spec=gen(int)::(lambda)::operator()<int>@66:10 how=builtin
-66:33-66:34  operator  '+' -> lib::operator+@25:3 spec=gen(S)::(lambda)::operator()<lib::S>@66:10 how=adl
+66:33-66:34  operator  '+' -> lib::operator+@25:3 spec=gen(S)::(lambda)::operator()<lib::S>@66:10 how=adl adl-ns=lib@18:11 adl-cls=lib::S@19:8
 70:3-70:6  nns  'lib' -> lib@18:11 in=s@70:10
 70:8-70:9  type  'S' -> lib::S@19:8 q=70:3 in=s@70:10
 71:3-71:6  expr  'add' -> add<lib::S>@46:22 found=add@46:22 in=run@69:5 adl-ns=lib@18:11 adl-cls=lib::S@19:8

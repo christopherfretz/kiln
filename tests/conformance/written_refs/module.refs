@@ -50,7 +50,7 @@ refs_mod.cppm:29:25-29:27  type  'Pt' -> geo::Pt@refs_mod.cppm:5:8 in=p@refs_mod
 refs_mod.cppm:29:40-29:41  expr  'g' -> g@refs_mod.cppm:29:22 in=geo::cell@refs_mod.cppm:29:12
 refs_mod.cppm:29:43-29:44  expr  'p' -> p@refs_mod.cppm:29:28 in=geo::cell@refs_mod.cppm:29:12
 refs_mod.cppm:29:47-29:48  expr  'p' -> p@refs_mod.cppm:29:28 in=geo::cell@refs_mod.cppm:29:12
-refs_mod.cppm:29:45-29:46  operator  '+' -> geo::operator+@refs_mod.cppm:27:11 in=geo::cell@refs_mod.cppm:29:12
+refs_mod.cppm:29:45-29:46  operator  '+' -> geo::operator+@refs_mod.cppm:27:11 in=geo::cell@refs_mod.cppm:29:12 how=both adl-ns=geo@refs_mod.cppm:4:18 adl-cls=geo::Pt@refs_mod.cppm:5:8
 refs_mod.cppm:29:50-29:51  member  'x' -> geo::Pt::x@refs_mod.cppm:6:7 in=geo::cell@refs_mod.cppm:29:12
 refs_mod.cppm:29:41-29:42  operator  '[' -> geo::Grid::operator[]@refs_mod.cppm:25:7 close=refs_mod.cppm:29:51 in=geo::cell@refs_mod.cppm:29:12 how=member
 refs_mod.cppm:29:56-29:59  ud-suffix  '_px' -> geo::operator""_px@refs_mod.cppm:28:12 in=geo::cell@refs_mod.cppm:29:12
@@ -60,12 +60,12 @@ refs_mod.cppm:35:44-35:45  expr  't' -> t@refs_mod.cppm:35:32 in=geo::doubled@re
 refs_mod.cppm:35:48-35:49  expr  't' -> t@refs_mod.cppm:35:32 in=geo::doubled@refs_mod.cppm:35:22
 refs_mod.cppm:35:46-35:47  operator  '+' -> (dependent) in=geo::doubled@refs_mod.cppm:35:22 def=1+adl
 refs_mod.cppm:35:46-35:47  operator  '+' def=geo::operator+@refs_mod.cppm:27:11
-refs_mod.cppm:35:46-35:47  operator  '+' -> geo::operator+@refs_mod.cppm:27:11 spec=geo::doubled<geo::Pt>@refs_mod.cppm:35:22
+refs_mod.cppm:35:46-35:47  operator  '+' -> geo::operator+@refs_mod.cppm:27:11 spec=geo::doubled<geo::Pt>@refs_mod.cppm:35:22 how=both adl-ns=geo@refs_mod.cppm:4:18 adl-cls=geo::Pt@refs_mod.cppm:5:8
 refs_mod.cppm:36:35-36:36  type  'T' -> T@refs_mod.cppm:36:20 in=t@refs_mod.cppm:36:40
 refs_mod.cppm:36:53-36:54  expr  't' -> t@refs_mod.cppm:36:40 in=geo::summed@refs_mod.cppm:36:28
 refs_mod.cppm:36:55-36:56  operator  '+' -> (dependent) in=geo::summed@refs_mod.cppm:36:28 def=1+adl
 refs_mod.cppm:36:55-36:56  operator  '+' def=geo::operator+@refs_mod.cppm:27:11
-refs_mod.cppm:36:55-36:56  operator  '+' -> geo::operator+@refs_mod.cppm:27:11 spec=geo::summed<geo::Pt, geo::Pt, geo::Pt>@refs_mod.cppm:36:28
+refs_mod.cppm:36:55-36:56  operator  '+' -> geo::operator+@refs_mod.cppm:27:11 spec=geo::summed<geo::Pt, geo::Pt, geo::Pt>@refs_mod.cppm:36:28 how=both adl-ns=geo@refs_mod.cppm:4:18 adl-cls=geo::Pt@refs_mod.cppm:5:8
 refs_mod.cppm:47:14-47:18  type  'Pool' -> geo::Pool@refs_mod.cppm:42:8 in=geo::churn@refs_mod.cppm:46:13
 refs_mod.cppm:47:10-47:13  operator  'new' -> geo::Pool::operator new@refs_mod.cppm:43:16 in=geo::churn@refs_mod.cppm:46:13 how=qualified
 refs_mod.cppm:47:3-47:9  operator  'delete' -> geo::Pool::operator delete@refs_mod.cppm:44:15 in=geo::churn@refs_mod.cppm:46:13 how=qualified

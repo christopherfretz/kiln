@@ -10,6 +10,20 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- Full lookup provenance and built-in candidate entries for operator uses in
+  the written-reference table (spec/ast.md §18.7.4, §18.13, WP-2920, WP-3701):
+  non-member `Operator` entries (direct, rewritten/reversed comparisons,
+  `co_await`, and dependent per-specialization / keyed rows) now report
+  `how=both` when ordinary unqualified lookup and ADL both find the selected
+  function (keeping `found=` and `udir=` from ordinary lookup) and carry the
+  operands' associated sets (`adl-ns=`, `adl-cls=`, `adl-enum=`); member
+  operators remain `how=member` with no ADL set. When operator overload
+  resolution runs because an operand has class or enumeration type and
+  selects a built-in candidate (`[over.built]`), the table now records an
+  `Operator` entry with flag `REF_BUILTIN` (`64`), `how=builtin`, dumped
+  `(builtin)`, and the associated ADL set (consistent with dependent
+  `SPEC_BUILTIN` rows, which also gain the associated set for class/enum
+  operands); operators on fundamental/pointer operands still record no entry.
 - Written label uses (`goto l`, `&&l`, and `asm goto` label operands) are
   now recorded in the written-reference table with role `RefRole::Label`
   (`label`), pointing to their `LabelDecl` (updated to the `l:` definition

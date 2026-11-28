@@ -1,0 +1,172 @@
+17:8-17:9  type  'E' -> n::E@15:6 in=(anonymous)@17:9
+19:17-19:18  type  'S' -> n::S@14:8 in=(anonymous)@19:18
+19:20-19:21  type  'S' -> n::S@14:8 in=(anonymous)@19:21
+20:15-20:19  type  'Wrap' -> n::Wrap@16:8 in=(anonymous)@20:19
+25:25-25:26  type  'M' -> mem::M@24:8 in=(anonymous)@25:28 how=injected
+31:32-31:33  type  'H' -> hid::H@30:8 in=(anonymous)@31:35 how=injected
+37:25-37:28  type  'Ord' -> cmp::Ord@36:8 in=(anonymous)@37:28 how=injected
+40:10-40:13  type  'Ord' -> cmp::Ord@36:8 in=cmp::C::@40:14
+40:26-40:27  type  'C' -> cmp::C@39:8 in=(anonymous)@40:27 how=injected
+40:29-40:30  type  'C' -> cmp::C@39:8 in=(anonymous)@40:30 how=injected
+51:38-51:39  type  'T' -> T@51:17 in=(anonymous)@51:40
+51:36-51:37  template  'X' -> t::X@48:27 in=(anonymous)@51:40
+51:44-51:45  type  'T' -> T@51:17 in=(anonymous)@51:46
+51:42-51:43  template  'X' -> t::X@48:27 in=(anonymous)@51:46
+59:76-59:77  expr  'v' -> v@59:47 in=u::operator""_u@59:15
+62:76-62:77  expr  'v' -> v@62:47 in=operator""_g@62:15
+64:32-64:33  type  'T' -> T@64:17 in=a@64:34
+64:37-64:38  type  'T' -> T@64:17 in=b@64:39
+64:51-64:52  expr  'a' -> a@64:34 in=dep_eq@64:25
+64:56-64:57  expr  'b' -> b@64:39 in=dep_eq@64:25
+64:53-64:55  operator  '==' -> (dependent) in=dep_eq@64:25 def=0+adl
+64:53-64:55  operator  '==' -> (builtin) spec=dep_eq<int>@64:25 how=builtin
+64:53-64:55  operator  '==' -> (builtin) spec=dep_eq<n::E>@64:25 how=builtin adl-ns=n@13:11 adl-enum=n::E@15:6
+64:53-64:55  operator  '==' -> mem::M::operator==@25:8 spec=dep_eq<mem::M>@64:25 how=member
+64:53-64:55  operator  '==' -> n::operator==@19:6 spec=dep_eq<n::S>@64:25 how=adl adl-ns=n@13:11 adl-cls=n::S@14:8
+65:32-65:33  type  'T' -> T@65:17 in=a@65:34
+65:46-65:47  expr  'a' -> a@65:34 in=dep_add@65:24
+65:48-65:49  operator  '+' -> (dependent) in=dep_add@65:24 def=0+adl
+65:48-65:49  operator  '+' -> (builtin) spec=dep_add<int>@65:24 how=builtin
+65:48-65:49  operator  '+' -> (builtin) spec=dep_add<n::E>@65:24 how=builtin adl-ns=n@13:11 adl-enum=n::E@15:6
+65:48-65:49  operator  '+' -> (builtin) spec=dep_add<t::X<m::Y>>@65:24 how=builtin adl-ns=t@47:11,m@44:11 adl-cls=t::X@48:27,m::Y@45:8
+67:16-67:17  nns  'n' -> n@13:11 in=a@67:21
+67:19-67:20  type  'S' -> n::S@14:8 q=67:16 in=a@67:21
+67:24-67:25  nns  'n' -> n@13:11 in=b@67:29
+67:27-67:28  type  'S' -> n::S@14:8 q=67:24 in=b@67:29
+67:32-67:33  nns  'n' -> n@13:11 in=e@67:37
+67:35-67:36  type  'E' -> n::E@15:6 q=67:32 in=e@67:37
+68:13-68:14  expr  'a' -> a@67:21 in=r1@68:8
+68:18-68:19  expr  'b' -> b@67:29 in=r1@68:8
+68:15-68:17  operator  '==' -> n::operator==@19:6 in=r1@68:8 how=adl adl-ns=n@13:11 adl-cls=n::S@14:8
+69:13-69:14  expr  'e' -> e@67:37 in=r2@69:8
+69:18-69:19  expr  'e' -> e@67:37 in=r2@69:8
+69:15-69:17  operator  '==' -> (builtin) in=r2@69:8 how=builtin adl-ns=n@13:11 adl-enum=n::E@15:6
+70:13-70:14  expr  'b' -> b@67:29 in=r3@70:8
+70:18-70:19  expr  'a' -> a@67:21 in=r3@70:8
+70:15-70:17  operator  '!=' -> n::operator==@19:6 in=r3@70:8 rewritten how=adl adl-ns=n@13:11 adl-cls=n::S@14:8
+71:9-71:10  nns  'n' -> n@13:11 in=operator==@71:12
+71:12-71:22  using-decl  'operator==' -> n::operator==@19:6 q=71:9 in=operator==@71:12
+72:13-72:14  expr  'a' -> a@67:21 in=r4@72:8
+72:18-72:19  expr  'b' -> b@67:29 in=r4@72:8
+72:15-72:17  operator  '==' -> n::operator==@19:6 found=operator==@71:12 in=r4@72:8 how=both adl-ns=n@13:11 adl-cls=n::S@14:8
+73:12-73:13  expr  'e' -> e@67:37 in=r5@73:7
+73:14-73:15  operator  '+' -> (builtin) in=r5@73:7 how=builtin adl-ns=n@13:11 adl-enum=n::E@15:6
+75:13-75:14  expr  'p' -> p@67:45 in=r7@75:8
+76:9-76:11  expr  'r1' -> r1@68:8 in=use_shape@67:6
+77:9-77:11  expr  'r2' -> r2@69:8 in=use_shape@67:6
+78:9-78:11  expr  'r3' -> r3@70:8 in=use_shape@67:6
+79:9-79:11  expr  'r4' -> r4@72:8 in=use_shape@67:6
+80:9-80:11  expr  'r5' -> r5@73:7 in=use_shape@67:6
+81:9-81:11  expr  'r6' -> r6@74:7 in=use_shape@67:6
+82:9-82:11  expr  'r7' -> r7@75:8 in=use_shape@67:6
+85:15-85:16  nns  'n' -> n@13:11 in=a@85:20
+85:18-85:19  type  'S' -> n::S@14:8 q=85:15 in=a@85:20
+85:23-85:24  nns  'n' -> n@13:11 in=b@85:28
+85:26-85:27  type  'S' -> n::S@14:8 q=85:23 in=b@85:28
+86:19-86:20  using-directive  'n' -> n@13:11 in=use_udir@85:6
+87:12-87:13  expr  'a' -> a@85:20 in=r@87:8
+87:17-87:18  expr  'b' -> b@85:28 in=r@87:8
+87:14-87:16  operator  '==' -> n::operator==@19:6 in=r@87:8 how=both udir=n@86:3 adl-ns=n@13:11 adl-cls=n::S@14:8
+88:9-88:10  expr  'r' -> r@87:8 in=use_udir@85:6
+91:16-91:19  nns  'mem' -> mem@23:11 in=m1@91:23
+91:21-91:22  type  'M' -> mem::M@24:8 q=91:16 in=m1@91:23
+91:27-91:30  nns  'mem' -> mem@23:11 in=m2@91:34
+91:32-91:33  type  'M' -> mem::M@24:8 q=91:27 in=m2@91:34
+91:38-91:41  nns  'hid' -> hid@29:11 in=h@91:45
+91:43-91:44  type  'H' -> hid::H@30:8 q=91:38 in=h@91:45
+91:48-91:51  nns  'cmp' -> cmp@35:11 in=c1@91:55
+91:53-91:54  type  'C' -> cmp::C@39:8 q=91:48 in=c1@91:55
+91:59-91:62  nns  'cmp' -> cmp@35:11 in=c2@91:66
+91:64-91:65  type  'C' -> cmp::C@39:8 q=91:59 in=c2@91:66
+91:70-91:71  nns  't' -> t@47:11 in=x1@91:81
+91:75-91:76  nns  'm' -> m@44:11 in=x1@91:81
+91:78-91:79  type  'Y' -> m::Y@45:8 q=91:75 in=x1@91:81
+91:73-91:74  template  'X' -> t::X@48:27 q=91:70 in=x1@91:81
+92:16-92:17  nns  't' -> t@47:11 in=x2@92:27
+92:21-92:22  nns  'm' -> m@44:11 in=x2@92:27
+92:24-92:25  type  'Y' -> m::Y@45:8 q=92:21 in=x2@92:27
+92:19-92:20  template  'X' -> t::X@48:27 q=92:16 in=x2@92:27
+92:31-92:33  nns  'sc' -> sc@54:11 in=s1@92:38
+92:35-92:37  type  'Sc' -> sc::Sc@55:12 q=92:31 in=s1@92:38
+92:42-92:44  nns  'sc' -> sc@54:11 in=s2@92:49
+92:46-92:48  type  'Sc' -> sc::Sc@55:12 q=92:42 in=s2@92:49
+93:13-93:15  expr  'm1' -> m1@91:23 in=r1@93:8
+93:19-93:21  expr  'm2' -> m2@91:34 in=r1@93:8
+93:16-93:18  operator  '==' -> mem::M::operator==@25:8 in=r1@93:8 how=member
+94:13-94:14  expr  'h' -> h@91:45 in=r2@94:8
+94:15-94:17  operator  '==' -> hid::operator==@31:15 in=r2@94:8 how=adl adl-ns=hid@29:11 adl-cls=hid::H@30:8
+95:18-95:19  expr  'h' -> h@91:45 in=r3@95:8
+95:15-95:17  operator  '==' -> hid::operator==@31:15 in=r3@95:8 rewritten reversed how=adl adl-ns=hid@29:11 adl-cls=hid::H@30:8
+96:13-96:15  expr  'c1' -> c1@91:55 in=r4@96:8
+96:18-96:20  expr  'c2' -> c2@91:66 in=r4@96:8
+96:16-96:17  operator  '<' -> cmp::operator<=>@40:14 in=r4@96:8 rewritten how=adl adl-ns=cmp@35:11 adl-cls=cmp::C@39:8
+96:16-96:17  operator  '<' -> cmp::operator<@37:15 in=r4@96:8 rewritten how=adl adl-ns=cmp@35:11 adl-cls=cmp::Ord@36:8
+97:13-97:15  expr  'x1' -> x1@91:81 in=r5@97:8
+97:19-97:21  expr  'x2' -> x2@92:27 in=r5@97:8
+97:16-97:18  operator  '==' -> t::operator==<Y>@51:25 found=t::operator==@51:25 in=r5@97:8 how=adl adl-ns=t@47:11,m@44:11 adl-cls=t::X@48:27,m::Y@45:8
+98:12-98:14  expr  'x1' -> x1@91:81 in=r6@98:7
+98:15-98:16  operator  '+' -> (builtin) in=r6@98:7 how=builtin adl-ns=t@47:11,m@44:11 adl-cls=t::X@48:27,m::Y@45:8
+99:13-99:15  expr  's1' -> s1@92:38 in=r7@99:8
+99:19-99:21  expr  's2' -> s2@92:49 in=r7@99:8
+99:16-99:18  operator  '==' -> (builtin) in=r7@99:8 how=builtin adl-ns=sc@54:11 adl-enum=sc::Sc@55:12
+100:13-100:15  ud-suffix  '_g' -> operator""_g@62:15 in=r8@100:7
+101:9-101:10  nns  'u' -> u@58:11 in=operator""_u@101:12
+101:12-101:24  using-decl  'operator""_u' -> u::operator""_u@59:15 q=101:9 in=operator""_u@101:12
+102:13-102:15  ud-suffix  '_u' -> u::operator""_u@59:15 found=operator""_u@101:12 in=r9@102:7
+103:9-103:11  expr  'r1' -> r1@93:8 in=use_other@91:6
+104:9-104:11  expr  'r2' -> r2@94:8 in=use_other@91:6
+105:9-105:11  expr  'r3' -> r3@95:8 in=use_other@91:6
+106:9-106:11  expr  'r4' -> r4@96:8 in=use_other@91:6
+107:9-107:11  expr  'r5' -> r5@97:8 in=use_other@91:6
+108:9-108:11  expr  'r6' -> r6@98:7 in=use_other@91:6
+109:9-109:11  expr  'r7' -> r7@99:8 in=use_other@91:6
+110:9-110:11  expr  'r8' -> r8@100:7 in=use_other@91:6
+111:9-111:11  expr  'r9' -> r9@102:7 in=use_other@91:6
+115:19-115:20  using-directive  'u' -> u@58:11 in=use_udl_dir@114:6
+116:12-116:14  ud-suffix  '_u' -> u::operator""_u@59:15 in=r@116:7 udir=u@115:3
+117:9-117:10  expr  'r' -> r@116:7 in=use_udl_dir@114:6
+120:14-120:15  nns  'n' -> n@13:11 in=a@120:19
+120:17-120:18  type  'S' -> n::S@14:8 q=120:14 in=a@120:19
+120:22-120:23  nns  'n' -> n@13:11 in=b@120:27
+120:25-120:26  type  'S' -> n::S@14:8 q=120:22 in=b@120:27
+120:30-120:31  nns  'n' -> n@13:11 in=e@120:35
+120:33-120:34  type  'E' -> n::E@15:6 q=120:30 in=e@120:35
+120:38-120:41  nns  'mem' -> mem@23:11 in=m1@120:45
+120:43-120:44  type  'M' -> mem::M@24:8 q=120:38 in=m1@120:45
+120:49-120:52  nns  'mem' -> mem@23:11 in=m2@120:56
+120:54-120:55  type  'M' -> mem::M@24:8 q=120:49 in=m2@120:56
+120:60-120:61  nns  't' -> t@47:11 in=x@120:71
+120:65-120:66  nns  'm' -> m@44:11 in=x@120:71
+120:68-120:69  type  'Y' -> m::Y@45:8 q=120:65 in=x@120:71
+120:63-120:64  template  'X' -> t::X@48:27 q=120:60 in=x@120:71
+121:9-121:15  expr  'dep_eq' -> dep_eq<n::S>@64:25 found=dep_eq@64:25 in=use_dep@120:6 adl-ns=n@13:11 adl-cls=n::S@14:8
+121:16-121:17  expr  'a' -> a@120:19 in=use_dep@120:6
+121:19-121:20  expr  'b' -> b@120:27 in=use_dep@120:6
+122:9-122:15  expr  'dep_eq' -> dep_eq<n::E>@64:25 found=dep_eq@64:25 in=use_dep@120:6 adl-ns=n@13:11 adl-enum=n::E@15:6
+122:16-122:17  expr  'e' -> e@120:35 in=use_dep@120:6
+122:19-122:20  expr  'e' -> e@120:35 in=use_dep@120:6
+123:9-123:15  expr  'dep_eq' -> dep_eq<mem::M>@64:25 found=dep_eq@64:25 in=use_dep@120:6 adl-ns=mem@23:11 adl-cls=mem::M@24:8
+123:16-123:18  expr  'm1' -> m1@120:45 in=use_dep@120:6
+123:20-123:22  expr  'm2' -> m2@120:56 in=use_dep@120:6
+124:9-124:15  expr  'dep_eq' -> dep_eq<int>@64:25 found=dep_eq@64:25 in=use_dep@120:6 adl-ns=
+125:9-125:16  expr  'dep_add' -> dep_add<t::X<m::Y>>@65:24 found=dep_add@65:24 in=use_dep@120:6 adl-ns=t@47:11,m@44:11 adl-cls=t::X@48:27,m::Y@45:8
+125:17-125:18  expr  'x' -> x@120:71 in=use_dep@120:6
+126:9-126:16  expr  'dep_add' -> dep_add<n::E>@65:24 found=dep_add@65:24 in=use_dep@120:6 adl-ns=n@13:11 adl-enum=n::E@15:6
+126:17-126:18  expr  'e' -> e@120:35 in=use_dep@120:6
+127:9-127:16  expr  'dep_add' -> dep_add<int>@65:24 found=dep_add@65:24 in=use_dep@120:6 adl-ns=
+130:7-130:8  nns  'n' -> n@13:11 in=operator==@130:10
+130:10-130:20  using-decl  'operator==' -> n::operator==@19:6 q=130:7 in=operator==@130:10
+131:37-131:38  type  'T' -> T@131:17 in=a@131:39
+131:42-131:43  type  'T' -> T@131:17 in=b@131:44
+131:56-131:57  expr  'a' -> a@131:39 in=dep_eq_both@131:25
+131:61-131:62  expr  'b' -> b@131:44 in=dep_eq_both@131:25
+131:58-131:60  operator  '==' -> (dependent) in=dep_eq_both@131:25 def=1+adl
+131:58-131:60  operator  '==' def=n::operator==@19:6 found=operator==@130:10
+131:58-131:60  operator  '==' -> n::operator==@19:6 found=operator==@130:10 spec=dep_eq_both<n::S>@131:25 how=both adl-ns=n@13:11 adl-cls=n::S@14:8
+132:19-132:20  nns  'n' -> n@13:11 in=a@132:24
+132:22-132:23  type  'S' -> n::S@14:8 q=132:19 in=a@132:24
+132:27-132:28  nns  'n' -> n@13:11 in=b@132:32
+132:30-132:31  type  'S' -> n::S@14:8 q=132:27 in=b@132:32
+132:43-132:54  expr  'dep_eq_both' -> dep_eq_both<n::S>@131:25 found=dep_eq_both@131:25 in=use_dep_both@132:6 adl-ns=n@13:11 adl-cls=n::S@14:8
+132:55-132:56  expr  'a' -> a@132:24 in=use_dep_both@132:6
+132:58-132:59  expr  'b' -> b@132:32 in=use_dep_both@132:6

@@ -9,6 +9,7 @@
 21:18-21:21  type  'Rec' -> lib::Rec@12:8 q=21:13 in=made@26:5 exp=26:1
 27:5-27:8  type  'Rec' -> lib::Rec@12:8 found=Rec@24:12 in=pointer@27:10 exp=27:1
 27:21-27:25  expr  'made' -> made@26:5 in=pointer@27:10
+27:20-27:21  operator  '&' -> (builtin) in=pointer@27:10 how=builtin adl-ns=lib@11:11 adl-cls=lib::Rec@12:8
 29:29-29:32  nns  'lib' -> lib@11:11 in=k@29:18
 29:34-29:37  type  'Rec' -> lib::Rec@12:8 q=29:29 in=k@29:18
 29:49-29:50  expr  'k' -> k@29:18 in=defaults@29:5
