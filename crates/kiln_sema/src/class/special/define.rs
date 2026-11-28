@@ -70,6 +70,21 @@ pub(crate) enum SynthKind {
     Declaring(SpecialKind),
 }
 
+impl SynthKind {
+    /// Whether this synthesis context breaks an enclosing SFINAE context
+    /// (`Sema::sfinae_traps`), matching clang's `Sema::isSFINAEContext`:
+    /// implicit definitions (`Special`, `Comparison`, `Inheriting`:
+    /// `DefiningSynthesizedFunction`) and implicit special-member
+    /// declarations (`Declaring`: `DeclaringSpecialMember`) stop SFINAE;
+    /// `ExceptionSpec` (`ExceptionSpecEvaluation`) is transparent to it.
+    pub(crate) fn ends_sfinae(self) -> bool {
+        match self {
+            Self::Special(_) | Self::Comparison(_) | Self::Inheriting | Self::Declaring(_) => true,
+            Self::ExceptionSpec => false,
+        }
+    }
+}
+
 /// How a constructor initializes the subobjects it has no
 /// mem-initializer for (clang `ImplicitInitializerKind`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -1391,6 +1391,14 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   instantiated on odr-use even when the call binds a later bodyless friend
   redeclaration (from another specialization, from the same class template,
   or at namespace scope after an earlier bodyless friend) (WP-3686).
+- A class that inherits constructors from a base whose default constructor is
+  a template with defaulted parameters (such as `std::pair`) no longer
+  requires a nested class's default member initializers inside the enclosing
+  class definition (regression since `1f2951a7b`, WP-3685): evaluating a
+  special member's implicit exception specification (`SynthKind::ExceptionSpec`,
+  clang `ExceptionSpecEvaluation`) no longer breaks out of an enclosing SFINAE
+  context such as `__is_constructible` (implicit definitions and
+  `SynthKind::Declaring` still end SFINAE, matching clang `isSFINAEContext`).
 - `Ast::decl_written_exprs` now keeps expressions written around a
   deduced placeholder (spec/types.md §8.4, WP-3640): array bounds in a
   declarator (`auto (*p)[f(1)] = &a;`), type-constraint arguments on a
