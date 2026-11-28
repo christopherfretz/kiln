@@ -975,13 +975,19 @@ pub struct JobConfig {
 /// with no other flag ([`JobConfig`]): the parser's options, the
 /// preprocessor's options and its configuration as the driver builds
 /// them, for the host target and the toolchain `options.environment`
-/// locates. No file is read but the toolchain's (the predefines). The
+/// locates. No file is read but the toolchain's (the predefines).
+/// Returns `Err(FrontEndError::WorkingDirectory { .. })` when
+/// `options.working_directory` cannot be resolved or is not an existing
+/// directory (as [`run_front_end`] does; WP-3699). Otherwise the
 /// report's value is `None` when the driver rejected `<std>` or the
 /// toolchain (the report says why); `options.own_thread` and
 /// `options.record_lookups` do not apply.
-pub fn std_config(std: &str, options: &FrontEndOptions) -> FrontEndReport<JobConfig> {
+pub fn std_config(
+    std: &str,
+    options: &FrontEndOptions,
+) -> Result<FrontEndReport<JobConfig>, FrontEndError> {
+    let base = options.base_work_dir()?;
     let cl = ["-fsyntax-only".to_owned(), format!("-std={std}"), "std-config.cpp".to_owned()];
-    let base = options.base_work_dir().unwrap_or_else(|_| WorkDir::of_process());
     let args = entry_args("kiln++", &cl, &options.environment, &base);
     let host = Host::new(options.stderr.clone());
     let diag_opts = crate::diag_options(&args);
@@ -1014,7 +1020,7 @@ pub fn std_config(std: &str, options: &FrontEndOptions) -> FrontEndReport<JobCon
         engine.flush();
         host.done(&engine);
     }
-    FrontEndReport {
+    Ok(FrontEndReport {
         value,
         errors: host.errors.get(),
         warnings: host.warnings.get(),
@@ -1022,7 +1028,7 @@ pub fn std_config(std: &str, options: &FrontEndOptions) -> FrontEndReport<JobCon
         driver_errors,
         first_error: host.first_error(),
         overlay_failures: Vec::new(),
-    }
+    })
 }
 
 /// The configuration of `job` as [`crate::pp_cmd::Job::configure_preprocessor`]

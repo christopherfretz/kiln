@@ -1946,13 +1946,17 @@ entries whose lazy loader failed when the run read them (with the error
 text, in the order read): such a file is not found in the run, so a run
 with any is void. There is no command-line flag for an overlay.
 
-`front_end::std_config(std, options)` is the configuration the driver
-builds for `kiln++ -fsyntax-only -std=<std>` with no other flag
+`front_end::std_config(std, options)` returns
+`Result<FrontEndReport<JobConfig>, FrontEndError>`: the configuration the
+driver builds for `kiln++ -fsyntax-only -std=<std>` with no other flag
 (`JobConfig`): the standard, target, parser options, preprocessor
 options (predefines included; `modules` is `None`), the `#if` evaluator,
 the staged feature queries (`pp_cmd::StagedFeatures`) and the header
 search list, for a caller that runs an in-memory front end exactly as
-configured. `Args::complex_promoted()` is `-fcomplex-arithmetic=promoted`
+configured. When `options.working_directory` cannot be resolved or is not
+an existing directory, it returns `Err(FrontEndError::WorkingDirectory { .. })`
+as `run_front_end` does (WP-3699; `std_config_bad_working_directory_is_an_error`).
+`Args::complex_promoted()` is `-fcomplex-arithmetic=promoted`
 as the parser options take it.
 
 ### Working directory (WP-2121)

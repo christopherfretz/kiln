@@ -3611,8 +3611,9 @@ one of:
   (`__attribute__((x(mu)))`), which clang takes as an identifier
   argument (`ParseAttributeArgsCommon`), looking nothing up (a later
   argument of an unknown GNU attribute is an expression and counts),
-  a label (`l:`, `goto l`, `&&l`, the names of a `__label__`
-  declaration, an `asm goto` label),
+  a label (a `LabelStmt` definition `l:` located from the AST rather than
+  any identifier followed by `:` — WP-3699 — `goto l`, `&&l`, the names of
+  a `__label__` declaration, an `asm goto` label),
   an `asm` symbolic operand name, or a module name (after `module` /
   `import` up to `;`).
 
@@ -3667,7 +3668,11 @@ attribute as an identifier argument and skips an unknown `[[...]]`
 attribute's tokens, looking nothing up, so the table rightly has no
 entry; since WP-2290 the test counts them as non-names (the documented
 set above). Run again (WP-2290: 3481 files, 318645 identifiers),
-nothing is left (the two panics are gone since WP-2173). The
+nothing is left (the two panics are gone since WP-2173). Narrowing the
+label-definition excuse from any `ident :` token to actual `LabelStmt`
+locations in the AST (WP-3699; `ident_before_colon_excuse_only_covers_label_defs`)
+exposed 0 leftovers across `tests/conformance` (3657 files, 334160
+identifiers) and host libstdc++ `<bits/stdc++.h>` (387763 identifiers). The
 pinned set is unchanged (733 files, 58989 identifiers, nothing left).
 
 Over the host's libstdc++ (WP-1934: GCC 14's headers on aarch64 Linux
