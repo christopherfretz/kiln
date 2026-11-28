@@ -1387,6 +1387,13 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- `Ast::decl_written_exprs` no longer descends into a function's deduced
+  return type (`FnSpec::return_deduced()`, spec/types.md §8.4, WP-3641):
+  a function, member function, lambda call operator or function template
+  specialization whose return type was deduced from a placeholder now
+  appends only the expressions written in its parameter types and
+  `noexcept(e)` operand, not expressions carried by the deduced return
+  type.
 - The explicitly specified template arguments are substituted into the
   pattern of a trailing function parameter pack too ([temp.deduct.general]/2-3,
   /8, WP-3380): `h<int>()` of `template<class T, class... Ts> void

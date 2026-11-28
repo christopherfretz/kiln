@@ -946,3 +946,204 @@ fn a_compound_literal_keeps_its_unknown_bound() {
     assert_eq!(ast.exprs.compound_literal_written_type(e), ast.exprs.get(e).ty());
     assert!(ast.exprs.cold.compound_literal_written.get(e).is_none());
 }
+
+/// [dcl.spec.auto]: a function whose return type was deduced from a
+/// placeholder (`auto`, `decltype(auto)`, `auto -> auto`, member
+/// function, redeclaration after definition) writes no return-type
+/// expression, so `decl_written_exprs` does not leak expressions from
+/// the deduced return type (spec/types.md §8.4, WP-3641).
+#[test]
+fn a_deduced_return_writes_no_expression() {
+    let t = parse(
+        "template<int N> struct A {};\n\
+         A<1+1> g();\n\
+         auto f() { return g(); }\n\
+         auto f();\n\
+         decltype(auto) f_decl() { return g(); }\n\
+         auto f_trail() -> auto { return g(); }\n\
+         struct S { auto m() { return g(); } };\n",
+    );
+    let ast = t.ast();
+    let fs = t.named("f", DeclKind::Function);
+    assert_eq!(fs.len(), 2, "definition and trailing redeclaration");
+    assert!(ast.decls.function(fs[0]).unwrap().spec.return_deduced());
+    let decls = [
+        fs[0],
+        t.one("f_decl", DeclKind::Function),
+        t.one("f_trail", DeclKind::Function),
+        t.one("m", DeclKind::CXXMethod),
+    ];
+    for d in decls {
+        let mut out = Vec::new();
+        ast.decl_written_exprs(d, &mut out);
+        assert!(out.is_empty(), "{d:?}: deduced return leaked {out:?}");
+        // The function type itself keeps `g`'s sugar; only the
+        // declaration walk skips its deduced return type.
+        let mut leak = Vec::new();
+        ast.types.written_exprs(ast.decls.get(d).ty().unwrap(), &mut leak);
+        assert_eq!(leak.len(), 1, "{d:?}: {leak:?}");
+        assert_eq!(t.line(leak[0]), 2, "{d:?}: 1+1 from g");
+    }
+    let mut out = Vec::new();
+    ast.decl_written_exprs(fs[1], &mut out);
+    assert!(out.is_empty(), "trailing redecl leaked {out:?}");
+}
+
+/// [dcl.spec.auto], [except.spec]: a function whose return type was
+/// deduced still appends the expressions written in its parameter types
+/// (including nested function types) in order, and in its `noexcept(e)`
+/// operand (spec/types.md §8.4, WP-3641).
+#[test]
+fn a_deduced_return_keeps_parameter_and_noexcept_exprs() {
+    let t = parse(
+        "template<int N> struct A {};\n\
+         A<1+1> g();\n\
+         auto f(int (*p)[3+1]) noexcept(2>1) { return g(); }\n\
+         auto f2(A<4+1> (*cb)()) { return g(); }\n",
+    );
+    let ast = t.ast();
+    let char_at = |e: ExprId| -> char {
+        let lc = t.sm.line_col(ast.exprs.get(e).loc()).expect("source loc");
+        let line = t.src.lines().nth(lc.line as usize - 1).unwrap();
+        line.as_bytes()[lc.col as usize - 1] as char
+    };
+    let f = t.one("f", DeclKind::Function);
+    assert!(ast.decls.function(f).unwrap().spec.return_deduced());
+    let mut out = Vec::new();
+    ast.decl_written_exprs(f, &mut out);
+    assert_eq!(out.len(), 2, "3+1 then 2>1: {out:?}");
+    assert_eq!(t.line(out[0]), 3);
+    assert_eq!(t.line(out[1]), 3);
+    assert_eq!(ast.exprs.get(out[0]).kind(), ExprKind::BinaryOperator);
+    assert_eq!(char_at(out[0]), '+', "parameter bound 3+1 first");
+    assert_eq!(ast.exprs.get(out[1]).kind(), ExprKind::ConstantExpr);
+    let exc_inner = ast.exprs.children(out[1], &ast.lists)[0];
+    assert_eq!(ast.exprs.get(exc_inner).kind(), ExprKind::BinaryOperator);
+    assert_eq!(char_at(exc_inner), '>', "noexcept(2>1) second");
+
+    // A nested function type written in a parameter keeps its own return.
+    let f2 = t.one("f2", DeclKind::Function);
+    assert!(ast.decls.function(f2).unwrap().spec.return_deduced());
+    let mut out2 = Vec::new();
+    ast.decl_written_exprs(f2, &mut out2);
+    assert_eq!(out2.len(), 1, "4+1 from cb's return type: {out2:?}");
+    assert_eq!(t.line(out2[0]), 4);
+}
+
+/// [dcl.fct]/2: a non-placeholder trailing return type is written, not
+/// deduced, so `decl_written_exprs` walks the whole function type
+/// (spec/types.md §8.4, WP-3641).
+#[test]
+fn a_written_trailing_return_keeps_its_expression() {
+    let t = parse(
+        "template<int N> struct A {};\n\
+         A<1+1> g();\n\
+         auto f() -> A<1+1> { return g(); }\n",
+    );
+    let ast = t.ast();
+    let f = t.one("f", DeclKind::Function);
+    assert!(!ast.decls.function(f).unwrap().spec.return_deduced());
+    let mut out = Vec::new();
+    ast.decl_written_exprs(f, &mut out);
+    assert_eq!(out.len(), 1, "1+1 from f's trailing return: {out:?}");
+    assert_eq!(t.line(out[0]), 3);
+    assert_eq!(ast.exprs.get(out[0]).kind(), ExprKind::BinaryOperator);
+}
+
+/// [expr.prim.lambda.closure]/4: a lambda call operator without a
+/// trailing return type has a deduced return type, so `decl_written_exprs`
+/// appends only its parameter expressions (spec/types.md §8.4, WP-3641).
+#[test]
+fn a_lambda_deduced_return_keeps_parameter_exprs() {
+    use kiln_ast::names::OverloadedOperator;
+    let t = parse(
+        "template<int N> struct A {};\n\
+         A<1+1> g();\n\
+         auto lam = [](int (*p)[3+1]) { return g(); };\n",
+    );
+    let ast = t.ast();
+    let ops: Vec<DeclId> = (1..=ast.decls.len() as u32)
+        .map(DeclId::new)
+        .filter(|&d| {
+            let n = ast.decls.get(d);
+            n.kind() == DeclKind::CXXMethod
+                && n.name().as_operator() == Some(OverloadedOperator::Call)
+        })
+        .collect();
+    assert_eq!(ops.len(), 1, "lambda call operator: {ops:?}");
+    let op = ops[0];
+    assert!(ast.decls.function(op).unwrap().spec.return_deduced());
+    let mut out = Vec::new();
+    ast.decl_written_exprs(op, &mut out);
+    assert_eq!(out.len(), 1, "3+1 only: {out:?}");
+    assert_eq!(t.line(out[0]), 3);
+    assert_eq!(ast.exprs.get(out[0]).kind(), ExprKind::BinaryOperator);
+    // Raw `written_exprs` on the call operator's type reaches both.
+    let mut all = Vec::new();
+    ast.types.written_exprs(ast.decls.get(op).ty().unwrap(), &mut all);
+    assert_eq!(all.len(), 2, "deduced return (line 2) + param (line 3): {all:?}");
+}
+
+/// [dcl.spec.auto.general]/12, [temp.inst]: a function template pattern
+/// with a body gets `return_deduced` (its return is a dependent `auto`);
+/// a body-less declaration keeps an undeduced `auto` (which writes no
+/// expression either); an instantiation appends only the specialization's
+/// parameter expressions, not its deduced return type (spec/types.md
+/// §8.4, WP-3641).
+#[test]
+fn a_deduced_return_template_pattern_and_specialization() {
+    use kiln_ast::expr::ExprDeps;
+    use kiln_ast::types::TypeView;
+    let t = parse(
+        "template<int N> struct A {};\n\
+         A<1+1> g();\n\
+         template<class T> auto fwd(T t);\n\
+         template<class T> auto id(T t) { return t; }\n\
+         template<class T> auto h(T, int (*p)[sizeof(T) + 1]) { return g(); }\n\
+         auto r1 = id(g());\n\
+         auto r2 = h(0, nullptr);\n",
+    );
+    let ast = t.ast();
+
+    // Forward-declared pattern: no body yet, return is undeduced `auto`.
+    let fwd = t.one("fwd", DeclKind::Function);
+    assert!(!ast.decls.function(fwd).unwrap().spec.return_deduced());
+    let TypeView::Function(p) = ast.types.view(ast.decls.get(fwd).ty().unwrap().ty()) else {
+        panic!("fwd is a function");
+    };
+    assert!(matches!(ast.types.view(p.ret().ty()), TypeView::Auto { args: None, .. }));
+    let mut out = Vec::new();
+    ast.decl_written_exprs(fwd, &mut out);
+    assert!(out.is_empty(), "fwd: {out:?}");
+
+    // Defined pattern `id` and its specialization `id<A<1+1>>`.
+    let (id_pat, id_spec) = t.pattern_and_instance("id", DeclKind::Function);
+    assert!(ast.decls.function(id_pat).unwrap().spec.return_deduced());
+    assert!(ast.decls.function(id_spec).unwrap().spec.return_deduced());
+    for d in [id_pat, id_spec] {
+        let mut out = Vec::new();
+        ast.decl_written_exprs(d, &mut out);
+        assert!(out.is_empty(), "id {d:?}: {out:?}");
+    }
+
+    // Defined pattern `h` and its specialization `h<int>`.
+    let (h_pat, h_spec) = t.pattern_and_instance("h", DeclKind::Function);
+    assert!(ast.decls.function(h_pat).unwrap().spec.return_deduced());
+    assert!(ast.decls.function(h_spec).unwrap().spec.return_deduced());
+    let mut pat_out = Vec::new();
+    ast.decl_written_exprs(h_pat, &mut pat_out);
+    assert_eq!(pat_out.len(), 1, "h pattern: {pat_out:?}");
+    assert_eq!(t.line(pat_out[0]), 5);
+    assert!(ast.exprs.get(pat_out[0]).deps().contains(ExprDeps::INSTANTIATION));
+
+    let mut spec_out = Vec::new();
+    ast.decl_written_exprs(h_spec, &mut spec_out);
+    assert_eq!(spec_out.len(), 1, "h<int> appends only its parameter expr: {spec_out:?}");
+    assert_eq!(t.line(spec_out[0]), 5);
+    assert_ne!(spec_out[0], pat_out[0], "the specialization's substituted bound");
+    assert!(!ast.exprs.get(spec_out[0]).deps().contains(ExprDeps::INSTANTIATION));
+
+    let mut h_all = Vec::new();
+    ast.types.written_exprs(ast.decls.get(h_spec).ty().unwrap(), &mut h_all);
+    assert_eq!(h_all.len(), 2, "deduced return (line 2) + param (line 5): {h_all:?}");
+}

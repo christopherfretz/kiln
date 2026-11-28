@@ -1089,11 +1089,19 @@ variable read before that has `None`. Expressions written in the
 declarator around the placeholder (`auto (*p)[f(1)] = &a;`, a
 type-constraint's arguments `C<f(1)> auto v = w;`) are not kept once
 deduced. PCH `FORMAT_VERSION` 187, `IMAGE_VERSION` 101 (the image
-carries the bits with the variable's specifiers). Tests:
+carries the bits with the variable's specifiers). A function whose
+return type was deduced from a placeholder (`FnSpec::return_deduced()`,
+WP-3641) writes only its parameter types and `noexcept(e)` operand,
+never its return type. Tests:
 `crates/kiln_parse/tests/written_bounds.rs`
 `a_deduced_variable_writes_no_expression`,
 `a_structured_binding_writes_no_expression`,
-`an_instantiated_deduced_variable`.
+`an_instantiated_deduced_variable`,
+`a_deduced_return_writes_no_expression`,
+`a_deduced_return_keeps_parameter_and_noexcept_exprs`,
+`a_written_trailing_return_keeps_its_expression`,
+`a_lambda_deduced_return_keeps_parameter_exprs`,
+`a_deduced_return_template_pattern_and_specialization`.
 
 ## 9. Memory accounting
 `TypeContext::memory() -> MemReport` with one row per arena: element
