@@ -28,7 +28,7 @@
 23:5-23:6  expr  'a' -> D<int>::a@18:8 spec=D<int>::use@20:8
 23:7-23:8  expr  't' -> t@20:14 in=D::use@20:8
 24:11-24:16  member  'other' -> (dependent) in=D::use@20:8
-24:11-24:16  member  'other' -> B<int>::other@15:8 spec=D<int>::use@20:8
+24:11-24:16  member  'other' -> B<int>::other@15:8 spec=D<int>::use@20:8 naming=D<int>@17:27
 24:17-24:18  expr  't' -> t@20:14 in=D::use@20:8
 25:7-25:8  type  'T' -> T@17:17 in=D::use@20:8
 25:5-25:6  nns  'B' -> B@12:27 in=D::use@20:8

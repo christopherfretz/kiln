@@ -18,7 +18,7 @@
 //! | `subst.on` (as `keys_on`), `subst.keys`, `subst.rows`, `subst.root_spans`, `subst.root_slots`, `subst.expanded_nodes` | state: the substitution keys, their rows and their roots (§18.14, WP-3540, WP-3541); `keys_on` records whether the producer recorded keys |
 //! | `subst.not_completed` | the parse's own count, not carried (a restore starts at 0) |
 //! | `adl_index`, `spec_seen`, `found_index`, `subst.index` | rebuilt from `adl_sets`, the live rows of `specs`, `found_sets` and `subst.keys` |
-//! | `inst_target`, `spec_pending`, `spec_last`, `spec_key`, `colons`, `subst.pending`, `subst.last` | transient: scratch of one declaration or one instantiation, empty at rest |
+//! | `inst_target`, `spec_pending`, `spec_last`, `spec_key`, `last_naming`, `colons`, `subst.pending`, `subst.last` | transient: scratch of one declaration or one instantiation, empty at rest |
 //! | `on` | the restoring compilation's own option |
 
 use std::collections::HashMap;
@@ -706,6 +706,7 @@ mod tests {
             found: None,
             adl: None,
             udir: None,
+            naming_class: None,
             flags: SPEC_BUILTIN,
             how: RefLookup::Builtin,
         };
@@ -777,6 +778,7 @@ mod tests {
             found: None,
             adl: None,
             udir: None,
+            naming_class: None,
             flags: 0,
             how: RefLookup::Unqualified,
         };
@@ -852,6 +854,7 @@ mod tests {
             found: None,
             adl: None,
             udir: None,
+            naming_class: None,
             flags: 0,
             how: RefLookup::Unqualified,
         };

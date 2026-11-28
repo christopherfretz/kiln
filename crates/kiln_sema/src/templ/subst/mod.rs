@@ -328,10 +328,11 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         entity: Option<DeclId>,
         found: Option<DeclId>,
         nns: Option<NnsId>,
+        naming: Option<DeclId>,
     ) {
         if self.sema.ast.written_refs.has_pattern_nodes() {
             let at = self.pattern_loc(q, loc);
-            self.sema.note_written_spec_type(q, at, entity, found, nns);
+            self.sema.note_written_spec_type(q, at, entity, found, nns, naming);
         }
     }
 

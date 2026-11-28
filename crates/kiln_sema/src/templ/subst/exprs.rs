@@ -2641,14 +2641,16 @@ impl Substituter<'_, '_, '_> {
     /// argument-dependent lookup at the point of instantiation
     /// ([temp.dep.candidate]; spec §5.4 gap: one lookup, not two).
     fn callee(&mut self, c: ExprId) -> SubstResult<ExprId> {
-        // An unqualified dependent call's name (spec/ast.md §18.9).
-        let written = self.sema.written_spec_errors();
+        // An unqualified dependent call's name (spec/ast.md §18.9). Every
+        // other callee kind delegates to `self.expr`, which already calls
+        // `note_written_spec_expr` and `note_written_spec_oper` once.
+        let is_ule = self.sema.ast.exprs.get(c).kind() == ExprKind::UnresolvedLookupExpr;
+        let written = if is_ule { self.sema.written_spec_errors() } else { None };
         let r = self.callee_node(c);
         if let Some(errors) = written {
             match r {
                 Ok(r) => {
                     self.sema.note_written_spec_expr(c, r);
-                    // A dependent `->` in the callee (`t->f(x)`).
                     self.sema.note_written_spec_oper(c, r);
                 }
                 Err(_) => self.sema.note_written_spec_failed(c, errors),

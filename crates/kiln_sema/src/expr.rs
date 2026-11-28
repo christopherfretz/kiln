@@ -2527,6 +2527,9 @@ impl Sema<'_, '_> {
             }
             let e = self.implicit_member_ref(d, loc, found.shadow(0), nns);
             self.set_qualified_begin(e, begin, loc);
+            if let Some(naming) = found.naming {
+                self.note_last_naming(e, naming);
+            }
             return e;
         }
         // clang 22 reports a TU-local enumerator at the qualified name's
@@ -2536,6 +2539,9 @@ impl Sema<'_, '_> {
         self.modules.qualified_use_begin = None;
         self.set_qualified_begin(e, begin, loc);
         self.note_function_name_use(d, e, loc, qualifier.is_none());
+        if let Some(naming) = found.naming {
+            self.note_last_naming(e, naming);
+        }
         e
     }
 
@@ -3828,7 +3834,7 @@ impl Sema<'_, '_> {
                 && let Some(m) = self.ovl.members.remove(&x)
             {
                 let at = self.ast.exprs.get(x).loc();
-                self.resolve_written_ref(x, d, Some(f));
+                self.resolve_written_ref(x, d, Some(f), Some(m.naming));
                 let r = self.finish_member_winner(&m, d, f, at);
                 // `&this->sf<int>` ends at the template-id's `>`
                 // (spec/ast.md §21).

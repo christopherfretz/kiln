@@ -104,6 +104,10 @@ impl Sema<'_, '_> {
         }
         let node = PatternNode::Expr(pattern);
         let Some(keys) = self.written_row_keys(w, Some(node)) else { return };
+        let peeled = self.written_target_peeled(rebuilt);
+        let last_naming = self.ast.written_refs.take_last_naming(rebuilt, peeled);
+        let nns = self.written_expr_qualifier(rebuilt);
+        let nns_class = nns.and_then(|n| self.written_nns_class(n));
         match self.written_target(rebuilt) {
             // Still dependent (a generic lambda's body, a member template
             // substituted with the outer arguments only): the rebuilt node
@@ -132,14 +136,20 @@ impl Sema<'_, '_> {
                 }
             }
             Target::Decl(d, f) => {
-                self.push_written_spec(w, keys, Some(d), f);
+                self.push_written_spec(w, keys, Some(d), f, last_naming.or(nns_class));
             }
             Target::Concept(c) => {
-                self.push_written_spec(w, keys, Some(c), None);
+                self.push_written_spec(w, keys, Some(c), None, nns_class);
             }
             Target::Type(t) => {
                 let e = self.written_type_entity(t, 0);
-                self.push_written_spec(w, keys, e.map(|x| x.0), e.and_then(|x| x.1));
+                self.push_written_spec(
+                    w,
+                    keys,
+                    e.map(|x| x.0),
+                    e.and_then(|x| x.1),
+                    last_naming.or(nns_class),
+                );
             }
             // A substitution failure records nothing (§18.9.3); the
             // substitution a key scope records fails.
@@ -150,10 +160,9 @@ impl Sema<'_, '_> {
                 return;
             }
             Target::Unresolved => {
-                self.push_written_spec(w, keys, None, None);
+                self.push_written_spec(w, keys, None, None, None);
             }
         }
-        let nns = self.written_expr_qualifier(rebuilt);
         self.note_written_spec_qualifiers(w, keys, nns);
     }
 
@@ -189,7 +198,7 @@ impl Sema<'_, '_> {
         let Some(keys) = self.written_row_keys(w, Some(PatternNode::Expr(pattern))) else {
             return;
         };
-        self.push_written_spec(w, keys, None, None);
+        self.push_written_spec(w, keys, None, None, None);
     }
 
     /// The substituter resolved the dependent type `q`, written with its
@@ -202,6 +211,7 @@ impl Sema<'_, '_> {
         entity: Option<DeclId>,
         found: Option<DeclId>,
         nns: Option<NnsId>,
+        naming: Option<DeclId>,
     ) {
         let node = PatternNode::Type(q.without_quals(), loc);
         let Some(w) = self.ast.written_refs.pattern_entry(node) else {
@@ -215,7 +225,8 @@ impl Sema<'_, '_> {
             }
             return;
         }
-        self.push_written_spec(w, keys, entity, found);
+        let naming = naming.or_else(|| nns.and_then(|n| self.written_nns_class(n)));
+        self.push_written_spec(w, keys, entity, found, naming);
         self.note_written_spec_qualifiers(w, keys, nns);
     }
 
@@ -259,7 +270,7 @@ impl Sema<'_, '_> {
         let Some(keys) = self.written_row_keys(w, Some(PatternNode::Decl(pattern))) else {
             return;
         };
-        self.push_written_spec(w, keys, entity, None);
+        self.push_written_spec(w, keys, entity, None, scope.map(|s| s.1));
         self.note_written_spec_qualifiers(w, keys, scope.map(|s| s.0));
     }
 
@@ -291,7 +302,7 @@ impl Sema<'_, '_> {
         let Some(keys) = self.written_row_keys(w, Some(PatternNode::Decl(pattern))) else {
             return;
         };
-        self.push_written_spec(w, keys, entity, found);
+        self.push_written_spec(w, keys, entity, found, None);
     }
 
     /// Overload resolution chose `d` (found as `found`; `None`: it failed)
@@ -303,6 +314,7 @@ impl Sema<'_, '_> {
         x: ExprId,
         d: Option<DeclId>,
         found: Option<DeclId>,
+        naming: Option<DeclId>,
     ) -> Option<WrittenPush> {
         let spec = self.ast.written_refs.take_spec_pending(x);
         let key = self.ast.written_refs.take_subst_pending(x);
@@ -314,7 +326,9 @@ impl Sema<'_, '_> {
             spec: spec.map(|p| p.1),
             key: key.map(|p| p.1).filter(|&k| self.key_scopes.records(k)),
         };
-        let p = self.push_written_spec(w, keys, d, found);
+        let naming = naming
+            .or_else(|| self.written_expr_qualifier(x).and_then(|n| self.written_nns_class(n)));
+        let p = self.push_written_spec(w, keys, d, found, naming);
         if let Some(id) = p.spec {
             self.ast.written_refs.set_spec_last(x, id);
         }
@@ -365,7 +379,7 @@ impl Sema<'_, '_> {
                 self.drop_written_spec_pending(x);
                 return;
             }
-            let Some(q) = self.resolve_written_spec(x, None, None) else { return };
+            let Some(q) = self.resolve_written_spec(x, None, None, None) else { return };
             let _ = self.ast.written_refs.take_spec_last(x);
             let _ = self.ast.written_refs.take_subst_last(x);
             p = q;
@@ -422,7 +436,7 @@ impl Sema<'_, '_> {
         let s = self.ovl.single_specs.remove(i);
         self.ast.written_refs.defer_spec(s.set, s.entry, s.spec);
         if viable {
-            let _ = self.resolve_written_spec(s.set, Some(s.func), Some(s.found));
+            let _ = self.resolve_written_spec(s.set, Some(s.func), Some(s.found), s.naming);
         }
         self.note_written_spec_call(s.set, s.facts);
     }
@@ -448,7 +462,7 @@ impl Sema<'_, '_> {
                 self.drop_written_spec_pending(x);
                 return;
             }
-            let _ = self.resolve_written_spec(x, None, None);
+            let _ = self.resolve_written_spec(x, None, None, None);
             let _ = self.ast.written_refs.take_spec_last(x);
             let _ = self.ast.written_refs.take_subst_last(x);
         }
@@ -462,8 +476,9 @@ impl Sema<'_, '_> {
         keys: RowKeys,
         entity: Option<DeclId>,
         found: Option<DeclId>,
+        naming_class: Option<DeclId>,
     ) -> WrittenPush {
-        self.push_written_spec_with(w, keys, entity, found, 0, None)
+        self.push_written_spec_with(w, keys, entity, found, 0, None, naming_class)
     }
 
     /// [`Self::push_written_spec`] with a dependent operator's facts
@@ -475,6 +490,7 @@ impl Sema<'_, '_> {
     /// per-specialization table under `keys.spec` and to the key scope
     /// `keys.key` (spec/ast.md §18.14.3), where an unresolved name fails
     /// the substitution instead.
+    #[allow(clippy::too_many_arguments, reason = "row fields")]
     pub(crate) fn push_written_spec_with(
         &mut self,
         w: WrittenRefId,
@@ -483,6 +499,7 @@ impl Sema<'_, '_> {
         found: Option<DeclId>,
         flags: u8,
         how: Option<RefLookup>,
+        naming_class: Option<DeclId>,
     ) -> WrittenPush {
         let r = *self.ast.written_refs.get(w);
         let builtin = flags & SPEC_BUILTIN != 0;
@@ -498,6 +515,7 @@ impl Sema<'_, '_> {
             found: found.filter(|&f| Some(f) != entity),
             adl: None,
             udir: None,
+            naming_class: None,
             flags,
             how: RefLookup::None,
         };
@@ -512,6 +530,19 @@ impl Sema<'_, '_> {
             && matches!(row.how, RefLookup::Unqualified | RefLookup::Qualified)
         {
             row.how = RefLookup::Builtin;
+        }
+        if entity.is_some()
+            && !builtin
+            && matches!(row.how, RefLookup::Member | RefLookup::Qualified)
+            && let Some(nc) = naming_class
+            && matches!(
+                self.kind_of(nc),
+                DeclKind::CXXRecord
+                    | DeclKind::ClassTemplateSpecialization
+                    | DeclKind::ClassTemplatePartialSpecialization
+            )
+        {
+            row.naming_class = Some(self.ast.first(nc));
         }
         // The using-directive ordinary lookup at the definition found the
         // selected declaration through (§18.9.1).
@@ -560,12 +591,48 @@ impl Sema<'_, '_> {
                     Nns::Global => None,
                 };
                 if !relooked || q.flags & REF_DEPENDENT != 0 || entity != q.entity {
-                    self.push_written_spec(qid, keys, entity, None);
+                    let prefix_cls =
+                        self.ast.types.nns_prefix(c).and_then(|p| self.written_nns_class(p));
+                    self.push_written_spec(qid, keys, entity, None, prefix_cls);
                 }
             }
             link = q.qualifier;
             cur = self.ast.types.nns_prefix(c);
         }
+    }
+
+    /// Remembers the naming class of the non-overloaded member or
+    /// qualified-member expression `e` when pattern nodes are recorded
+    /// (one branch when recording is off).
+    #[inline]
+    pub(crate) fn note_last_naming(&mut self, e: ExprId, naming: DeclId) {
+        if self.ast.written_refs.has_pattern_nodes() {
+            let first = self.ast.first(naming);
+            self.ast.written_refs.set_last_naming(e, first);
+        }
+    }
+
+    /// The class named by `nns` when it is a type specifier naming a class.
+    fn written_nns_class(&self, nns: NnsId) -> Option<DeclId> {
+        match self.ast.types.nns_view(nns) {
+            Nns::Type { ty, .. } => self.ast.types.as_record(ty),
+            _ => None,
+        }
+    }
+
+    /// Peels implicit casts, constant wrappers and parens around `e` as
+    /// [`Sema::written_target`] does, to match [`WrittenRefs::take_last_naming`].
+    fn written_target_peeled(&self, mut e: ExprId) -> ExprId {
+        let exprs = &self.ast.exprs;
+        for _ in 0..16 {
+            match exprs.get(e).kind() {
+                ExprKind::ImplicitCastExpr | ExprKind::ConstantExpr | ExprKind::ParenExpr => {
+                    e = exprs.operand(e);
+                }
+                _ => return e,
+            }
+        }
+        e
     }
 
     /// The nested-name-specifier of a rebuilt name expression `e`.

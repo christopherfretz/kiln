@@ -10,6 +10,19 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- Lookup-context (naming) class on per-specialization and keyed
+  written-reference rows (WP-3695, spec/ast.md §18.9.1, §18.14.2):
+  `SpecRef::naming_class` and `SubstRef::naming_class` record the
+  canonical first declaration of the class in which a resolved `Member`
+  or `Qualified` lookup ran ([class.access.base]/5), including dependent
+  member and class-scope operators (`operator+`, `operator->`, class
+  `operator new`/`delete`, surrogate calls) and nested member chains,
+  staying `None` for non-class, ADL, built-in and unresolved rows.
+  Distinct naming classes stay distinct rows in `WrittenRefs::specs()`.
+  `-fkiln-dump-written-refs` prints `naming=<class>` only when it
+  differs from the semantic parent of `entity`. Carried by PCH snapshots
+  (`FORMAT_VERSION` 189) and module declaration images (`IMAGE_VERSION`
+  103).
 - Entity keys in evaluation session results (WP-3481,
   spec/eval-session.md §4.1 "Entity keys"): every `Entity` of a run's
   value tree and of `RunError::Uncaught` carries `key`, the key

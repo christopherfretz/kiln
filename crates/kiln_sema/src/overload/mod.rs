@@ -430,6 +430,8 @@ pub(crate) struct SingleWrittenSpec {
     /// The candidate and its found declaration.
     pub func: DeclId,
     pub found: DeclId,
+    /// The lookup-context (naming) class of a class member lookup.
+    pub naming: Option<DeclId>,
     /// What argument-dependent lookup saw.
     pub facts: Option<adl::AdlFacts>,
 }

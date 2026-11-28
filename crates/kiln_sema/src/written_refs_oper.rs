@@ -36,8 +36,9 @@ use crate::written_keys::RowKeys;
 #[derive(Clone, Copy, Debug)]
 enum OperSel {
     /// A function (`found` when it differs), with the row's flags
-    /// (`REWRITTEN`, `REVERSED`) and the `how` its call says.
-    Fn((DeclId, Option<DeclId>), u8, Option<RefLookup>),
+    /// (`REWRITTEN`, `REVERSED`), the `how` its call says, and its
+    /// lookup-context (naming) class for `Member`/`Qualified` class lookups.
+    Fn((DeclId, Option<DeclId>), u8, Option<RefLookup>, Option<DeclId>),
     /// A built-in candidate or no operator function at all.
     Builtin,
     /// Overload resolution failed (diagnosed).
@@ -91,8 +92,8 @@ impl Sema<'_, '_> {
                 // A surrogate call function ([over.call.object]/2): the
                 // callee is the object implicitly converted to a pointer
                 // to function.
-                if let Some(conv) = self.written_surrogate(self.ast.exprs.callee(x)) {
-                    self.push_written_oper(tok, conv, close, 0);
+                if let Some((d, f, _)) = self.written_surrogate(self.ast.exprs.callee(x)) {
+                    self.push_written_oper(tok, (d, f), close, 0);
                 }
             }
             _ if self.is_err_expr(x) => self.note_written_oper_failure(tok, close, operands),
@@ -627,11 +628,11 @@ impl Sema<'_, '_> {
         let keys = if slot == 0 { keys } else { self.rekey(keys, w, node) };
         for &sel in picks {
             match sel {
-                OperSel::Fn((d, f), flags, how) => {
-                    self.push_written_spec_with(w, keys, Some(d), f, flags, how);
+                OperSel::Fn((d, f), flags, how, naming) => {
+                    self.push_written_spec_with(w, keys, Some(d), f, flags, how, naming);
                 }
                 OperSel::Builtin => {
-                    self.push_written_spec_with(w, keys, None, None, SPEC_BUILTIN, None);
+                    self.push_written_spec_with(w, keys, None, None, SPEC_BUILTIN, None, None);
                 }
                 OperSel::Unresolved if self.inst.stack.is_sfinae() => {
                     if let Some(k) = keys.key {
@@ -639,7 +640,7 @@ impl Sema<'_, '_> {
                     }
                 }
                 OperSel::Unresolved => {
-                    self.push_written_spec_with(w, keys, None, None, 0, None);
+                    self.push_written_spec_with(w, keys, None, None, 0, None, None);
                 }
                 OperSel::Dependent => {
                     let new = PatternNode::Oper(rebuilt, slot);
@@ -681,7 +682,9 @@ impl Sema<'_, '_> {
                 }
             }
             ExprKind::CallExpr => match self.written_surrogate(ex.callee(x)) {
-                Some(conv) => vec![OperSel::Fn(conv, 0, Some(RefLookup::Member))],
+                Some((d, f, naming)) => {
+                    vec![OperSel::Fn((d, f), 0, Some(RefLookup::Member), naming)]
+                }
                 None => vec![OperSel::Builtin],
             },
             // Stage 6c: the allocation or deallocation function (the
@@ -689,7 +692,17 @@ impl Sema<'_, '_> {
             // dependent one stands for the entry.
             ExprKind::CXXNewExpr | ExprKind::CXXDeleteExpr => match self.written_alloc_fn(x) {
                 Some(f) => {
-                    vec![OperSel::Fn(self.written_fn_found(f), 0, Some(RefLookup::Qualified))]
+                    let naming = if self.kind_of(f) == DeclKind::CXXMethod {
+                        self.written_alloc_class(x)
+                    } else {
+                        None
+                    };
+                    vec![OperSel::Fn(
+                        self.written_fn_found(f),
+                        0,
+                        Some(RefLookup::Qualified),
+                        naming,
+                    )]
                 }
                 _ if self.written_alloc_dependent(x) => vec![OperSel::Dependent],
                 _ => vec![OperSel::Builtin],
@@ -716,10 +729,60 @@ impl Sema<'_, '_> {
                     } else {
                         None
                     };
-                OperSel::Fn(t, flags, how)
+                let naming = if how == Some(RefLookup::Member) {
+                    self.ast
+                        .lists
+                        .iter::<ExprId>(self.ast.exprs.call_args(c))
+                        .next()
+                        .and_then(|a| self.written_oper_object_class(a))
+                } else {
+                    None
+                };
+                OperSel::Fn(t, flags, how, naming)
             }
             None => OperSel::Unresolved,
         }
+    }
+
+    /// The pre-derived-to-base object class of a member operator's object
+    /// operand `e` ([class.access.base]/5).
+    fn written_oper_object_class(&self, mut e: ExprId) -> Option<DeclId> {
+        let ex = &self.ast.exprs;
+        for _ in 0..32 {
+            match ex.get(e).kind() {
+                ExprKind::ImplicitCastExpr
+                    if matches!(
+                        ex.cast_kind(e),
+                        CastKind::DerivedToBase
+                            | CastKind::UncheckedDerivedToBase
+                            | CastKind::NoOp
+                            | CastKind::LValueToRValue
+                    ) =>
+                {
+                    e = ex.operand(e);
+                }
+                ExprKind::MaterializeTemporaryExpr
+                | ExprKind::CXXBindTemporaryExpr
+                | ExprKind::ParenExpr
+                | ExprKind::ConstantExpr
+                | ExprKind::ExprWithCleanups => e = ex.operand(e),
+                _ => break,
+            }
+        }
+        self.ast.types.as_record(self.ety(e))
+    }
+
+    /// The class scope in which a class-member `operator new` or
+    /// `operator delete` of `x` was looked up ([expr.new]/12, [expr.delete]/9).
+    fn written_alloc_class(&self, x: ExprId) -> Option<DeclId> {
+        let ty = match self.ast.exprs.get(x).kind() {
+            ExprKind::CXXNewExpr => self.ast.exprs.new_extra(x).allocated_ty,
+            ExprKind::CXXDeleteExpr => {
+                self.ast.types.pointee(self.ety(self.ast.exprs.delete_operand(x)))?
+            }
+            _ => return None,
+        };
+        self.ast.types.as_record(self.base_element(ty))
     }
 
     /// What the `->` at `at` of the rebuilt member access `r` applied:
@@ -802,9 +865,13 @@ impl Sema<'_, '_> {
 
     /// The conversion function of a surrogate call whose callee is
     /// `callee`: the object under a user-defined conversion (an implicit
-    /// cast, so not a written `c.operator FP()(x)`) by its `operator FP()`;
-    /// `None` for any other call.
-    fn written_surrogate(&self, callee: ExprId) -> Option<(DeclId, Option<DeclId>)> {
+    /// cast, so not a written `c.operator FP()(x)`) by its `operator FP()`,
+    /// together with the object's pre-conversion class; `None` for any
+    /// other call.
+    fn written_surrogate(
+        &self,
+        callee: ExprId,
+    ) -> Option<(DeclId, Option<DeclId>, Option<DeclId>)> {
         let ex = &self.ast.exprs;
         let mut c = callee;
         while ex.get(c).kind() == ExprKind::ImplicitCastExpr
@@ -824,7 +891,12 @@ impl Sema<'_, '_> {
             return None;
         }
         let d = ex.decl(m);
-        (self.kind_of(d) == DeclKind::CXXConversion).then(|| self.written_callee(m)).flatten()
+        if self.kind_of(d) != DeclKind::CXXConversion {
+            return None;
+        }
+        let (decl, found) = self.written_callee(m)?;
+        let naming = self.written_oper_object_class(ex.operand(m));
+        Some((decl, found, naming))
     }
 
     /// The entry of the resolved operator call `call` at `tok`.

@@ -1589,3 +1589,139 @@ fn partial_match_roots_in_templates_and_lambdas() {
         assert!(ast.closure_lambda(closure).is_some(), "a valid closure");
     });
 }
+
+const NAMING_CLASS_SRC: &str = concat!(
+    "namespace n {\n",
+    "template <class T> struct S { static int s(); using type = T; };\n",
+    "}\n",
+    "template <class B> struct Der : B {};\n",
+    "struct FwdDer;\n",
+    "struct FwdDer : n::S<int> {};\n",
+    "template <class T> using A = decltype(T::s());\n",
+    "template <class T> auto call() -> decltype(T::s());\n",
+    "template <class T> using Ty = typename T::type;\n",
+    "struct LeafBase { int g() const; int v; };\n",
+    "struct LeafDer : LeafBase {};\n",
+    "struct MidBase {\n",
+    "  int f() const;\n",
+    "  int f(int) const;\n",
+    "  int x;\n",
+    "  int operator+(int) const;\n",
+    "  LeafDer a;\n",
+    "  LeafDer b;\n",
+    "};\n",
+    "struct MidDer : MidBase {};\n",
+    "struct SmartBase { MidBase *operator->() const; };\n",
+    "struct SmartDer : SmartBase {};\n",
+    "struct AllocBase { static void *operator new(decltype(sizeof(0))); };\n",
+    "struct AllocDer : AllocBase {};\n",
+    "namespace adl_ns { struct Tag {}; int operator-(Tag, int); void ping(Tag); }\n",
+    "template <class T> int member_use(const T &t) {\n",
+    "  return t.f() + t.f(1) + t.x + (t + 1) + t.a.g() + t.a.v;\n",
+    "}\n",
+    "template <class T> struct Host : T {\n",
+    "  int run() const { return this->f() + this->x + this->b.g(); }\n",
+    "};\n",
+    "template <class T> int arrow_use(const T &p) { return p->x; }\n",
+    "template <class T> T *alloc_use() { return new T; }\n",
+    "template <class T> int non_member_use(T v) { ping(v); return v - 1; }\n",
+    "template <class T> concept HasS = requires(const T &t) { T::s(); t.f(); };\n",
+    "struct Both : n::S<int>, MidBase {};\n",
+    "static_assert(HasS<Both>);\n",
+    "template <class T, class = void> struct P { static const int v = 0; };\n",
+    "template <class T> struct P<T, decltype(void(T::s()))> { static const int v = 1; };\n",
+    "A<Der<n::S<int>>> a1 = 0;\n",
+    "A<FwdDer> a2 = 0;\n",
+    "A<n::S<int>> a3 = 0;\n",
+    "Ty<Der<n::S<int>>> t1 = 0;\n",
+    "int c1 = call<Der<n::S<int>>>();\n",
+    "int c2 = call<n::S<int>>();\n",
+    "int m1 = member_use(MidDer{});\n",
+    "int m2 = member_use(MidBase{});\n",
+    "int h1 = Host<MidDer>{}.run();\n",
+    "int ar1 = arrow_use(SmartDer{});\n",
+    "AllocDer *al1 = alloc_use<AllocDer>();\n",
+    "int nm1 = non_member_use(adl_ns::Tag{});\n",
+    "int p1 = P<Der<n::S<int>>>::v + P<n::S<int>>::v;\n",
+);
+
+/// spec/ast.md §18.9.1, §18.14.2 (WP-3695): `SpecRef::naming_class` and
+/// `SubstRef::naming_class` carry the canonical lookup-context class for
+/// resolved `Member` and `Qualified` class lookups (including when it equals
+/// the entity's semantic parent class, where the dump omits `naming=`), keep
+/// distinct lookup classes as distinct rows on alias templates, preserve
+/// distinct naming classes across nested member chains, cover member/class
+/// operators, and stay `None` for non-class, ADL, built-in and unresolved rows.
+#[test]
+fn spec_and_subst_rows_carry_naming_class() {
+    with_keys(NAMING_CLASS_SRC, |ast, sm| {
+        let t = &ast.written_refs;
+        let cls_name = |d: kiln_ast::DeclId| -> String {
+            use kiln_ast::types::TypeNames as _;
+            let names = kiln_ast::diag_names::DiagNames::new(ast, Some(sm), 0).canonical_args();
+            let mut s = String::new();
+            names.write_decl_name(d, true, &mut s);
+            if let Some((_, info)) = ast.spec_info(d) {
+                names.write_spec_args(&names, d, info.print_args, &mut s);
+            }
+            s
+        };
+        let naming_of = |at: (u32, u32)| -> Vec<Option<String>> {
+            let w = entry_at(t, sm, at);
+            let mut v: Vec<Option<String>> =
+                t.specs_of(w).map(|(_, r)| r.naming_class.map(cls_name)).collect();
+            v.sort();
+            v
+        };
+        // Forward-declared FwdDer: naming_class must be the canonical first decl (line 5).
+        let fwd_first = ast.first(decl_at(ast, sm, (5, 8)));
+        let a_entry = entry_at(t, sm, (7, 42));
+        let a_rows: Vec<_> = t.specs_of(a_entry).map(|(_, r)| r.naming_class).collect();
+        assert_eq!(a_rows.len(), 3, "distinct naming classes stay distinct rows on alias A");
+        assert!(a_rows.contains(&Some(fwd_first)), "canonical first decl for FwdDer");
+        assert_eq!(
+            naming_of((7, 42)),
+            vec![Some("Der<n::S<int>>".into()), Some("FwdDer".into()), Some("n::S<int>".into()),]
+        );
+        // Trailing decltype(T::s()) signature: both derived and direct carry naming_class.
+        assert_eq!(
+            naming_of((8, 47)),
+            vec![Some("Der<n::S<int>>".into()), Some("n::S<int>".into())]
+        );
+        // Dependent typename T::type.
+        assert_eq!(naming_of((9, 43)), vec![Some("Der<n::S<int>>".into())]);
+        // Member calls, fields, operator+, and nested chains in member_use.
+        let base_and_der = vec![Some("MidBase".into()), Some("MidDer".into())];
+        assert_eq!(naming_of((27, 12)), base_and_der); // t.f()
+        assert_eq!(naming_of((27, 20)), base_and_der); // t.f(1)
+        assert_eq!(naming_of((27, 29)), base_and_der); // t.x
+        assert_eq!(naming_of((27, 36)), base_and_der); // t + 1 (member operator+)
+        assert_eq!(naming_of((27, 45)), base_and_der); // t.a (in t.a.g())
+        assert_eq!(naming_of((27, 47)), vec![Some("LeafDer".into()), Some("LeafDer".into())]); // .g()
+        assert_eq!(naming_of((27, 55)), base_and_der); // t.a (in t.a.v)
+        assert_eq!(naming_of((27, 57)), vec![Some("LeafDer".into()), Some("LeafDer".into())]); // .v
+        // Built-in `+` rows get None.
+        assert_eq!(naming_of((27, 16)), vec![None, None]);
+        // Implicit/explicit `this->` and nested chain `this->b.g()`.
+        assert_eq!(naming_of((30, 34)), vec![Some("Host<MidDer>".into())]); // this->f()
+        assert_eq!(naming_of((30, 46)), vec![Some("Host<MidDer>".into())]); // this->x
+        assert_eq!(naming_of((30, 56)), vec![Some("Host<MidDer>".into())]); // this->b
+        assert_eq!(naming_of((30, 58)), vec![Some("LeafDer".into())]); // .g()
+        // Member operator-> and class-scope operator new.
+        assert_eq!(naming_of((32, 56)), vec![Some("SmartDer".into())]); // ->
+        assert_eq!(naming_of((32, 58)), vec![Some("MidBase".into())]); // x
+        assert_eq!(naming_of((33, 44)), vec![Some("AllocDer".into())]); // new
+        // Non-member ADL call and non-member ADL operator- get None.
+        assert_eq!(naming_of((34, 46)), vec![None]); // ping(v)
+        assert_eq!(naming_of((34, 64)), vec![None]); // v - 1
+        // Concept requires-clause.
+        assert_eq!(naming_of((35, 61)), vec![Some("Both".into())]); // T::s()
+        assert_eq!(naming_of((35, 68)), vec![Some("Both".into())]); // t.f()
+        // Keyed rows (`SubstRef::naming_class`) for partial specialization matches.
+        let p_entry = entry_at(t, sm, (39, 49));
+        let mut p_naming: Vec<Option<String>> =
+            t.subst_rows_of(p_entry).map(|(_, r)| r.naming_class.map(cls_name)).collect();
+        p_naming.sort();
+        assert_eq!(p_naming, vec![Some("Der<n::S<int>>".into()), Some("n::S<int>".into())]);
+    });
+}
