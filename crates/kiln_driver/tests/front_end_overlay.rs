@@ -346,6 +346,7 @@ fn embed_reads_the_overlay() {
             kind: ConsultedKind::Embed,
             path: "./data.bin".to_owned(),
             content: Some(Content::of(b"vwxyz")),
+            bytes: None,
         }]
     );
 }

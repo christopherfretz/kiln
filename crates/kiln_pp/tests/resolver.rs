@@ -422,7 +422,7 @@ impl HeaderFs for UpperListing {
     fn open(&mut self, sm: &SourceManager, path: &str) -> Option<kiln_source::FileId> {
         self.0.open(sm, path)
     }
-    fn read(&mut self, path: &str) -> Option<Vec<u8>> {
+    fn read(&mut self, path: &str) -> Option<std::sync::Arc<[u8]>> {
         self.0.read(path)
     }
 }
@@ -466,4 +466,43 @@ fn a_header_is_found_by_its_spelled_path() {
     let mut hs = searcher(fs, &["/d"]);
     assert_eq!(find(&mut hs, &sm, "sub/../once.h", None).as_deref(), Some("/d/sub/../once.h"));
     assert_eq!(find(&mut hs, &sm, "once.h", None).as_deref(), Some("/d/once.h"));
+}
+
+#[test]
+fn embed_observer_receives_shared_buffer_without_copy() {
+    use kiln_pp::{EmbedRequest, IncludeResolver, RealFs, SearchEvent};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::Arc;
+
+    let dir = std::env::temp_dir().join(format!("kiln-embed-shared-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("blob.bin");
+    std::fs::write(&file, b"\x01\x02\x03\x04").unwrap();
+    let path = file.to_string_lossy().into_owned();
+
+    let sm = SourceManager::new();
+    let mut hs = HeaderSearch::new(RealFs::new(), SearchList::default());
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let seen2 = Rc::clone(&seen);
+    hs.set_observer(Box::new(move |_, ev| {
+        if let SearchEvent::Embed { bytes, .. } = ev {
+            // `RealFs::read` allocates one `Arc<[u8]>` and hands `&Arc<[u8]>`
+            // directly to the observer without cloning on the off path.
+            seen2.borrow_mut().push((Arc::strong_count(bytes), bytes.to_vec()));
+        }
+    }));
+    let req = EmbedRequest {
+        name: path,
+        name_span: kiln_source::Span::INVALID,
+        angled: false,
+        includer: None,
+        offset: Some(1),
+        limit: Some(2),
+        query_only: false,
+    };
+    let data = hs.resolve_embed(&sm, &req).unwrap();
+    assert_eq!(data.bytes, b"\x02\x03");
+    assert_eq!(*seen.borrow(), vec![(1, b"\x01\x02\x03\x04".to_vec())]);
+    let _ = std::fs::remove_dir_all(&dir);
 }

@@ -218,8 +218,10 @@ needs but the `FileChange` callbacks do not see:
   `__has_include` / `__has_include_next`;
 - `SearchEvent::Embed { path, query_only, bytes }` for each `#embed` /
   `__has_embed` that finds a resource: `query_only` for `__has_embed`,
-  `bytes` the whole resource as read, before `offset` / `limit` (WP-2120,
-  the front-end library entry's content of a consulted path).
+  `bytes` (`&Arc<[u8]>`) the whole resource as read, before `offset` /
+  `limit`, shared without copying (WP-2120, WP-3692, the front-end
+  library entry's content and optional shared bytes of a consulted
+  path).
 
 **Lookup log (WP-1403).** `HeaderSearch::record_lookups()` makes header
 search record what the PCH snapshot's lookup-tolerant search path needs
