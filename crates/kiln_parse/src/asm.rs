@@ -172,8 +172,10 @@ impl Parser<'_, '_> {
                 self.skip_asm_rest();
                 return None;
             };
-            let at = self.bump().span.lo;
-            labels.push((self.s.act_on_asm_goto_label(name, at), at));
+            let span = self.bump().span;
+            let d = self.s.act_on_asm_goto_label(name, span.lo);
+            self.s.note_written_label(span, Some(d));
+            labels.push((d, span.lo));
             if self.eat(Punct::Comma).is_none() {
                 return Some(labels);
             }

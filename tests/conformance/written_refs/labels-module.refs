@@ -1,0 +1,8 @@
+labels_mod.cppm:5:8-5:14  label  'target' -> target@labels_mod.cppm:6:1 in=jump_fn@labels_mod.cppm:4:20
+labels_mod.cppm:7:15-7:21  label  'target' -> target@labels_mod.cppm:6:1 in=p@labels_mod.cppm:7:9
+labels_mod.cppm:8:9-8:10  expr  'p' -> p@labels_mod.cppm:7:9 in=jump_fn@labels_mod.cppm:4:20
+labels_mod.cppm:10:49-10:50  type  'T' -> T@labels_mod.cppm:10:24 in=x@labels_mod.cppm:10:51
+labels_mod.cppm:12:8-12:12  label  'done' -> done@labels_mod.cppm:11:3 in=jump_tmpl@labels_mod.cppm:10:39
+labels_mod.cppm:13:9-13:10  expr  'x' -> x@labels_mod.cppm:10:51 in=jump_tmpl@labels_mod.cppm:10:39
+10:3-10:10  expr  'jump_fn' -> jump_fn@labels_mod.cppm:4:20 in=run@9:6 adl-ns=
+11:3-11:12  expr  'jump_tmpl' -> jump_tmpl<int>@labels_mod.cppm:10:39 found=jump_tmpl@labels_mod.cppm:10:39 in=run@9:6 adl-ns=

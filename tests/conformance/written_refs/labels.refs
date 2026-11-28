@@ -1,0 +1,25 @@
+7:22-7:23  label  'f' -> f@7:12 in=g@7:6
+7:37-7:38  label  'f' -> f@7:12 in=p@7:31
+7:46-7:47  expr  'p' -> p@7:31 in=g@7:6
+8:38-8:39  expr  'x' -> x@8:12 in=h@8:6
+8:45-8:48  label  'out' -> out@8:51 in=h@8:6
+9:30-9:31  label  'm' -> m@9:22 in=k@9:6
+10:19-10:24  label  'later' -> later@10:26 in=fwd@10:6
+13:10-13:13  label  'top' -> top@12:3 in=nested_and_lambda@11:6
+14:25-14:28  label  'top' -> top@14:15 in=nested_and_lambda@11:6
+15:32-15:35  label  'top' -> (lambda at tests/conformance/written_refs/labels.cpp:15:13)::top@15:20 in=nested_and_lambda()::(lambda)::operator()@15:13
+16:9-16:11  expr  'fn' -> fn@15:8 in=nested_and_lambda@11:6
+18:30-18:31  type  'T' -> T@18:17 in=x@18:32
+20:15-20:16  label  'l' -> l@19:3 in=p@20:9
+21:9-21:10  expr  'p' -> p@20:9 in=tmpl@18:25
+22:9-22:10  expr  'x' -> x@18:32 in=tmpl@18:25
+25:3-25:7  expr  'tmpl' -> tmpl<int>@18:25 found=tmpl@18:25 in=use_tmpl@24:6 adl-ns=
+26:3-26:7  expr  'tmpl' -> tmpl<double>@18:25 found=tmpl@18:25 in=use_tmpl@24:6 adl-ns=
+31:19-31:20  label  'a' -> a@29:3 in=t@31:9
+31:24-31:25  label  'b' -> b@30:3 in=t@31:9
+32:13-32:14  expr  't' -> t@31:9 in=p@32:9
+32:15-32:16  expr  'i' -> i@28:19 in=p@32:9
+33:9-33:10  expr  'p' -> p@32:9 in=computed@28:6
+35:46-35:47  expr  'x' -> x@35:20 in=multi_asm@35:6
+35:53-35:55  label  'l1' -> l1@35:62 in=multi_asm@35:6
+35:57-35:59  label  'l2' -> l2@35:68 in=multi_asm@35:6
