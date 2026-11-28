@@ -46,6 +46,7 @@ pub mod reflect;
 pub mod roles;
 pub mod sanitize;
 pub mod slot;
+pub mod static_init;
 pub mod stmt;
 pub mod strings;
 pub mod sve;

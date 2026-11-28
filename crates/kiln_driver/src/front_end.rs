@@ -34,7 +34,8 @@ use crate::{Engines, EntryRules, SharedWriter};
 
 /// How one run behaves. `Default` is: diagnostics discarded, no lookup
 /// log, a thread of its own, the PCH probe on, the process environment,
-/// no preprocessing record, no written-reference table, no builtin-macro
+/// no preprocessing record, no written-reference table, no static-initialization
+/// facts, no builtin-macro
 /// literal table, no token table, the process's working directory (read
 /// once), no overlay.
 #[non_exhaustive]
@@ -84,6 +85,12 @@ pub struct FrontEndOptions {
     /// `-fkiln-written-ref-keys` on the command line does; implies
     /// `written_refs`. Off by default (WP-3540).
     pub written_ref_keys: bool,
+    /// Record each static variable's static-initialization fact
+    /// (`ParseOptions::static_init_facts`, spec/ast.md §25), as
+    /// `-fkiln-static-init-facts` on the command line does: the closure
+    /// reads it as `fe.ast.static_init_fact(d)`. Off by default
+    /// (WP-3650).
+    pub static_init_facts: bool,
     /// Record the function-name span table (`ParseOptions::fn_names`,
     /// spec/ast.md §24), as `-fkiln-fn-names` on the command line does,
     /// and print nothing: the closure reads it as `fe.ast.fn_names`
@@ -135,6 +142,7 @@ impl Default for FrontEndOptions {
             pp_record: false,
             written_refs: false,
             written_ref_keys: false,
+            static_init_facts: false,
             fn_names: false,
             builtin_literals: false,
             token_table: false,
@@ -156,6 +164,7 @@ impl std::fmt::Debug for FrontEndOptions {
             .field("pp_record", &self.pp_record)
             .field("written_refs", &self.written_refs)
             .field("written_ref_keys", &self.written_ref_keys)
+            .field("static_init_facts", &self.static_init_facts)
             .field("fn_names", &self.fn_names)
             .field("builtin_literals", &self.builtin_literals)
             .field("token_table", &self.token_table)
@@ -679,6 +688,7 @@ fn run_here<R>(
     // carries the table its producer recorded, spec/ast.md §18.10.2).
     args.written_refs |= options.written_refs || options.written_ref_keys;
     args.written_ref_keys |= options.written_ref_keys;
+    args.static_init_facts |= options.static_init_facts;
     args.fn_names |= options.fn_names;
     args.builtin_literals |= options.builtin_literals;
     structural_checks(&args)?;

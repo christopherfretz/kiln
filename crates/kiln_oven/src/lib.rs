@@ -73,6 +73,18 @@ use kiln_source::Loc;
 use kiln_source::fx::{FxHashMap, FxHashSet};
 
 pub use failure::{EvalFailure, FailKind, Note, Overflow};
+
+/// The result of [`Oven::static_init`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum StaticInitEval {
+    /// A constant initializer ([basic.start.static]/2), with its value.
+    Constant(ConstValueId),
+    /// Not a constant initializer; the fallback fold's value
+    /// ([basic.start.static]/3).
+    Folded(ConstValueId),
+    /// Neither: why the constant initialization failed.
+    NotConstant(FailKind),
+}
 pub use frame::{FrameEval, FrameObject};
 use host::HostMode;
 pub use host::{HostCalls, HostError, HostOut};
@@ -1588,6 +1600,61 @@ impl Oven {
         #[cfg(feature = "op-stats")]
         trial_stats::end(trial, "fold_constant_init", r.is_some(), self.memo.hits);
         r
+    }
+
+    /// How the initializer `e` of variable `var`, of static or thread
+    /// storage duration, initializes it, as code generation decides
+    /// (spec/ast.md §25, `kiln_codegen` `fold::prepass`): in the modes of
+    /// codegen's folds (floating results that are NaN or infinite kept,
+    /// leaks allowed), [`Oven::fold_constant_init`]; a value that holds
+    /// the address of an automatic variable is no constant form. When
+    /// that fails and `fallback` (a scalar or initializer-list
+    /// initializer), [`Oven::fold_static_fallback`]. Silent; not
+    /// recorded.
+    pub fn static_init(
+        &mut self,
+        bridge: &mut dyn SemaBridge,
+        e: ExprId,
+        var: DeclId,
+        fallback: bool,
+    ) -> StaticInitEval {
+        let modes = (self.fold_float_ub, self.fold_leaks);
+        (self.fold_float_ub, self.fold_leaks) = (true, true);
+        let host = self.host_enter(HostMode::Speculative);
+        let r = self.eval_ctx(bridge, e, Some(var), true, false, true).0;
+        self.host_leave(host);
+        let r = match r {
+            Ok(v) if automatic_referent(bridge.ast(), v).is_none() => StaticInitEval::Constant(v),
+            // Constant, but with no constant form: dynamic, as codegen
+            // (no fallback fold).
+            Ok(_) => StaticInitEval::NotConstant(FailKind::NotConstant),
+            Err(f) => match fallback.then(|| self.fold_static_fallback(bridge, e)).flatten() {
+                Some(v) => StaticInitEval::Folded(v),
+                None => StaticInitEval::NotConstant(f.kind),
+            },
+        };
+        (self.fold_float_ub, self.fold_leaks) = modes;
+        r
+    }
+
+    /// The fold codegen gives a static variable's scalar or
+    /// initializer-list initializer `e` that is not a constant initializer
+    /// (clang `ConstantEmitter::tryEmitPrivateForVarInit` folding it again
+    /// outside a constant context, `__builtin_is_constant_evaluated()`
+    /// false): [`Oven::fold_rvalue`] with an address cast to an integer
+    /// kept as one, floating results that are NaN or infinite kept and
+    /// leaks allowed; a value that holds the address of an automatic
+    /// variable is no constant form. Silent; not recorded.
+    pub fn fold_static_fallback(
+        &mut self,
+        bridge: &mut dyn SemaBridge,
+        e: ExprId,
+    ) -> Option<ConstValueId> {
+        let modes = (self.fold_float_ub, self.fold_leaks, self.addr_int);
+        (self.fold_float_ub, self.fold_leaks, self.addr_int) = (true, true, true);
+        let v = self.fold_rvalue(bridge, e);
+        (self.fold_float_ub, self.fold_leaks, self.addr_int) = modes;
+        v.filter(|&v| automatic_referent(bridge.ast(), v).is_none())
     }
 
     /// clang's `-Wconstant-evaluated` of a variable's initializer `e`

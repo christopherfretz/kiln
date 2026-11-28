@@ -206,6 +206,9 @@ fn excluded(args: &Args) -> Args {
         // §18.10.1): either side may differ.
         written_refs: d.written_refs,
         written_ref_keys: d.written_ref_keys,
+        // A prefix records no static-initialization facts; the consumer
+        // records its own (spec/ast.md §25.5).
+        static_init_facts: d.static_init_facts,
         // The function-name span table is not carried (stage A): a
         // consumer recording it marks the prefix unrecorded
         // (spec/ast.md §24.6).

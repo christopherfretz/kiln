@@ -129,6 +129,12 @@ pub struct Ast {
     /// preprocessor keeps its table (`PpOptions::builtin_literals`);
     /// read with [`Ast::literal_builtin`]. Transient in snapshots.
     pub builtin_literals: crate::builtin_literals::BuiltinLiterals,
+    /// Static-initialization facts are recorded (§25,
+    /// `-fkiln-static-init-facts`): sema records one per variable of
+    /// static or thread storage duration at the end of the unit, the dump
+    /// shows them and codegen reads them. Off by default; a setting of
+    /// the unit, transient in snapshots.
+    pub static_init_facts: bool,
     symbols: Arc<Interner>,
     inst: InstantiationMeter,
 }
@@ -527,6 +533,7 @@ impl Ast {
             fn_names: crate::fn_names::FnNames::default(),
             split_greaters: kiln_source::fx::FxHashSet::default(),
             builtin_literals: crate::builtin_literals::BuiltinLiterals::default(),
+            static_init_facts: false,
             symbols,
             inst: InstantiationMeter::default(),
         }
@@ -1112,6 +1119,17 @@ impl Ast {
             Some(r) => self.redecls.get(r.group).definition,
             None => Some(d),
         }
+    }
+
+    /// The static-initialization fact recorded for variable `d`'s entity
+    /// (§25): on the declaration holding its initializer, else on its
+    /// definition. `None` when none is recorded: the unit did not record
+    /// them (`-fkiln-static-init-facts`), the variable has neither static
+    /// nor thread storage duration, no definition, or is in a dependent
+    /// context.
+    pub fn static_init_fact(&self, d: DeclId) -> Option<crate::static_init::StaticInitFact> {
+        self.decls.var(d)?;
+        self.redecls_of(d).find_map(|r| self.decls.var(r)?.spec.static_init_fact())
     }
 
     /// The previous declaration of `d`'s entity.

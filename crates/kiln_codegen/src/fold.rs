@@ -13,6 +13,7 @@ use kiln_ast::consts::ConstStore;
 use kiln_ast::decl::{DeclFlags, DeclKind, VarStorage};
 use kiln_ast::expr::{BinaryOp, CastKind, ExprFlags, ExprKind, UnaryOp};
 use kiln_ast::fp::FpOptions;
+use kiln_ast::static_init::{StaticDestruction, StaticInit};
 use kiln_ast::stmt::StmtKind;
 use kiln_ast::types::{RecordLayout, TypeFlags, TypeView};
 use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, QualType, StmtId};
@@ -226,7 +227,24 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target, fp: FpOpt
         // A C static's initializer is evaluated in a constant context
         // (clang: every C variable `hasConstantInitialization`).
         oven.set_fold_c_static(c_static.contains(&e));
-        let v = match inits.get(&e) {
+        // The fact sema recorded (spec/ast.md §25): it decides, so code
+        // generation and the fact agree by construction.
+        let fact = inits.get(&e).and_then(|&var| recorded_init(b.ast, var));
+        let v = match (inits.get(&e), fact) {
+            // Constant-initialized: sema's value of the initializer, not
+            // evaluated again (none for a trivial default construction
+            // whose object did not fold: zero-initialized all the same).
+            (Some(&var), Some(StaticInit::Constant)) => sema_any_value(b.ast, var),
+            // Not constant-initialized, initialized statically: the same
+            // fallback fold sema's decision ran.
+            (_, Some(StaticInit::EarlyStatic)) => {
+                let v = oven.fold_static_fallback(&mut b, e);
+                if v.is_some() {
+                    refolded.insert(e);
+                }
+                v
+            }
+            (_, Some(StaticInit::Dynamic)) => None,
             // A `constexpr` variable sema already evaluated keeps that value
             // (clang `VarDecl::evaluateValue` is cached and
             // `tryEmitForInitializer` reads it): its initializer is
@@ -234,8 +252,8 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target, fp: FpOpt
             // bridge runs the reflection intrinsics (`constexpr bool b =
             // type_of(R) == ^^int;`, spec/reflection.md §8.3; `static
             // constexpr auto s = std::define_static_array(r);`, WP-479).
-            Some(&var) if let Some(v) = sema_value(b.ast, var) => Some(v),
-            Some(&var) => match oven.fold_constant_init(&mut b, e, var) {
+            (Some(&var), _) if let Some(v) = sema_value(b.ast, var) => Some(v),
+            (Some(&var), _) => match oven.fold_constant_init(&mut b, e, var) {
                 // clang `ConstantEmitter::tryEmitPrivateForVarInit`: an
                 // initializer that is not constant is folded again outside
                 // a constant context (`__builtin_is_constant_evaluated()`
@@ -258,7 +276,7 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target, fp: FpOpt
                 }
                 v => v,
             },
-            None => oven.fold_rvalue(&mut b, e),
+            (None, _) => oven.fold_rvalue(&mut b, e),
         };
         oven.set_fold_c_static(false);
         // A value holding the address of an automatic variable (a
@@ -343,6 +361,15 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target, fp: FpOpt
     let mut dtors: Vec<_> = dtors.into_iter().collect();
     dtors.sort_unstable_by_key(|&(first, _)| first);
     for (first, (d, init, is_static)) in dtors {
+        // The destruction kind sema recorded (spec/ast.md §25).
+        match recorded_destruction(b.ast, d) {
+            Some(StaticDestruction::Constant) => {
+                folds.const_destroyed.insert(first);
+                continue;
+            }
+            Some(StaticDestruction::Trivial | StaticDestruction::Registered) => continue,
+            None => {}
+        }
         let value = init.filter(|e| !refolded.contains(e)).and_then(|e| folds.get(e));
         let const_context = is_static && (init.is_none() || value.is_some());
         if oven.has_constant_destruction(&mut b, d, value, const_context) {
@@ -428,6 +455,34 @@ pub(crate) fn flexible_elements_init(ast: &Ast, init: ExprId) -> Option<ExprId> 
         TypeView::ConstantArray(c) if c.size > 0
     );
     (matches!(ast.types.canonical_view(lt), TypeView::IncompleteArray(_)) && sized).then_some(x)
+}
+
+/// The initialization kind sema recorded for variable `d` (spec/ast.md
+/// §25), when the unit records them and it was decided.
+fn recorded_init(ast: &Ast, d: DeclId) -> Option<StaticInit> {
+    if !ast.static_init_facts {
+        return None;
+    }
+    ast.static_init_fact(d).map(|f| f.init).filter(|i| !matches!(i, StaticInit::NotEvaluated(_)))
+}
+
+/// The destruction kind sema recorded for variable `d` (spec/ast.md §25),
+/// when the unit records them and it was decided.
+fn recorded_destruction(ast: &Ast, d: DeclId) -> Option<StaticDestruction> {
+    if !ast.static_init_facts {
+        return None;
+    }
+    ast.static_init_fact(d).and_then(|f| f.destruction)
+}
+
+/// The evaluated value sema recorded for variable `d`, `constexpr` or
+/// not: with a recorded constant-initialization fact it is the value of
+/// that initialization (spec/ast.md §25.2).
+fn sema_any_value(ast: &Ast, d: DeclId) -> Option<ConstValueId> {
+    match ast.decls.var(d)?.eval.state() {
+        kiln_ast::decl::VarEvalState::Value(c) => Some(c),
+        _ => None,
+    }
 }
 
 fn sema_value(ast: &Ast, d: DeclId) -> Option<ConstValueId> {

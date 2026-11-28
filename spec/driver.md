@@ -133,6 +133,7 @@ linker prints its version; Meson's linker probe, WP-920), and `-c
 | `-fkiln-dump-decl-extents` | implies `-fkiln-decl-extents`; with `-fsyntax-only` (to the output) or codegen (to standard output, before the IR): prints one line per declaration with a row in the §19.7 layout; a PCH producer with it takes two passes |
 | `-fkiln-fn-names` | kiln: records the function-name span table (spec/ast.md §24; off otherwise) without printing it, for a tooling client of the library API; part of neither identity; a snapshot does not carry the table (a consumer that records marks the prefix unrecorded) and a module built in process for an importer records nothing. `KILN_FN_NAMES_VERIFY=1` in the environment implies it and self-checks every record (an error on a failure, spec/ast.md §24.7) |
 | `-fkiln-dump-fn-names` | kiln: implies `-fkiln-fn-names`; with `-fsyntax-only` (to the output, after a declaration-extent dump) or codegen (to standard output, before the IR): prints one record per (string, function) in the spec/ast.md §24.6 layout; a PCH producer with it takes two passes |
+| `-fkiln-static-init-facts` | kiln: records, at the end of the unit, each static or thread variable's static-initialization fact (constant, early static, dynamic, or not evaluated and why; trivial, constant or registered destruction) and makes code generation read it (spec/ast.md §25; off otherwise, and off changes nothing); `FrontEndOptions::static_init_facts` is the library form; the AST dump shows the fact; part of neither identity (a prefix records none, a module image carries none). `KILN_STATIC_INIT_FACTS=1` in the environment turns it on for a compile to code (spec/ast.md §25.6) |
 | `-fkiln-dump-expr-extents` | kiln: with `-fsyntax-only` (to the output, after a declaration-extent dump): prints the written extent of every expression of the written bodies and initializers, one line per node in the spec/ast.md §21.4 layout (the input of `cargo xtask extents`, spec/harness.md "Expression extents"); records nothing, part of neither identity; a PCH producer with it takes two passes |
 | `-fkiln-dump-friend-forms` | kiln: with `-fsyntax-only` (to the output, after the expression-extent dump): prints every friend's written form, one line per `FriendForm` row in declaration order in the spec/ast.md §23.6 layout; not part of the written-reference dump; records nothing (the rows are always kept), part of neither identity; a PCH producer with it takes two passes |
 | `-fkiln-dump-pp-record` | kiln: records the preprocessing record (spec/pp.md "Preprocessing record"; off otherwise) and prints it, one line per entry: with `-E` in place of the preprocessed text, after one `tok` line per output token at a macro location; with `-fsyntax-only` (to the output, after a written-reference dump) or codegen (to standard output, before the IR), the entries only. A PCH producer with it (or with `-fkiln-pp-record`) takes two passes and carries the header's record in its snapshot, which a recording consumer goes on from; a snapshot built without it leaves the consumer's record `restored`, with a `-v` note (spec/pp.md "Preprocessing record", stage 4; WP-2113). `=source-order` prints each condition's reads in source order (WP-2301). The harness's `pp-record:` directive runs it (spec/harness.md; WP-2110) |
@@ -1829,6 +1830,11 @@ the token table, every token the preprocessor delivered to the parser
 with a split `>>` as its two `>`s and the per-file query
 `starts_token(file, offset)`, as `fe.token_table` (`None` when off;
 spec/parse.md §2.6; `front_end.rs` test `token_table_of_two_files`).
+`static_init_facts` (default off; WP-3650; on, the command line's
+`-fkiln-static-init-facts`) records each static or thread variable's
+static-initialization fact at the end of the unit, read as
+`fe.ast.static_init_fact(d)` (spec/ast.md §25;
+`static_init_facts.rs` tests).
 Under a fixed environment the driver reads
 every variable it consults from it and never from the process:
 `KILN_RESOURCE_DIR`, `KILN_LLVM_DIR` and the LLVM search's variables,
@@ -1845,6 +1851,7 @@ driver's environment (`Args::env`: the process's for the executable,
 |---|---|---|
 | `KILN_WREF_RAW` | the written-reference dump (`WrittenRefs::set_raw_dump`, set by the job before the closure runs) | routed: changes the dump a closure renders (`#<raw location> ` before each line); `front_end.rs` test `developer_switches_follow_the_environment` |
 | `KILN_FN_NAMES_VERIFY` | the function-name span table's self-check (`env::fn_names_verify`, read where the parser's options are made) | routed: `1` turns the table on and makes a failed self-check an error (spec/ast.md §24.7) |
+| `KILN_STATIC_INIT_FACTS` | the static-initialization facts' self-check (`env::static_init_facts`, read where code generation's parser options are made) | routed: `1` turns `-fkiln-static-init-facts` on for a compile to code; the IR must not change (spec/ast.md §25.6) |
 | `KILN_STATS_LOG` | the statistics log (`stats::log_path`) | routed; the entry writes no log either way |
 | `KILN_HOD_STRICT` | hod's failure handling (`hod::strict`) | routed; code generation only |
 | `KILN_PCH_SNAPSHOT_PASSES` | the PCH snapshot producer (`single_pass_blocker`) | routed; the producer never runs in the entry |

@@ -67,6 +67,14 @@ pub(crate) fn fn_names_verify(env: &Environment) -> bool {
     env.var_os("KILN_FN_NAMES_VERIFY").is_some_and(|v| v == "1")
 }
 
+/// Whether `KILN_STATIC_INIT_FACTS=1` is set in `env`: a compile to code
+/// records the static-initialization facts and code generation reads
+/// them, as `-fkiln-static-init-facts` (spec/ast.md §25.6; a corpus run
+/// with it set checks that the IR does not change).
+pub(crate) fn static_init_facts(env: &Environment) -> bool {
+    env.var_os("KILN_STATIC_INIT_FACTS").is_some_and(|v| v == "1")
+}
+
 /// Whether `KILN_WREF_RAW` is set in `env`: the written-reference dump
 /// prefixes each line with the name's raw location (a developer switch).
 pub(crate) fn wref_raw(env: &Environment) -> bool {

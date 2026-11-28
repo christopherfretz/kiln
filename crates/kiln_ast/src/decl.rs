@@ -1044,7 +1044,8 @@ pub enum VarPlaceholder {
 
 /// `VarData.spec`: `storage(3) tls(2) init_style(2) constexpr(1)
 /// constinit(1) inline(1) nrvo(1) exception_var(1) cxx_for_range(1)
-/// inline_implied(1) placeholder(2)`.
+/// inline_implied(1) placeholder(2) static_init_fact(8)` (the last
+/// recorded by sema at the end of the unit when asked to, spec/ast.md §25).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug, kiln_snap::Snap)]
 pub struct VarSpec(u32);
 
@@ -1125,6 +1126,19 @@ impl VarSpec {
     /// kind (set when the initializer deduces the type).
     pub const LATE: VarSpec =
         VarSpec((3 << 14) | (1 << 13) | (1 << 12) | (1 << 10) | (1 << 9) | (1 << 6) | (1 << 5));
+
+    /// The static-initialization fact recorded in bits 16 to 23
+    /// (spec/ast.md §25; [`DeclArena::set_static_init_fact`]), if any.
+    pub fn static_init_fact(self) -> Option<crate::static_init::StaticInitFact> {
+        crate::static_init::StaticInitFact::decode(self.0)
+    }
+
+    /// The specifiers without a static-initialization fact: what a module
+    /// image carries (the importer records its own).
+    #[must_use]
+    pub const fn without_static_init_fact(self) -> Self {
+        VarSpec(self.0 & !crate::static_init::FACT_MASK)
+    }
 }
 
 bit_accessors!(VarSpec:
@@ -3086,6 +3100,13 @@ impl DeclArena {
         assert!(bits.0 & !VarSpec::LATE.0 == 0, "VarSpec bit is not settable after creation");
         let d = self.var_mut(v);
         d.spec = VarSpec(d.spec.0 | bits.0);
+    }
+
+    /// Records variable `v`'s static-initialization fact (spec/ast.md
+    /// §25), replacing any recorded before.
+    pub fn set_static_init_fact(&mut self, v: DeclId, fact: crate::static_init::StaticInitFact) {
+        let d = self.var_mut(v);
+        d.spec = VarSpec((d.spec.0 & !crate::static_init::FACT_MASK) | fact.encode());
     }
 
     /// `NotEvaluated → Evaluating` (§9.2). Returns the current state

@@ -396,6 +396,7 @@ impl SyntaxJob<'_> {
             cfg_dump: a.dump_cfg,
             written_refs: a.written_refs,
             written_ref_keys: a.written_ref_keys,
+            static_init_facts: a.static_init_facts,
             fn_names: a.fn_names,
             fn_names_verify: crate::env::fn_names_verify(&a.env),
             decl_extents: a.decl_extents,

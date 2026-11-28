@@ -706,6 +706,11 @@ pub struct Args {
     /// Outside a precompiled header's identity, part of an implicit
     /// module's cache key.
     pub written_ref_keys: bool,
+    /// `-fkiln-static-init-facts`: record each static variable's
+    /// static-initialization fact (spec/ast.md §25) for a tooling client;
+    /// codegen then reads it. Outside a precompiled header's identity (a
+    /// prefix records none).
+    pub static_init_facts: bool,
     /// `-fkiln-decl-extents`: record the declaration-extent table
     /// (spec/ast.md §19) for a tooling client; `-fkiln-dump-decl-extents`
     /// sets it too. Part of a precompiled header's identity (a snapshot
@@ -2174,6 +2179,7 @@ impl Args {
                 self.written_refs = true;
                 self.written_ref_keys = true;
             }
+            "-fkiln-static-init-facts" => self.static_init_facts = true,
             "-fkiln-fn-names" => self.fn_names = true,
             "-fkiln-dump-fn-names" => {
                 self.fn_names = true;
