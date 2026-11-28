@@ -6,7 +6,7 @@
 18:35-18:36  expr  'a' -> a@18:26 in=Sub@18:9
 18:33-18:34  operator  '-' -> (dependent) in=Sub@18:9 def=0+adl
 18:33-18:34  operator  '-' -> (builtin) spec=Sub@18:9 how=builtin
-18:33-18:34  operator  '-' -> lib::operator-@13:3 spec=Sub@18:9 how=adl
+18:33-18:34  operator  '-' -> lib::operator-@13:3 spec=Sub@18:9 how=adl adl-ns=lib@9:11 adl-cls=lib::S@10:8
 19:11-19:14  concept  'Sub' -> Sub@18:9 in=con@19:22
 19:26-19:27  type  'T' -> T@19:15 in=(anonymous)@19:27
 20:28-20:29  type  'T' -> T@20:17 in=(anonymous)@20:29

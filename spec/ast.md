@@ -3536,8 +3536,13 @@ chosen:
 - a **hidden friend** adds nothing to the set: it is found because its
   class is an associated class (/4.2) and is invisible to ordinary
   lookup, so a call that selects it is always `Adl`;
-- an operator expression (`a + b`) has no written name and no entry
-  (§18.4), so its argument-dependent lookup is not recorded; the
+- an operator expression (`a + b`) whose overload resolution ran
+  argument-dependent lookup (non-member candidates or a selected
+  built-in candidate on a class or enumeration operand, §18.13.7,
+  WP-2920, WP-3701) shares `Sema::adl_associated_set` /
+  `Sema::adl_lookup_explained` and carries the same `how` (`Adl`,
+  `Both`, `Unqualified`, or `Builtin`) and `adl_set(id)` on its
+  `Operator` entry (and per-specialization rows). The
   operator-function-id written as a call (`operator+(a, b)`) is an
   `Expr` entry like any call.
 
@@ -4935,18 +4940,28 @@ using-shadow lookup found it through):
   `operator co_await` applies ([expr.await]/3.3), role `operator`
   (stage 6c, WP-2911).
 
-A token whose resolution selects a built-in candidate ([over.built];
-also for class operands converted to a built-in type, `c + 1` with an
-`operator int`), or that is never overloadable (`?:`, `.*` on a
-pointer, `sizeof`), has no entry. A call the compiler makes with no
-written token of its own has none: implicit conversions (whose
-conversion function's only range would be the operand's own name,
-already an entry), range-for iterator operations, structured-binding
-`get`, awaiter and promise calls, the bodies of defaulted comparisons,
-and the destructor a `delete` calls. An explicit operator call
-(`a.operator+(b)`, `operator+(a, b)`, `operator""_k(12)`) is a name,
-unchanged (§18.2, §18.11.1): its `(` is a function call, not an
-operator use.
+When overload resolution runs for an operator expression because an
+operand has class or enumeration type ([over.match.oper]/1-2) and
+selects a **built-in** candidate ([over.built]; e.g. `e == e` on an
+enumeration, `c + 1` with `operator int`, `&s` on a class object, or
+`s[0]` with `operator int*`), the token gets an `operator` entry with
+no entity, flag `REF_BUILTIN` (bit 6, `64`, distinct from
+`REF_UNRESOLVED` and `REF_GROUP`), `how=builtin`, dumped `(builtin)`,
+and the associated ADL set when non-member ADL ran (not for member-only
+`[]`; WP-3701). It is the non-dependent counterpart of §18.13.6's
+`SPEC_BUILTIN` rows. An operator with no class or enumeration operand
+(`1 + 2`, `p + 1` on a pointer), an operator that is never overloadable
+(`?:`, `.*`, `sizeof`), `=` on an enumeration (member-only; no user
+assignment operator can exist for an enumeration), `&C::m`, and a normal
+function call `f(s)` run no operator overload resolution and have no
+entry. A call the compiler makes with no written token of its own has
+none: implicit conversions (whose conversion function's only range would
+be the operand's own name, already an entry), range-for iterator
+operations, structured-binding `get`, awaiter and promise calls, the
+bodies of defaulted comparisons, and the destructor a `delete` calls. An
+explicit operator call (`a.operator+(b)`, `operator+(a, b)`,
+`operator""_k(12)`) is a name, unchanged (§18.2, §18.11.1): its `(` is a
+function call, not an operator use.
 
 `REF_MEMBER` is not set on an `operator` entry (it means "written
 after `.` or `->`"); a member candidate is told by `how=member`.
@@ -4964,7 +4979,8 @@ after `.` or `->`"); a member candidate is told by `how=member`.
 | `m, 4` with an overloaded `operator,` | one | the comma | `operator,` |
 | a rewritten comparison | one or two (§18.13.3) | the written token | the selected candidate |
 | a user-defined literal | one per suffixed piece (§18.13.4) | the suffix | the literal operator |
-| a built-in operator, an implicit conversion | none | | |
+| a built-in operator on a class or enumeration operand (WP-3701) | one | the operator token (`close(id)` for `[]`) | none (`REF_BUILTIN`, `how=builtin`, dumped `(builtin)`, plus ADL set when non-member ADL ran) |
+| a built-in operator on fundamental/pointer operands, an implicit conversion | none | | |
 
 Commas between the arguments of a multi-argument `operator[]` or a
 call are separators, not operators. clang builds the overloaded comma
@@ -5093,10 +5109,12 @@ type-dependent operand is a dependent name ([temp.dep.general]/2,
   lambda's call operator specialization, a concept for a
   requirement's satisfaction check): the operator function selected,
   `how=member` for a member (a member operator, `operator[]`,
-  `operator()`, `operator->`, a surrogate's conversion function),
-  `how=adl` when the call's `ADL` flag says argument-dependent lookup
-  alone found it, `udir=` for one the definition's using-directive
-  made visible; a rewritten or reversed candidate
+  `operator()`, `operator->`, a surrogate's conversion function; no ADL
+  set), `how=adl`, `how=both`, or `unqualified` with the associated ADL
+  set for a non-member candidate (re-running `adl_lookup_explained`
+  against the entry's definition-context found set, WP-2920), `udir=`
+  for one the definition's using-directive made visible (both for
+  `unqualified` and `both`); a rewritten or reversed candidate
   ([over.match.oper]/3.4, /8) with `REWRITTEN` and `REVERSED` (one
   specialization may select `operator!=` directly and another
   `operator==` rewritten), two rows for `a < b` through `operator<=>`
@@ -5104,7 +5122,10 @@ type-dependent operand is a dependent name ([temp.dep.general]/2,
   specialization that selected a built-in candidate ([over.built]),
   or called through a pointer to function, gets a row with flag
   `SPEC_BUILTIN`, no entity and no `found`, `how=builtin`, dumped
-  `(builtin)`. An ill-formed specialization whose operator selects
+  `(builtin)`, plus the associated ADL set when operator overload
+  resolution ran ADL on a class or enumeration operand (peeling
+  implicit and user-defined conversions off the rebuilt operands; none
+  for fundamental/pointer operands, WP-3701). An ill-formed specialization whose operator selects
   nothing ([over.match.oper]/3 finds no viable function, `->` on a
   class with no `operator->`) gets an `UNRESOLVED` row; one whose
   operand failed gets none. A failed substitution in a SFINAE context
@@ -5266,15 +5287,29 @@ operator.
   ones come from the same `note_written_spec_oper` hook, which reads the
   rebuilt expressions the same way. Off, each site is one branch on
   `records_written_refs()`.
-- **`how`.** `member` when the function is a member (a member
-  candidate, [over.match.oper]/3.1; `operator[]`, `operator()`,
-  `operator->`, a surrogate's conversion function); `adl` when the
-  call's `ADL` flag says argument-dependent lookup alone found it
-  (clang's `IsADLCandidate`); else `unqualified`, with `udir=` from
-  the scope walk (§18.7.3). Not yet distinguished (WP-2920): `both` (found by
-  unqualified and argument-dependent lookup) and the associated sets
-  (`adl-ns=` and the others); an entry found by both prints
-  `unqualified` (or `found=` the using-shadow).
+- **`how` and associated sets (WP-2920, WP-3701).** `member` when the
+  function is a member (a member candidate, [over.match.oper]/3.1;
+  `operator[]`, `operator()`, `operator->`, a surrogate's conversion
+  function), with no associated set. For a non-member operator call
+  (including rewritten/reversed comparisons, where the operator name is
+  the one actually looked up — `operator==` for a rewritten `!=`,
+  `operator<=>` for a rewritten `<` — and `operator co_await`), the
+  recording site re-runs `Sema::adl_lookup_explained` on the
+  unconverted operands (seeded with `lookup_operator_name` when
+  `ExprFlags::ADL` is not set, or the entry's definition-context found
+  set for a dependent operator row), setting `how=adl`, `how=both`
+  (preserving `found=` and `udir=` from ordinary lookup), or
+  `unqualified`, together with the associated set (`adl-ns=`,
+  `adl-cls=`, `adl-enum=`, §18.7.4). For a selected built-in candidate
+  on a class or enumeration operand (`REF_BUILTIN` on main entries,
+  `SPEC_BUILTIN` on dependent rows), `how=builtin` and `adl_set` comes
+  from the shared `Sema::adl_associated_set` whenever non-member ADL
+  ran (none for member-only `[]`, or for dependent specializations with
+  only fundamental/pointer operands). User-defined literal lookup
+  ([over.literal]/2, [lex.ext]) is unqualified only: never `how=both`
+  and never an associated set. Re-running ADL runs only when
+  `records_written_refs()` is on: with recording off each site remains
+  one branch.
 - **The operator join.** For every `CXXOperatorCallExpr` of the code
   as written (`for_each_written_expr`, instantiations left out) that is
   not type-dependent, whose callee names a function and whose location
@@ -5396,10 +5431,13 @@ a UCN, raw and prefixed strings; `operator_entries_through_the_api`),
 `crates/kiln_parse/tests/written_refs_accounting.rs` (the operator
 join; the UDL callee joins its `ud-suffix` entry), and
 `tests/conformance/written_refs/`: `operators.cpp`,
+`operators-provenance.cpp` (WP-2920, WP-3701),
 `operators-rewritten.cpp`, `operators-arrow.cpp`,
 `operators-comma.cpp`, `operators-special.cpp`, `udl.cpp`,
 `operators-macros.cpp`, `operators-requires.cpp`,
-`operators-errors.cpp`, and the carriage goldens.
+`operators-errors.cpp`, and the carriage goldens;
+`crates/kiln_parse/tests/written_refs.rs`
+(`operator_provenance_and_builtin_entries_through_the_api`).
 
 Stage 6b (WP-2910): `crates/kiln_ast/src/written_refs.rs`
 (`operator_nodes_and_builtin_rows`: an operator token's node apart from

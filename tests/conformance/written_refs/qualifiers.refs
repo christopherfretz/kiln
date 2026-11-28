@@ -25,10 +25,12 @@
 28:47-28:52  nns  'alias' -> alias@20:11 in=qualified@26:5
 28:54-28:55  nns  'S' -> outer::inner::S@11:8 q=28:47 in=qualified@26:5
 28:57-28:59  expr  'k1' -> outer::inner::S::k1@13:19 q=28:54 in=qualified@26:5
+28:45-28:46  operator  '+' -> (builtin) in=qualified@26:5 how=builtin adl-ns=outer::inner@9:11 adl-cls=outer::inner::S@11:8 adl-enum=outer::inner::S::Kind@13:8
 28:62-28:67  nns  'alias' -> alias@20:11 in=qualified@26:5
 28:69-28:70  nns  'S' -> outer::inner::S@11:8 q=28:62 in=qualified@26:5
 28:72-28:76  nns  'Kind' -> outer::inner::S::Kind@13:8 q=28:69 in=qualified@26:5
 28:78-28:80  expr  'k0' -> outer::inner::S::k0@13:15 q=28:72 in=qualified@26:5
+28:60-28:61  operator  '+' -> (builtin) in=qualified@26:5 how=builtin adl-ns=outer::inner@9:11 adl-cls=outer::inner::S@11:8 adl-enum=outer::inner::S::Kind@13:8
 29:10-29:15  nns  'outer' -> outer@8:11 in=qualified@26:5
 29:17-29:22  nns  'inner' -> outer::inner@9:11 q=29:10 in=qualified@26:5
 29:24-29:27  nns  'Box' -> outer::inner::Box@15:27 q=29:17 in=qualified@26:5

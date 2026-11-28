@@ -9,12 +9,12 @@
 24:52-24:53  operator  '+' -> (dependent) in=sum@24:28 def=0+adl
 24:52-24:53  operator  '+' -> (builtin) spec=sum<int, int>@24:28 how=builtin
 24:52-24:53  operator  '+' -> (builtin) spec=sum<lib::S>@24:28 how=builtin
-24:52-24:53  operator  '+' -> lib::operator+@19:3 spec=sum<lib::S, lib::S, lib::S>@24:28 how=adl
-24:52-24:53  operator  '+' -> lib::operator+@20:3 spec=sum<lib::S, int>@24:28 how=adl
+24:52-24:53  operator  '+' -> lib::operator+@19:3 spec=sum<lib::S, lib::S, lib::S>@24:28 how=adl adl-ns=lib@15:11 adl-cls=lib::S@16:8
+24:52-24:53  operator  '+' -> lib::operator+@20:3 spec=sum<lib::S, int>@24:28 how=adl adl-ns=lib@15:11 adl-cls=lib::S@16:8
 25:33-25:34  type  'T' -> T@25:20 in=t@25:38
 25:57-25:58  expr  't' -> t@25:38 in=lsum@25:28
 25:55-25:56  operator  '+' -> (dependent) in=lsum@25:28 def=0+adl
-25:55-25:56  operator  '+' -> lib::operator+@19:3 spec=lsum<lib::S, lib::S>@25:28 how=adl
+25:55-25:56  operator  '+' -> lib::operator+@19:3 spec=lsum<lib::S, lib::S>@25:28 how=adl adl-ns=lib@15:11 adl-cls=lib::S@16:8
 26:33-26:34  type  'T' -> T@26:20 in=t@26:38
 26:61-26:62  expr  't' -> t@26:38 in=init@26:28
 26:53-26:54  operator  '+' -> (dependent) in=init@26:28 def=0+adl
@@ -27,7 +27,7 @@
 27:50-27:51  expr  't' -> t@27:37 in=all@27:28
 27:52-27:54  operator  '&&' -> (dependent) in=all@27:28 def=0+adl
 27:52-27:54  operator  '&&' -> (builtin) spec=all<>@27:28 how=builtin
-27:52-27:54  operator  '&&' -> lib::operator&&@21:6 spec=all<lib::S, bool>@27:28 how=adl
+27:52-27:54  operator  '&&' -> lib::operator&&@21:6 spec=all<lib::S, bool>@27:28 how=adl adl-ns=lib@15:11 adl-cls=lib::S@16:8
 28:42-28:43  expr  'N' -> N@28:18 in=ints@28:25
 29:34-29:35  type  'T' -> T@29:20 in=t@29:39
 29:52-29:53  expr  't' -> t@29:39 in=never@29:28

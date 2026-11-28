@@ -11,7 +11,7 @@
 22:62-22:65  expr  'val' def=val@18:22
 22:62-22:65  expr  'val' -> val<a::X>@18:22 found=val@18:22 key=partial:shl@22:27<a::X, void> adl-ns=
 22:59-22:61  operator  '<<' -> (dependent) in=shl@22:27 def=0+adl
-22:59-22:61  operator  '<<' -> a::operator<<@15:5 key=partial:shl@22:27<a::X, void> how=adl
+22:59-22:61  operator  '<<' -> a::operator<<@15:5 key=partial:shl@22:27<a::X, void> how=adl adl-ns=a@13:11 adl-cls=a::X@14:8
 22:34-22:40  template  'void_t' -> void_t@17:27 in=shl@22:27
 22:27-22:30  spec-target  'shl' -> shl@19:41 in=shl@22:27
 25:13-25:14  nns  'a' -> a@13:11 in=u@25:5

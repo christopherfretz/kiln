@@ -3,12 +3,12 @@
 8:18-8:19  type  'M' -> M@6:8 in=(anonymous)@8:19
 10:10-10:11  type  'M' -> M@6:8 in=m@10:12
 11:3-11:4  expr  'm' -> m@10:12 in=use@10:6
-11:4-11:5  operator  ',' -> operator,@7:5 in=use@10:6
+11:4-11:5  operator  ',' -> operator,@7:5 in=use@10:6 how=both adl-ns=:: adl-cls=M@6:8
 12:10-12:11  expr  'm' -> m@10:12 in=use@10:6
-12:11-12:12  operator  ',' -> operator,@7:5 in=use@10:6
+12:11-12:12  operator  ',' -> operator,@7:5 in=use@10:6 how=both adl-ns=:: adl-cls=M@6:8
 13:12-13:13  expr  'm' -> m@10:12 in=use@10:6
-13:10-13:11  operator  ',' -> operator,@8:3 in=use@10:6
-13:13-13:14  operator  ',' -> operator,@7:5 in=use@10:6
+13:10-13:11  operator  ',' -> operator,@8:3 in=use@10:6 how=both adl-ns=:: adl-cls=M@6:8
+13:13-13:14  operator  ',' -> operator,@7:5 in=use@10:6 how=both adl-ns=:: adl-cls=M@6:8
 14:12-14:13  expr  'm' -> m@10:12 in=x@14:7
-14:13-14:14  operator  ',' -> operator,@7:5 in=x@14:7
+14:13-14:14  operator  ',' -> operator,@7:5 in=x@14:7 how=both adl-ns=:: adl-cls=M@6:8
 16:9-16:10  expr  'x' -> x@14:7 in=use@10:6

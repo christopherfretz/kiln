@@ -35,7 +35,9 @@
 33:25-33:26  type  'P' -> P@14:8 in=run@31:5
 33:32-33:35  expr  'get' -> get<S *>@21:24 found=get@21:24 in=run@31:5 how=both adl-ns=:: adl-cls=S@11:8
 33:37-33:38  expr  's' -> s@32:5 in=run@31:5
+33:36-33:37  operator  '&' -> (builtin) in=run@31:5 how=builtin adl-ns=:: adl-cls=S@11:8
 33:42-33:49  expr  'discard' -> discard<S *>@23:24 found=discard@23:24 in=run@31:5 how=both adl-ns=:: adl-cls=S@11:8
 33:51-33:52  expr  's' -> s@32:5 in=run@31:5
+33:50-33:51  operator  '&' -> (builtin) in=run@31:5 how=builtin adl-ns=:: adl-cls=S@11:8
 33:56-33:60  expr  'call' -> call<Q>@29:24 found=call@29:24 in=run@31:5 how=both adl-ns=:: adl-cls=Q@17:8
 33:61-33:62  type  'Q' -> Q@17:8 in=run@31:5
